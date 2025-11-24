@@ -14,11 +14,7 @@ import qrcode from "qrcode-terminal";
 import { danger, info, logVerbose, success } from "./globals.js";
 import { ensureDir, jidToE164, toWhatsappJid } from "./utils.js";
 
-const WA_WEB_AUTH_DIR = path.join(
-	os.homedir(),
-	".warelay",
-	"credentials",
-);
+const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
 	await ensureDir(WA_WEB_AUTH_DIR);
@@ -136,13 +132,29 @@ export async function loginWeb(
 		if (code === 515) {
 			console.log(
 				info(
-					"WhatsApp asked for a restart after pairing (code 515); creds are saved. You can now send with provider=web.",
+					"WhatsApp asked for a restart after pairing (code 515); creds are saved. Restarting connection once…",
 				),
 			);
-			return;
+			try {
+				sock.ws?.close();
+			} catch {
+				// ignore
+			}
+			const retry = await createWaSocket(false, verbose);
+			try {
+				await waitForConnection(retry);
+				console.log(
+					success(
+						"✅ Linked after restart; web session ready. You can now send with provider=web.",
+					),
+				);
+				return;
+			} finally {
+				setTimeout(() => retry.ws?.close(), 500);
+			}
 		}
 		if (code === DisconnectReason.loggedOut) {
-			await fs.rm(WA_WEB_AUTH_FILE, { force: true });
+			await fs.rm(WA_WEB_AUTH_DIR, { recursive: true, force: true });
 			console.error(
 				danger(
 					"WhatsApp reported the session is logged out. Cleared cached web session; please rerun warelay web:login and scan the QR again.",
@@ -172,7 +184,7 @@ export { WA_WEB_AUTH_DIR };
 
 export function webAuthExists() {
 	return fs
-		.access(WA_WEB_AUTH_FILE)
+		.access(WA_WEB_AUTH_DIR)
 		.then(() => true)
 		.catch(() => false);
 }

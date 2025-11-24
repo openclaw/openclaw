@@ -69,17 +69,17 @@ describe("provider-web", () => {
 	it("creates WA socket with QR handler", async () => {
 		await createWaSocket(true, false);
 		const makeWASocket = baileys.makeWASocket as ReturnType<typeof vi.fn>;
-	expect(makeWASocket).toHaveBeenCalledWith(
-		expect.objectContaining({ printQRInTerminal: false }),
-	);
-	const sock = getLastSocket();
-	const saveCreds = (
-		await baileys.useMultiFileAuthState.mock.results[0].value
-	).saveCreds;
-	// trigger creds.update listener
-	sock.ev.emit("creds.update", {});
-	expect(saveCreds).toHaveBeenCalled();
-});
+		expect(makeWASocket).toHaveBeenCalledWith(
+			expect.objectContaining({ printQRInTerminal: false }),
+		);
+		const sock = getLastSocket();
+		const saveCreds = (
+			await baileys.useMultiFileAuthState.mock.results[0].value
+		).saveCreds;
+		// trigger creds.update listener
+		sock.ev.emit("creds.update", {});
+		expect(saveCreds).toHaveBeenCalled();
+	});
 
 	it("waits for connection open", async () => {
 		const ev = new EventEmitter();
