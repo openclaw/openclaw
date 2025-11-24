@@ -65,6 +65,18 @@ type TwilioChannelsSender = {
 	sender_id?: string;
 };
 
+type IncomingPhoneNumberUpdater = {
+	update: (params: Record<string, string>) => Promise<unknown>;
+};
+
+type IncomingPhoneNumbersClient = {
+	list: (params: {
+		phoneNumber: string;
+		limit?: number;
+	}) => Promise<IncomingNumber[]>;
+	get: (sid: string) => IncomingPhoneNumberUpdater;
+} & ((sid: string) => IncomingPhoneNumberUpdater);
+
 type TwilioSenderListClient = {
 	messaging: {
 		v2: {
@@ -73,19 +85,16 @@ type TwilioSenderListClient = {
 					channel: string;
 					pageSize: number;
 				}) => Promise<TwilioChannelsSender[]>;
-				(sid: string): {
+				(
+					sid: string,
+				): {
 					fetch: () => Promise<TwilioChannelsSender>;
 					update: (params: Record<string, string>) => Promise<unknown>;
 				};
 			};
 		};
 	};
-	incomingPhoneNumbers: {
-		list: (params: { phoneNumber: string; limit?: number }) => Promise<IncomingNumber[]>;
-		(sid: string): {
-			update: (params: Record<string, string>) => Promise<unknown>;
-		};
-	};
+	incomingPhoneNumbers: IncomingPhoneNumbersClient;
 };
 
 type TwilioRequester = {
@@ -349,13 +358,18 @@ async function getReplyFromConfig(
 	// Choose reply from config: static text or external command stdout.
 	const cfg = loadConfig();
 	const reply = cfg.inbound?.reply;
-	if (!reply) return undefined;
+	if (!reply) {
+		logVerbose("No inbound.reply configured; skipping auto-reply");
+		return undefined;
+	}
 
 	if (reply.mode === "text" && reply.text) {
+		logVerbose("Using text auto-reply from config");
 		return applyTemplate(reply.text, ctx);
 	}
 
 	if (reply.mode === "command" && reply.command?.length) {
+		logVerbose(`Running command auto-reply: ${reply.command.join(" ")}`);
 		const argv = reply.command.map((part) => applyTemplate(part, ctx));
 		const templatePrefix = reply.template
 			? applyTemplate(reply.template, ctx)
@@ -364,10 +378,15 @@ async function getReplyFromConfig(
 			? [argv[0], templatePrefix, ...argv.slice(1)]
 			: argv;
 		try {
-			const { stdout } = await execFileAsync(finalArgv[0], finalArgv.slice(1), {
+			if (globalVerbose) console.log(`RUN `);
+        const { stdout } = await execFileAsync(finalArgv[0], finalArgv.slice(1), {
 				maxBuffer: 1024 * 1024,
 			});
-			return stdout.trim();
+			const trimmed = stdout.trim();
+			logVerbose(
+				`Command auto-reply stdout (trimmed): ${trimmed || "<empty>"}`,
+			);
+			return trimmed || undefined;
 		} catch (err) {
 			console.error("Command auto-reply failed", err);
 			return undefined;
@@ -375,6 +394,54 @@ async function getReplyFromConfig(
 	}
 
 	return undefined;
+}
+
+async function autoReplyIfConfigured(
+	client: ReturnType<typeof createClient>,
+	message: MessageInstance,
+): Promise<void> {
+	// Fire a config-driven reply (text or command) for the inbound message, if configured.
+	const ctx: MsgContext = {
+		Body: message.body ?? undefined,
+		From: message.from ?? undefined,
+		To: message.to ?? undefined,
+		MessageSid: message.sid,
+	};
+
+	const replyText = await getReplyFromConfig(ctx);
+	if (!replyText) return;
+
+	const replyFrom = message.to;
+	const replyTo = message.from;
+	if (!replyFrom || !replyTo) {
+		if (globalVerbose)
+			console.error(
+				"Skipping auto-reply: missing to/from on inbound message",
+				ctx,
+			);
+		return;
+	}
+
+	logVerbose(
+		`Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyText.length}`,
+	);
+
+	try {
+		await client.messages.create({
+			from: replyFrom,
+			to: replyTo,
+			body: replyText,
+		});
+		if (globalVerbose) {
+			console.log(
+				success(
+					`↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"})`,
+				),
+			);
+		}
+	} catch (err) {
+		console.error("Failed to auto-reply", err);
+	}
 }
 
 function createClient(env: EnvConfig) {
@@ -757,15 +824,22 @@ async function findWhatsappSenderSid(
 	}
 }
 
-async function findIncomingNumberSid(client: TwilioSenderListClient, url: string): Promise<string | null> {
+async function findIncomingNumberSid(
+	client: TwilioSenderListClient,
+): Promise<string | null> {
 	// Try to locate the underlying phone number and return its SID for webhook fallback.
 	const env = readEnv();
 	const phone = env.whatsappFrom.replace("whatsapp:", "");
 	try {
-		const list = await client.incomingPhoneNumbers.list({ phoneNumber: phone, limit: 2 });
+		const list = await client.incomingPhoneNumbers.list({
+			phoneNumber: phone,
+			limit: 2,
+		});
 		if (!list || list.length === 0) return null;
 		if (list.length > 1 && globalVerbose) {
-			console.error(warn("Multiple incoming numbers matched; using the first."));
+			console.error(
+				warn("Multiple incoming numbers matched; using the first."),
+			);
 		}
 		return list[0]?.sid ?? null;
 	} catch (err) {
@@ -798,7 +872,10 @@ async function updateWebhook(
 		return;
 	} catch (err) {
 		if (globalVerbose)
-			console.error("channelsSenders request update failed, will try client helpers", err);
+			console.error(
+				"channelsSenders request update failed, will try client helpers",
+				err,
+			);
 	}
 
 	// 2) SDK helper fallback (if supported by this client)
@@ -807,23 +884,27 @@ async function updateWebhook(
 			await clientTyped.messaging.v2.channelsSenders(senderSid).update({
 				callbackUrl: url,
 				callbackMethod: method,
-			} as any);
+			});
 			console.log(success(`✅ Twilio sender webhook set to ${url}`));
 			return;
 		}
 	} catch (err) {
 		if (globalVerbose)
-			console.error("channelsSenders helper update failed, will try phone number fallback", err);
+			console.error(
+				"channelsSenders helper update failed, will try phone number fallback",
+				err,
+			);
 	}
 
 	// 3) Incoming phone number fallback (works for many WA senders)
 	try {
-		const phoneSid = await findIncomingNumberSid(clientTyped, url);
+		const phoneSid = await findIncomingNumberSid(clientTyped);
 		if (phoneSid) {
-			await (clientTyped.incomingPhoneNumbers as any)(phoneSid).update({
+			const phoneNumberUpdater = clientTyped.incomingPhoneNumbers(phoneSid);
+			await phoneNumberUpdater.update({
 				smsUrl: url,
 				smsMethod: method,
-			} as any);
+			});
 			console.log(success(`✅ Twilio phone webhook set to ${url}`));
 			return;
 		}
@@ -884,21 +965,23 @@ async function monitor(intervalSeconds: number, lookbackMinutes: number) {
 				limit: 50,
 			});
 
-			messages
+			const inboundMessages = messages
 				.filter((m: MessageInstance) => m.direction === "inbound")
 				.sort((a: MessageInstance, b: MessageInstance) => {
 					const da = a.dateCreated?.getTime() ?? 0;
 					const db = b.dateCreated?.getTime() ?? 0;
 					return da - db;
-				})
-				.forEach((m: MessageInstance) => {
-					if (seen.has(m.sid)) return;
-					seen.add(m.sid);
-					const time = m.dateCreated?.toISOString() ?? "unknown time";
-					const fromNum = m.from ?? "unknown sender";
-					console.log(`\n[${time}] ${fromNum} -> ${m.to}: ${m.body ?? ""}`);
-					updateSince(m.dateCreated);
 				});
+
+			for (const m of inboundMessages) {
+				if (seen.has(m.sid)) continue;
+				seen.add(m.sid);
+				const time = m.dateCreated?.toISOString() ?? "unknown time";
+				const fromNum = m.from ?? "unknown sender";
+				console.log(`\n[${time}] ${fromNum} -> ${m.to}: ${m.body ?? ""}`);
+				updateSince(m.dateCreated);
+				await autoReplyIfConfigured(client, m);
+			}
 		} catch (err) {
 			console.error("Error while polling messages", err);
 		}
@@ -1130,10 +1213,10 @@ program
 		);
 		await updateWebhook(client, senderSid, publicUrl, "POST");
 
-	console.log(
-		"\nSetup complete. Leave this process running to keep the webhook online. Ctrl+C to stop.",
-	);
-	await waitForever();
-});
+		console.log(
+			"\nSetup complete. Leave this process running to keep the webhook online. Ctrl+C to stop.",
+		);
+		await waitForever();
+	});
 
 program.parseAsync(process.argv);
