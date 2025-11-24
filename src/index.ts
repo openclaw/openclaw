@@ -38,6 +38,25 @@ type AuthMode =
   | { accountSid: string; authToken: string }
   | { accountSid: string; apiKey: string; apiSecret: string };
 
+type TwilioRequestOptions = {
+  method: 'get' | 'post';
+  uri: string;
+  params?: Record<string, string | number>;
+  form?: Record<string, string>;
+};
+
+type TwilioSender = { sid: string; sender_id: string };
+
+type TwilioRequestResponse = {
+  data?: {
+    senders?: TwilioSender[];
+  };
+};
+
+type TwilioRequester = {
+  request: (options: TwilioRequestOptions) => Promise<TwilioRequestResponse>;
+};
+
 type GlobalOptions = {
   verbose: boolean;
   yes?: boolean;
@@ -449,26 +468,18 @@ async function ensureFunnel(port: number) {
 async function findWhatsappSenderSid(client: ReturnType<typeof createClient>, from: string) {
   // Fetch sender SID that matches configured WhatsApp from number.
   try {
-    const resp = await (client as unknown as {
-      request: (options: Record<string, unknown>) => Promise<{ data?: unknown }>
-    }).request({
+    const resp = await (client as unknown as TwilioRequester).request({
       method: 'get',
       uri: 'https://messaging.twilio.com/v2/Channels/Senders',
       params: { Channel: 'whatsapp', PageSize: 50 }
     });
-    const data = resp?.data as Record<string, unknown> | undefined;
-    const senders = Array.isArray((data as Record<string, unknown> | undefined)?.senders)
-      ? (data as { senders: unknown[] }).senders
-      : undefined;
+    const senders = resp.data?.senders;
     if (!senders) {
       throw new Error('List senders response missing "senders" array');
     }
     const match = senders.find(
-      (s) =>
-        typeof s === 'object' &&
-        s !== null &&
-        (s as Record<string, unknown>).sender_id === withWhatsAppPrefix(from)
-    ) as { sid?: string } | undefined;
+      (s) => typeof s?.sender_id === 'string' && s.sender_id === withWhatsAppPrefix(from)
+    );
     if (!match || typeof match.sid !== 'string') {
       throw new Error(`Could not find sender ${withWhatsAppPrefix(from)} in Twilio account`);
     }
@@ -492,7 +503,7 @@ async function updateWebhook(
   method: 'POST' | 'GET' = 'POST'
 ) {
   // Point Twilio sender webhook at the provided URL.
-  await (client as unknown as { request: (options: Record<string, unknown>) => Promise<unknown> })
+  await (client as unknown as TwilioRequester)
     .request({
       method: 'post',
       uri: `https://messaging.twilio.com/v2/Channels/Senders/${senderSid}`,
