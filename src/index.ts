@@ -290,6 +290,11 @@ function withWhatsAppPrefix(number: string): string {
 	return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
 }
 
+function normalizePath(p: string): string {
+	if (!p.startsWith("/")) return `/${p}`;
+	return p;
+}
+
 const CONFIG_PATH = path.join(os.homedir(), ".warelay", "warelay.json");
 const success = chalk.green;
 const warn = chalk.yellow;
@@ -470,6 +475,7 @@ async function startWebhook(
 	autoReply: string | undefined,
 	verbose: boolean,
 ): Promise<import("http").Server> {
+	const normalizedPath = normalizePath(path);
 	// Start Express webhook; generate replies via config or CLI flag.
 	const env = readEnv();
 	const app = express();
@@ -477,17 +483,18 @@ async function startWebhook(
 	// Twilio sends application/x-www-form-urlencoded
 	app.use(bodyParser.urlencoded({ extended: false }));
 	app.use((req, _res, next) => {
-		if (verbose) {
-			console.log(chalk.gray(`REQ ${req.method} ${req.url}`));
-		}
+		console.log(chalk.gray(`REQ ${req.method} ${req.url}`));
 		next();
 	});
 
-	app.post(path, async (req: Request, res: Response) => {
+	app.post(normalizedPath, async (req: Request, res: Response) => {
 		const { From, To, Body, MessageSid } = req.body ?? {};
-		if (verbose) {
-			console.log(`[INBOUND] ${From} -> ${To} (${MessageSid}): ${Body}`);
-		}
+		console.log(
+			`[INBOUND] ${From ?? "unknown"} -> ${To ?? "unknown"} (${
+				MessageSid ?? "no-sid"
+			})`,
+		);
+		if (verbose) console.log(chalk.gray(`Body: ${Body ?? ""}`));
 
 		let replyText = autoReply;
 		if (!replyText) {
@@ -520,6 +527,7 @@ async function startWebhook(
 	});
 
 	app.use((_req, res) => {
+		if (verbose) console.log(chalk.yellow(`404 ${_req.method} ${_req.url}`));
 		res.status(404).send("warelay webhook: not found");
 	});
 
@@ -528,7 +536,9 @@ async function startWebhook(
 
 		const onListening = () => {
 			cleanup();
-			console.log(`📥 Webhook listening on http://localhost:${port}${path}`);
+			console.log(
+				`📥 Webhook listening on http://localhost:${port}${normalizedPath}`,
+			);
 			resolve(server);
 		};
 
@@ -775,9 +785,9 @@ async function updateWebhook(
 	try {
 		if (clientTyped.messaging?.v2?.channelsSenders) {
 			await clientTyped.messaging.v2.channelsSenders(senderSid).update({
-				CallbackUrl: url,
-				CallbackMethod: method,
-			});
+				callbackUrl: url,
+				callbackMethod: method,
+			} as any);
 			console.log(success(`✅ Twilio sender webhook set to ${url}`));
 			return;
 		}
@@ -790,9 +800,9 @@ async function updateWebhook(
 		const phoneSid = await findIncomingNumberSid(clientTyped, url);
 		if (phoneSid) {
 			await (clientTyped.incomingPhoneNumbers as any)(phoneSid).update({
-				SmsUrl: url,
-				SmsMethod: method,
-			});
+				smsUrl: url,
+				smsMethod: method,
+			} as any);
 			console.log(success(`✅ Twilio phone webhook set to ${url}`));
 			return;
 		}
