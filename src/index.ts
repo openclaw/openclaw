@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import process from 'node:process';
 import Twilio from 'twilio';
 import type { MessageInstance } from 'twilio/lib/rest/api/v2010/account/message.js';
-import express from 'express';
+import express, { type Request, type Response } from 'express';
 import bodyParser from 'body-parser';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -62,13 +62,21 @@ function readEnv(): EnvConfig {
 
 const execFileAsync = promisify(execFile);
 
-async function ensureBinary(name: string) {
-  try {
-    await execFileAsync('which', [name]);
-  } catch {
+type ExecResult = { stdout: string; stderr: string };
+
+async function runExec(command: string, args: string[], maxBuffer = 2_000_000): Promise<ExecResult> {
+  const { stdout, stderr } = await execFileAsync(command, args, {
+    maxBuffer,
+    encoding: 'utf8'
+  });
+  return { stdout, stderr };
+}
+
+async function ensureBinary(name: string): Promise<void> {
+  await runExec('which', [name]).catch(() => {
     console.error(`Missing required binary: ${name}. Please install it.`);
     process.exit(1);
-  }
+  });
 }
 
 function withWhatsAppPrefix(number: string): string {
@@ -94,7 +102,9 @@ function loadConfig(): WarelayConfig {
   try {
     if (!fs.existsSync(CONFIG_PATH)) return {};
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON5.parse(raw) as WarelayConfig;
+    const parsed = JSON5.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return {};
+    return parsed as WarelayConfig;
   } catch (err) {
     console.error(`Failed to read config at ${CONFIG_PATH}`, err);
     return {};
@@ -228,7 +238,7 @@ async function startWebhook(
   // Twilio sends application/x-www-form-urlencoded
   app.use(bodyParser.urlencoded({ extended: false }));
 
-  app.post(path, async (req, res) => {
+  app.post(path, async (req: Request, res: Response) => {
     const { From, To, Body, MessageSid } = req.body ?? {};
     console.log(`[INBOUND] ${From} -> ${To} (${MessageSid}): ${Body}`);
 
@@ -269,31 +279,28 @@ async function startWebhook(
 }
 
 async function getTailnetHostname() {
-  const { stdout } = await execFileAsync('tailscale', ['status', '--json'], { maxBuffer: 2_000_000 });
-  const parsed = JSON.parse(stdout);
-  const dns = parsed?.Self?.DNSName as string | undefined;
-  const ips = parsed?.Self?.TailscaleIPs as string[] | undefined;
+  const { stdout } = await runExec('tailscale', ['status', '--json']);
+  const parsed = stdout ? (JSON.parse(stdout) as Record<string, unknown>) : {};
+  const self = parsed?.['Self'] as Record<string, unknown> | undefined;
+  const dns = typeof self?.['DNSName'] === 'string' ? (self['DNSName'] as string) : undefined;
+  const ips = Array.isArray(self?.['TailscaleIPs']) ? (self?.['TailscaleIPs'] as string[]) : [];
   if (dns && dns.length > 0) return dns.replace(/\.$/, '');
-  if (ips && ips.length > 0) return ips[0];
+  if (ips.length > 0) return ips[0];
   throw new Error('Could not determine Tailscale DNS or IP');
 }
 
 async function ensureFunnel(port: number) {
   try {
-    const status = await execFileAsync('tailscale', ['funnel', 'status', '--json'], {
-      maxBuffer: 2_000_000
-    }).then((r) => r.stdout.trim());
-
-    if (!status || status === '{}' || status === 'null') {
+    const statusOut = (await runExec('tailscale', ['funnel', 'status', '--json'])).stdout.trim();
+    const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
+    if (!parsed || Object.keys(parsed).length === 0) {
       console.error(
         'Tailscale Funnel is not enabled on this tailnet/device. Enable it in the Tailscale admin console, then re-run warelay setup.'
       );
       process.exit(1);
     }
 
-    const { stdout } = await execFileAsync('tailscale', ['funnel', '--yes', '--bg', `${port}`], {
-      maxBuffer: 200_000
-    });
+    const { stdout } = await runExec('tailscale', ['funnel', '--yes', '--bg', `${port}`], 200_000);
     if (stdout.trim()) console.log(stdout.trim());
   } catch (err) {
     console.error('Failed to enable Tailscale Funnel. Is it allowed on your tailnet?', err);
@@ -302,20 +309,28 @@ async function ensureFunnel(port: number) {
 }
 
 async function findWhatsappSenderSid(client: ReturnType<typeof createClient>, from: string) {
-  const resp = await (client as any).request({
+  const resp = await (client as unknown as { request: (options: Record<string, unknown>) => Promise<{ data?: unknown }> }).request({
     method: 'get',
     uri: 'https://messaging.twilio.com/v2/Channels/Senders',
     qs: { Channel: 'whatsapp', PageSize: 50 }
   });
-  const senders = resp?.data?.senders as Array<any>;
-  if (!Array.isArray(senders)) {
+  const data = resp?.data as Record<string, unknown> | undefined;
+  const senders = Array.isArray((data as Record<string, unknown> | undefined)?.senders)
+    ? (data as { senders: unknown[] }).senders
+    : undefined;
+  if (!senders) {
     throw new Error('Unable to list WhatsApp senders');
   }
-  const match = senders.find((s) => s.sender_id === withWhatsAppPrefix(from));
-  if (!match) {
+  const match = senders.find(
+    (s) =>
+      typeof s === 'object' &&
+      s !== null &&
+      (s as Record<string, unknown>).sender_id === withWhatsAppPrefix(from)
+  ) as { sid?: string } | undefined;
+  if (!match || typeof match.sid !== 'string') {
     throw new Error(`Could not find sender ${withWhatsAppPrefix(from)} in Twilio account`);
   }
-  return match.sid as string;
+  return match.sid;
 }
 
 async function updateWebhook(
