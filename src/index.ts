@@ -14,6 +14,7 @@ import os from 'node:os';
 import JSON5 from 'json5';
 import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
+import chalk from 'chalk';
 
 dotenv.config();
 
@@ -25,7 +26,7 @@ function setVerbose(v: boolean) {
 }
 
 function logVerbose(message: string) {
-  if (globalVerbose) console.log(message);
+  if (globalVerbose) console.log(chalk.gray(message));
 }
 
 type AuthMode =
@@ -119,6 +120,10 @@ function withWhatsAppPrefix(number: string): string {
 }
 
 const CONFIG_PATH = path.join(os.homedir(), '.warelay', 'warelay.json');
+const success = chalk.green;
+const warn = chalk.yellow;
+const info = chalk.cyan;
+const danger = chalk.red;
 
 type ReplyMode = 'text' | 'command';
 
@@ -216,7 +221,7 @@ async function sendMessage(to: string, body: string) {
       body
     });
 
-    console.log(`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`);
+    console.log(success(`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`));
     return { client, sid: message.sid };
   } catch (err) {
     const anyErr = err as Record<string, unknown>;
@@ -252,7 +257,7 @@ async function waitForFinalStatus(
     const m = await client.messages(sid).fetch();
     const status = m.status ?? 'unknown';
     if (successTerminalStatuses.has(status)) {
-      console.log(`✅ Delivered (status: ${status})`);
+      console.log(success(`✅ Delivered (status: ${status})`));
       return;
     }
     if (failureTerminalStatuses.has(status)) {
@@ -306,7 +311,7 @@ async function startWebhook(
           body: replyText
         });
         if (verbose) {
-          console.log(`↩️  Auto-replied to ${From}`);
+          console.log(success(`↩️  Auto-replied to ${From}`));
         }
       } catch (err) {
         console.error('Failed to auto-reply', err);
@@ -376,9 +381,9 @@ async function ensureFunnel(port: number) {
     const statusOut = (await runExec('tailscale', ['funnel', 'status', '--json'])).stdout.trim();
     const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
     if (!parsed || Object.keys(parsed).length === 0) {
-      console.error('Tailscale Funnel is not enabled on this tailnet/device.');
-      console.error('Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)');
-      console.error('macOS user-space tailscaled docs: https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS');
+      console.error(danger('Tailscale Funnel is not enabled on this tailnet/device.'));
+      console.error(info('Enable in admin console: https://login.tailscale.com/admin (see https://tailscale.com/kb/1223/funnel)'));
+      console.error(info('macOS user-space tailscaled docs: https://github.com/tailscale/tailscale/wiki/Tailscaled-on-macOS'));
       const proceed = await promptYesNo('Attempt local setup with user-space tailscaled?', true);
       if (!proceed) process.exit(1);
       await ensureGoInstalled();
