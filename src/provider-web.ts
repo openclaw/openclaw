@@ -1,8 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import * as Baileys from "baileys";
-import type { proto } from "baileys";
+import {
+	DisconnectReason,
+	fetchLatestBaileysVersion,
+	makeCacheableSignalKeyStore,
+	makeWASocket,
+	useSingleFileAuthState,
+} from "@whiskeysockets/baileys";
+import type { proto } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { danger, info, logVerbose, success } from "./globals.js";
@@ -16,13 +22,13 @@ const WA_WEB_AUTH_FILE = path.join(
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
 	await ensureDir(path.dirname(WA_WEB_AUTH_FILE));
-	const { state, saveState } = await resolveAuthState(WA_WEB_AUTH_FILE);
-	const { version } = await Baileys.fetchLatestBaileysVersion();
+	const { state, saveState } = await useSingleFileAuthState(WA_WEB_AUTH_FILE);
+	const { version } = await fetchLatestBaileysVersion();
 	const logger = pino({ level: verbose ? "info" : "silent" });
-	const sock = Baileys.makeWASocket({
+	const sock = makeWASocket({
 		auth: {
 			creds: state.creds,
-			keys: Baileys.makeCacheableSignalKeyStore(state.keys, logger),
+			keys: makeCacheableSignalKeyStore(state.keys, logger),
 		},
 		version,
 		logger,
@@ -35,7 +41,7 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
 	sock.ev.on("creds.update", saveState);
 	sock.ev.on(
 		"connection.update",
-		(update: Partial<import("baileys").ConnectionState>) => {
+		(update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
 			const { connection, lastDisconnect, qr } = update;
 			if (qr && printQr) {
 				console.log("Scan this QR in WhatsApp (Linked Devices):");

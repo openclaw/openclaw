@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockBaileysSocket } from "../test/mocks/baileys.js";
 import { createMockBaileys } from "../test/mocks/baileys.js";
 
-vi.mock("baileys", () => {
+vi.mock("@whiskeysockets/baileys", () => {
 	const created = createMockBaileys();
 	(globalThis as Record<PropertyKey, unknown>)[
 		Symbol.for("warelay:lastSocket")
@@ -35,8 +35,8 @@ import {
 } from "./provider-web.js";
 
 const baileys = (await import(
-	"baileys"
-)) as unknown as typeof import("baileys") & {
+	"@whiskeysockets/baileys"
+)) as unknown as typeof import("@whiskeysockets/baileys") & {
 	makeWASocket: ReturnType<typeof vi.fn>;
 	useSingleFileAuthState: ReturnType<typeof vi.fn>;
 	fetchLatestBaileysVersion: ReturnType<typeof vi.fn>;
