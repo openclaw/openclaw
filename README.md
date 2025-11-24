@@ -22,12 +22,12 @@ You can also use a personal WhatsApp Web session (QR login) via `--provider web`
 ## Providers (choose per command)
 
 - **Twilio (default)** — full feature set: send, wait/poll delivery, status, inbound polling/webhook, auto-replies. Requires `.env` Twilio creds and a WhatsApp-enabled number (`TWILIO_WHATSAPP_FROM`).
-- **Web (`--provider web`)** — personal WhatsApp Web session via QR. Supports outbound sends and inbound auto-replies when you run `pnpm warelay relay --provider web`. No delivery-status polling for web sends. Setup: `pnpm warelay web:login` then either send with `--provider web` or keep `relay --provider web` running. Session data lives in `~/.warelay/credentials.json`; if logged out, rerun `web:login`. Use at your own risk (personal-account automation can be rate-limited or logged out by WhatsApp).
+- **Web (`--provider web`)** — personal WhatsApp Web session via QR. Supports outbound sends and inbound auto-replies when you run `pnpm warelay relay --provider web`. No delivery-status polling for web sends. Setup: `pnpm warelay web:login` (alias: `pnpm warelay login`) then either send with `--provider web` or keep `relay --provider web` running. Session data lives in `~/.warelay/credentials.json`; if logged out, rerun `web:login`/`login`. Use at your own risk (personal-account automation can be rate-limited or logged out by WhatsApp).
 
 ## Common Commands
 
 - Send: `pnpm warelay send --to +12345550000 --message "Hello" --wait 20 --poll 2`
-- Send via personal WhatsApp Web: first `pnpm warelay web:login` (scan QR), then `pnpm warelay send --provider web --to +12345550000 --message "Hi"`
+- Send via personal WhatsApp Web: first `pnpm warelay web:login` (alias: `pnpm warelay login`, scan QR), then `pnpm warelay send --provider web --to +12345550000 --message "Hi"`
 - Auto-replies (auto provider): `pnpm warelay relay` (uses web if logged in, otherwise twilio poll)
 - Auto-replies (force web): `pnpm warelay relay --provider web`
 - Auto-replies (force Twilio poll): `pnpm warelay relay --provider twilio --interval 5 --lookback 10 --verbose`

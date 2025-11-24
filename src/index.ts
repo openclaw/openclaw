@@ -1928,6 +1928,20 @@ program
 	});
 
 program
+	.command("login")
+	.description("Alias for web:login (personal WhatsApp Web QR link)")
+	.option("--verbose", "Verbose connection logs", false)
+	.action(async (opts) => {
+		setVerbose(Boolean(opts.verbose));
+		try {
+			await loginWeb(Boolean(opts.verbose));
+		} catch (err) {
+			defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
+			defaultRuntime.exit(1);
+		}
+	});
+
+program
 	.command("send")
 	.description("Send a WhatsApp message")
 	.requiredOption(

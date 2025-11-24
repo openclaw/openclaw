@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockTwilio } from "../test/mocks/twilio.js";
 import { statusCommand } from "./commands/status.js";
 import { createDefaultDeps, defaultRuntime } from "./index.js";
+import * as providerWeb from "./provider-web.js";
 
 vi.mock("twilio", () => {
 	const { factory } = createMockTwilio();
@@ -53,6 +54,12 @@ describe("CLI commands", () => {
 		);
 		expect(twilio._client.messages.create).toHaveBeenCalled();
 		expect(wait).not.toHaveBeenCalled();
+	});
+
+	it("login alias calls web login", async () => {
+		const spy = vi.spyOn(providerWeb, "loginWeb").mockResolvedValue();
+		await index.program.parseAsync(["login"], { from: "user" });
+		expect(spy).toHaveBeenCalled();
 	});
 
 	it("status command prints JSON", async () => {
