@@ -35,6 +35,14 @@ export function toWhatsappJid(number: string): string {
 	return `${digits}@s.whatsapp.net`;
 }
 
+export function jidToE164(jid: string): string | null {
+	// Convert a WhatsApp JID (with optional device suffix, e.g. 1234:[redacted-email]) back to +1234.
+	const match = jid.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/);
+	if (!match) return null;
+	const digits = match[1];
+	return `+${digits}`;
+}
+
 export function sleep(ms: number) {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
