@@ -16,7 +16,7 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import chalk from 'chalk';
 
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const program = new Command();
 let globalVerbose = false;
