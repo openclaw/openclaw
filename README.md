@@ -28,6 +28,8 @@ Small TypeScript CLI to send, monitor, and webhook WhatsApp messages via Twilio.
 - Polling mode (no webhooks/funnel): `pnpm warelay poll --interval 5 --lookback 10 --verbose`
   - Useful fallback if Twilio webhook can’t reach you.
   - Still runs config-driven auto-replies (including command-mode/Claude) for new inbound messages.
+- Status: `pnpm warelay status --limit 20 --lookback 240`
+  - Lists recent sent/received WhatsApp messages (merged and sorted), defaulting to 20 messages from the past 4 hours. Add `--json` for machine-readable output.
 
 ## Config-driven auto-replies
 
@@ -61,6 +63,7 @@ Put a JSON5 config at `~/.warelay/warelay.json`. Examples:
 - `inbound.reply.text?: string` — used when `mode` is `text`; supports `{{Body}}`, `{{From}}`, `{{To}}`, `{{MessageSid}}`.
 - `inbound.reply.command?: string[]` — argv for the command to run; templated per element.
 - `inbound.reply.template?: string` — optional string prepended as the second argv element (handy for adding a prompt prefix).
+- `inbound.reply.bodyPrefix?: string` — optional string prepended to `Body` before templating (useful to add system instructions, e.g., `You are a helpful assistant running on the user's Mac. User writes messages via WhatsApp and you respond. You want to be concise in your responses, at most 1000 characters.\n\n`).
 
 Example with an allowlist and Claude CLI one-shot (uses a sample number):
 
@@ -91,3 +94,4 @@ During dev you can run without building: `pnpm dev -- <subcommand>` (e.g. `pnpm 
 
 - Monitor uses polling; webhook mode is push (recommended).
 - Stop monitor/webhook with `Ctrl+C`.
+- When an auto-reply is triggered (text or command mode), warelay immediately posts a WhatsApp typing indicator tied to the inbound `MessageSid` so the user sees “typing…” while your handler runs.

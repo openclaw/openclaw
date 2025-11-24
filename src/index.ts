@@ -100,6 +100,7 @@ type TwilioSenderListClient = {
 		v1: {
 			services: (sid: string) => {
 				update: (params: Record<string, string>) => Promise<unknown>;
+				fetch: () => Promise<{ inboundRequestUrl?: string }>;
 			};
 		};
 	};
@@ -375,6 +376,7 @@ type WarelayConfig = {
 			command?: string[]; // for mode=command, argv with templates
 			template?: string; // prepend template string when building command/prompt
 			timeoutSeconds?: number; // optional command timeout; defaults to 600s
+			bodyPrefix?: string; // optional string prepended to Body before templating
 		};
 	};
 };
@@ -400,6 +402,10 @@ type MsgContext = {
 	MessageSid?: string;
 };
 
+type GetReplyOptions = {
+	onReplyStart?: () => Promise<void> | void;
+};
+
 function applyTemplate(str: string, ctx: MsgContext) {
 	// Simple {{Placeholder}} interpolation using inbound message context.
 	return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
@@ -410,12 +416,28 @@ function applyTemplate(str: string, ctx: MsgContext) {
 
 async function getReplyFromConfig(
 	ctx: MsgContext,
+	opts?: GetReplyOptions,
 ): Promise<string | undefined> {
 	// Choose reply from config: static text or external command stdout.
 	const cfg = loadConfig();
 	const reply = cfg.inbound?.reply;
 	const timeoutSeconds = Math.max(reply?.timeoutSeconds ?? 600, 1);
 	const timeoutMs = timeoutSeconds * 1000;
+	let started = false;
+	const onReplyStart = async () => {
+		if (started) return;
+		started = true;
+		await opts?.onReplyStart?.();
+	};
+
+	// Optional prefix injected before Body for templating/command prompts.
+	const bodyPrefix = reply?.bodyPrefix
+		? applyTemplate(reply.bodyPrefix, ctx)
+		: "";
+	const templatingCtx: MsgContext =
+		bodyPrefix && (ctx.Body ?? "").length >= 0
+			? { ...ctx, Body: `${bodyPrefix}${ctx.Body ?? ""}` }
+			: ctx;
 
 	// Optional allowlist by origin number (E.164 without whatsapp: prefix)
 	const allowFrom = cfg.inbound?.allowFrom;
@@ -434,14 +456,18 @@ async function getReplyFromConfig(
 	}
 
 	if (reply.mode === "text" && reply.text) {
+		await onReplyStart();
 		logVerbose("Using text auto-reply from config");
-		return applyTemplate(reply.text, ctx);
+		return applyTemplate(reply.text, templatingCtx);
 	}
 
 	if (reply.mode === "command" && reply.command?.length) {
-		const argv = reply.command.map((part) => applyTemplate(part, ctx));
+		await onReplyStart();
+		const argv = reply.command.map((part) =>
+			applyTemplate(part, templatingCtx),
+		);
 		const templatePrefix = reply.template
-			? applyTemplate(reply.template, ctx)
+			? applyTemplate(reply.template, templatingCtx)
 			: "";
 		const finalArgv = templatePrefix
 			? [argv[0], templatePrefix, ...argv.slice(1)]
@@ -509,7 +535,9 @@ async function autoReplyIfConfigured(
 		MessageSid: message.sid,
 	};
 
-	const replyText = await getReplyFromConfig(ctx);
+	const replyText = await getReplyFromConfig(ctx, {
+		onReplyStart: () => sendTypingIndicator(client, message.sid),
+	});
 	if (!replyText) return;
 
 	const replyFrom = message.to;
@@ -555,6 +583,34 @@ function createClient(env: EnvConfig) {
 	return Twilio(env.auth.apiKey, env.auth.apiSecret, {
 		accountSid: env.accountSid,
 	});
+}
+
+async function sendTypingIndicator(
+	client: ReturnType<typeof createClient>,
+	messageSid?: string,
+) {
+	// Best-effort WhatsApp typing indicator (public beta as of Nov 2025).
+	if (!messageSid) {
+		logVerbose("Skipping typing indicator: missing MessageSid");
+		return;
+	}
+	try {
+		const requester = client as unknown as TwilioRequester;
+		await requester.request({
+			method: "post",
+			uri: "https://messaging.twilio.com/v2/Indicators/Typing.json",
+			form: {
+				messageId: messageSid,
+				channel: "whatsapp",
+			},
+		});
+		logVerbose(`Sent typing indicator for inbound ${messageSid}`);
+	} catch (err) {
+		if (globalVerbose) {
+			console.error(warn("Typing indicator failed (continuing without it)"));
+			console.error(err);
+		}
+	}
 }
 
 async function sendMessage(to: string, body: string) {
@@ -664,19 +720,24 @@ async function startWebhook(
 		);
 		if (verbose) console.log(chalk.gray(`Body: ${Body ?? ""}`));
 
+		const client = createClient(env);
 		let replyText = autoReply;
 		if (!replyText) {
-			replyText = await getReplyFromConfig({
-				Body,
-				From,
-				To,
-				MessageSid,
-			});
+			replyText = await getReplyFromConfig(
+				{
+					Body,
+					From,
+					To,
+					MessageSid,
+				},
+				{
+					onReplyStart: () => sendTypingIndicator(client, MessageSid),
+				},
+			);
 		}
 
 		if (replyText) {
 			try {
-				const client = createClient(env);
 				await client.messages.create({
 					from: To,
 					to: From,
@@ -949,6 +1010,49 @@ async function findIncomingNumberSid(
 	}
 }
 
+async function findMessagingServiceSid(
+	client: TwilioSenderListClient,
+): Promise<string | null> {
+	// Attempt to locate a messaging service tied to the WA phone number (webhook fallback).
+	type IncomingNumberWithService = { messagingServiceSid?: string };
+	try {
+		const env = readEnv();
+		const phone = env.whatsappFrom.replace("whatsapp:", "");
+		const list = await client.incomingPhoneNumbers.list({
+			phoneNumber: phone,
+			limit: 1,
+		});
+		const msid =
+			(list?.[0] as IncomingNumberWithService | undefined)
+				?.messagingServiceSid ?? null;
+		return msid;
+	} catch (err) {
+		if (globalVerbose) console.error("findMessagingServiceSid failed", err);
+		return null;
+	}
+}
+
+async function setMessagingServiceWebhook(
+	client: TwilioSenderListClient,
+	url: string,
+	method: "POST" | "GET",
+): Promise<boolean> {
+	const msid = await findMessagingServiceSid(client);
+	if (!msid) return false;
+	try {
+		await client.messaging.v1.services(msid).update({
+			InboundRequestUrl: url,
+			InboundRequestMethod: method,
+		});
+		if (globalVerbose)
+			console.log(chalk.gray(`Updated Messaging Service ${msid} inbound URL`));
+		return true;
+	} catch (err) {
+		if (globalVerbose) console.error("Messaging Service update failed", err);
+		return false;
+	}
+}
+
 async function updateWebhook(
 	client: ReturnType<typeof createClient>,
 	senderSid: string,
@@ -1012,6 +1116,14 @@ async function updateWebhook(
 	} catch (err) {
 		if (globalVerbose) console.error("Incoming number update failed", err);
 	}
+
+	// 4) Messaging Service fallback (some WA senders are tied to a service)
+	const messagingServiceUpdated = await setMessagingServiceWebhook(
+		clientTyped,
+		url,
+		method,
+	);
+	if (messagingServiceUpdated) return;
 
 	console.error(danger("Failed to set Twilio webhook."));
 	console.error(
@@ -1092,6 +1204,95 @@ async function monitor(intervalSeconds: number, lookbackMinutes: number) {
 	}
 }
 
+type ListedMessage = {
+	sid: string;
+	status: string | null;
+	direction: string | null;
+	dateCreated?: Date | null;
+	from?: string | null;
+	to?: string | null;
+	body?: string | null;
+	errorCode?: number | null;
+	errorMessage?: string | null;
+};
+
+function uniqueBySid(messages: ListedMessage[]): ListedMessage[] {
+	const seen = new Set<string>();
+	const deduped: ListedMessage[] = [];
+	for (const m of messages) {
+		if (seen.has(m.sid)) continue;
+		seen.add(m.sid);
+		deduped.push(m);
+	}
+	return deduped;
+}
+
+function sortByDateDesc(messages: ListedMessage[]): ListedMessage[] {
+	return [...messages].sort((a, b) => {
+		const da = a.dateCreated?.getTime() ?? 0;
+		const db = b.dateCreated?.getTime() ?? 0;
+		return db - da;
+	});
+}
+
+function formatMessageLine(m: ListedMessage): string {
+	const ts = m.dateCreated?.toISOString() ?? "unknown-time";
+	const dir =
+		m.direction === "inbound"
+			? "⬅️ "
+			: m.direction === "outbound-api" || m.direction === "outbound-reply"
+				? "➡️ "
+				: "↔️ ";
+	const status = m.status ?? "unknown";
+	const err =
+		m.errorCode != null
+			? ` error ${m.errorCode}${m.errorMessage ? ` (${m.errorMessage})` : ""}`
+			: "";
+	const body = (m.body ?? "").replace(/\s+/g, " ").trim();
+	const bodyPreview =
+		body.length > 140 ? `${body.slice(0, 137)}…` : body || "<empty>";
+	return `[${ts}] ${dir}${m.from ?? "?"} -> ${m.to ?? "?"} | ${status}${err} | ${bodyPreview} (sid ${m.sid})`;
+}
+
+async function listRecentMessages(
+	lookbackMinutes: number,
+	limit: number,
+): Promise<ListedMessage[]> {
+	const env = readEnv();
+	const client = createClient(env);
+	const from = withWhatsAppPrefix(env.whatsappFrom);
+	const since = new Date(Date.now() - lookbackMinutes * 60_000);
+
+	// Fetch inbound (to our WA number) and outbound (from our WA number), merge, sort, limit.
+	const fetchLimit = Math.min(Math.max(limit * 2, limit + 10), 100);
+	const inbound = await client.messages.list({
+		to: from,
+		dateSentAfter: since,
+		limit: fetchLimit,
+	});
+	const outbound = await client.messages.list({
+		from,
+		dateSentAfter: since,
+		limit: fetchLimit,
+	});
+
+	const combined = uniqueBySid(
+		[...inbound, ...outbound].map((m) => ({
+			sid: m.sid,
+			status: m.status ?? null,
+			direction: m.direction ?? null,
+			dateCreated: m.dateCreated,
+			from: m.from,
+			to: m.to,
+			body: m.body,
+			errorCode: m.errorCode ?? null,
+			errorMessage: m.errorMessage ?? null,
+		})),
+	);
+
+	return sortByDateDesc(combined).slice(0, limit);
+}
+
 program
 	.name("warelay")
 	.description("WhatsApp relay CLI using Twilio")
@@ -1165,6 +1366,46 @@ Examples:
 		}
 
 		await monitor(intervalSeconds, lookbackMinutes);
+	});
+
+program
+	.command("status")
+	.description("Show recent WhatsApp messages (sent and received)")
+	.option("-l, --limit <count>", "Number of messages to show", "20")
+	.option("-b, --lookback <minutes>", "How far back to fetch messages", "240")
+	.option("--json", "Output JSON instead of text", false)
+	.addHelpText(
+		"after",
+		`
+Examples:
+  warelay status                            # last 20 msgs in past 4h
+  warelay status --limit 5 --lookback 30    # last 5 msgs in past 30m
+  warelay status --json --limit 50          # machine-readable output`,
+	)
+	.action(async (opts) => {
+		const limit = Number.parseInt(opts.limit, 10);
+		const lookbackMinutes = Number.parseInt(opts.lookback, 10);
+		if (Number.isNaN(limit) || limit <= 0 || limit > 200) {
+			console.error("limit must be between 1 and 200");
+			process.exit(1);
+		}
+		if (Number.isNaN(lookbackMinutes) || lookbackMinutes <= 0) {
+			console.error("lookback must be > 0 minutes");
+			process.exit(1);
+		}
+
+		const messages = await listRecentMessages(lookbackMinutes, limit);
+		if (opts.json) {
+			console.log(JSON.stringify(messages, null, 2));
+			return;
+		}
+		if (messages.length === 0) {
+			console.log("No messages found in the requested window.");
+			return;
+		}
+		for (const m of messages) {
+			console.log(formatMessageLine(m));
+		}
 	});
 
 program
