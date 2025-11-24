@@ -66,6 +66,10 @@ type TwilioChannelsSender = {
 	sender_id?: string;
 };
 
+type ChannelSenderUpdater = {
+	update: (params: Record<string, string>) => Promise<unknown>;
+};
+
 type IncomingPhoneNumberUpdater = {
 	update: (params: Record<string, string>) => Promise<unknown>;
 };
@@ -88,9 +92,8 @@ type TwilioSenderListClient = {
 				}) => Promise<TwilioChannelsSender[]>;
 				(
 					sid: string,
-				): {
+				): ChannelSenderUpdater & {
 					fetch: () => Promise<TwilioChannelsSender>;
-					update: (params: Record<string, string>) => Promise<unknown>;
 				};
 			};
 		};
@@ -321,6 +324,7 @@ type WarelayConfig = {
 			text?: string; // for mode=text, can contain {{Body}}
 			command?: string[]; // for mode=command, argv with templates
 			template?: string; // prepend template string when building command/prompt
+			timeoutSeconds?: number; // optional command timeout; defaults to 600s
 		};
 	};
 };
@@ -360,6 +364,8 @@ async function getReplyFromConfig(
 	// Choose reply from config: static text or external command stdout.
 	const cfg = loadConfig();
 	const reply = cfg.inbound?.reply;
+	const timeoutSeconds = Math.max(reply?.timeoutSeconds ?? 600, 1);
+	const timeoutMs = timeoutSeconds * 1000;
 
 	// Optional allowlist by origin number (E.164 without whatsapp: prefix)
 	const allowFrom = cfg.inbound?.allowFrom;
@@ -395,6 +401,7 @@ async function getReplyFromConfig(
 		try {
 			const { stdout } = await execFileAsync(finalArgv[0], finalArgv.slice(1), {
 				maxBuffer: 1024 * 1024,
+				timeout: timeoutMs,
 			});
 			const trimmed = stdout.trim();
 			logVerbose(
@@ -999,7 +1006,7 @@ async function monitor(intervalSeconds: number, lookbackMinutes: number) {
 				const fromNum = m.from ?? "unknown sender";
 				console.log(`\n[${time}] ${fromNum} -> ${m.to}: ${m.body ?? ""}`);
 				updateSince(m.dateCreated);
-				await autoReplyIfConfigured(client, m);
+				void autoReplyIfConfigured(client, m);
 			}
 		} catch (err) {
 			console.error("Error while polling messages", err);
