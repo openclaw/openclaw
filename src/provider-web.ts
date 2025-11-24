@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { proto } from "@whiskeysockets/baileys";
 import {
 	DisconnectReason,
 	fetchLatestBaileysVersion,
@@ -8,7 +9,6 @@ import {
 	makeWASocket,
 	useSingleFileAuthState,
 } from "@whiskeysockets/baileys";
-import type { proto } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { danger, info, logVerbose, success } from "./globals.js";
@@ -287,22 +287,4 @@ function formatError(err: unknown): string {
 	if (status || code)
 		return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
 	return String(err);
-}
-
-async function resolveAuthState(authPath: string) {
-	// Prefer single-file auth if available; fall back to multi-file auth directory.
-	if (typeof (Baileys as { useSingleFileAuthState?: unknown }).useSingleFileAuthState === "function") {
-		return await (Baileys as typeof Baileys & {
-			useSingleFileAuthState: (p: string) => Promise<{
-				state: { creds: unknown; keys: unknown };
-				saveState: () => Promise<void>;
-			}>;
-		}).useSingleFileAuthState(authPath);
-	}
-	const dir = path.dirname(authPath);
-	const multi = await Baileys.useMultiFileAuthState(dir);
-	return {
-		state: multi.state,
-		saveState: multi.saveCreds,
-	};
 }
