@@ -280,10 +280,21 @@ async function getTailnetHostname() {
 
 async function ensureFunnel(port: number) {
   try {
-    const { stdout } = await execFileAsync('tailscale', ['funnel', `${port}`, `127.0.0.1:${port}`], {
+    const status = await execFileAsync('tailscale', ['funnel', 'status', '--json'], {
+      maxBuffer: 2_000_000
+    }).then((r) => r.stdout.trim());
+
+    if (!status || status === '{}' || status === 'null') {
+      console.error(
+        'Tailscale Funnel is not enabled on this tailnet/device. Enable it in the Tailscale admin console, then re-run warelay setup.'
+      );
+      process.exit(1);
+    }
+
+    const { stdout } = await execFileAsync('tailscale', ['funnel', '--yes', '--bg', `${port}`], {
       maxBuffer: 200_000
     });
-    console.log(stdout.trim());
+    if (stdout.trim()) console.log(stdout.trim());
   } catch (err) {
     console.error('Failed to enable Tailscale Funnel. Is it allowed on your tailnet?', err);
     process.exit(1);
