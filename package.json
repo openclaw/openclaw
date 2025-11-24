@@ -14,7 +14,10 @@
     "start": "tsx src/index.ts",
     "warelay": "tsx src/index.ts",
     "warely": "tsx src/index.ts",
-    "lint": "echo \"No linter configured\"",
+    "lint": "biome check src",
+    "lint:fix": "biome check --write src",
+    "format": "biome format src",
+    "format:fix": "biome format src --write",
     "test": "echo \"No tests yet\""
   },
   "keywords": [],
@@ -34,6 +37,7 @@
     "twilio": "^5.10.6"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.3.7",
     "@types/body-parser": "^1.19.6",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.1",
