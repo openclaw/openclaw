@@ -18,6 +18,15 @@ import { stdin as input, stdout as output } from 'node:process';
 dotenv.config();
 
 const program = new Command();
+let globalVerbose = false;
+
+function setVerbose(v: boolean) {
+  globalVerbose = v;
+}
+
+function logVerbose(message: string) {
+  if (globalVerbose) console.log(message);
+}
 
 type AuthMode =
   | { accountSid: string; authToken: string }
@@ -73,6 +82,9 @@ type ExecResult = { stdout: string; stderr: string };
 
 async function runExec(command: string, args: string[], maxBuffer = 2_000_000): Promise<ExecResult> {
   // Thin wrapper around execFile with utf8 output.
+  if (globalVerbose) {
+    console.log(`$ ${command} ${args.join(' ')}`);
+  }
   const { stdout, stderr } = await execFileAsync(command, args, {
     maxBuffer,
     encoding: 'utf8'
@@ -333,6 +345,7 @@ async function ensureGoInstalled() {
     console.error('Go is required to build tailscaled from source. Aborting.');
     process.exit(1);
   }
+  logVerbose('Installing Go via Homebrew…');
   await runExec('brew', ['install', 'go']);
 }
 
@@ -349,6 +362,7 @@ async function ensureTailscaledInstalled() {
     console.error('tailscaled is required for user-space funnel. Aborting.');
     process.exit(1);
   }
+  logVerbose('Installing tailscaled via Homebrew…');
   await runExec('brew', ['install', 'tailscale']);
 }
 
@@ -367,6 +381,7 @@ async function ensureFunnel(port: number) {
       await ensureTailscaledInstalled();
     }
 
+    logVerbose(`Enabling funnel on port ${port}…`);
     const { stdout } = await runExec('tailscale', ['funnel', '--yes', '--bg', `${port}`], 200_000);
     if (stdout.trim()) console.log(stdout.trim());
   } catch (err) {
@@ -565,6 +580,7 @@ With Tailscale:
   (then set Twilio webhook URL to your tailnet IP:42873/webhook/whatsapp)`
   )
   .action(async (opts) => {
+    setVerbose(Boolean(opts.verbose));
     const port = Number.parseInt(opts.port, 10);
     if (Number.isNaN(port) || port <= 0 || port >= 65536) {
       console.error('Port must be between 1 and 65535');
@@ -580,6 +596,7 @@ program
   .option('--path <path>', 'Webhook path', '/webhook/whatsapp')
   .option('--verbose', 'Verbose logging during setup/webhook', false)
   .action(async (opts) => {
+    setVerbose(Boolean(opts.verbose));
     const port = Number.parseInt(opts.port, 10);
     if (Number.isNaN(port) || port <= 0 || port >= 65536) {
       console.error('Port must be between 1 and 65535');
