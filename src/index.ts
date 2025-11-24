@@ -46,6 +46,7 @@ type GlobalOptions = {
 type EnvConfig = {
   accountSid: string;
   whatsappFrom: string;
+  whatsappSenderSid?: string;
   auth: AuthMode;
 };
 
@@ -53,6 +54,7 @@ function readEnv(): EnvConfig {
   // Load and validate Twilio auth + sender configuration from env.
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const whatsappFrom = process.env.TWILIO_WHATSAPP_FROM;
+  const whatsappSenderSid = process.env.TWILIO_SENDER_SID;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
   const apiKey = process.env.TWILIO_API_KEY;
   const apiSecret = process.env.TWILIO_API_SECRET;
@@ -79,6 +81,7 @@ function readEnv(): EnvConfig {
   return {
     accountSid,
     whatsappFrom,
+    whatsappSenderSid,
     auth
   };
 }
@@ -445,28 +448,39 @@ async function ensureFunnel(port: number) {
 
 async function findWhatsappSenderSid(client: ReturnType<typeof createClient>, from: string) {
   // Fetch sender SID that matches configured WhatsApp from number.
-  const resp = await (client as unknown as { request: (options: Record<string, unknown>) => Promise<{ data?: unknown }> }).request({
-    method: 'get',
-    uri: 'https://messaging.twilio.com/v2/Channels/Senders',
-    qs: { Channel: 'whatsapp', PageSize: 50 }
-  });
-  const data = resp?.data as Record<string, unknown> | undefined;
-  const senders = Array.isArray((data as Record<string, unknown> | undefined)?.senders)
-    ? (data as { senders: unknown[] }).senders
-    : undefined;
-  if (!senders) {
-    throw new Error('Unable to list WhatsApp senders');
+  try {
+    const resp = await (client as unknown as { request: (options: Record<string, unknown>) => Promise<{ data?: unknown }> }).request({
+      method: 'get',
+      uri: 'https://messaging.twilio.com/v2/Channels/Senders',
+      qs: { Channel: 'whatsapp', PageSize: 50 }
+    });
+    const data = resp?.data as Record<string, unknown> | undefined;
+    const senders = Array.isArray((data as Record<string, unknown> | undefined)?.senders)
+      ? (data as { senders: unknown[] }).senders
+      : undefined;
+    if (!senders) {
+      throw new Error('List senders response missing "senders" array');
+    }
+    const match = senders.find(
+      (s) =>
+        typeof s === 'object' &&
+        s !== null &&
+        (s as Record<string, unknown>).sender_id === withWhatsAppPrefix(from)
+    ) as { sid?: string } | undefined;
+    if (!match || typeof match.sid !== 'string') {
+      throw new Error(`Could not find sender ${withWhatsAppPrefix(from)} in Twilio account`);
+    }
+    return match.sid;
+  } catch (err) {
+    console.error(danger('Unable to list WhatsApp senders via Twilio API.'));
+    if (globalVerbose) console.error(err);
+    console.error(
+      info(
+        'Provide TWILIO_SENDER_SID in .env to skip lookup (find it in Twilio Console → Messaging → Senders → WhatsApp).'
+      )
+    );
+    process.exit(1);
   }
-  const match = senders.find(
-    (s) =>
-      typeof s === 'object' &&
-      s !== null &&
-      (s as Record<string, unknown>).sender_id === withWhatsAppPrefix(from)
-  ) as { sid?: string } | undefined;
-  if (!match || typeof match.sid !== 'string') {
-    throw new Error(`Could not find sender ${withWhatsAppPrefix(from)} in Twilio account`);
-  }
-  return match.sid;
 }
 
 async function updateWebhook(
@@ -476,15 +490,22 @@ async function updateWebhook(
   method: 'POST' | 'GET' = 'POST'
 ) {
   // Point Twilio sender webhook at the provided URL.
-  await (client as unknown as { request: (options: Record<string, unknown>) => Promise<unknown> }).request({
-    method: 'post',
-    uri: `https://messaging.twilio.com/v2/Channels/Senders/${senderSid}`,
-    form: {
-      CallbackUrl: url,
-      CallbackMethod: method
-    }
-  });
-  console.log(`✅ Twilio webhook set to ${url}`);
+  await (client as unknown as { request: (options: Record<string, unknown>) => Promise<unknown> })
+    .request({
+      method: 'post',
+      uri: `https://messaging.twilio.com/v2/Channels/Senders/${senderSid}`,
+      form: {
+        CallbackUrl: url,
+        CallbackMethod: method
+      }
+    })
+    .catch((err) => {
+      console.error(danger('Failed to set Twilio webhook.'));
+      if (globalVerbose) console.error(err);
+      console.error(info('Double-check your sender SID and credentials; you can set TWILIO_SENDER_SID to force a specific sender.'));
+      process.exit(1);
+    });
+  console.log(success(`✅ Twilio webhook set to ${url}`));
 }
 
 function sleep(ms: number) {

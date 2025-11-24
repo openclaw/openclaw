@@ -7,6 +7,7 @@ Small TypeScript CLI to send, monitor, and webhook WhatsApp messages via Twilio.
 1. `pnpm install`
 2. Copy `.env.example` to `.env` and fill in `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_WHATSAPP_FROM` (use your approved WhatsApp-enabled Twilio number, prefixed with `whatsapp:`).
    - Alternatively, use API keys: `TWILIO_API_KEY` + `TWILIO_API_SECRET` instead of `TWILIO_AUTH_TOKEN`.
+   - Optional: `TWILIO_SENDER_SID` to skip auto-discovery of the WhatsApp sender in Twilio.
 3. Build once for the runnable bin: `pnpm build`
 
 ## Commands
