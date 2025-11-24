@@ -22,9 +22,11 @@ Small TypeScript CLI to send, monitor, and webhook WhatsApp messages via Twilio.
   - With Tailscale, expose it: `tailscale serve tcp 42873 127.0.0.1:42873` and use your tailnet IP.
   - Customize path if desired: `--path /hooks/wa`
   - If no `--reply`, auto-reply can be configured via `~/.warelay/warelay.json` (JSON5)
-- Setup helper: `pnpm warelay setup --port 42873 --path /webhook/whatsapp`
-  - Validates Twilio env, confirms `tailscale` binary, starts the webhook, enables Tailscale Funnel, and sets the Twilio incoming webhook to your Funnel URL.
+- Webhook/funnel “up”: `pnpm warelay up --port 42873 --path /webhook/whatsapp`
+  - Validates Twilio env, confirms `tailscale` binary, enables Tailscale Funnel, starts the webhook, and sets the Twilio incoming webhook to your Funnel URL.
   - Requires Tailscale Funnel to be enabled for your tailnet/device (admin setting). If it isn’t enabled, the command will exit with instructions; alternatively expose the webhook via your own tunnel and set the Twilio URL manually.
+- Polling mode (no webhooks/funnel): `pnpm warelay poll --interval 5 --lookback 10 --verbose`
+  - Useful fallback if Twilio webhook can’t reach you.
 
 ## Config-driven auto-replies
 
