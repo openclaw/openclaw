@@ -20,7 +20,8 @@
     "lint:fix": "biome check --write src",
     "format": "biome format src",
     "format:fix": "biome format src --write",
-    "test": "vitest"
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage"
   },
   "keywords": [],
   "author": "",
@@ -30,28 +31,48 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
+    "baileys": "^7.0.0-rc.9",
     "body-parser": "^2.2.0",
     "chalk": "^5.6.2",
     "commander": "^14.0.2",
     "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "json5": "^2.2.3",
-    "qrcode-terminal": "^0.12.0",
-    "twilio": "^5.10.6",
     "pino": "^10.1.0",
-    "baileys": "^7.0.0-rc.9"
+    "qrcode-terminal": "^0.12.0",
+    "twilio": "^5.10.6"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.7",
     "@types/body-parser": "^1.19.6",
-    "@types/qrcode-terminal": "^0.12.2",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.1",
+    "@types/qrcode-terminal": "^0.12.2",
+    "@vitest/coverage-v8": "^4.0.13",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.13"
   },
   "vitest": {
+    "coverage": {
+      "provider": "v8",
+      "reporter": [
+        "text",
+        "lcov"
+      ],
+      "thresholds": {
+        "lines": 70,
+        "functions": 70,
+        "branches": 70,
+        "statements": 70
+      },
+      "include": [
+        "src/utils.ts"
+      ],
+      "exclude": [
+        "src/**/*.test.ts"
+      ]
+    },
     "exclude": [
       "dist/**"
     ]
