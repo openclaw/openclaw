@@ -53,6 +53,12 @@ type TwilioRequestResponse = {
 	};
 };
 
+type IncomingNumber = {
+	sid: string;
+	phoneNumber: string;
+	smsUrl?: string;
+};
+
 type TwilioChannelsSender = {
 	sid?: string;
 	senderId?: string;
@@ -67,7 +73,17 @@ type TwilioSenderListClient = {
 					channel: string;
 					pageSize: number;
 				}) => Promise<TwilioChannelsSender[]>;
+				(sid: string): {
+					fetch: () => Promise<TwilioChannelsSender>;
+					update: (params: Record<string, string>) => Promise<unknown>;
+				};
 			};
+		};
+	};
+	incomingPhoneNumbers: {
+		list: (params: { phoneNumber: string; limit?: number }) => Promise<IncomingNumber[]>;
+		(sid: string): {
+			update: (params: Record<string, string>) => Promise<unknown>;
 		};
 	};
 };
@@ -726,6 +742,23 @@ async function findWhatsappSenderSid(
 	}
 }
 
+async function findIncomingNumberSid(client: TwilioSenderListClient, url: string): Promise<string | null> {
+	// Try to locate the underlying phone number and return its SID for webhook fallback.
+	const env = readEnv();
+	const phone = env.whatsappFrom.replace("whatsapp:", "");
+	try {
+		const list = await client.incomingPhoneNumbers.list({ phoneNumber: phone, limit: 2 });
+		if (!list || list.length === 0) return null;
+		if (list.length > 1 && globalVerbose) {
+			console.error(warn("Multiple incoming numbers matched; using the first."));
+		}
+		return list[0]?.sid ?? null;
+	} catch (err) {
+		if (globalVerbose) console.error("incomingPhoneNumbers.list failed", err);
+		return null;
+	}
+}
+
 async function updateWebhook(
 	client: ReturnType<typeof createClient>,
 	senderSid: string,
@@ -733,26 +766,42 @@ async function updateWebhook(
 	method: "POST" | "GET" = "POST",
 ) {
 	// Point Twilio sender webhook at the provided URL.
-	await (client as unknown as TwilioRequester)
-		.request({
-			method: "post",
-			uri: `https://messaging.twilio.com/v2/Channels/Senders/${senderSid}`,
-			form: {
+	const clientTyped = client as unknown as TwilioSenderListClient;
+	try {
+		if (clientTyped.messaging?.v2?.channelsSenders) {
+			await clientTyped.messaging.v2.channelsSenders(senderSid).update({
 				CallbackUrl: url,
 				CallbackMethod: method,
-			},
-		})
-		.catch((err) => {
-			console.error(danger("Failed to set Twilio webhook."));
-			if (globalVerbose) console.error(err);
-			console.error(
-				info(
-					"Double-check your sender SID and credentials; you can set TWILIO_SENDER_SID to force a specific sender.",
-				),
-			);
-			process.exit(1);
-		});
-	console.log(success(`✅ Twilio webhook set to ${url}`));
+			});
+			console.log(success(`✅ Twilio sender webhook set to ${url}`));
+			return;
+		}
+	} catch (err) {
+		if (globalVerbose)
+			console.error("channelsSenders update failed, will try phone number fallback", err);
+	}
+
+	try {
+		const phoneSid = await findIncomingNumberSid(clientTyped, url);
+		if (phoneSid) {
+			await (clientTyped.incomingPhoneNumbers as any)(phoneSid).update({
+				SmsUrl: url,
+				SmsMethod: method,
+			});
+			console.log(success(`✅ Twilio phone webhook set to ${url}`));
+			return;
+		}
+	} catch (err) {
+		if (globalVerbose) console.error("Incoming number update failed", err);
+	}
+
+	console.error(danger("Failed to set Twilio webhook."));
+	console.error(
+		info(
+			"Double-check your sender SID and credentials; you can set TWILIO_SENDER_SID to force a specific sender.",
+		),
+	);
+	process.exit(1);
 }
 
 function sleep(ms: number) {
