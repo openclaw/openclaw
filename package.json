@@ -17,7 +17,7 @@
     "warely": "tsx src/index.ts",
     "wa": "tsx src/index.ts",
     "lint": "biome check src",
-    "lint:fix": "biome check --write src",
+    "lint:fix": "biome check --write --unsafe src && biome format --write src",
     "format": "biome format src",
     "format:fix": "biome format src --write",
     "test": "vitest",
