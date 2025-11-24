@@ -89,6 +89,10 @@ async function runExec(command: string, args: string[], maxBuffer = 2_000_000): 
     maxBuffer,
     encoding: 'utf8'
   });
+  if (globalVerbose) {
+    if (stdout.trim()) console.log(stdout.trim());
+    if (stderr.trim()) console.error(stderr.trim());
+  }
   return { stdout, stderr };
 }
 
