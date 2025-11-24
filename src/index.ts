@@ -328,6 +328,12 @@ async function startWebhook(
 
   // Twilio sends application/x-www-form-urlencoded
   app.use(bodyParser.urlencoded({ extended: false }));
+  app.use((req, _res, next) => {
+    if (verbose) {
+      console.log(chalk.gray(`REQ ${req.method} ${req.url}`));
+    }
+    next();
+  });
 
   app.post(path, async (req: Request, res: Response) => {
     const { From, To, Body, MessageSid } = req.body ?? {};
@@ -363,6 +369,10 @@ async function startWebhook(
 
     // Respond 200 OK to Twilio
     res.type('text/xml').send('<Response></Response>');
+  });
+
+  app.use((req, res) => {
+    res.status(404).send('warelay webhook: not found');
   });
 
   return new Promise<void>((resolve) => {
