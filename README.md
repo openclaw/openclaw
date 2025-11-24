@@ -52,6 +52,39 @@ Put a JSON5 config at `~/.warelay/warelay.json`. Examples:
 }
 ```
 
+### Options reference (JSON5)
+
+- `inbound.allowFrom?: string[]` — optional allowlist of E.164 numbers (no `whatsapp:` prefix). If set, only these senders trigger auto-replies.
+- `inbound.reply.mode: "text" | "command"`
+  - `text` — send `inbound.reply.text` after templating.
+  - `command` — run `inbound.reply.command` (argv array) after templating; trimmed stdout becomes the reply.
+- `inbound.reply.text?: string` — used when `mode` is `text`; supports `{{Body}}`, `{{From}}`, `{{To}}`, `{{MessageSid}}`.
+- `inbound.reply.command?: string[]` — argv for the command to run; templated per element.
+- `inbound.reply.template?: string` — optional string prepended as the second argv element (handy for adding a prompt prefix).
+
+Example with an allowlist and Claude CLI one-shot (uses a sample number):
+
+```json5
+{
+  inbound: {
+    allowFrom: ["+15551230000"],
+    reply: {
+      mode: "command",
+      command: [
+        "claude",
+        "--print",
+        "--output-format",
+        "text",
+        "--dangerously-skip-permissions",
+        "--system-prompt",
+        "You are an auto-reply bot on WhatsApp. Respond concisely.",
+        "{{Body}}"
+      ]
+    }
+  }
+}
+```
+
 During dev you can run without building: `pnpm dev -- <subcommand>` (e.g. `pnpm dev -- send --to +1...`). Auto-replies apply in webhook and polling modes.
 
 ## Notes

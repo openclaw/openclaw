@@ -43,6 +43,7 @@ type TwilioRequestOptions = {
 	uri: string;
 	params?: Record<string, string | number>;
 	form?: Record<string, string>;
+	body?: unknown;
 };
 
 type TwilioSender = { sid: string; sender_id: string };
@@ -390,8 +391,8 @@ async function getReplyFromConfig(
 		const finalArgv = templatePrefix
 			? [argv[0], templatePrefix, ...argv.slice(1)]
 			: argv;
+		const started = Date.now();
 		try {
-			if (globalVerbose) console.log(`RUN `);
 			const { stdout } = await execFileAsync(finalArgv[0], finalArgv.slice(1), {
 				maxBuffer: 1024 * 1024,
 			});
@@ -399,9 +400,13 @@ async function getReplyFromConfig(
 			logVerbose(
 				`Command auto-reply stdout (trimmed): ${trimmed || "<empty>"}`,
 			);
+			logVerbose(`Command auto-reply finished in ${Date.now() - started}ms`);
 			return trimmed || undefined;
 		} catch (err) {
-			console.error("Command auto-reply failed", err);
+			console.error(
+				`Command auto-reply failed after ${Date.now() - started}ms`,
+				err,
+			);
 			return undefined;
 		}
 	}
