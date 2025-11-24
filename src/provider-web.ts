@@ -1,14 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as Baileys from "baileys";
 import type { proto } from "baileys";
-import {
-	DisconnectReason,
-	fetchLatestBaileysVersion,
-	makeCacheableSignalKeyStore,
-	makeWASocket,
-	useSingleFileAuthState,
-} from "baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
 import { danger, info, logVerbose, success } from "./globals.js";
@@ -22,13 +16,13 @@ const WA_WEB_AUTH_FILE = path.join(
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
 	await ensureDir(path.dirname(WA_WEB_AUTH_FILE));
-	const { state, saveState } = await useSingleFileAuthState(WA_WEB_AUTH_FILE);
-	const { version } = await fetchLatestBaileysVersion();
+	const { state, saveState } = await resolveAuthState(WA_WEB_AUTH_FILE);
+	const { version } = await Baileys.fetchLatestBaileysVersion();
 	const logger = pino({ level: verbose ? "info" : "silent" });
-	const sock = makeWASocket({
+	const sock = Baileys.makeWASocket({
 		auth: {
 			creds: state.creds,
-			keys: makeCacheableSignalKeyStore(state.keys, logger),
+			keys: Baileys.makeCacheableSignalKeyStore(state.keys, logger),
 		},
 		version,
 		logger,
@@ -287,4 +281,22 @@ function formatError(err: unknown): string {
 	if (status || code)
 		return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
 	return String(err);
+}
+
+async function resolveAuthState(authPath: string) {
+	// Prefer single-file auth if available; fall back to multi-file auth directory.
+	if (typeof (Baileys as { useSingleFileAuthState?: unknown }).useSingleFileAuthState === "function") {
+		return await (Baileys as typeof Baileys & {
+			useSingleFileAuthState: (p: string) => Promise<{
+				state: { creds: unknown; keys: unknown };
+				saveState: () => Promise<void>;
+			}>;
+		}).useSingleFileAuthState(authPath);
+	}
+	const dir = path.dirname(authPath);
+	const multi = await Baileys.useMultiFileAuthState(dir);
+	return {
+		state: multi.state,
+		saveState: multi.saveCreds,
+	};
 }
