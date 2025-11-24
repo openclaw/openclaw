@@ -389,7 +389,6 @@ async function getReplyFromConfig(
 	}
 
 	if (reply.mode === "command" && reply.command?.length) {
-		logVerbose(`Running command auto-reply: ${reply.command.join(" ")}`);
 		const argv = reply.command.map((part) => applyTemplate(part, ctx));
 		const templatePrefix = reply.template
 			? applyTemplate(reply.template, ctx)
@@ -397,7 +396,7 @@ async function getReplyFromConfig(
 		const finalArgv = templatePrefix
 			? [argv[0], templatePrefix, ...argv.slice(1)]
 			: argv;
-		logVerbose(`Resolved command argv: ${finalArgv.join(" ")}`);
+		logVerbose(`Running command auto-reply: ${finalArgv.join(" ")}`);
 		const started = Date.now();
 		try {
 			const { stdout, stderr } = await execFileAsync(
