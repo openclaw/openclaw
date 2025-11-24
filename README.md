@@ -27,6 +27,7 @@ Small TypeScript CLI to send, monitor, and webhook WhatsApp messages via Twilio.
   - Requires Tailscale Funnel to be enabled for your tailnet/device (admin setting). If it isn’t enabled, the command will exit with instructions; alternatively expose the webhook via your own tunnel and set the Twilio URL manually.
 - Polling mode (no webhooks/funnel): `pnpm warelay poll --interval 5 --lookback 10 --verbose`
   - Useful fallback if Twilio webhook can’t reach you.
+  - Still runs config-driven auto-replies (including command-mode/Claude) for new inbound messages.
 
 ## Config-driven auto-replies
 
@@ -51,7 +52,7 @@ Put a JSON5 config at `~/.warelay/warelay.json`. Examples:
 }
 ```
 
-During dev you can run without building: `pnpm dev -- <subcommand>` (e.g. `pnpm dev -- send --to +1...`).
+During dev you can run without building: `pnpm dev -- <subcommand>` (e.g. `pnpm dev -- send --to +1...`). Auto-replies apply in webhook and polling modes.
 
 ## Notes
 

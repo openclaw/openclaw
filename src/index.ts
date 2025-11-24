@@ -314,6 +314,7 @@ type ReplyMode = "text" | "command";
 
 type WarelayConfig = {
 	inbound?: {
+		allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
 		reply?: {
 			mode: ReplyMode;
 			text?: string; // for mode=text, can contain {{Body}}
@@ -358,6 +359,18 @@ async function getReplyFromConfig(
 	// Choose reply from config: static text or external command stdout.
 	const cfg = loadConfig();
 	const reply = cfg.inbound?.reply;
+
+	// Optional allowlist by origin number (E.164 without whatsapp: prefix)
+	const allowFrom = cfg.inbound?.allowFrom;
+	if (Array.isArray(allowFrom) && allowFrom.length > 0) {
+		const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
+		if (!allowFrom.includes(from)) {
+			logVerbose(
+				`Skipping auto-reply: sender ${from || "<unknown>"} not in allowFrom list`,
+			);
+			return undefined;
+		}
+	}
 	if (!reply) {
 		logVerbose("No inbound.reply configured; skipping auto-reply");
 		return undefined;
@@ -379,7 +392,7 @@ async function getReplyFromConfig(
 			: argv;
 		try {
 			if (globalVerbose) console.log(`RUN `);
-        const { stdout } = await execFileAsync(finalArgv[0], finalArgv.slice(1), {
+			const { stdout } = await execFileAsync(finalArgv[0], finalArgv.slice(1), {
 				maxBuffer: 1024 * 1024,
 			});
 			const trimmed = stdout.trim();
@@ -952,7 +965,8 @@ async function monitor(intervalSeconds: number, lookbackMinutes: number) {
 	};
 
 	let keepRunning = true;
-	process.on("SIGINT", () => {
+	process.once("SIGINT", () => {
+		if (!keepRunning) return;
 		keepRunning = false;
 		console.log("\n👋 Stopping monitor");
 	});
