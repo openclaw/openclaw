@@ -11,9 +11,9 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/index.js",
-    "warelay": "node dist/index.js",
-    "warely": "node dist/index.js",
+    "start": "tsx src/index.ts",
+    "warelay": "tsx src/index.ts",
+    "warely": "tsx src/index.ts",
     "lint": "echo \"No linter configured\"",
     "test": "echo \"No tests yet\""
   },
