@@ -97,6 +97,11 @@ type TwilioSenderListClient = {
 				};
 			};
 		};
+		v1: {
+			services: (sid: string) => {
+				update: (params: Record<string, string>) => Promise<unknown>;
+			};
+		};
 	};
 	incomingPhoneNumbers: IncomingPhoneNumbersClient;
 };
