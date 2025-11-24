@@ -28,6 +28,7 @@ type EnvConfig = {
 };
 
 function readEnv(): EnvConfig {
+  // Load and validate Twilio auth + sender configuration from env.
   const accountSid = process.env.TWILIO_ACCOUNT_SID;
   const whatsappFrom = process.env.TWILIO_WHATSAPP_FROM;
   const authToken = process.env.TWILIO_AUTH_TOKEN;
@@ -65,6 +66,7 @@ const execFileAsync = promisify(execFile);
 type ExecResult = { stdout: string; stderr: string };
 
 async function runExec(command: string, args: string[], maxBuffer = 2_000_000): Promise<ExecResult> {
+  // Thin wrapper around execFile with utf8 output.
   const { stdout, stderr } = await execFileAsync(command, args, {
     maxBuffer,
     encoding: 'utf8'
@@ -73,6 +75,7 @@ async function runExec(command: string, args: string[], maxBuffer = 2_000_000): 
 }
 
 async function ensureBinary(name: string): Promise<void> {
+  // Abort early if a required CLI tool is missing.
   await runExec('which', [name]).catch(() => {
     console.error(`Missing required binary: ${name}. Please install it.`);
     process.exit(1);
@@ -80,6 +83,7 @@ async function ensureBinary(name: string): Promise<void> {
 }
 
 function withWhatsAppPrefix(number: string): string {
+  // Ensure number has whatsapp: prefix expected by Twilio.
   return number.startsWith('whatsapp:') ? number : `whatsapp:${number}`;
 }
 
@@ -99,6 +103,7 @@ type WarelayConfig = {
 };
 
 function loadConfig(): WarelayConfig {
+  // Read ~/.warelay/warelay.json (JSON5) if present.
   try {
     if (!fs.existsSync(CONFIG_PATH)) return {};
     const raw = fs.readFileSync(CONFIG_PATH, 'utf-8');
@@ -119,6 +124,7 @@ type MsgContext = {
 };
 
 function applyTemplate(str: string, ctx: MsgContext) {
+  // Simple {{Placeholder}} interpolation using inbound message context.
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = (ctx as Record<string, unknown>)[key];
     return value == null ? '' : String(value);
@@ -126,6 +132,7 @@ function applyTemplate(str: string, ctx: MsgContext) {
 }
 
 async function getReplyFromConfig(ctx: MsgContext): Promise<string | undefined> {
+  // Choose reply from config: static text or external command stdout.
   const cfg = loadConfig();
   const reply = cfg.inbound?.reply;
   if (!reply) return undefined;
@@ -153,6 +160,7 @@ async function getReplyFromConfig(ctx: MsgContext): Promise<string | undefined> 
 }
 
 function createClient(env: EnvConfig) {
+  // Twilio client using either auth token or API key/secret.
   if ('authToken' in env.auth) {
     return Twilio(env.accountSid, env.auth.authToken, {
       accountSid: env.accountSid
@@ -164,6 +172,7 @@ function createClient(env: EnvConfig) {
 }
 
 async function sendMessage(to: string, body: string) {
+  // Send outbound WhatsApp message; exit non-zero on API failure.
   const env = readEnv();
   const client = createClient(env);
   const from = withWhatsAppPrefix(env.whatsappFrom);
@@ -206,6 +215,7 @@ async function waitForFinalStatus(
   timeoutSeconds: number,
   pollSeconds: number
 ) {
+  // Poll message status until delivered/failed or timeout.
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     const m = await client.messages(sid).fetch();
@@ -232,6 +242,7 @@ async function startWebhook(
   path = '/webhook/whatsapp',
   autoReply?: string
 ) {
+  // Start Express webhook; generate replies via config or CLI flag.
   const env = readEnv();
   const app = express();
 
@@ -279,6 +290,7 @@ async function startWebhook(
 }
 
 async function getTailnetHostname() {
+  // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
   const { stdout } = await runExec('tailscale', ['status', '--json']);
   const parsed = stdout ? (JSON.parse(stdout) as Record<string, unknown>) : {};
   const self = parsed?.['Self'] as Record<string, unknown> | undefined;
@@ -290,6 +302,7 @@ async function getTailnetHostname() {
 }
 
 async function ensureFunnel(port: number) {
+  // Ensure Funnel is enabled and publish the webhook port.
   try {
     const statusOut = (await runExec('tailscale', ['funnel', 'status', '--json'])).stdout.trim();
     const parsed = statusOut ? (JSON.parse(statusOut) as Record<string, unknown>) : {};
@@ -309,6 +322,7 @@ async function ensureFunnel(port: number) {
 }
 
 async function findWhatsappSenderSid(client: ReturnType<typeof createClient>, from: string) {
+  // Fetch sender SID that matches configured WhatsApp from number.
   const resp = await (client as unknown as { request: (options: Record<string, unknown>) => Promise<{ data?: unknown }> }).request({
     method: 'get',
     uri: 'https://messaging.twilio.com/v2/Channels/Senders',
@@ -339,7 +353,8 @@ async function updateWebhook(
   url: string,
   method: 'POST' | 'GET' = 'POST'
 ) {
-  await (client as any).request({
+  // Point Twilio sender webhook at the provided URL.
+  await (client as unknown as { request: (options: Record<string, unknown>) => Promise<unknown> }).request({
     method: 'post',
     uri: `https://messaging.twilio.com/v2/Channels/Senders/${senderSid}`,
     form: {
@@ -351,10 +366,12 @@ async function updateWebhook(
 }
 
 function sleep(ms: number) {
+  // Promise-based sleep utility.
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function monitor(intervalSeconds: number, lookbackMinutes: number) {
+  // Poll Twilio for inbound messages and stream them with de-dupe.
   const env = readEnv();
   const client = createClient(env);
   const from = withWhatsAppPrefix(env.whatsappFrom);
