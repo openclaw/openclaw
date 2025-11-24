@@ -8,42 +8,39 @@ import process, { stdin as input, stdout as output } from "node:process";
 import readline from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import type { ConnectionState } from "baileys";
-import {
-	DisconnectReason,
-	fetchLatestBaileysVersion,
-	makeCacheableSignalKeyStore,
-	makeWASocket,
-	useMultiFileAuthState,
-} from "baileys";
 import bodyParser from "body-parser";
 import chalk from "chalk";
 import { Command } from "commander";
 import dotenv from "dotenv";
 import express, { type Request, type Response } from "express";
 import JSON5 from "json5";
-import pino from "pino";
-import qrcode from "qrcode-terminal";
 import Twilio from "twilio";
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
+import {
+	danger,
+	info,
+	isYes,
+	isVerbose,
+	logVerbose,
+	setVerbose,
+	setYes,
+	success,
+	warn,
+} from "./globals.js";
+import { loginWeb, sendMessageWeb } from "./provider-web.js";
+import {
+	Provider,
+	assertProvider,
+	normalizeE164,
+	normalizePath,
+	sleep,
+	toWhatsappJid,
+	withWhatsAppPrefix,
+} from "./utils.js";
 
 dotenv.config({ quiet: true });
 
 const program = new Command();
-let globalVerbose = false;
-let globalYes = false;
-
-function setVerbose(v: boolean) {
-	globalVerbose = v;
-}
-
-function logVerbose(message: string) {
-	if (globalVerbose) console.log(chalk.gray(message));
-}
-
-function setYes(v: boolean) {
-	globalYes = v;
-}
 
 type AuthMode =
 	| { accountSid: string; authToken: string }
@@ -186,7 +183,7 @@ async function runExec(
 	{ maxBuffer = 2_000_000, timeoutMs }: ExecOptions = {},
 ): Promise<ExecResult> {
 	// Thin wrapper around execFile with utf8 output.
-	if (globalVerbose) {
+	if (isVerbose()) {
 		console.log(`$ ${command} ${args.join(" ")}`);
 	}
 	try {
@@ -195,13 +192,13 @@ async function runExec(
 			encoding: "utf8",
 			timeout: timeoutMs,
 		});
-		if (globalVerbose) {
+		if (isVerbose()) {
 			if (stdout.trim()) console.log(stdout.trim());
 			if (stderr.trim()) console.error(stderr.trim());
 		}
 		return { stdout, stderr };
 	} catch (err) {
-		if (globalVerbose) {
+		if (isVerbose()) {
 			console.error(danger(`Command failed: ${command} ${args.join(" ")}`));
 		}
 		throw err;
@@ -356,7 +353,8 @@ async function promptYesNo(
 	question: string,
 	defaultYes = false,
 ): Promise<boolean> {
-	if (globalYes) return true;
+	if (isVerbose() && isYes()) return true; // redundant guard when both flags set
+	if (isYes()) return true;
 	const rl = readline.createInterface({ input, output });
 	const suffix = defaultYes ? " [Y/n] " : " [y/N] ";
 	const answer = (await rl.question(`${question}${suffix}`))
@@ -367,47 +365,7 @@ async function promptYesNo(
 	return answer.startsWith("y");
 }
 
-function withWhatsAppPrefix(number: string): string {
-	// Ensure number has whatsapp: prefix expected by Twilio.
-	return number.startsWith("whatsapp:") ? number : `whatsapp:${number}`;
-}
-
-function normalizePath(p: string): string {
-	if (!p.startsWith("/")) return `/${p}`;
-	return p;
-}
-
-async function ensureDir(dir: string) {
-	await fs.promises.mkdir(dir, { recursive: true });
-}
-
-type Provider = "twilio" | "web";
-
-function assertProvider(input: string): asserts input is Provider {
-	if (input !== "twilio" && input !== "web") {
-		throw new Error("Provider must be 'twilio' or 'web'");
-	}
-}
-
-function normalizeE164(number: string): string {
-	const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
-	const digits = withoutPrefix.replace(/[^\d+]/g, "");
-	if (digits.startsWith("+")) return `+${digits.slice(1)}`;
-	return `+${digits}`;
-}
-
-function toWhatsappJid(number: string): string {
-	const e164 = normalizeE164(number);
-	const digits = e164.replace(/\D/g, "");
-	return `${digits}@s.whatsapp.net`;
-}
-
 const CONFIG_PATH = path.join(os.homedir(), ".warelay", "warelay.json");
-const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "waweb");
-const success = chalk.green;
-const warn = chalk.yellow;
-const info = chalk.cyan;
-const danger = chalk.red;
 
 type ReplyMode = "text" | "command";
 
@@ -587,10 +545,10 @@ async function autoReplyIfConfigured(
 	const replyFrom = message.to;
 	const replyTo = message.from;
 	if (!replyFrom || !replyTo) {
-		if (globalVerbose)
-			console.error(
-				"Skipping auto-reply: missing to/from on inbound message",
-				ctx,
+	if (isVerbose())
+		console.error(
+			"Skipping auto-reply: missing to/from on inbound message",
+			ctx,
 			);
 		return;
 	}
@@ -605,7 +563,7 @@ async function autoReplyIfConfigured(
 			to: replyTo,
 			body: replyText,
 		});
-		if (globalVerbose) {
+		if (isVerbose()) {
 			console.log(
 				success(
 					`↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"})`,
@@ -650,10 +608,10 @@ async function sendTypingIndicator(
 		});
 		logVerbose(`Sent typing indicator for inbound ${messageSid}`);
 	} catch (err) {
-		if (globalVerbose) {
-			console.error(warn("Typing indicator failed (continuing without it)"));
-			console.error(err);
-		}
+	if (isVerbose()) {
+		console.error(warn("Typing indicator failed (continuing without it)"));
+		console.error(err);
+	}
 	}
 }
 
@@ -701,112 +659,6 @@ async function sendMessage(to: string, body: string) {
 			console.error("Response body:", JSON.stringify(responseBody, null, 2));
 		}
 		process.exit(1);
-	}
-}
-
-async function createWaSocket(printQr: boolean, verbose: boolean) {
-	await ensureDir(WA_WEB_AUTH_DIR);
-	const { state, saveCreds } = await useMultiFileAuthState(WA_WEB_AUTH_DIR);
-	const { version } = await fetchLatestBaileysVersion();
-	const logger = pino({ level: verbose ? "info" : "silent" });
-	const sock = makeWASocket({
-		auth: {
-			creds: state.creds,
-			keys: makeCacheableSignalKeyStore(state.keys, logger),
-		},
-		version,
-		printQRInTerminal: false,
-		browser: ["Warelay", "CLI", "1.0.0"],
-		syncFullHistory: false,
-		markOnlineOnConnect: false,
-	});
-
-	sock.ev.on("creds.update", saveCreds);
-	sock.ev.on("connection.update", (update: Partial<ConnectionState>) => {
-		const { connection, lastDisconnect, qr } = update;
-		if (qr && printQr) {
-			console.log("Scan this QR in WhatsApp (Linked Devices):");
-			qrcode.generate(qr, { small: true });
-		}
-		if (connection === "close") {
-			const code = (
-				lastDisconnect?.error as { output?: { statusCode?: number } }
-			)?.output?.statusCode;
-			if (code === DisconnectReason.loggedOut) {
-				console.error(
-					danger("WhatsApp session logged out. Run: warelay web:login"),
-				);
-			}
-		}
-		if (connection === "open" && verbose) {
-			console.log(success("WhatsApp Web connected."));
-		}
-	});
-
-	return sock;
-}
-
-async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>) {
-	return new Promise<void>((resolve, reject) => {
-		type OffCapable = {
-			off?: (event: string, listener: (...args: unknown[]) => void) => void;
-		};
-		const evWithOff = sock.ev as unknown as OffCapable;
-
-		const handler = (...args: unknown[]) => {
-			const update = (args[0] ?? {}) as Partial<ConnectionState>;
-			if (update.connection === "open") {
-				evWithOff.off?.("connection.update", handler);
-				resolve();
-			}
-			if (update.connection === "close") {
-				evWithOff.off?.("connection.update", handler);
-				reject(update.lastDisconnect ?? new Error("Connection closed"));
-			}
-		};
-
-		sock.ev.on("connection.update", handler);
-	});
-}
-
-async function sendMessageWeb(to: string, body: string) {
-	const sock = await createWaSocket(false, globalVerbose);
-	try {
-		await waitForWaConnection(sock);
-		const jid = toWhatsappJid(to);
-		try {
-			await sock.sendPresenceUpdate("composing", jid);
-		} catch (err) {
-			logVerbose(`Presence update skipped: ${String(err)}`);
-		}
-		const result = await sock.sendMessage(jid, { text: body });
-		const messageId = result?.key?.id ?? "unknown";
-		console.log(
-			success(`✅ Sent via web session. Message ID: ${messageId} -> ${jid}`),
-		);
-	} finally {
-		try {
-			sock.ws?.close();
-		} catch (err) {
-			logVerbose(`Socket close failed: ${String(err)}`);
-		}
-	}
-}
-
-async function loginWeb(verbose: boolean) {
-	const sock = await createWaSocket(true, verbose);
-	console.log(info("Waiting for WhatsApp connection..."));
-	try {
-		await waitForWaConnection(sock);
-		console.log(success("✅ Linked! Credentials saved for future sends."));
-	} finally {
-		setTimeout(() => {
-			try {
-				sock.ws?.close();
-			} catch {
-				// ignore
-			}
-		}, 500);
 	}
 }
 
@@ -1079,7 +931,7 @@ async function ensureFunnel(port: number) {
 				"Tip: you can fall back to polling (no webhooks needed): `pnpm warelay poll --interval 5 --lookback 10`",
 			),
 		);
-		if (globalVerbose) {
+		if (isVerbose()) {
 			if (stdout.trim()) console.error(chalk.gray(`stdout: ${stdout.trim()}`));
 			if (stderr.trim()) console.error(chalk.gray(`stderr: ${stderr.trim()}`));
 			console.error(err);
@@ -1124,7 +976,7 @@ async function findWhatsappSenderSid(
 		return match.sid;
 	} catch (err) {
 		console.error(danger("Unable to list WhatsApp senders via Twilio API."));
-		if (globalVerbose) {
+		if (isVerbose()) {
 			console.error(err);
 		}
 		console.error(
@@ -1148,14 +1000,14 @@ async function findIncomingNumberSid(
 			limit: 2,
 		});
 		if (!list || list.length === 0) return null;
-		if (list.length > 1 && globalVerbose) {
+		if (list.length > 1 && isVerbose()) {
 			console.error(
 				warn("Multiple incoming numbers matched; using the first."),
 			);
 		}
 		return list[0]?.sid ?? null;
 	} catch (err) {
-		if (globalVerbose) console.error("incomingPhoneNumbers.list failed", err);
+		if (isVerbose()) console.error("incomingPhoneNumbers.list failed", err);
 		return null;
 	}
 }
@@ -1177,7 +1029,7 @@ async function findMessagingServiceSid(
 				?.messagingServiceSid ?? null;
 		return msid;
 	} catch (err) {
-		if (globalVerbose) console.error("findMessagingServiceSid failed", err);
+		if (isVerbose()) console.error("findMessagingServiceSid failed", err);
 		return null;
 	}
 }
@@ -1203,7 +1055,7 @@ async function setMessagingServiceWebhook(
 		);
 		return true;
 	} catch (err) {
-		if (globalVerbose) console.error("Messaging Service update failed", err);
+		if (isVerbose()) console.error("Messaging Service update failed", err);
 		return false;
 	}
 }
@@ -1241,12 +1093,12 @@ async function updateWebhook(
 			console.log(success(`✅ Twilio sender webhook set to ${storedUrl}`));
 			return;
 		}
-		if (globalVerbose)
+		if (isVerbose())
 			console.error(
 				"Sender updated but webhook callback_url missing; will try fallbacks",
 			);
 	} catch (err) {
-		if (globalVerbose)
+		if (isVerbose())
 			console.error(
 				"channelsSenders request update failed, will try client helpers",
 				err,
@@ -1272,12 +1124,12 @@ async function updateWebhook(
 			console.log(success(`✅ Twilio sender webhook set to ${storedUrl}`));
 			return;
 		}
-		if (globalVerbose)
+		if (isVerbose())
 			console.error(
 				"Form update succeeded but callback_url missing; will try helper fallback",
 			);
 	} catch (err) {
-		if (globalVerbose)
+		if (isVerbose())
 			console.error(
 				"Form channelsSenders update failed, will try helper fallback",
 				err,
@@ -1304,7 +1156,7 @@ async function updateWebhook(
 			return;
 		}
 	} catch (err) {
-		if (globalVerbose)
+		if (isVerbose())
 			console.error(
 				"channelsSenders helper update failed, will try phone number fallback",
 				err,
@@ -1324,7 +1176,7 @@ async function updateWebhook(
 			return;
 		}
 	} catch (err) {
-		if (globalVerbose) console.error("Incoming number update failed", err);
+		if (isVerbose()) console.error("Incoming number update failed", err);
 	}
 
 	// 4) Messaging Service fallback (some WA senders are tied to a service)
@@ -1347,11 +1199,6 @@ async function updateWebhook(
 		),
 	);
 	process.exit(1);
-}
-
-function sleep(ms: number) {
-	// Promise-based sleep utility.
-	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 type TwilioApiError = {
@@ -1585,7 +1432,7 @@ Examples:
 					info("Wait/poll are Twilio-only; ignored for provider=web."),
 				);
 			}
-			await sendMessageWeb(opts.to, opts.message);
+			await sendMessageWeb(opts.to, opts.message, { verbose: isVerbose() });
 			return;
 		}
 
