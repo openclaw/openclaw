@@ -8,7 +8,7 @@ You can also use a personal WhatsApp Web session (QR login) via `--provider web`
 
 1) Install: `pnpm install`  
 2) Configure `.env` (see `.env.example`): set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (or `TWILIO_API_KEY`/`TWILIO_API_SECRET`), and `TWILIO_WHATSAPP_FROM=whatsapp:+15551234567`. Optional: `TWILIO_SENDER_SID` if you don’t want auto-discovery.  
-3) Send a test: `pnpm warelay send --to +15551234567 --message "Hi from warelay"`  
+3) Send a test: `pnpm warelay send --to +12345550000 --message "Hi from warelay"`  
 4) Run auto-replies in polling mode (no public URL needed):  
    `pnpm warelay poll --interval 5 --lookback 10 --verbose`  
 5) Prefer webhooks? Launch everything in one step (webhook + Tailscale Funnel + Twilio callback):  
@@ -26,8 +26,8 @@ You can also use a personal WhatsApp Web session (QR login) via `--provider web`
 
 ## Common Commands
 
-- Send: `pnpm warelay send --to +15551234567 --message "Hello" --wait 20 --poll 2`
-- Send via personal WhatsApp Web: first `pnpm warelay web:login` (scan QR), then `pnpm warelay send --provider web --to +15551234567 --message "Hi"`
+- Send: `pnpm warelay send --to +12345550000 --message "Hello" --wait 20 --poll 2`
+- Send via personal WhatsApp Web: first `pnpm warelay web:login` (scan QR), then `pnpm warelay send --provider web --to +12345550000 --message "Hi"`
 - Poll (lightweight): `pnpm warelay poll --interval 5 --lookback 10 --verbose`
 - Webhook only: `pnpm warelay webhook --port 42873 --path /webhook/whatsapp --verbose`
 - Webhook + Funnel + Twilio update: `pnpm warelay up --port 42873 --path /webhook/whatsapp --verbose`
