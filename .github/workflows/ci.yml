@@ -14,7 +14,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.9.0
+          node-version: 22
+          check-latest: true
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -30,7 +31,11 @@ jobs:
       - name: Install dependencies
         env:
           CI: true
-        run: pnpm install --frozen-lockfile --ignore-scripts=false
+        run: |
+          which node
+          node -v
+          pnpm -v
+          pnpm install --frozen-lockfile --ignore-scripts=false
 
       - name: Lint
         run: pnpm lint
