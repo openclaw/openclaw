@@ -16,6 +16,7 @@ You can also talk to WhatsApp directly with a personal WhatsApp Web session (QR 
 1) Install: `pnpm install`  
 2) Configure `.env` (see `.env.example`): set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` (or `TWILIO_API_KEY`/`TWILIO_API_SECRET`), and `TWILIO_WHATSAPP_FROM=whatsapp:+15551234567`. Optional: `TWILIO_SENDER_SID` if you don’t want auto-discovery.  
 3) Send a test (Twilio): `pnpm warelay send --to +12345550000 --message "Hi from warelay"`  
+   Dry run without sending: `pnpm warelay send --to +12345550000 --message "Hi" --dry-run`  
    Send direct via personal WhatsApp: `pnpm warelay web:login` (scan QR once) then `pnpm warelay send --provider web --to +12345550000 --message "Hi from warelay"`  
 4) Run auto-replies in polling mode (no public URL needed):  
    `pnpm warelay relay --provider twilio --interval 5 --lookback 10 --verbose`  
@@ -75,8 +76,9 @@ You can also talk to WhatsApp directly with a personal WhatsApp Web session (QR 
 ### Claude CLI integration
 
 - When `command[0]` is `claude`, set `claudeOutputFormat` to `"text"`, `"json"`, or `"stream-json"` and warelay will inject `--output-format` and `-p/--print` automatically.
-- For `"json"`/`"stream-json"`, warelay now parses Claude's JSON payload and sends just the text content to WhatsApp while keeping the full JSON in logs for debugging.
+- For `"json"`/`"stream-json"`, warelay parses Claude's JSON payload and sends just the text content to WhatsApp while keeping the full JSON in logs for debugging.
 - If you omit `claudeOutputFormat`, warelay leaves your args untouched (useful for custom Claude flags).
+- The config loader validates `warelay.json` (mode/text/command/claudeOutputFormat/session shape) and logs warnings for invalid combos instead of failing later at runtime.
 
 ### Running without Twilio (personal WhatsApp Web)
 
