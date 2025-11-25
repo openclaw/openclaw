@@ -10,16 +10,16 @@ export type ClaudeOutputFormat = "text" | "json" | "stream-json";
 export type SessionScope = "per-sender" | "global";
 
 export type SessionConfig = {
-  scope?: SessionScope;
-  resetTriggers?: string[];
-  idleMinutes?: number;
-  store?: string;
-  sessionArgNew?: string[];
-  sessionArgResume?: string[];
-  sessionArgBeforeBody?: boolean;
-  sendSystemOnce?: boolean;
-  sessionIntro?: string;
-  typingIntervalSeconds?: number;
+	scope?: SessionScope;
+	resetTriggers?: string[];
+	idleMinutes?: number;
+	store?: string;
+	sessionArgNew?: string[];
+	sessionArgResume?: string[];
+	sessionArgBeforeBody?: boolean;
+	sendSystemOnce?: boolean;
+	sessionIntro?: string;
+	typingIntervalSeconds?: number;
 };
 
 export type LoggingConfig = {
@@ -28,29 +28,29 @@ export type LoggingConfig = {
 };
 
 export type WarelayConfig = {
-  logging?: LoggingConfig;
-  inbound?: {
-    allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
-    transcribeAudio?: {
-      // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
-      command: string[];
-      timeoutSeconds?: number;
-    };
-    reply?: {
-      mode: ReplyMode;
-      text?: string; // for mode=text, can contain {{Body}}
-      command?: string[]; // for mode=command, argv with templates
-      cwd?: string; // working directory for command execution
-      template?: string; // prepend template string when building command/prompt
-      timeoutSeconds?: number; // optional command timeout; defaults to 600s
-      bodyPrefix?: string; // optional string prepended to Body before templating
-      mediaUrl?: string; // optional media attachment (path or URL)
-      session?: SessionConfig;
-      claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
-      mediaMaxMb?: number; // optional cap for outbound media (default 5MB)
-      typingIntervalSeconds?: number; // how often to refresh typing indicator while command runs
-    };
-  };
+	logging?: LoggingConfig;
+	inbound?: {
+		allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
+		transcribeAudio?: {
+			// Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
+			command: string[];
+			timeoutSeconds?: number;
+		};
+		reply?: {
+			mode: ReplyMode;
+			text?: string; // for mode=text, can contain {{Body}}
+			command?: string[]; // for mode=command, argv with templates
+			cwd?: string; // working directory for command execution
+			template?: string; // prepend template string when building command/prompt
+			timeoutSeconds?: number; // optional command timeout; defaults to 600s
+			bodyPrefix?: string; // optional string prepended to Body before templating
+			mediaUrl?: string; // optional media attachment (path or URL)
+			session?: SessionConfig;
+			claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
+			mediaMaxMb?: number; // optional cap for outbound media (default 5MB)
+			typingIntervalSeconds?: number; // how often to refresh typing indicator while command runs
+		};
+	};
 };
 
 export const CONFIG_PATH = path.join(os.homedir(), ".warelay", "warelay.json");

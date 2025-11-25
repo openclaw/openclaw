@@ -501,42 +501,42 @@ describe("provider-web", () => {
 		fetchMock.mockRestore();
 	});
 
-		it(
-			"compresses common formats to jpeg under the cap",
-			{ timeout: 15_000 },
-			async () => {
-				const formats = [
-					{
-						name: "png",
-						mime: "image/png",
-						make: (buf: Buffer, opts: { width: number; height: number }) =>
-							sharp(buf, {
-								raw: { width: opts.width, height: opts.height, channels: 3 },
-							})
-								.png({ compressionLevel: 0 })
-								.toBuffer(),
-					},
-					{
-						name: "jpeg",
-						mime: "image/jpeg",
-						make: (buf: Buffer, opts: { width: number; height: number }) =>
-							sharp(buf, {
-								raw: { width: opts.width, height: opts.height, channels: 3 },
-							})
-								.jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
-								.toBuffer(),
-					},
-					{
-						name: "webp",
-						mime: "image/webp",
-						make: (buf: Buffer, opts: { width: number; height: number }) =>
-							sharp(buf, {
-								raw: { width: opts.width, height: opts.height, channels: 3 },
-							})
-								.webp({ quality: 100 })
-								.toBuffer(),
-					},
-				] as const;
+	it(
+		"compresses common formats to jpeg under the cap",
+		{ timeout: 15_000 },
+		async () => {
+			const formats = [
+				{
+					name: "png",
+					mime: "image/png",
+					make: (buf: Buffer, opts: { width: number; height: number }) =>
+						sharp(buf, {
+							raw: { width: opts.width, height: opts.height, channels: 3 },
+						})
+							.png({ compressionLevel: 0 })
+							.toBuffer(),
+				},
+				{
+					name: "jpeg",
+					mime: "image/jpeg",
+					make: (buf: Buffer, opts: { width: number; height: number }) =>
+						sharp(buf, {
+							raw: { width: opts.width, height: opts.height, channels: 3 },
+						})
+							.jpeg({ quality: 100, chromaSubsampling: "4:4:4" })
+							.toBuffer(),
+				},
+				{
+					name: "webp",
+					mime: "image/webp",
+					make: (buf: Buffer, opts: { width: number; height: number }) =>
+						sharp(buf, {
+							raw: { width: opts.width, height: opts.height, channels: 3 },
+						})
+							.webp({ quality: 100 })
+							.toBuffer(),
+				},
+			] as const;
 
 			for (const fmt of formats) {
 				// Force a small cap to ensure compression is exercised for every format.

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import net from "node:net";
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
@@ -144,11 +144,11 @@ describe("config and templating", () => {
 			killed: false,
 		});
 
-	const result = await index.getReplyFromConfig(
-		{
-			Body: "<media:audio>",
-			From: "+1",
-			To: "+2",
+		const result = await index.getReplyFromConfig(
+			{
+				Body: "<media:audio>",
+				From: "+1",
+				To: "+2",
 				MediaPath: "/tmp/voice.ogg",
 				MediaType: "audio/ogg",
 			},
@@ -157,15 +157,15 @@ describe("config and templating", () => {
 			commandRunner,
 		);
 
-	expect(runExec).toHaveBeenCalled();
-	expect(commandRunner).toHaveBeenCalled();
-	const argv = commandRunner.mock.calls[0][0];
-	const prompt = argv[argv.length - 1] as string;
-	expect(prompt).toContain("/tmp/voice.ogg");
-	expect(prompt).toContain("Transcript:");
-	expect(prompt).toContain("voice transcript");
-	expect(result?.text).toBe("ok");
-});
+		expect(runExec).toHaveBeenCalled();
+		expect(commandRunner).toHaveBeenCalled();
+		const argv = commandRunner.mock.calls[0][0];
+		const prompt = argv[argv.length - 1] as string;
+		expect(prompt).toContain("/tmp/voice.ogg");
+		expect(prompt).toContain("Transcript:");
+		expect(prompt).toContain("voice transcript");
+		expect(result?.text).toBe("ok");
+	});
 
 	it("getReplyFromConfig skips transcription when not configured", async () => {
 		const cfg = {
@@ -640,44 +640,44 @@ describe("config and templating", () => {
 		expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(3);
 	});
 
-  it("uses session typing interval override", async () => {
-    const onReplyStart = vi.fn();
-    const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockImplementation(
-      () =>
-        new Promise((resolve) =>
-          setTimeout(
-            () =>
-              resolve({
-                stdout: "done\n",
-                stderr: "",
-                code: 0,
-                signal: null,
-                killed: false,
-              }),
-            120,
-          ),
-        ),
-    );
-    const cfg = {
-      inbound: {
-        reply: {
-          mode: "command" as const,
-          command: ["echo", "{{Body}}"],
-          session: { typingIntervalSeconds: 0.02 },
-        },
-      },
-    };
+	it("uses session typing interval override", async () => {
+		const onReplyStart = vi.fn();
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockImplementation(
+			() =>
+				new Promise((resolve) =>
+					setTimeout(
+						() =>
+							resolve({
+								stdout: "done\n",
+								stderr: "",
+								code: 0,
+								signal: null,
+								killed: false,
+							}),
+						120,
+					),
+				),
+		);
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					session: { typingIntervalSeconds: 0.02 },
+				},
+			},
+		};
 
-    const promise = index.getReplyFromConfig(
-      { Body: "hi", From: "+1", To: "+2" },
-      { onReplyStart },
-      cfg,
-      runSpy,
-    );
-    await new Promise((r) => setTimeout(r, 200));
-    await promise;
-    expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(3);
-  });
+		const promise = index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			{ onReplyStart },
+			cfg,
+			runSpy,
+		);
+		await new Promise((r) => setTimeout(r, 200));
+		await promise;
+		expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(3);
+	});
 
 	it("injects Claude output format + print flag when configured", async () => {
 		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
