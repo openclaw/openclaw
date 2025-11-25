@@ -11,6 +11,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install Node 22.9.0
+        run: |
+          NODE_VERSION=22.9.0
+          mkdir -p "$RUNNER_TEMP/node"
+          curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP/node" --strip-components=1
+          echo "$RUNNER_TEMP/node/bin" >> "$GITHUB_PATH"
+
       - name: Node version
         run: node -v
 
