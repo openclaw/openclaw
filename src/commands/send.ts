@@ -1,5 +1,7 @@
 import { info } from "../globals.js";
-import type { CliDeps, Provider, RuntimeEnv } from "../index.js";
+import type { CliDeps } from "../cli/deps.js";
+import type { Provider } from "../utils.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export async function sendCommand(
 	opts: {

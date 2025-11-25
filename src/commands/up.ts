@@ -1,5 +1,6 @@
-import type { CliDeps, RuntimeEnv } from "../index.js";
-import { waitForever as defaultWaitForever } from "../index.js";
+import type { CliDeps } from "../cli/deps.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { waitForever as defaultWaitForever } from "../cli/wait.js";
 
 export async function upCommand(
 	opts: { port: string; path: string; verbose?: boolean; yes?: boolean },

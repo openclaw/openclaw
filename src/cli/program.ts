@@ -1,6 +1,7 @@
 import { Command } from "commander";
 
-import { defaultRuntime, setVerbose, setYes, danger, info, warn } from "../globals.js";
+import { setVerbose, setYes, danger, info, warn } from "../globals.js";
+import { defaultRuntime } from "../runtime.js";
 import { sendCommand } from "../commands/send.js";
 import { statusCommand } from "../commands/status.js";
 import { upCommand } from "../commands/up.js";

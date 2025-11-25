@@ -1,5 +1,6 @@
-import type { CliDeps, RuntimeEnv } from "../index.js";
-import { formatMessageLine } from "../index.js";
+import type { CliDeps } from "../cli/deps.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { formatMessageLine } from "../twilio/messages.js";
 
 export async function statusCommand(
 	opts: { limit: string; lookback: string; json?: boolean },

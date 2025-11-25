@@ -1,4 +1,5 @@
-import type { CliDeps, RuntimeEnv } from "../index.js";
+import type { CliDeps } from "../cli/deps.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export async function webhookCommand(
 	opts: {

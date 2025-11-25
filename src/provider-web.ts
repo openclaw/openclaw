@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { proto } from "@whiskeysockets/baileys";
@@ -11,8 +12,12 @@ import {
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { danger, info, logVerbose, success } from "./globals.js";
+import { danger, info, isVerbose, logVerbose, success, warn } from "./globals.js";
 import { ensureDir, jidToE164, toWhatsappJid } from "./utils.js";
+import type { Provider } from "./utils.js";
+import { waitForever } from "./cli/wait.js";
+import { getReplyFromConfig } from "./auto-reply/reply.js";
+import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 
@@ -269,6 +274,101 @@ export async function monitorWebInbox(options: {
 			}
 		},
 	};
+}
+
+export async function monitorWebProvider(
+	verbose: boolean,
+	listenerFactory = monitorWebInbox,
+	keepAlive = true,
+	replyResolver: typeof getReplyFromConfig = getReplyFromConfig,
+	runtime: RuntimeEnv = defaultRuntime,
+) {
+	// Listen for inbound personal WhatsApp Web messages and auto-reply if configured.
+	const listener = await listenerFactory({
+		verbose,
+		onMessage: async (msg) => {
+			const ts = msg.timestamp
+				? new Date(msg.timestamp).toISOString()
+				: new Date().toISOString();
+			console.log(`\n[${ts}] ${msg.from} -> ${msg.to}: ${msg.body}`);
+
+			const replyText = await replyResolver(
+				{
+					Body: msg.body,
+					From: msg.from,
+					To: msg.to,
+					MessageSid: msg.id,
+				},
+				{
+					onReplyStart: msg.sendComposing,
+				},
+			);
+			if (!replyText) return;
+			try {
+				await msg.reply(replyText);
+				if (isVerbose()) {
+					console.log(success(`↩️  Auto-replied to ${msg.from} (web)`));
+				}
+			} catch (err) {
+				console.error(
+					danger(
+						`Failed sending web auto-reply to ${msg.from}: ${String(err)}`,
+					),
+				);
+			}
+		},
+	});
+
+	console.log(
+		info(
+			"📡 Listening for personal WhatsApp Web inbound messages. Leave this running; Ctrl+C to stop.",
+		),
+	);
+	process.on("SIGINT", () => {
+		void listener.close().finally(() => {
+			console.log("\n👋 Web monitor stopped");
+			runtime.exit(0);
+		});
+	});
+
+	if (keepAlive) {
+		await waitForever();
+	}
+}
+
+function readWebSelfId() {
+	// Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
+	const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
+	try {
+		if (!fs.existsSync(credsPath)) {
+			return { e164: null, jid: null };
+		}
+		const raw = fs.readFileSync(credsPath, "utf-8");
+		const parsed = JSON.parse(raw) as { me?: { id?: string } } | undefined;
+		const jid = parsed?.me?.id ?? null;
+		const e164 = jid ? jidToE164(jid) : null;
+		return { e164, jid };
+	} catch {
+		return { e164: null, jid: null };
+	}
+}
+
+export function logWebSelfId(runtime: RuntimeEnv = defaultRuntime) {
+	// Human-friendly log of the currently linked personal web session.
+	const { e164, jid } = readWebSelfId();
+	const details =
+		e164 || jid
+			? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
+			: "unknown";
+	runtime.log(info(`Listening on web session: ${details}`));
+}
+
+export async function pickProvider(pref: Provider | "auto"): Promise<Provider> {
+	// Auto-select web when logged in; otherwise fall back to twilio.
+	if (pref !== "auto") return pref;
+	const hasWeb = await webAuthExists();
+	if (hasWeb) return "web";
+	return "twilio";
 }
 
 function extractText(message: proto.IMessage | undefined): string | undefined {
