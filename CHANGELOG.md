@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2025-11-25
+
+### CLI polish
+- Added a proper executable shim so `npx warelay@0.1.x --help` runs the CLI directly.
+- Help/version banner now uses the README tagline with color, and the help footer includes colored examples with short explanations.
+- `send` and `status` gained a `--verbose` flag for consistent noisy output when debugging.
+
 ## 0.1.0 — 2025-11-25
 
 ### CLI & Providers
