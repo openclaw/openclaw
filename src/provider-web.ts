@@ -243,6 +243,13 @@ export async function monitorWebInbox(options: {
 }) {
 	const sock = await createWaSocket(false, options.verbose);
 	await waitForWaConnection(sock);
+	try {
+		// Advertise that the relay is online right after connecting.
+		await sock.sendPresenceUpdate("available");
+		if (isVerbose()) logVerbose("Sent global 'available' presence on connect");
+	} catch (err) {
+		logVerbose(`Failed to send 'available' presence on connect: ${String(err)}`);
+	}
 	const selfJid = sock.user?.id;
 	const selfE164 = selfJid ? jidToE164(selfJid) : null;
 	const seen = new Set<string>();
