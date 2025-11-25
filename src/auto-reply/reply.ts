@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
-import { CLAUDE_BIN, parseClaudeJson } from "./claude.js";
+import { CLAUDE_BIN, CLAUDE_IDENTITY_PREFIX, parseClaudeJson } from "./claude.js";
 import {
 	applyTemplate,
 	type MsgContext,
@@ -270,9 +270,17 @@ const mediaNote =
 				];
 			}
 		}
-		const finalArgv = argv;
+		let finalArgv = argv;
 		const isClaudeInvocation =
 			finalArgv.length > 0 && path.basename(finalArgv[0]) === CLAUDE_BIN;
+		if (isClaudeInvocation && finalArgv.length > 0) {
+			const bodyIdx = finalArgv.length - 1;
+			const existingBody = finalArgv[bodyIdx] ?? "";
+			finalArgv = [
+				...finalArgv.slice(0, bodyIdx),
+				[CLAUDE_IDENTITY_PREFIX, existingBody].filter(Boolean).join("\n\n"),
+			];
+		}
 		logVerbose(`Running command auto-reply: ${finalArgv.join(" ")}`);
 		const started = Date.now();
 		try {
