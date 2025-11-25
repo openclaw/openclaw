@@ -270,5 +270,18 @@ With Tailscale:
 			}
 		});
 
+	program
+		.command("relay:tmux:attach")
+		.description("Attach to the existing warelay-relay tmux session (no restart)")
+		.action(async () => {
+			try {
+				await spawnRelayTmux("pnpm warelay relay --verbose", true, false);
+				defaultRuntime.log(info("Attached to warelay-relay session."));
+			} catch (err) {
+				defaultRuntime.error(danger(`Failed to attach to warelay-relay: ${String(err)}`));
+				defaultRuntime.exit(1);
+			}
+		});
+
 	return program;
 }
