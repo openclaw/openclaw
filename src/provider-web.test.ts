@@ -184,10 +184,10 @@ describe("provider-web", () => {
 			exit: vi.fn(),
 		};
 
-		logWebSelfId(runtime as never);
+		logWebSelfId(runtime as never, true);
 
 		expect(runtime.log).toHaveBeenCalledWith(
-			expect.stringContaining("+12345"),
+			"Web Provider: +12345 (jid 12345@s.whatsapp.net)",
 		);
 		existsSpy.mockRestore();
 		readSpy.mockRestore();

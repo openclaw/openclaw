@@ -375,9 +375,9 @@ export function logWebSelfId(
 			? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
 			: "unknown";
 	const prefix = includeProviderPrefix
-		? "Provider: web (personal WhatsApp Web session) — "
+		? "Web Provider: "
 		: "";
-	runtime.log(info(`${prefix}Listening on web session: ${details}`));
+	runtime.log(info(`${prefix}${details}`));
 }
 
 export async function pickProvider(pref: Provider | "auto"): Promise<Provider> {
