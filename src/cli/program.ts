@@ -8,6 +8,7 @@ import { danger, info, setVerbose, setYes, warn } from "../globals.js";
 import { loginWeb, monitorWebProvider, pickProvider } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import type { Provider } from "../utils.js";
+import { VERSION } from "../version.js";
 import {
 	createDefaultDeps,
 	logTwilioFrom,
@@ -18,7 +19,7 @@ import { spawnRelayTmux } from "./relay_tmux.js";
 
 export function buildProgram() {
 	const program = new Command();
-	const PROGRAM_VERSION = "0.1.4";
+	const PROGRAM_VERSION = VERSION;
 	const TAGLINE =
 		"Send, receive, and auto-reply on WhatsApp—Twilio-backed or QR-linked.";
 

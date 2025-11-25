@@ -23,6 +23,7 @@ import { saveMediaBuffer } from "./media/store.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 import type { Provider } from "./utils.js";
 import { ensureDir, jidToE164, toWhatsappJid } from "./utils.js";
+import { VERSION } from "./version.js";
 
 function formatDuration(ms: number) {
 	return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
@@ -53,7 +54,7 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
 		version,
 		logger,
 		printQRInTerminal: false,
-		browser: ["warelay", "cli", "0.1.4"],
+		browser: ["warelay", "cli", VERSION],
 		syncFullHistory: false,
 		markOnlineOnConnect: false,
 	});
