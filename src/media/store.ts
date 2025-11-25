@@ -39,9 +39,13 @@ function looksLikeUrl(src: string) {
 	return /^https?:\/\//i.test(src);
 }
 
-async function downloadToFile(url: string, dest: string) {
+async function downloadToFile(
+	url: string,
+	dest: string,
+	headers?: Record<string, string>,
+) {
 	await new Promise<void>((resolve, reject) => {
-		const req = request(url, (res) => {
+		const req = request(url, { headers }, (res) => {
 			if (!res.statusCode || res.statusCode >= 400) {
 				reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
 				return;
@@ -70,13 +74,16 @@ export type SavedMedia = {
 
 export async function saveMediaSource(
 	source: string,
+	headers?: Record<string, string>,
+	subdir = "",
 ): Promise<SavedMedia> {
-	await ensureMediaDir();
+	const dir = subdir ? path.join(MEDIA_DIR, subdir) : MEDIA_DIR;
+	await fs.mkdir(dir, { recursive: true });
 	await cleanOldMedia();
 	const id = crypto.randomUUID();
-	const dest = path.join(MEDIA_DIR, id);
+	const dest = path.join(dir, id);
 	if (looksLikeUrl(source)) {
-		await downloadToFile(source, dest);
+		await downloadToFile(source, dest, headers);
 		const stat = await fs.stat(dest);
 		return { id, path: dest, size: stat.size };
 	}
@@ -90,4 +97,20 @@ export async function saveMediaSource(
 	}
 	await fs.copyFile(source, dest);
 	return { id, path: dest, size: stat.size };
+}
+
+export async function saveMediaBuffer(
+	buffer: Buffer,
+	contentType?: string,
+	subdir = "inbound",
+): Promise<SavedMedia> {
+	if (buffer.byteLength > MAX_BYTES) {
+		throw new Error("Media exceeds 5MB limit");
+	}
+	const dir = path.join(MEDIA_DIR, subdir);
+	await fs.mkdir(dir, { recursive: true });
+	const id = crypto.randomUUID();
+	const dest = path.join(dir, id);
+	await fs.writeFile(dest, buffer);
+	return { id, path: dest, size: buffer.byteLength, contentType };
 }

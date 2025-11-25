@@ -9,6 +9,7 @@ import {
 	makeCacheableSignalKeyStore,
 	makeWASocket,
 	useMultiFileAuthState,
+	downloadMediaMessage,
 	type AnyMessageContent,
 } from "@whiskeysockets/baileys";
 import pino from "pino";
@@ -20,6 +21,7 @@ import { waitForever } from "./cli/wait.js";
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 import { logInfo, logWarn } from "./logger.js";
+import { saveMediaBuffer } from "./media/store.js";
 
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 
@@ -226,6 +228,9 @@ export type WebInboundMessage = {
 	sendComposing: () => Promise<void>;
 	reply: (text: string) => Promise<void>;
 	sendMedia: (payload: { image: Buffer; caption?: string; mimetype?: string }) => Promise<void>;
+	mediaPath?: string;
+	mediaType?: string;
+	mediaUrl?: string;
 };
 
 export async function monitorWebInbox(options: {
@@ -253,8 +258,26 @@ export async function monitorWebInbox(options: {
 				continue;
 			const from = jidToE164(remoteJid);
 			if (!from) continue;
-			const body = extractText(msg.message ?? undefined);
-			if (!body) continue;
+			let body = extractText(msg.message ?? undefined);
+			if (!body) {
+				body = extractMediaPlaceholder(msg.message ?? undefined);
+				if (!body) continue;
+			}
+			let mediaPath: string | undefined;
+			let mediaType: string | undefined;
+			try {
+				const inboundMedia = await downloadInboundMedia(msg, sock);
+				if (inboundMedia) {
+					const saved = await saveMediaBuffer(
+						inboundMedia.buffer,
+						inboundMedia.mimetype,
+					);
+					mediaPath = saved.path;
+					mediaType = inboundMedia.mimetype;
+				}
+			} catch (err) {
+				logVerbose(`Inbound media download failed: ${String(err)}`);
+			}
 			const chatJid = remoteJid;
 			const sendComposing = async () => {
 				try {
@@ -287,6 +310,8 @@ export async function monitorWebInbox(options: {
 					sendComposing,
 					reply,
 					sendMedia,
+					mediaPath,
+					mediaType,
 				});
 			} catch (err) {
 				console.error(
@@ -330,6 +355,9 @@ export async function monitorWebProvider(
 					From: msg.from,
 					To: msg.to,
 					MessageSid: msg.id,
+					MediaPath: msg.mediaPath,
+					MediaUrl: msg.mediaUrl,
+					MediaType: msg.mediaType,
 				},
 				{
 					onReplyStart: msg.sendComposing,
@@ -439,6 +467,48 @@ function extractText(message: proto.IMessage | undefined): string | undefined {
 		message.imageMessage?.caption ?? message.videoMessage?.caption;
 	if (caption?.trim()) return caption.trim();
 	return undefined;
+}
+
+function extractMediaPlaceholder(message: proto.IMessage | undefined): string | undefined {
+	if (!message) return undefined;
+	if (message.imageMessage) return "<media:image>";
+	if (message.videoMessage) return "<media:video>";
+	if (message.audioMessage) return "<media:audio>";
+	if (message.documentMessage) return "<media:document>";
+	if (message.stickerMessage) return "<media:sticker>";
+	return undefined;
+}
+
+async function downloadInboundMedia(
+	msg: proto.IWebMessageInfo,
+	sock: ReturnType<typeof makeWASocket>,
+): Promise<{ buffer: Buffer; mimetype?: string } | undefined> {
+	const message = msg.message;
+	if (!message) return undefined;
+	const mimetype =
+		message.imageMessage?.mimetype ??
+		message.videoMessage?.mimetype ??
+		message.documentMessage?.mimetype ??
+		message.audioMessage?.mimetype ??
+		message.stickerMessage?.mimetype;
+	if (
+		!message.imageMessage &&
+		!message.videoMessage &&
+		!message.documentMessage &&
+		!message.audioMessage &&
+		!message.stickerMessage
+	) {
+		return undefined;
+	}
+	try {
+		const buffer = (await downloadMediaMessage(msg as any, "buffer", {}, {
+			reuploadRequest: sock.updateMediaMessage,
+		})) as Buffer;
+		return { buffer, mimetype };
+	} catch (err) {
+		logVerbose(`downloadMediaMessage failed: ${String(err)}`);
+		return undefined;
+	}
 }
 
 async function loadWebMedia(

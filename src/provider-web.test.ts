@@ -12,6 +12,17 @@ vi.mock("@whiskeysockets/baileys", () => {
 	return created.mod;
 });
 
+vi.mock("./media/store.js", () => ({
+	saveMediaBuffer: vi
+		.fn()
+		.mockImplementation(async (_buf: Buffer, contentType?: string) => ({
+			id: "mid",
+			path: "/tmp/mid",
+			size: _buf.length,
+			contentType,
+		})),
+}));
+
 function getLastSocket(): MockBaileysSocket {
 	const getter = (globalThis as Record<PropertyKey, unknown>)[
 		Symbol.for("warelay:lastSocket")
@@ -167,6 +178,34 @@ describe("provider-web", () => {
 			text: "pong",
 		});
 
+		await listener.close();
+	});
+
+	it("monitorWebInbox captures media path for image messages", async () => {
+		const onMessage = vi.fn();
+		const listener = await monitorWebInbox({ verbose: false, onMessage });
+		const sock = getLastSocket();
+		const upsert = {
+			type: "notify",
+			messages: [
+				{
+					key: { id: "med1", fromMe: false, remoteJid: "[redacted-email]" },
+					message: { imageMessage: { mimetype: "image/jpeg" } },
+					messageTimestamp: 1_700_000_100,
+				},
+			],
+		};
+
+		sock.ev.emit("messages.upsert", upsert);
+		await new Promise((resolve) => setImmediate(resolve));
+
+		expect(onMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				body: "<media:image>",
+				mediaPath: "/tmp/mid",
+				mediaType: "image/jpeg",
+			}),
+		);
 		await listener.close();
 	});
 

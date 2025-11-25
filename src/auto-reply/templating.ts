@@ -3,6 +3,9 @@ export type MsgContext = {
 	From?: string;
 	To?: string;
 	MessageSid?: string;
+	MediaPath?: string;
+	MediaUrl?: string;
+	MediaType?: string;
 };
 
 export type TemplateContext = MsgContext & {

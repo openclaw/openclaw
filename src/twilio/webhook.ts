@@ -4,7 +4,7 @@ import chalk from "chalk";
 import type { Server } from "http";
 
 import { success, logVerbose, danger } from "../globals.js";
-import { readEnv } from "../env.js";
+import { readEnv, type EnvConfig } from "../env.js";
 import { createClient } from "./client.js";
 import { normalizePath } from "../utils.js";
 import { getReplyFromConfig, type ReplyPayload } from "../auto-reply/reply.js";
@@ -12,6 +12,7 @@ import { sendTypingIndicator } from "./typing.js";
 import { logTwilioSendError } from "./utils.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { attachMediaRoutes } from "../media/server.js";
+import { saveMediaSource } from "../media/store.js";
 
 /** Start the inbound webhook HTTP server and wire optional auto-replies. */
 export async function startWebhook(
@@ -39,12 +40,33 @@ export async function startWebhook(
 [INBOUND] ${From ?? "unknown"} -> ${To ?? "unknown"} (${MessageSid ?? "no-sid"})`);
     if (verbose) runtime.log(chalk.gray(`Body: ${Body ?? ""}`));
 
+    const numMedia = Number.parseInt((req.body?.NumMedia ?? "0") as string, 10);
+    let mediaPath: string | undefined;
+    let mediaUrlInbound: string | undefined;
+    let mediaType: string | undefined;
+    if (numMedia > 0 && typeof req.body?.MediaUrl0 === "string") {
+      mediaUrlInbound = req.body.MediaUrl0 as string;
+      mediaType = typeof req.body?.MediaContentType0 === "string"
+        ? (req.body.MediaContentType0 as string)
+        : undefined;
+      try {
+        const creds = buildTwilioBasicAuth(env);
+        const saved = await saveMediaSource(mediaUrlInbound, {
+          Authorization: `Basic ${creds}`,
+        }, "inbound");
+        mediaPath = saved.path;
+        if (!mediaType && saved.contentType) mediaType = saved.contentType;
+      } catch (err) {
+        runtime.error(danger(`Failed to download inbound media: ${String(err)}`));
+      }
+    }
+
     const client = createClient(env);
     let replyResult: ReplyPayload | undefined =
       autoReply !== undefined ? { text: autoReply } : undefined;
     if (!replyResult) {
       replyResult = await getReplyFromConfig(
-        { Body, From, To, MessageSid },
+        { Body, From, To, MessageSid, MediaPath: mediaPath, MediaUrl: mediaUrlInbound, MediaType: mediaType },
         {
           onReplyStart: () => sendTypingIndicator(client, runtime, MessageSid),
         },
@@ -104,4 +126,11 @@ export async function startWebhook(
     server.once("listening", onListening);
     server.once("error", onError);
   });
+}
+
+function buildTwilioBasicAuth(env: EnvConfig) {
+	if ("authToken" in env.auth) {
+		return Buffer.from(`${env.accountSid}:${env.auth.authToken}`).toString("base64");
+	}
+	return Buffer.from(`${env.auth.apiKey}:${env.auth.apiSecret}`).toString("base64");
 }

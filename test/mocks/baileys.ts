@@ -16,6 +16,7 @@ export type MockBaileysModule = {
 	useMultiFileAuthState: ReturnType<typeof vi.fn>;
 	jidToE164?: (jid: string) => string | null;
 	proto?: unknown;
+	downloadMediaMessage?: ReturnType<typeof vi.fn>;
 };
 
 export function createMockBaileys(): { mod: MockBaileysModule; lastSocket: () => MockBaileysSocket } {
@@ -44,6 +45,7 @@ export function createMockBaileys(): { mod: MockBaileysModule; lastSocket: () =>
 			saveCreds: vi.fn(),
 		})),
 		jidToE164: (jid: string) => jid.replace(/@.*$/, "").replace(/^/, "+"),
+		downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("img")),
 	};
 
 	return {

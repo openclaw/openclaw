@@ -86,9 +86,33 @@ describe("config and templating", () => {
 			{ onReplyStart },
 			cfg,
 		);
-			expect(result?.text).toBe("Hello whatsapp:+1555 [pfx] hi");
-			expect(onReplyStart).toHaveBeenCalled();
-		});
+		expect(result?.text).toBe("Hello whatsapp:+1555 [pfx] hi");
+		expect(onReplyStart).toHaveBeenCalled();
+	});
+
+	it("getReplyFromConfig templating includes media fields", async () => {
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "text" as const,
+					text: "{{MediaPath}} {{MediaType}} {{MediaUrl}}",
+				},
+			},
+		};
+		const result = await index.getReplyFromConfig(
+			{
+				Body: "",
+				From: "+1",
+				To: "+2",
+				MediaPath: "/tmp/a.jpg",
+				MediaType: "image/jpeg",
+				MediaUrl: "http://example.com/a.jpg",
+			},
+			undefined,
+			cfg,
+		);
+		expect(result?.text).toBe("/tmp/a.jpg image/jpeg http://example.com/a.jpg");
+	});
 
 	it("getReplyFromConfig runs command and manages session store", async () => {
 		const tmpStore = path.join(os.tmpdir(), `warelay-store-${Date.now()}.json`);
