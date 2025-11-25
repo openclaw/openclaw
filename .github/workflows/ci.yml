@@ -16,13 +16,6 @@ jobs:
         with:
           version: 10.23.0
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20.18.0'
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-
       - name: Node version
         run: node -v
 
