@@ -65,9 +65,7 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
 			if (connection === "close") {
 				const status = getStatusCode(lastDisconnect?.error);
 				if (status === DisconnectReason.loggedOut) {
-					console.error(
-						danger("WhatsApp session logged out. Run: warelay web:login"),
-					);
+					console.error(danger("WhatsApp session logged out. Run: warelay login"));
 				}
 			}
 			if (connection === "open" && verbose) {
@@ -191,10 +189,10 @@ export async function loginWeb(
 			await fs.rm(WA_WEB_AUTH_DIR, { recursive: true, force: true });
 			console.error(
 				danger(
-					"WhatsApp reported the session is logged out. Cleared cached web session; please rerun warelay web:login and scan the QR again.",
+					"WhatsApp reported the session is logged out. Cleared cached web session; please rerun warelay login and scan the QR again.",
 				),
 			);
-			throw new Error("Session logged out; cache cleared. Re-run web:login.");
+			throw new Error("Session logged out; cache cleared. Re-run login.");
 		}
 		const formatted = formatError(err);
 		console.error(

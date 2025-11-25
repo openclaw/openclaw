@@ -26,10 +26,9 @@ afterEach(() => {
 });
 
 describe("CLI commands", () => {
-	it("exposes login alias", () => {
+	it("exposes login command", () => {
 		const names = index.program.commands.map((c) => c.name());
 		expect(names).toContain("login");
-		expect(names).toContain("web:login");
 	});
 
 	it("send command routes to web provider", async () => {
@@ -87,7 +86,7 @@ describe("CLI commands", () => {
 		);
 	});
 
-	it("login alias calls web login", async () => {
+	it("login command calls web login", async () => {
 		const spy = vi.spyOn(providerWeb, "loginWeb").mockResolvedValue();
 		await index.program.parseAsync(["login"], { from: "user" });
 		expect(spy).toHaveBeenCalled();

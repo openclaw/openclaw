@@ -25,22 +25,8 @@ export function buildProgram() {
 		.version("1.0.0");
 
 	program
-		.command("web:login")
-		.description("Link your personal WhatsApp via QR (web provider)")
-		.option("--verbose", "Verbose connection logs", false)
-		.action(async (opts) => {
-			setVerbose(Boolean(opts.verbose));
-			try {
-				await loginWeb(Boolean(opts.verbose));
-			} catch (err) {
-				defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
-				defaultRuntime.exit(1);
-			}
-		});
-
-	program
 		.command("login")
-		.description("Alias for web:login (personal WhatsApp Web QR link)")
+		.description("Link your personal WhatsApp via QR (web provider)")
 		.option("--verbose", "Verbose connection logs", false)
 		.action(async (opts) => {
 			setVerbose(Boolean(opts.verbose));
