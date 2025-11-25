@@ -80,24 +80,24 @@ Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business a
 3) (Optional) Add `bodyPrefix` to inject a system prompt and `session` settings to keep multi-turn context (`/new` resets by default).
 4) Run `pnpm warelay relay --provider auto` (or `--provider web|twilio`) and send a WhatsApp message; warelay will queue the Claude call, stream typing indicators (Twilio provider), parse the result, and send back the text.
 
-### Auto-reply parameter table
-| Key | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `inbound.allowFrom` | `string[]` | empty | E.164 numbers allowed to trigger auto-reply (no `whatsapp:`). |
-| `inbound.reply.mode` | `"text"` \| `"command"` | — | Reply style. |
-| `inbound.reply.text` | `string` | — | Used when `mode=text`; templating supported. |
-| `inbound.reply.command` | `string[]` | — | argv for `mode=command`; each element templated. Stdout (trimmed) is sent. |
-| `inbound.reply.template` | `string` | — | Injected as argv[1] (prompt prefix) before the body. |
-| `inbound.reply.bodyPrefix` | `string` | — | Prepended to `Body` before templating (great for system prompts). |
-| `inbound.reply.timeoutSeconds` | `number` | `600` | Command timeout. |
-| `inbound.reply.claudeOutputFormat` | `"text"|"json"|"stream-json"` | — | When command starts with `claude`, auto-adds `--output-format` + `-p/--print` and trims reply text. |
-| `inbound.reply.session.scope` | `"per-sender"|"global"` | `per-sender` | Session bucket for conversation memory. |
-| `inbound.reply.session.resetTriggers` | `string[]` | `["/new"]` | Exact match or prefix (`/new hi`) resets session. |
-| `inbound.reply.session.idleMinutes` | `number` | `60` | Session expires after idle period. |
-| `inbound.reply.session.store` | `string` | `~/.warelay/sessions.json` | Custom session store path. |
-| `inbound.reply.session.sessionArgNew` | `string[]` | `["--session-id","{{SessionId}}"]` | Args injected for a new session run. |
-| `inbound.reply.session.sessionArgResume` | `string[]` | `["--resume","{{SessionId}}"]` | Args for resumed sessions. |
-| `inbound.reply.session.sessionArgBeforeBody` | `boolean` | `true` | Place session args before final body arg. |
+### Auto-reply parameter table (compact)
+| Key | Type & default | Notes |
+| --- | --- | --- |
+| `inbound.allowFrom` | `string[]` (default: empty) | E.164 numbers allowed to trigger auto-reply (no `whatsapp:`). |
+| `inbound.reply.mode` | `"text"` \| `"command"` (default: —) | Reply style. |
+| `inbound.reply.text` | `string` (default: —) | Used when `mode=text`; templating supported. |
+| `inbound.reply.command` | `string[]` (default: —) | Argv for `mode=command`; each element templated. Stdout (trimmed) is sent. |
+| `inbound.reply.template` | `string` (default: —) | Injected as argv[1] (prompt prefix) before the body. |
+| `inbound.reply.bodyPrefix` | `string` (default: —) | Prepended to `Body` before templating (great for system prompts). |
+| `inbound.reply.timeoutSeconds` | `number` (default: `600`) | Command timeout. |
+| `inbound.reply.claudeOutputFormat` | `"text"`\|`"json"`\|`"stream-json"` (default: —) | When command starts with `claude`, auto-adds `--output-format` + `-p/--print` and trims reply text. |
+| `inbound.reply.session.scope` | `"per-sender"`\|`"global"` (default: `per-sender`) | Session bucket for conversation memory. |
+| `inbound.reply.session.resetTriggers` | `string[]` (default: `["/new"]`) | Exact match or prefix (`/new hi`) resets session. |
+| `inbound.reply.session.idleMinutes` | `number` (default: `60`) | Session expires after idle period. |
+| `inbound.reply.session.store` | `string` (default: `~/.warelay/sessions.json`) | Custom session store path. |
+| `inbound.reply.session.sessionArgNew` | `string[]` (default: `["--session-id","{{SessionId}}"]`) | Args injected for a new session run. |
+| `inbound.reply.session.sessionArgResume` | `string[]` (default: `["--resume","{{SessionId}}"]`) | Args for resumed sessions. |
+| `inbound.reply.session.sessionArgBeforeBody` | `boolean` (default: `true`) | Place session args before final body arg. |
 
 Templating tokens: `{{Body}}`, `{{BodyStripped}}`, `{{From}}`, `{{To}}`, `{{MessageSid}}`, plus `{{SessionId}}` and `{{IsNewSession}}` when sessions are enabled.
 
