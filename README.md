@@ -34,6 +34,8 @@ Small CLI to send, receive, auto-reply, and inspect WhatsApp messages over **Twi
 - **Web (`--provider web`):** uses your personal WhatsApp via Baileys; supports send/receive + auto-reply, but no delivery-status wait; cache lives in `~/.warelay/credentials/` (rerun `web:login` if logged out).
 - **Auto-select (`relay` only):** `--provider auto` uses Web when logged in, otherwise Twilio polling.
 
+Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business account) for automation instead of your primary personal account to avoid unexpected logouts or rate limits.
+
 ## Configuration
 
 ### Environment (.env)
