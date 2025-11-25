@@ -39,6 +39,7 @@ export type WarelayConfig = {
 			mediaUrl?: string; // optional media attachment (path or URL)
 			session?: SessionConfig;
 			claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
+			mediaMaxMb?: number; // optional cap for outbound media (default 5MB)
 		};
 	};
 };
@@ -55,6 +56,7 @@ const ReplySchema = z
 		timeoutSeconds: z.number().int().positive().optional(),
 		bodyPrefix: z.string().optional(),
 		mediaUrl: z.string().optional(),
+		mediaMaxMb: z.number().positive().optional(),
 		session: z
 			.object({
 				scope: z

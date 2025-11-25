@@ -389,7 +389,9 @@ export async function getReplyFromConfig(
 				const baseMsg = `Command timed out after ${timeoutSeconds}s. Try a shorter prompt or split the request.`;
 				const partial = errorObj.stdout?.trim();
 				const partialSnippet =
-					partial && partial.length > 800 ? `${partial.slice(0, 800)}...` : partial;
+					partial && partial.length > 800
+						? `${partial.slice(0, 800)}...`
+						: partial;
 				const text = partialSnippet
 					? `${baseMsg}\n\nPartial output before timeout:\n${partialSnippet}`
 					: baseMsg;

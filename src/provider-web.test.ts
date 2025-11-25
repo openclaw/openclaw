@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MockBaileysSocket } from "../test/mocks/baileys.js";
 import { createMockBaileys } from "../test/mocks/baileys.js";
@@ -24,6 +25,11 @@ vi.mock("./media/store.js", () => ({
 			size: _buf.length,
 			contentType,
 		})),
+}));
+
+let loadConfigMock: () => unknown = () => ({});
+vi.mock("./config/config.js", () => ({
+	loadConfig: () => loadConfigMock(),
 }));
 
 function getLastSocket(): MockBaileysSocket {
@@ -64,6 +70,7 @@ const baileys = (await import(
 describe("provider-web", () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
+		loadConfigMock = () => ({});
 		const recreated = createMockBaileys();
 		(globalThis as Record<PropertyKey, unknown>)[
 			Symbol.for("warelay:lastSocket")
@@ -321,9 +328,9 @@ describe("provider-web", () => {
 		vi.useFakeTimers();
 		const closeResolvers: Array<() => void> = [];
 		const listenerFactory = vi.fn(async () => {
-			let resolve!: () => void;
+			let _resolve!: () => void;
 			const onClose = new Promise<void>((res) => {
-				resolve = res;
+				_resolve = res;
 				closeResolvers.push(res);
 			});
 			return { close: vi.fn(), onClose };
@@ -381,10 +388,24 @@ describe("provider-web", () => {
 			return { close: vi.fn() };
 		};
 
+		const smallPng = await sharp({
+			create: {
+				width: 200,
+				height: 200,
+				channels: 3,
+				background: { r: 0, g: 255, b: 0 },
+			},
+		})
+			.png()
+			.toBuffer();
 		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
 			ok: true,
 			body: true,
-			arrayBuffer: async () => new ArrayBuffer(1024),
+			arrayBuffer: async () =>
+				smallPng.buffer.slice(
+					smallPng.byteOffset,
+					smallPng.byteOffset + smallPng.byteLength,
+				),
 			headers: { get: () => "image/png" },
 			status: 200,
 		} as Response);
@@ -404,6 +425,151 @@ describe("provider-web", () => {
 
 		expect(sendMedia).toHaveBeenCalled();
 		expect(reply).toHaveBeenCalledWith("hi");
+		fetchMock.mockRestore();
+	});
+
+	it("compresses media over 5MB and still sends it", async () => {
+		const sendMedia = vi.fn();
+		const reply = vi.fn().mockResolvedValue(undefined);
+		const sendComposing = vi.fn();
+		const resolver = vi.fn().mockResolvedValue({
+			text: "hi",
+			mediaUrl: "https://example.com/big.png",
+		});
+
+		let capturedOnMessage:
+			| ((msg: import("./provider-web.js").WebInboundMessage) => Promise<void>)
+			| undefined;
+		const listenerFactory = async (opts: {
+			onMessage: (
+				msg: import("./provider-web.js").WebInboundMessage,
+			) => Promise<void>;
+		}) => {
+			capturedOnMessage = opts.onMessage;
+			return { close: vi.fn() };
+		};
+
+		// Create a large ( >5MB ) PNG to trigger compression.
+		const bigPng = await sharp({
+			create: {
+				width: 3200,
+				height: 3200,
+				channels: 3,
+				background: { r: 255, g: 0, b: 0 },
+			},
+		})
+			.png({ compressionLevel: 0 })
+			.toBuffer();
+		expect(bigPng.length).toBeGreaterThan(5 * 1024 * 1024);
+
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+			ok: true,
+			body: true,
+			arrayBuffer: async () =>
+				bigPng.buffer.slice(
+					bigPng.byteOffset,
+					bigPng.byteOffset + bigPng.byteLength,
+				),
+			headers: { get: () => "image/png" },
+			status: 200,
+		} as Response);
+
+		await monitorWebProvider(false, listenerFactory, false, resolver);
+		expect(capturedOnMessage).toBeDefined();
+
+		await capturedOnMessage?.({
+			body: "hello",
+			from: "+1",
+			to: "+2",
+			id: "msg1",
+			sendComposing,
+			reply,
+			sendMedia,
+		});
+
+		expect(sendMedia).toHaveBeenCalledTimes(1);
+		const payload = sendMedia.mock.calls[0][0] as {
+			image: Buffer;
+			caption?: string;
+			mimetype?: string;
+		};
+		expect(payload.image.length).toBeLessThanOrEqual(5 * 1024 * 1024);
+		expect(payload.mimetype).toBe("image/jpeg");
+		// Should not fall back to separate text reply because caption is used.
+		expect(reply).not.toHaveBeenCalled();
+
+		fetchMock.mockRestore();
+	});
+
+	it("honors mediaMaxMb from config", async () => {
+		loadConfigMock = () => ({ inbound: { reply: { mediaMaxMb: 1 } } });
+		const sendMedia = vi.fn();
+		const reply = vi.fn().mockResolvedValue(undefined);
+		const sendComposing = vi.fn();
+		const resolver = vi.fn().mockResolvedValue({
+			text: "hi",
+			mediaUrl: "https://example.com/big.png",
+		});
+
+		let capturedOnMessage:
+			| ((msg: import("./provider-web.js").WebInboundMessage) => Promise<void>)
+			| undefined;
+		const listenerFactory = async (opts: {
+			onMessage: (
+				msg: import("./provider-web.js").WebInboundMessage,
+			) => Promise<void>;
+		}) => {
+			capturedOnMessage = opts.onMessage;
+			return { close: vi.fn() };
+		};
+
+		const bigPng = await sharp({
+			create: {
+				width: 2600,
+				height: 2600,
+				channels: 3,
+				background: { r: 0, g: 0, b: 255 },
+			},
+		})
+			.png({ compressionLevel: 0 })
+			.toBuffer();
+		expect(bigPng.length).toBeGreaterThan(1 * 1024 * 1024);
+
+		const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+			ok: true,
+			body: true,
+			arrayBuffer: async () =>
+				bigPng.buffer.slice(
+					bigPng.byteOffset,
+					bigPng.byteOffset + bigPng.byteLength,
+				),
+			headers: { get: () => "image/png" },
+			status: 200,
+		} as Response);
+
+		await monitorWebProvider(false, listenerFactory, false, resolver);
+		expect(capturedOnMessage).toBeDefined();
+
+		await capturedOnMessage?.({
+			body: "hello",
+			from: "+1",
+			to: "+2",
+			id: "msg1",
+			sendComposing,
+			reply,
+			sendMedia,
+		});
+
+		expect(sendMedia).toHaveBeenCalledTimes(1);
+		const payload = sendMedia.mock.calls[0][0] as {
+			image: Buffer;
+			caption?: string;
+			mimetype?: string;
+		};
+		expect(payload.image.length).toBeLessThanOrEqual(1 * 1024 * 1024);
+		expect(payload.mimetype).toBe("image/jpeg");
+		expect(reply).not.toHaveBeenCalled();
+
 		fetchMock.mockRestore();
 	});
 

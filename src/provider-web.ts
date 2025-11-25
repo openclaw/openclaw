@@ -14,8 +14,10 @@ import {
 	type WAMessage,
 } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
+import sharp from "sharp";
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { waitForever } from "./cli/wait.js";
+import { loadConfig } from "./config/config.js";
 import { danger, info, isVerbose, logVerbose, success } from "./globals.js";
 import { logInfo } from "./logger.js";
 import { getChildLogger } from "./logging.js";
@@ -30,6 +32,7 @@ function formatDuration(ms: number) {
 }
 
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
+const DEFAULT_WEB_MEDIA_BYTES = 5 * 1024 * 1024;
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
 	const logger = getChildLogger(
@@ -418,6 +421,12 @@ export async function monitorWebProvider(
 	abortSignal?: AbortSignal,
 ) {
 	const replyLogger = getChildLogger({ module: "web-auto-reply" });
+	const cfg = loadConfig();
+	const configuredMaxMb = cfg.inbound?.reply?.mediaMaxMb;
+	const maxMediaBytes =
+		typeof configuredMaxMb === "number" && configuredMaxMb > 0
+			? configuredMaxMb * 1024 * 1024
+			: DEFAULT_WEB_MEDIA_BYTES;
 	const stopRequested = () => abortSignal?.aborted === true;
 	const abortPromise =
 		abortSignal &&
@@ -457,7 +466,9 @@ export async function monitorWebProvider(
 					},
 				);
 				if (!replyResult || (!replyResult.text && !replyResult.mediaUrl)) {
-					logVerbose("Skipping auto-reply: no text/media returned from resolver");
+					logVerbose(
+						"Skipping auto-reply: no text/media returned from resolver",
+					);
 					return;
 				}
 				try {
@@ -466,7 +477,10 @@ export async function monitorWebProvider(
 							`Web auto-reply media detected: ${replyResult.mediaUrl}`,
 						);
 						try {
-							const media = await loadWebMedia(replyResult.mediaUrl);
+							const media = await loadWebMedia(
+								replyResult.mediaUrl,
+								maxMediaBytes,
+							);
 							if (isVerbose()) {
 								logVerbose(
 									`Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
@@ -713,39 +727,45 @@ async function downloadInboundMedia(
 
 async function loadWebMedia(
 	mediaUrl: string,
+	maxBytes: number = DEFAULT_WEB_MEDIA_BYTES,
 ): Promise<{ buffer: Buffer; contentType?: string }> {
-	const MAX_WEB_BYTES = 16 * 1024 * 1024; // 16MB: web provider can handle larger than Twilio
+	// Hard cap to avoid Anthropic/WhatsApp 5MB image limit that triggers API 400s.
 	if (mediaUrl.startsWith("file://")) {
 		mediaUrl = mediaUrl.replace("file://", "");
 	}
+
+	const optimizeAndClamp = async (buffer: Buffer) => {
+		const originalSize = buffer.length;
+		const optimized = await optimizeImageToJpeg(buffer, maxBytes);
+		if (optimized.optimizedSize < originalSize && isVerbose()) {
+			logVerbose(
+				`Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
+			);
+		}
+		if (optimized.buffer.length > maxBytes) {
+			throw new Error(
+				`Media could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(
+					optimized.buffer.length / (1024 * 1024)
+				).toFixed(2)}MB)`,
+			);
+		}
+		return {
+			buffer: optimized.buffer,
+			contentType: "image/jpeg",
+		};
+	};
+
 	if (/^https?:\/\//i.test(mediaUrl)) {
 		const res = await fetch(mediaUrl);
 		if (!res.ok || !res.body) {
 			throw new Error(`Failed to fetch media: HTTP ${res.status}`);
 		}
 		const array = Buffer.from(await res.arrayBuffer());
-		if (array.length > MAX_WEB_BYTES) {
-			throw new Error(
-				`Media exceeds ${Math.floor(MAX_WEB_BYTES / (1024 * 1024))}MB limit (got ${(
-					array.length / (1024 * 1024)
-				).toFixed(1)}MB)`,
-			);
-		}
-		return {
-			buffer: array,
-			contentType: res.headers.get("content-type") ?? undefined,
-		};
+		return optimizeAndClamp(array);
 	}
 	// Local path
 	const data = await fs.readFile(mediaUrl);
-	if (data.length > MAX_WEB_BYTES) {
-		throw new Error(
-			`Media exceeds ${Math.floor(MAX_WEB_BYTES / (1024 * 1024))}MB limit (got ${(
-				data.length / (1024 * 1024)
-			).toFixed(1)}MB)`,
-		);
-	}
-	return { buffer: data };
+	return optimizeAndClamp(data);
 }
 
 function getStatusCode(err: unknown) {
@@ -763,4 +783,61 @@ function formatError(err: unknown): string {
 	if (status || code)
 		return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
 	return String(err);
+}
+
+async function optimizeImageToJpeg(
+	buffer: Buffer,
+	maxBytes: number,
+): Promise<{
+	buffer: Buffer;
+	optimizedSize: number;
+	resizeSide: number;
+	quality: number;
+}> {
+	// Try a grid of sizes/qualities until under the limit.
+	const sides = [2048, 1536, 1280, 1024, 800];
+	const qualities = [80, 70, 60, 50, 40];
+	let smallest: {
+		buffer: Buffer;
+		size: number;
+		resizeSide: number;
+		quality: number;
+	} | null = null;
+
+	for (const side of sides) {
+		for (const quality of qualities) {
+			const out = await sharp(buffer)
+				.resize({
+					width: side,
+					height: side,
+					fit: "inside",
+					withoutEnlargement: true,
+				})
+				.jpeg({ quality, mozjpeg: true })
+				.toBuffer();
+			const size = out.length;
+			if (!smallest || size < smallest.size) {
+				smallest = { buffer: out, size, resizeSide: side, quality };
+			}
+			if (size <= maxBytes) {
+				return {
+					buffer: out,
+					optimizedSize: size,
+					resizeSide: side,
+					quality,
+				};
+			}
+		}
+	}
+
+	if (smallest) {
+		return {
+			buffer: smallest.buffer,
+			optimizedSize: smallest.size,
+			resizeSide: smallest.resizeSide,
+			quality: smallest.quality,
+		};
+	}
+
+	throw new Error("Failed to optimize image");
 }
