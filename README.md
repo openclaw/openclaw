@@ -3,6 +3,10 @@
 [![npm version](https://img.shields.io/npm/v/warelay.svg)](https://www.npmjs.com/package/warelay)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="README-header.png" alt="warelay header" width="640">
+</p>
+
 Send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven).
 
 ## Quick Start (pick your engine)
