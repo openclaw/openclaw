@@ -6,6 +6,7 @@
 - Web auto-replies now resize/recompress media and honor `inbound.reply.mediaMaxMb` in `~/.warelay/warelay.json` (default 5 MB) to avoid provider/API limits.
 - Web provider now detects media kind (image/audio/video/document), logs the source path, and enforces provider caps: images ≤6 MB, audio/video ≤16 MB, documents ≤100 MB; images still target the configurable cap above with resize + JPEG recompress.
 - Sessions can now send the system prompt only once: set `inbound.reply.session.sendSystemOnce` (optional `sessionIntro` for the first turn) to avoid re-sending large prompts every message.
+- While commands run, typing indicators refresh every 30s by default (tune with `inbound.reply.typingIntervalSeconds`); helps keep WhatsApp “composing” visible during longer Claude runs.
 - Optional voice-note transcription: set `inbound.transcribeAudio.command` (e.g., OpenAI Whisper CLI) to turn inbound audio into text before templating/Claude; verbose logs surface when transcription runs. Prompts now include the original media path plus a `Transcript:` block so models see both.
 
 ## 1.0.4 — 2025-11-25

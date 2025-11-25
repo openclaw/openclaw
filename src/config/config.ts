@@ -14,12 +14,13 @@ export type SessionConfig = {
 	resetTriggers?: string[];
 	idleMinutes?: number;
 	store?: string;
-	sessionArgNew?: string[];
-	sessionArgResume?: string[];
-	sessionArgBeforeBody?: boolean;
-	sendSystemOnce?: boolean;
-	sessionIntro?: string;
-};
+		sessionArgNew?: string[];
+		sessionArgResume?: string[];
+		sessionArgBeforeBody?: boolean;
+		sendSystemOnce?: boolean;
+		sessionIntro?: string;
+		typingIntervalSeconds?: number;
+	};
 
 export type LoggingConfig = {
 	level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
@@ -43,12 +44,13 @@ export type WarelayConfig = {
 			template?: string; // prepend template string when building command/prompt
 			timeoutSeconds?: number; // optional command timeout; defaults to 600s
 			bodyPrefix?: string; // optional string prepended to Body before templating
-			mediaUrl?: string; // optional media attachment (path or URL)
-			session?: SessionConfig;
-			claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
-			mediaMaxMb?: number; // optional cap for outbound media (default 5MB)
-		};
+		mediaUrl?: string; // optional media attachment (path or URL)
+		session?: SessionConfig;
+		claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
+		mediaMaxMb?: number; // optional cap for outbound media (default 5MB)
+		typingIntervalSeconds?: number; // how often to refresh typing indicator while command runs
 	};
+};
 };
 
 export const CONFIG_PATH = path.join(os.homedir(), ".warelay", "warelay.json");
@@ -64,6 +66,7 @@ const ReplySchema = z
 		bodyPrefix: z.string().optional(),
 		mediaUrl: z.string().optional(),
 		mediaMaxMb: z.number().positive().optional(),
+		typingIntervalSeconds: z.number().int().positive().optional(),
 		session: z
 			.object({
 				scope: z
@@ -77,6 +80,7 @@ const ReplySchema = z
 				sessionArgBeforeBody: z.boolean().optional(),
 				sendSystemOnce: z.boolean().optional(),
 				sessionIntro: z.string().optional(),
+				typingIntervalSeconds: z.number().int().positive().optional(),
 			})
 			.optional(),
 		claudeOutputFormat: z

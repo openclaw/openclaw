@@ -601,6 +601,49 @@ describe("config and templating", () => {
 		expect(secondArgv[secondArgv.length - 1]).toBe("[sys] next");
 	});
 
+	it("refreshes typing indicator while command runs", async () => {
+		vi.useFakeTimers();
+		const onReplyStart = vi.fn();
+		const runSpy = vi
+			.spyOn(index, "runCommandWithTimeout")
+			.mockImplementation(
+				() =>
+					new Promise((resolve) =>
+						setTimeout(
+							() =>
+								resolve({
+									stdout: "done\n",
+									stderr: "",
+									code: 0,
+									signal: null,
+									killed: false,
+								}),
+							35_000,
+						),
+					),
+			);
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					typingIntervalSeconds: 10,
+				},
+			},
+		};
+
+		const promise = index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			{ onReplyStart },
+			cfg,
+			runSpy,
+		);
+		await vi.advanceTimersByTimeAsync(35_000);
+		await promise;
+		expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(4);
+		vi.useRealTimers();
+	});
+
 	it("injects Claude output format + print flag when configured", async () => {
 		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
 			stdout: "ok",

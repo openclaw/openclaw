@@ -105,10 +105,35 @@ export async function getReplyFromConfig(
 	const timeoutSeconds = Math.max(reply?.timeoutSeconds ?? 600, 1);
 	const timeoutMs = timeoutSeconds * 1000;
 	let started = false;
+	const triggerTyping = async () => {
+		await opts?.onReplyStart?.();
+	};
 	const onReplyStart = async () => {
 		if (started) return;
 		started = true;
-		await opts?.onReplyStart?.();
+		await triggerTyping();
+	};
+	let typingTimer: NodeJS.Timeout | undefined;
+	const typingIntervalMs =
+		reply?.mode === "command"
+			? (reply.typingIntervalSeconds ??
+					reply?.session?.typingIntervalSeconds ??
+					30) * 1000
+			: 0;
+	const cleanupTyping = () => {
+		if (typingTimer) {
+			clearInterval(typingTimer);
+			typingTimer = undefined;
+		}
+	};
+	const startTypingLoop = async () => {
+		if (!opts?.onReplyStart) return;
+		if (typingIntervalMs <= 0) return;
+		if (typingTimer) return;
+		await triggerTyping();
+		typingTimer = setInterval(() => {
+			void triggerTyping();
+		}, typingIntervalMs);
 	};
 	let transcribedText: string | undefined;
 
@@ -193,9 +218,12 @@ export async function getReplyFromConfig(
 			logVerbose(
 				`Skipping auto-reply: sender ${from || "<unknown>"} not in allowFrom list`,
 			);
+			cleanupTyping();
 			return undefined;
 		}
 	}
+
+	await startTypingLoop();
 
 	// Optional prefix injected before Body for templating/command prompts.
 	const sendSystemOnce = sessionCfg?.sendSystemOnce === true;
@@ -262,16 +290,19 @@ export async function getReplyFromConfig(
 	};
 	if (!reply) {
 		logVerbose("No inbound.reply configured; skipping auto-reply");
+		cleanupTyping();
 		return undefined;
 	}
 
 	if (reply.mode === "text" && reply.text) {
 		await onReplyStart();
 		logVerbose("Using text auto-reply from config");
-		return {
+		const result = {
 			text: applyTemplate(reply.text, templatingCtx),
 			mediaUrl: reply.mediaUrl,
 		};
+		cleanupTyping();
+		return result;
 	}
 
 	if (reply.mode === "command" && reply.command?.length) {
@@ -425,9 +456,12 @@ export async function getReplyFromConfig(
 				return undefined;
 			}
 			const mediaUrl = mediaFromCommand ?? reply.mediaUrl;
-			return trimmed || mediaUrl
-				? { text: trimmed || undefined, mediaUrl }
-				: undefined;
+			const result =
+				trimmed || mediaUrl
+					? { text: trimmed || undefined, mediaUrl }
+					: undefined;
+			cleanupTyping();
+			return result;
 		} catch (err) {
 			const elapsed = Date.now() - started;
 			const anyErr = err as { killed?: boolean; signal?: string };
@@ -452,16 +486,20 @@ export async function getReplyFromConfig(
 				const text = partialSnippet
 					? `${baseMsg}\n\nPartial output before timeout:\n${partialSnippet}`
 					: baseMsg;
-				return { text };
+				const result = { text };
+				cleanupTyping();
+				return result;
 			} else {
 				logError(
 					`Command auto-reply failed after ${elapsed}ms: ${String(err)}`,
 				);
 			}
+			cleanupTyping();
 			return undefined;
 		}
 	}
 
+	cleanupTyping();
 	return undefined;
 }
 
