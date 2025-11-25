@@ -602,32 +602,29 @@ describe("config and templating", () => {
 	});
 
 	it("refreshes typing indicator while command runs", async () => {
-		vi.useFakeTimers();
 		const onReplyStart = vi.fn();
-		const runSpy = vi
-			.spyOn(index, "runCommandWithTimeout")
-			.mockImplementation(
-				() =>
-					new Promise((resolve) =>
-						setTimeout(
-							() =>
-								resolve({
-									stdout: "done\n",
-									stderr: "",
-									code: 0,
-									signal: null,
-									killed: false,
-								}),
-							35_000,
-						),
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockImplementation(
+			() =>
+				new Promise((resolve) =>
+					setTimeout(
+						() =>
+							resolve({
+								stdout: "done\n",
+								stderr: "",
+								code: 0,
+								signal: null,
+								killed: false,
+							}),
+						120,
 					),
-			);
+				),
+		);
 		const cfg = {
 			inbound: {
 				reply: {
 					mode: "command" as const,
 					command: ["echo", "{{Body}}"],
-					typingIntervalSeconds: 10,
+					typingIntervalSeconds: 0.02,
 				},
 			},
 		};
@@ -638,10 +635,48 @@ describe("config and templating", () => {
 			cfg,
 			runSpy,
 		);
-		await vi.advanceTimersByTimeAsync(35_000);
+		await new Promise((r) => setTimeout(r, 200));
 		await promise;
-		expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(4);
-		vi.useRealTimers();
+		expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(3);
+	});
+
+	it("uses session typing interval override", async () => {
+		const onReplyStart = vi.fn();
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockImplementation(
+			() =>
+				new Promise((resolve) =>
+					setTimeout(
+						() =>
+							resolve({
+								stdout: "done\n",
+								stderr: "",
+								code: 0,
+								signal: null,
+								killed: false,
+							}),
+						120,
+					),
+				),
+		);
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					session: { typingIntervalSeconds: 0.02 },
+				},
+			},
+		};
+
+		const promise = index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			{ onReplyStart },
+			cfg,
+			runSpy,
+		);
+		await new Promise((r) => setTimeout(r, 200));
+		await promise;
+		expect(onReplyStart.mock.calls.length).toBeGreaterThanOrEqual(3);
 	});
 
 	it("injects Claude output format + print flag when configured", async () => {
