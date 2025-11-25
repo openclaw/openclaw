@@ -18,7 +18,7 @@ import { spawnRelayTmux } from "./relay_tmux.js";
 
 export function buildProgram() {
 	const program = new Command();
-	const PROGRAM_VERSION = "0.1.1";
+	const PROGRAM_VERSION = "0.1.2";
 	const TAGLINE =
 		"Send, receive, and auto-reply on WhatsApp—Twilio-backed or QR-linked.";
 
@@ -36,7 +36,7 @@ export function buildProgram() {
 
 	program.configureHelp({
 		optionTerm: (option) => chalk.yellow(option.flags),
-		commandTerm: (cmd) => chalk.green(cmd.name()),
+		subcommandTerm: (cmd) => chalk.green(cmd.name()),
 	});
 
 	program.configureOutput({

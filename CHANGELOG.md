@@ -6,6 +6,13 @@
 - Added a proper executable shim so `npx warelay@0.1.x --help` runs the CLI directly.
 - Help/version banner now uses the README tagline with color, and the help footer includes colored examples with short explanations.
 - `send` and `status` gained a `--verbose` flag for consistent noisy output when debugging.
+- Lowercased branding in docs/UA; web provider UA is `warelay/cli/0.1.1`.
+
+## 0.1.2 — 2025-11-25
+
+### CI/build fix
+- Fixed commander help configuration (`subcommandTerm`) so TypeScript builds pass in CI.
+- Bumped version/UA to 0.1.2; no functional changes beyond the CI fix.
 
 ## 0.1.0 — 2025-11-25
 
