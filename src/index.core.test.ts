@@ -172,12 +172,42 @@ describe("config and templating", () => {
 		const argv = runSpy.mock.calls[0][0];
 		expect(argv[0]).toBe("claude");
 		expect(argv.at(-1)).toBe("hi");
+		// The helper should auto-add print and output format flags without disturbing the prompt position.
 		expect(argv.includes("-p") || argv.includes("--print")).toBe(true);
 		const outputIdx = argv.findIndex(
-			(part) => part === "--output-format" || part.startsWith("--output-format="),
+			(part) =>
+				part === "--output-format" || part.startsWith("--output-format="),
 		);
 		expect(outputIdx).toBeGreaterThan(-1);
 		expect(argv[outputIdx + 1]).toBe("text");
+	});
+
+	it("parses Claude JSON output and returns text content", async () => {
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+			stdout: '{"text":"hello world"}\n',
+			stderr: "",
+			code: 0,
+			signal: null,
+			killed: false,
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["claude", "{{Body}}"],
+					claudeOutputFormat: "json" as const,
+				},
+			},
+		};
+
+		const result = await index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+
+		expect(result).toBe("hello world");
 	});
 });
 

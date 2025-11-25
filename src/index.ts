@@ -552,11 +552,69 @@ type TemplateContext = MsgContext & {
 	IsNewSession?: string;
 };
 
+function extractClaudeText(payload: unknown): string | undefined {
+	// Best-effort walker to find the primary text field in Claude JSON outputs.
+	if (payload == null) return undefined;
+	if (typeof payload === "string") return payload;
+	if (Array.isArray(payload)) {
+		for (const item of payload) {
+			const found = extractClaudeText(item);
+			if (found) return found;
+		}
+		return undefined;
+	}
+	if (typeof payload === "object") {
+		const obj = payload as Record<string, unknown>;
+		if (typeof obj.text === "string") return obj.text;
+		if (typeof obj.completion === "string") return obj.completion;
+		if (typeof obj.output === "string") return obj.output;
+		if (obj.message) {
+			const inner = extractClaudeText(obj.message);
+			if (inner) return inner;
+		}
+		if (Array.isArray(obj.messages)) {
+			const inner = extractClaudeText(obj.messages);
+			if (inner) return inner;
+		}
+		if (Array.isArray(obj.content)) {
+			for (const block of obj.content) {
+				if (
+					block &&
+					typeof block === "object" &&
+					(block as { type?: string }).type === "text" &&
+					typeof (block as { text?: unknown }).text === "string"
+				) {
+					return (block as { text: string }).text;
+				}
+				const inner = extractClaudeText(block);
+				if (inner) return inner;
+			}
+		}
+	}
+	return undefined;
+}
+
+function parseClaudeJsonText(raw: string): string | undefined {
+	// Handle a single JSON blob or newline-delimited JSON; return the first extracted text.
+	const candidates = [raw, ...raw.split(/\n+/).map((s) => s.trim()).filter(Boolean)];
+	for (const candidate of candidates) {
+		try {
+			const parsed = JSON.parse(candidate);
+			const text = extractClaudeText(parsed);
+			if (text) return text;
+		} catch {
+			// ignore parse errors; try next candidate
+		}
+	}
+	return undefined;
+}
+
 type SessionEntry = { sessionId: string; updatedAt: number };
 
 const SESSION_STORE_DEFAULT = path.join(CONFIG_DIR, "sessions.json");
 const DEFAULT_RESET_TRIGGER = "/new";
 const DEFAULT_IDLE_MINUTES = 60;
+const CLAUDE_BIN = "claude";
 
 function resolveStorePath(store?: string) {
 	if (!store) return SESSION_STORE_DEFAULT;
@@ -722,7 +780,7 @@ async function getReplyFromConfig(
 		if (
 			reply.claudeOutputFormat &&
 			argv.length > 0 &&
-			path.basename(argv[0]) === "claude"
+			path.basename(argv[0]) === CLAUDE_BIN
 		) {
 			const hasOutputFormat = argv.some(
 				(part) =>
@@ -773,9 +831,21 @@ async function getReplyFromConfig(
 				finalArgv,
 				timeoutMs,
 			);
-			const trimmed = stdout.trim();
+			let trimmed = stdout.trim();
 			if (stderr?.trim()) {
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
+			}
+			if (reply.claudeOutputFormat === "json" && trimmed) {
+				// Claude JSON mode: extract the human text for both logging and reply.
+				const extracted = parseClaudeJsonText(trimmed);
+				if (extracted) {
+					logVerbose(
+						`Claude JSON parsed -> ${extracted.slice(0, 120)}${extracted.length > 120 ? "…" : ""}`,
+					);
+					trimmed = extracted.trim();
+				} else {
+					logVerbose("Claude JSON parse failed; returning raw stdout");
+				}
 			}
 			logVerbose(
 				`Command auto-reply stdout (trimmed): ${trimmed || "<empty>"}`,
