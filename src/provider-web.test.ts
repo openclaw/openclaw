@@ -46,6 +46,7 @@ import {
 	sendMessageWeb,
 	waitForWaConnection,
 } from "./provider-web.js";
+import { monitorWebProvider } from "./index.js";
 
 const baileys = (await import(
 	"@whiskeysockets/baileys"
@@ -207,6 +208,49 @@ describe("provider-web", () => {
 			}),
 		);
 		await listener.close();
+	});
+
+	it("monitorWebProvider falls back to text when media send fails", async () => {
+		const sendMedia = vi.fn().mockRejectedValue(new Error("boom"));
+		const reply = vi.fn().mockResolvedValue(undefined);
+		const sendComposing = vi.fn();
+		const resolver = vi.fn().mockResolvedValue({
+			text: "hi",
+			mediaUrl: "https://example.com/img.png",
+		});
+
+		let capturedOnMessage: ((msg: any) => Promise<void>) | undefined;
+		const listenerFactory = async (opts: { onMessage: (msg: any) => Promise<void> }) => {
+			capturedOnMessage = opts.onMessage;
+			return { close: vi.fn() };
+		};
+
+		const fetchMock = vi
+			.spyOn(global as any, "fetch")
+			.mockResolvedValue({
+				ok: true,
+				body: true,
+				arrayBuffer: async () => new ArrayBuffer(1024),
+				headers: { get: () => "image/png" },
+				status: 200,
+			} as any);
+
+		await monitorWebProvider(false, listenerFactory as any, false, resolver);
+
+		expect(capturedOnMessage).toBeDefined();
+		await capturedOnMessage?.({
+			body: "hello",
+			from: "+1",
+			to: "+2",
+			id: "msg1",
+			sendComposing,
+			reply,
+			sendMedia,
+		});
+
+		expect(sendMedia).toHaveBeenCalled();
+		expect(reply).toHaveBeenCalledWith("hi");
+		fetchMock.mockRestore();
 	});
 
 	it("logWebSelfId prints cached E.164 when creds exist", () => {

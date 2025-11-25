@@ -198,6 +198,31 @@ describe("config and templating", () => {
 		expect(result?.text).toBe("caption before caption after");
 	});
 
+	it("captures MEDIA wrapped in backticks", async () => {
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+			stdout: "MEDIA:`/tmp/pic.png` cool",
+			stderr: "",
+			code: 0,
+			signal: null,
+			killed: false,
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+				},
+			},
+		};
+		const result = await index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+		expect(result?.mediaUrl).toBe("/tmp/pic.png");
+	});
+
 	it("ignores invalid MEDIA lines with whitespace", async () => {
 		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
 			stdout: "hello\nMEDIA: not a url with spaces\nrest\n",
