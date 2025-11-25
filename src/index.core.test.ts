@@ -6,6 +6,7 @@ import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockTwilio } from "../test/mocks/twilio.js";
 import { withWhatsAppPrefix } from "./utils.js";
+import * as exec from "./process/exec.js";
 
 // Twilio mock factory shared across tests
 vi.mock("twilio", () => {
@@ -115,6 +116,69 @@ describe("config and templating", () => {
 		expect(result?.text).toContain("/tmp/a.jpg");
 		expect(result?.text).toContain("image/jpeg");
 		expect(result?.text).toContain("http://example.com/a.jpg");
+	});
+
+	it("getReplyFromConfig runs audio transcription command when configured", async () => {
+		const cfg = {
+			inbound: {
+				transcribeAudio: {
+					command: ["echo", "voice transcript"],
+				},
+				reply: {
+					mode: "text" as const,
+					text: "{{Body}}",
+				},
+			},
+		};
+
+		const runExec = vi.spyOn(exec, "runExec").mockResolvedValue({
+			stdout: "voice transcript\n",
+			stderr: "",
+		});
+
+		const result = await index.getReplyFromConfig(
+			{
+				Body: "<media:audio>",
+				From: "+1",
+				To: "+2",
+				MediaPath: "/tmp/voice.ogg",
+				MediaType: "audio/ogg",
+			},
+			undefined,
+			cfg,
+		);
+
+		expect(runExec).toHaveBeenCalled();
+		expect(result?.text).toContain("voice transcript");
+		expect(result?.text).toContain("/tmp/voice.ogg");
+	});
+
+	it("getReplyFromConfig skips transcription when not configured", async () => {
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "text" as const,
+					text: "{{Body}}",
+				},
+			},
+		};
+
+		const runExec = vi.spyOn(exec, "runExec");
+		const result = await index.getReplyFromConfig(
+			{
+				Body: "<media:audio>",
+				From: "+1",
+				To: "+2",
+				MediaPath: "/tmp/voice.ogg",
+				MediaType: "audio/ogg",
+			},
+			undefined,
+			cfg,
+		);
+
+		expect(runExec).not.toHaveBeenCalled();
+		expect(result?.text).toContain("/tmp/voice.ogg");
+		expect(result?.text).toContain("<media:audio>");
 	});
 
 	it("getReplyFromConfig extracts media URL from command stdout", async () => {

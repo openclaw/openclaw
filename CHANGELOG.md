@@ -4,6 +4,7 @@
 
 ### Pending
 - Web auto-replies now resize/recompress media and honor `inbound.reply.mediaMaxMb` in `~/.warelay/warelay.json` (default 5 MB) to avoid provider/API limits.
+- Optional voice-note transcription: set `inbound.transcribeAudio.command` (e.g., OpenAI Whisper CLI) to turn inbound audio into text before templating/Claude; verbose logs surface when transcription runs.
 
 ## 1.0.4 — 2025-11-25
 

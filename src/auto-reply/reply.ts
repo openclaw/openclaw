@@ -1,4 +1,6 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
@@ -16,7 +18,7 @@ import { logError } from "../logger.js";
 import { ensureMediaHosted } from "../media/host.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { enqueueCommand } from "../process/command-queue.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { TwilioRequester } from "../twilio/types.js";
 import { sendTypingIndicator } from "../twilio/typing.js";
@@ -109,6 +111,15 @@ export async function getReplyFromConfig(
 		await opts?.onReplyStart?.();
 	};
 
+	// Optional audio transcription before templating/session handling.
+	if (cfg.inbound?.transcribeAudio && isAudio(ctx.MediaType)) {
+		const transcribed = await transcribeInboundAudio(cfg, ctx, defaultRuntime);
+		if (transcribed?.text) {
+			ctx.Body = transcribed.text;
+			logVerbose("Replaced Body with audio transcript for reply flow");
+		}
+	}
+
 	// Optional session handling (conversation reuse + /new resets)
 	const sessionCfg = reply?.session;
 	const resetTriggers = sessionCfg?.resetTriggers?.length
@@ -166,6 +177,18 @@ export async function getReplyFromConfig(
 		IsNewSession: isNewSession ? "true" : "false",
 	};
 
+	// Optional allowlist by origin number (E.164 without whatsapp: prefix)
+	const allowFrom = cfg.inbound?.allowFrom;
+	if (Array.isArray(allowFrom) && allowFrom.length > 0) {
+		const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
+		if (!allowFrom.includes(from)) {
+			logVerbose(
+				`Skipping auto-reply: sender ${from || "<unknown>"} not in allowFrom list`,
+			);
+			return undefined;
+		}
+	}
+
 	// Optional prefix injected before Body for templating/command prompts.
 	const bodyPrefix = reply?.bodyPrefix
 		? applyTemplate(reply.bodyPrefix, sessionCtx)
@@ -192,18 +215,6 @@ export async function getReplyFromConfig(
 		Body: commandBody,
 		BodyStripped: commandBody,
 	};
-
-	// Optional allowlist by origin number (E.164 without whatsapp: prefix)
-	const allowFrom = cfg.inbound?.allowFrom;
-	if (Array.isArray(allowFrom) && allowFrom.length > 0) {
-		const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
-		if (!allowFrom.includes(from)) {
-			logVerbose(
-				`Skipping auto-reply: sender ${from || "<unknown>"} not in allowFrom list`,
-			);
-			return undefined;
-		}
-	}
 	if (!reply) {
 		logVerbose("No inbound.reply configured; skipping auto-reply");
 		return undefined;
@@ -431,13 +442,38 @@ export async function autoReplyIfConfigured(
 		To: message.to ?? undefined,
 		MessageSid: message.sid,
 	};
+	const cfg = configOverride ?? loadConfig();
+	// Attach media hints for transcription/templates if present on Twilio payloads.
+	const mediaUrl = (message as { mediaUrl?: string }).mediaUrl;
+	if (mediaUrl) ctx.MediaUrl = mediaUrl;
+
+	// Optional audio transcription before building reply.
+	if (cfg.inbound?.transcribeAudio && message.media?.length) {
+		const media = message.media[0];
+		const contentType = (media as { contentType?: string }).contentType;
+		if (contentType?.startsWith("audio")) {
+			const transcribed = await transcribeInboundAudio(
+				cfg,
+				{
+					mediaUrl: mediaUrl ?? undefined,
+					contentType,
+				},
+				runtime,
+			);
+			if (transcribed?.text) {
+				ctx.Body = transcribed.text;
+				ctx.MediaType = contentType;
+				logVerbose("Replaced Body with audio transcript for reply flow");
+			}
+		}
+	}
 
 	const replyResult = await getReplyFromConfig(
 		ctx,
 		{
 			onReplyStart: () => sendTypingIndicator(client, runtime, message.sid),
 		},
-		configOverride,
+		cfg,
 	);
 	if (!replyResult || (!replyResult.text && !replyResult.mediaUrl)) return;
 
@@ -502,6 +538,67 @@ export async function autoReplyIfConfigured(
 		if (responseBody) {
 			runtime.error("Response body:");
 			runtime.error(JSON.stringify(responseBody, null, 2));
+		}
+	}
+}
+
+function isAudio(mediaType?: string | null) {
+	return Boolean(mediaType && mediaType.startsWith("audio"));
+}
+
+async function transcribeInboundAudio(
+	cfg: WarelayConfig,
+	ctx: MsgContext,
+	runtime: RuntimeEnv,
+): Promise<{ text: string } | undefined> {
+	const transcriber = cfg.inbound?.transcribeAudio;
+	if (!transcriber?.command?.length) return undefined;
+
+	const timeoutMs = Math.max((transcriber.timeoutSeconds ?? 45) * 1000, 1_000);
+	let tmpPath: string | undefined;
+	let mediaPath = ctx.MediaPath;
+	try {
+		if (!mediaPath && ctx.MediaUrl) {
+			const res = await fetch(ctx.MediaUrl);
+			if (!res.ok) throw new Error(`HTTP ${res.status}`);
+			const arrayBuf = await res.arrayBuffer();
+			const buffer = Buffer.from(arrayBuf);
+			tmpPath = path.join(
+				os.tmpdir(),
+				`warelay-audio-${crypto.randomUUID()}.ogg`,
+			);
+			await fs.writeFile(tmpPath, buffer);
+			mediaPath = tmpPath;
+			if (isVerbose()) {
+				logVerbose(
+					`Downloaded audio for transcription (${(buffer.length / (1024 * 1024)).toFixed(2)}MB) -> ${tmpPath}`,
+				);
+			}
+		}
+		if (!mediaPath) return undefined;
+
+		const templCtx: MsgContext = { ...ctx, MediaPath: mediaPath };
+		const argv = transcriber.command.map((part) =>
+			applyTemplate(part, templCtx),
+		);
+		if (isVerbose()) {
+			logVerbose(`Transcribing audio via command: ${argv.join(" ")}`);
+		}
+		const { stdout } = await runExec(argv[0], argv.slice(1), {
+			timeoutMs,
+			maxBuffer: 5 * 1024 * 1024,
+		});
+		const text = stdout.trim();
+		if (!text) return undefined;
+		return { text };
+	} catch (err) {
+		runtime.error?.(`Audio transcription failed: ${String(err)}`);
+		return undefined;
+	} finally {
+		if (tmpPath) {
+			void fs
+				.unlink(tmpPath)
+				.catch(() => {});
 		}
 	}
 }

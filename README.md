@@ -51,6 +51,32 @@ Install from npm (global): `npm install -g warelay` (Node 22+). Then choose **on
 - Web: `warelay send --provider web --media ./pic.jpg --message "Hi"` (local path or URL; no hosting needed).
 - Auto-replies can attach `mediaUrl` in `~/.warelay/warelay.json` (used alongside `text` when present). Web auto-replies now auto-resize/recompress images and cap size by config: set `inbound.reply.mediaMaxMb` (default 5) to control the post-compression limit; images are resized (max side 2048px) and JPEG-compressed to fit.
 
+### Voice notes (optional transcription)
+- If you set `inbound.transcribeAudio.command`, warelay will run that CLI when inbound audio arrives (e.g., WhatsApp voice notes) and replace the Body with the transcript before templating/Claude.
+- Example using OpenAI Whisper CLI (requires `OPENAI_API_KEY`):
+  ```json5
+  {
+    inbound: {
+      transcribeAudio: {
+        command: [
+          "openai",
+          "api",
+          "audio.transcriptions.create",
+          "-m",
+          "whisper-1",
+          "-f",
+          "{{MediaPath}}",
+          "--response-format",
+          "text"
+        ],
+        timeoutSeconds: 45
+      },
+      reply: { mode: "command", command: ["claude", "{{Body}}"] }
+    }
+  }
+  ```
+- Works for Web and Twilio providers; verbose mode logs when transcription runs. If transcription fails, the original Body is used.
+
 ## Providers
 - **Twilio (default):** needs `.env` creds + WhatsApp-enabled number; supports delivery tracking, polling, webhooks, and auto-reply typing indicators.
 - **Web (`--provider web`):** uses your personal WhatsApp via Baileys; supports send/receive + auto-reply, but no delivery-status wait; cache lives in `~/.warelay/credentials/` (rerun `login` if logged out).

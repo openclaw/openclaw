@@ -59,6 +59,7 @@ Notes on this configuration:
   - Host local paths for Twilio using the media server/Tailscale Funnel.
   - Send buffers directly for the Web provider.
 - Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment. Outbound media from Claude (via `MEDIA:`) is resized/recompressed on the Web provider path; control the cap with `inbound.reply.mediaMaxMb` (default 5).
+- Voice notes: set `inbound.transcribeAudio.command` to run a CLI that emits the transcript to stdout (e.g., OpenAI Whisper: `openai api audio.transcriptions.create -m whisper-1 -f {{MediaPath}} --response-format text`). If it succeeds, warelay replaces `Body` with the transcript before invoking Claude.
 
 ## Testing the setup
 1. Start a relay (auto-selects Web when logged in, otherwise Twilio polling):

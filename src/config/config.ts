@@ -28,6 +28,11 @@ export type WarelayConfig = {
 	logging?: LoggingConfig;
 	inbound?: {
 		allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
+		transcribeAudio?: {
+			// Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
+			command: string[];
+			timeoutSeconds?: number;
+		};
 		reply?: {
 			mode: ReplyMode;
 			text?: string; // for mode=text, can contain {{Body}}
@@ -107,6 +112,12 @@ const WarelaySchema = z.object({
 	inbound: z
 		.object({
 			allowFrom: z.array(z.string()).optional(),
+			transcribeAudio: z
+				.object({
+					command: z.array(z.string()),
+					timeoutSeconds: z.number().int().positive().optional(),
+				})
+				.optional(),
 			reply: ReplySchema.optional(),
 		})
 		.optional(),
