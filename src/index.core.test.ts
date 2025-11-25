@@ -17,6 +17,7 @@ type TwilioFactoryMock = ReturnType<typeof createMockTwilio>["factory"];
 const twilioFactory = (await import("twilio")).default as TwilioFactoryMock;
 
 import * as index from "./index.js";
+import { splitMediaFromOutput } from "./media/parse.js";
 
 const envBackup = { ...process.env } as Record<string, string | undefined>;
 
@@ -221,6 +222,14 @@ describe("config and templating", () => {
 		);
 		expect(result?.text).toBe("hello\nrest");
 		expect(result?.mediaUrl).toBeUndefined();
+	});
+
+	it("splitMediaFromOutput strips media token and preserves text", () => {
+		const { text, mediaUrl } = splitMediaFromOutput(
+			"line1\nMEDIA:https://x/y.png\nline2",
+		);
+		expect(mediaUrl).toBe("https://x/y.png");
+		expect(text).toBe("line1\nline2");
 	});
 
 	it("getReplyFromConfig runs command and manages session store", async () => {

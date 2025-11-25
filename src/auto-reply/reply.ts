@@ -25,15 +25,11 @@ import type { TwilioRequester } from "../twilio/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { logError } from "../logger.js";
 import { ensureMediaHosted } from "../media/host.js";
+import { normalizeMediaSource, splitMediaFromOutput } from "../media/parse.js";
 
 type GetReplyOptions = {
 	onReplyStart?: () => Promise<void> | void;
 };
-
-function normalizeMediaSource(src: string) {
-	if (src.startsWith("file://")) return src.replace("file://", "");
-	return src;
-}
 
 function summarizeClaudeMetadata(payload: unknown): string | undefined {
 	if (!payload || typeof payload !== "object") return undefined;
@@ -293,43 +289,9 @@ const mediaNote =
 				},
 			);
 			const rawStdout = stdout.trim();
-			let trimmed = rawStdout;
-			let mediaFromCommand: string | undefined;
-			const mediaLine = rawStdout
-				.split("\n")
-				.find((line) => /\bMEDIA:/i.test(line));
-			if (mediaLine) {
-				let isValidMedia = false;
-				const mediaMatch = mediaLine.match(/\bMEDIA:\s*([^\s]+)/i);
-				if (mediaMatch?.[1]) {
-					const candidate = normalizeMediaSource(mediaMatch[1]);
-					const looksLikeUrl = /^https?:\/\//i.test(candidate);
-					const looksLikePath =
-						candidate.startsWith("/") || candidate.startsWith("./");
-					const hasWhitespace = /\s/.test(candidate);
-					isValidMedia =
-						!hasWhitespace &&
-						candidate.length <= 1024 &&
-						(looksLikeUrl || looksLikePath);
-					if (isValidMedia) mediaFromCommand = candidate;
-				}
-				if (isValidMedia && mediaMatch?.[0]) {
-					trimmed = rawStdout
-						.replace(mediaMatch[0], "")
-						.replace(/\s{2,}/g, " ")
-						.replace(/\s+\n/g, "\n")
-						.replace(/\n{3,}/g, "\n\n")
-						.trim();
-				} else {
-					trimmed = rawStdout
-						.split("\n")
-						.filter((line) => line !== mediaLine)
-						.join("\n")
-						.replace(/\n\s+/g, "\n")
-						.replace(/\n{3,}/g, "\n\n")
-						.trim();
-				}
-			}
+			const { text: trimmedText, mediaUrl: mediaFromCommand } =
+				splitMediaFromOutput(rawStdout);
+			let trimmed = trimmedText;
 			if (stderr?.trim()) {
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
 			}
