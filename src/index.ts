@@ -16,7 +16,6 @@ import express, { type Request, type Response } from "express";
 import JSON5 from "json5";
 import Twilio from "twilio";
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
-import { z } from "zod";
 import {
 	runCommandWithTimeout,
 	runExec,
@@ -28,6 +27,9 @@ import {
 	autoReplyIfConfigured,
 	getReplyFromConfig,
 } from "./auto-reply/reply.js";
+import { readEnv, ensureTwilioEnv, type EnvConfig } from "./env.js";
+import { createClient } from "./twilio/client.js";
+import { logTwilioSendError, formatTwilioError } from "./twilio/utils.js";
 import { CLAUDE_BIN, parseClaudeJsonText } from "./auto-reply/claude.js";
 import {
 	applyTemplate,
@@ -89,10 +91,6 @@ import {
 dotenv.config({ quiet: true });
 
 const program = new Command();
-
-type AuthMode =
-	| { accountSid: string; authToken: string }
-	| { accountSid: string; apiKey: string; apiSecret: string };
 
 type CliDeps = {
 	sendMessage: typeof sendMessage;
@@ -217,86 +215,6 @@ type TwilioSenderListClient = {
 type TwilioRequester = {
 	request: (options: TwilioRequestOptions) => Promise<TwilioRequestResponse>;
 };
-
-type EnvConfig = {
-	accountSid: string;
-	whatsappFrom: string;
-	whatsappSenderSid?: string;
-	auth: AuthMode;
-};
-
-const EnvSchema = z
-	.object({
-		TWILIO_ACCOUNT_SID: z.string().min(1, "TWILIO_ACCOUNT_SID required"),
-		TWILIO_WHATSAPP_FROM: z.string().min(1, "TWILIO_WHATSAPP_FROM required"),
-		TWILIO_SENDER_SID: z.string().optional(),
-		TWILIO_AUTH_TOKEN: z.string().optional(),
-		TWILIO_API_KEY: z.string().optional(),
-		TWILIO_API_SECRET: z.string().optional(),
-	})
-	.superRefine((val, ctx) => {
-		if (val.TWILIO_API_KEY && !val.TWILIO_API_SECRET) {
-			ctx.addIssue({
-				code: "custom",
-				message: "TWILIO_API_SECRET required when TWILIO_API_KEY is set",
-			});
-		}
-		if (val.TWILIO_API_SECRET && !val.TWILIO_API_KEY) {
-			ctx.addIssue({
-				code: "custom",
-				message: "TWILIO_API_KEY required when TWILIO_API_SECRET is set",
-			});
-		}
-		if (
-			!val.TWILIO_AUTH_TOKEN &&
-			!(val.TWILIO_API_KEY && val.TWILIO_API_SECRET)
-		) {
-			ctx.addIssue({
-				code: "custom",
-				message:
-					"Provide TWILIO_AUTH_TOKEN or both TWILIO_API_KEY and TWILIO_API_SECRET",
-			});
-		}
-	});
-
-function readEnv(runtime: RuntimeEnv = defaultRuntime): EnvConfig {
-	// Load and validate Twilio auth + sender configuration from env.
-	const parsed = EnvSchema.safeParse(process.env);
-	if (!parsed.success) {
-		runtime.error("Invalid environment configuration:");
-		parsed.error.issues.forEach((iss) => {
-			runtime.error(`- ${iss.message}`);
-		});
-		runtime.exit(1);
-	}
-
-	const {
-		TWILIO_ACCOUNT_SID: accountSid,
-		TWILIO_WHATSAPP_FROM: whatsappFrom,
-		TWILIO_SENDER_SID: whatsappSenderSid,
-		TWILIO_AUTH_TOKEN: authToken,
-		TWILIO_API_KEY: apiKey,
-		TWILIO_API_SECRET: apiSecret,
-	} = parsed.data;
-
-	let auth: AuthMode;
-	if (apiKey && apiSecret) {
-		auth = { accountSid, apiKey, apiSecret };
-	} else if (authToken) {
-		auth = { accountSid, authToken };
-	} else {
-		runtime.error("Missing Twilio auth configuration");
-		runtime.exit(1);
-		throw new Error("unreachable");
-	}
-
-	return {
-		accountSid,
-		whatsappFrom,
-		whatsappSenderSid,
-		auth,
-	};
-}
 
 
 class PortInUseError extends Error {
@@ -1036,39 +954,6 @@ async function updateWebhook(
 		),
 	);
 	runtime.exit(1);
-}
-
-type TwilioApiError = {
-	code?: number | string;
-	status?: number | string;
-	message?: string;
-	moreInfo?: string;
-	response?: { body?: unknown };
-};
-
-function formatTwilioError(err: unknown): string {
-	const e = err as TwilioApiError;
-	const pieces = [];
-	if (e.code != null) pieces.push(`code ${e.code}`);
-	if (e.status != null) pieces.push(`status ${e.status}`);
-	if (e.message) pieces.push(e.message);
-	if (e.moreInfo) pieces.push(`more: ${e.moreInfo}`);
-	return pieces.length ? pieces.join(" | ") : String(err);
-}
-
-function logTwilioSendError(
-	err: unknown,
-	destination?: string,
-	runtime: RuntimeEnv = defaultRuntime,
-) {
-	const prefix = destination ? `to ${destination}: ` : "";
-	runtime.error(
-		danger(`❌ Twilio send failed ${prefix}${formatTwilioError(err)}`),
-	);
-	const body = (err as TwilioApiError)?.response?.body;
-	if (body) {
-		runtime.error(info("Response body:"), JSON.stringify(body, null, 2));
-	}
 }
 
 function ensureTwilioEnv(runtime: RuntimeEnv = defaultRuntime) {
