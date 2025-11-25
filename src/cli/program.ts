@@ -11,6 +11,7 @@ import { pickProvider } from "../provider-web.js";
 import type { Provider } from "../utils.js";
 import { createDefaultDeps, logWebSelfId, logTwilioFrom, monitorTwilio } from "./deps.js";
 import { ensureTwilioEnv } from "../env.js";
+import { spawnRelayTmux } from "./relay_tmux.js";
 
 export function buildProgram() {
 	const program = new Command();
@@ -246,6 +247,19 @@ With Tailscale:
 				await deps.waitForever();
 			} catch (err) {
 				defaultRuntime.error(String(err));
+				defaultRuntime.exit(1);
+			}
+		});
+
+	program
+		.command("relay:tmux")
+		.description("Run relay --verbose inside tmux (session warelay-relay), restarting if already running")
+		.action(async () => {
+			try {
+				const session = await spawnRelayTmux();
+				defaultRuntime.log(info(`tmux session started: ${session} (pane running "pnpm warelay relay --verbose")`));
+			} catch (err) {
+				defaultRuntime.error(danger(`Failed to start relay tmux session: ${String(err)}`));
 				defaultRuntime.exit(1);
 			}
 		});
