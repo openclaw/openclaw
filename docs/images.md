@@ -21,7 +21,8 @@ This document defines how `warelay` should handle sending and replying with imag
 ## Provider Behavior
 ### Web (Baileys)
 - Input: local file path **or** HTTP(S) URL.
-- Flow: load into Buffer (max 5 MB), send via `sock.sendMessage(jid, { image: buffer, caption })`.
+- Flow: load into Buffer, **resize + recompress to JPEG** (max side 2048px, quality step-down) to fit under a configurable cap, then send via `sock.sendMessage(jid, { image: buffer, caption })`.
+- Size cap: default 5 MB; override with `inbound.reply.mediaMaxMb` in `~/.warelay/warelay.json`.
 - Caption uses `--message` or `reply.text`; if caption is empty, send media-only.
 - Logging: non-verbose shows `↩️`/`✅` with caption; verbose includes `(media, <bytes>B, <ms>ms fetch)`.
 

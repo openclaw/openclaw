@@ -58,7 +58,7 @@ Notes on this configuration:
 - To send an image from Claude, include a line like `MEDIA:https://example.com/pic.jpg` in the output. warelay will:
   - Host local paths for Twilio using the media server/Tailscale Funnel.
   - Send buffers directly for the Web provider.
-- Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment.
+- Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment. Outbound media from Claude (via `MEDIA:`) is resized/recompressed on the Web provider path; control the cap with `inbound.reply.mediaMaxMb` (default 5).
 
 ## Testing the setup
 1. Start a relay (auto-selects Web when logged in, otherwise Twilio polling):
