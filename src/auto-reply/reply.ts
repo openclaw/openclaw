@@ -297,38 +297,38 @@ const mediaNote =
 			let mediaFromCommand: string | undefined;
 			const mediaLine = rawStdout
 				.split("\n")
-				.find((line) => /^MEDIA:/i.test(line));
+				.find((line) => /\bMEDIA:/i.test(line));
 			if (mediaLine) {
-				const after = mediaLine.replace(/^MEDIA:\s*/i, "");
-				const parts = after.trim().split(/\s+/);
-				if (parts[0]) {
-					mediaFromCommand = normalizeMediaSource(parts[0]);
+				let isValidMedia = false;
+				const mediaMatch = mediaLine.match(/\bMEDIA:\s*([^\s]+)/i);
+				if (mediaMatch?.[1]) {
+					const candidate = normalizeMediaSource(mediaMatch[1]);
+					const looksLikeUrl = /^https?:\/\//i.test(candidate);
+					const looksLikePath =
+						candidate.startsWith("/") || candidate.startsWith("./");
+					const hasWhitespace = /\s/.test(candidate);
+					isValidMedia =
+						!hasWhitespace &&
+						candidate.length <= 1024 &&
+						(looksLikeUrl || looksLikePath);
+					if (isValidMedia) mediaFromCommand = candidate;
 				}
-				trimmed = rawStdout
-					.split("\n")
-					.filter((line) => !/^MEDIA:/i.test(line))
-					.join("\n")
-					.trim();
-				// Basic sanity: accept only URLs or existing file paths without whitespace.
-				const hasWhitespace = mediaFromCommand
-					? /\s/.test(mediaFromCommand)
-					: false;
-				const looksLikeUrl = mediaFromCommand
-					? /^https?:\/\//i.test(mediaFromCommand)
-					: false;
-				const looksLikePath = mediaFromCommand
-					? mediaFromCommand.startsWith("/") || mediaFromCommand.startsWith("./")
-					: false;
-				if (
-					!mediaFromCommand ||
-					hasWhitespace ||
-					(!looksLikeUrl && !looksLikePath) ||
-					mediaFromCommand.length > 1024
-				) {
-					mediaFromCommand = undefined;
+				if (isValidMedia && mediaMatch?.[0]) {
+					trimmed = rawStdout
+						.replace(mediaMatch[0], "")
+						.replace(/\s{2,}/g, " ")
+						.replace(/\s+\n/g, "\n")
+						.replace(/\n{3,}/g, "\n\n")
+						.trim();
+				} else {
+					trimmed = rawStdout
+						.split("\n")
+						.filter((line) => line !== mediaLine)
+						.join("\n")
+						.replace(/\n\s+/g, "\n")
+						.replace(/\n{3,}/g, "\n\n")
+						.trim();
 				}
-			} else {
-				trimmed = rawStdout;
 			}
 			if (stderr?.trim()) {
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);

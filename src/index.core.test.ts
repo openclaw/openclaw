@@ -171,6 +171,32 @@ describe("config and templating", () => {
 		expect(result?.mediaUrl).toBe("/tmp/pic.png");
 	});
 
+	it("extracts MEDIA token inline within a sentence", async () => {
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+			stdout: "caption before MEDIA:/tmp/pic.png caption after",
+			stderr: "",
+			code: 0,
+			signal: null,
+			killed: false,
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+				},
+			},
+		};
+		const result = await index.getReplyFromConfig(
+			{ Body: "hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+		expect(result?.mediaUrl).toBe("/tmp/pic.png");
+		expect(result?.text).toBe("caption before caption after");
+	});
+
 	it("ignores invalid MEDIA lines with whitespace", async () => {
 		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
 			stdout: "hello\nMEDIA: not a url with spaces\nrest\n",
@@ -483,11 +509,11 @@ describe("twilio interactions", () => {
 });
 
 describe("webhook and messaging", () => {
-		it("startWebhook responds and auto-replies", async () => {
-			const client = twilioFactory._createClient();
-			client.messages.create.mockResolvedValue({});
-			twilioFactory.mockReturnValue(client);
-			vi.spyOn(index, "getReplyFromConfig").mockResolvedValue({ text: "Auto" });
+	it("startWebhook responds and auto-replies", async () => {
+		const client = twilioFactory._createClient();
+		client.messages.create.mockResolvedValue({});
+		twilioFactory.mockReturnValue(client);
+		vi.spyOn(index, "getReplyFromConfig").mockResolvedValue({ text: "Auto" });
 
 		const server = await index.startWebhook(0, "/hook", undefined, false);
 		const address = server.address() as net.AddressInfo;
@@ -498,6 +524,39 @@ describe("webhook and messaging", () => {
 			body: "From=whatsapp%3A%2B1555&To=whatsapp%3A%2B1666&Body=Hello&MessageSid=SM2",
 		});
 		expect(res.status).toBe(200);
+		await new Promise((resolve) => server.close(resolve));
+	});
+
+	it("hosts local media before replying via webhook", async () => {
+		const client = twilioFactory._createClient();
+		client.messages.create.mockResolvedValue({});
+		twilioFactory.mockReturnValue(client);
+		const replies = await import("./auto-reply/reply.js");
+		const hostModule = await import("./media/host.js");
+		const hostSpy = vi
+			.spyOn(hostModule, "ensureMediaHosted")
+			.mockResolvedValue({ url: "https://ts.net/media/abc", id: "abc", size: 123 });
+		vi.spyOn(replies, "getReplyFromConfig").mockResolvedValue({
+			text: "Auto",
+			mediaUrl: "/tmp/pic.png",
+		});
+
+		const server = await index.startWebhook(0, "/hook", undefined, false);
+		const address = server.address() as net.AddressInfo;
+		const url = `http://127.0.0.1:${address.port}/hook`;
+		await fetch(url, {
+			method: "POST",
+			headers: { "content-type": "application/x-www-form-urlencoded" },
+			body: "From=whatsapp%3A%2B1555&To=whatsapp%3A%2B1666&Body=Hello&MessageSid=SM2",
+		});
+
+		expect(hostSpy).toHaveBeenCalledWith("/tmp/pic.png");
+		expect(client.messages.create).toHaveBeenCalledWith(
+			expect.objectContaining({
+				mediaUrl: ["https://ts.net/media/abc"],
+			}),
+		);
+		hostSpy.mockRestore();
 		await new Promise((resolve) => server.close(resolve));
 	});
 

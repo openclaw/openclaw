@@ -23,6 +23,10 @@ import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 import { logInfo, logWarn } from "./logger.js";
 import { saveMediaBuffer } from "./media/store.js";
 
+function formatDuration(ms: number) {
+	return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
+}
+
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
@@ -117,15 +121,12 @@ export async function sendMessageWeb(
 			logVerbose(`Presence update skipped: ${String(err)}`);
 		}
 		let payload: AnyMessageContent = { text: body };
-	if (options.mediaUrl) {
-		const normalized = options.mediaUrl.startsWith("file://")
-			? options.mediaUrl.replace("file://", "")
-			: options.mediaUrl;
-		const media = await loadWebMedia(options.mediaUrl);
-		payload = {
-			image: media.buffer,
-			caption: body || undefined,
-			mimetype: media.contentType,
+		if (options.mediaUrl) {
+			const media = await loadWebMedia(options.mediaUrl);
+			payload = {
+				image: media.buffer,
+				caption: body || undefined,
+				mimetype: media.contentType,
 			};
 		}
 		logInfo(
@@ -369,6 +370,9 @@ export async function monitorWebProvider(
 			if (!replyResult || (!replyResult.text && !replyResult.mediaUrl)) return;
 			try {
 				if (replyResult.mediaUrl) {
+					logVerbose(
+						`Web auto-reply media detected: ${replyResult.mediaUrl}`,
+					);
 					const media = await loadWebMedia(replyResult.mediaUrl);
 					await msg.sendMedia({
 						image: media.buffer,
@@ -382,7 +386,7 @@ export async function monitorWebProvider(
 				if (isVerbose()) {
 					console.log(
 						success(
-							`↩️  Auto-replied to ${msg.from} (web, ${replyResult.text?.length ?? 0} chars${replyResult.mediaUrl ? ", media" : ""}, ${durationMs}ms)`,
+							`↩️  Auto-replied to ${msg.from} (web, ${replyResult.text?.length ?? 0} chars${replyResult.mediaUrl ? ", media" : ""}, ${formatDuration(durationMs)})`,
 						),
 					);
 				} else {
@@ -493,7 +497,8 @@ async function downloadInboundMedia(
 		message.videoMessage?.mimetype ??
 		message.documentMessage?.mimetype ??
 		message.audioMessage?.mimetype ??
-		message.stickerMessage?.mimetype;
+		message.stickerMessage?.mimetype ??
+		undefined;
 	if (
 		!message.imageMessage &&
 		!message.videoMessage &&
@@ -506,6 +511,7 @@ async function downloadInboundMedia(
 	try {
 		const buffer = (await downloadMediaMessage(msg as any, "buffer", {}, {
 			reuploadRequest: sock.updateMediaMessage,
+			logger: (sock as { logger?: unknown })?.logger as any,
 		})) as Buffer;
 		return { buffer, mimetype };
 	} catch (err) {
@@ -531,6 +537,7 @@ async function loadWebMedia(
 		}
 		return { buffer: array, contentType: res.headers.get("content-type") ?? undefined };
 	}
+	// Local path
 	const data = await fs.readFile(mediaUrl);
 	if (data.length > 5 * 1024 * 1024) {
 		throw new Error("Media exceeds 5MB limit");

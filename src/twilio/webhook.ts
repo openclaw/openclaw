@@ -13,6 +13,7 @@ import { logTwilioSendError } from "./utils.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { attachMediaRoutes } from "../media/server.js";
 import { saveMediaSource } from "../media/store.js";
+import { ensureMediaHosted } from "../media/host.js";
 
 /** Start the inbound webhook HTTP server and wire optional auto-replies. */
 export async function startWebhook(
@@ -75,16 +76,21 @@ export async function startWebhook(
 
     if (replyResult && (replyResult.text || replyResult.mediaUrl)) {
       try {
+        let mediaUrl = replyResult.mediaUrl;
+        if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) {
+          const hosted = await ensureMediaHosted(mediaUrl);
+          mediaUrl = hosted.url;
+        }
         await client.messages.create({
           from: To,
           to: From,
           body: replyResult.text ?? "",
-          ...(replyResult.mediaUrl ? { mediaUrl: [replyResult.mediaUrl] } : {}),
+          ...(mediaUrl ? { mediaUrl: [mediaUrl] } : {}),
         });
         if (verbose)
           runtime.log(
             success(
-              `↩️  Auto-replied to ${From}${replyResult.mediaUrl ? " (media)" : ""}`,
+              `↩️  Auto-replied to ${From}${mediaUrl ? " (media)" : ""}`,
             ),
           );
       } catch (err) {
