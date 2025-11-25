@@ -260,6 +260,20 @@ export async function monitorWebInbox(options: {
 			// Ignore status/broadcast traffic; we only care about direct chats.
 			if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast"))
 				continue;
+			if (id) {
+				const participant = msg.key?.participant;
+				try {
+					await sock.readMessages([
+						{ remoteJid, id, participant, fromMe: false },
+					]);
+					if (isVerbose()) {
+						const suffix = participant ? ` (participant ${participant})` : "";
+						logVerbose(`Marked message ${id} as read for ${remoteJid}${suffix}`);
+					}
+				} catch (err) {
+					logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
+				}
+			}
 			const from = jidToE164(remoteJid);
 			if (!from) continue;
 			let body = extractText(msg.message ?? undefined);

@@ -5,6 +5,7 @@ export type MockBaileysSocket = {
 	ws: { close: ReturnType<typeof vi.fn> };
 	sendPresenceUpdate: ReturnType<typeof vi.fn>;
 	sendMessage: ReturnType<typeof vi.fn>;
+	readMessages: ReturnType<typeof vi.fn>;
 	user?: { id?: string };
 };
 
@@ -28,6 +29,7 @@ export function createMockBaileys(): { mod: MockBaileysModule; lastSocket: () =>
 			ws: { close: vi.fn() },
 			sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
 			sendMessage: vi.fn().mockResolvedValue({ key: { id: "msg123" } }),
+			readMessages: vi.fn().mockResolvedValue(undefined),
 			user: { id: "[redacted-email]" },
 		};
 		setImmediate(() => ev.emit("connection.update", { connection: "open" }));
