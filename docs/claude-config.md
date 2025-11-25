@@ -12,7 +12,7 @@ This guide shows the exact way to wire **warelay** to the Claude CLI so inbound 
 - Optional: set `ANTHROPIC_API_KEY` in your shell profile for non-interactive use.
 
 ## Create your warelay config
-Warelay reads `~/.warelay/warelay.json` (JSON5 accepted). Add a command-mode reply that points at the Claude CLI:
+warelay reads `~/.warelay/warelay.json` (JSON5 accepted). Add a command-mode reply that points at the Claude CLI:
 
 ```json5
 {
@@ -38,13 +38,13 @@ Warelay reads `~/.warelay/warelay.json` (JSON5 accepted). Add a command-mode rep
 ```
 
 Notes on this configuration:
-- Warelay automatically injects a Claude identity prefix and the correct `--output-format`/`-p` flags when `command[0]` is `claude` and `claudeOutputFormat` is set.
+- warelay automatically injects a Claude identity prefix and the correct `--output-format`/`-p` flags when `command[0]` is `claude` and `claudeOutputFormat` is set.
 - Sessions are stored in `~/.warelay/sessions.json`; `scope: per-sender` keeps separate threads for each contact.
 - `bodyPrefix` is added before the inbound message body that reaches Claude. The string above mirrors the built-in 1500-character WhatsApp guardrail.
 
 ## How the flow works
 1. An inbound message (Twilio webhook, Twilio poller, or WhatsApp Web listener) arrives.
-2. Warelay enqueues the command in a process-wide FIFO queue so only one Claude run happens at a time (`src/process/command-queue.ts`).
+2. warelay enqueues the command in a process-wide FIFO queue so only one Claude run happens at a time (`src/process/command-queue.ts`).
 3. Typing indicators are sent (Twilio) or `composing` presence is sent (Web) while Claude runs.
 4. Claude stdout is parsed:
    - JSON mode is handled automatically if you set `claudeOutputFormat: "json"`; otherwise text is used.
@@ -52,7 +52,7 @@ Notes on this configuration:
 5. The reply (text and optional media) is sent back via the same provider that received the message.
 
 ## Media and attachments
-- To send an image from Claude, include a line like `MEDIA:https://example.com/pic.jpg` in the output. Warelay will:
+- To send an image from Claude, include a line like `MEDIA:https://example.com/pic.jpg` in the output. warelay will:
   - Host local paths for Twilio using the media server/Tailscale Funnel.
   - Send buffers directly for the Web provider.
 - Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment.
