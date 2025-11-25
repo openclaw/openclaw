@@ -321,7 +321,7 @@ export async function monitorWebProvider(
 						),
 					);
 				} else {
-					console.log(`↩️  ${replyText}`);
+					console.log(success(`↩️  ${replyText}`));
 				}
 			} catch (err) {
 				console.error(
