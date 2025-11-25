@@ -94,8 +94,8 @@ describe("config and templating", () => {
 		const cfg = {
 			inbound: {
 				reply: {
-					mode: "text" as const,
-					text: "{{MediaPath}} {{MediaType}} {{MediaUrl}}",
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
 				},
 			},
 		};
@@ -111,7 +111,9 @@ describe("config and templating", () => {
 			undefined,
 			cfg,
 		);
-		expect(result?.text).toBe("/tmp/a.jpg image/jpeg http://example.com/a.jpg");
+		expect(result?.text).toContain("/tmp/a.jpg");
+		expect(result?.text).toContain("image/jpeg");
+		expect(result?.text).toContain("http://example.com/a.jpg");
 	});
 
 	it("getReplyFromConfig runs command and manages session store", async () => {

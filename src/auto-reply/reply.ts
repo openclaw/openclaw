@@ -166,10 +166,18 @@ export async function getReplyFromConfig(
 	const prefixedBody = bodyPrefix
 		? `${bodyPrefix}${sessionCtx.BodyStripped ?? sessionCtx.Body ?? ""}`
 		: (sessionCtx.BodyStripped ?? sessionCtx.Body);
+const mediaNote =
+	ctx.MediaPath && ctx.MediaPath.length
+		? `[media attached: ${ctx.MediaPath}${ctx.MediaType ? ` (${ctx.MediaType})` : ""}${ctx.MediaUrl ? ` | ${ctx.MediaUrl}` : ""}]`
+		: undefined;
+	// For command prompts we prepend the media note so Claude et al. see it; text replies stay clean.
+	const commandBody = mediaNote
+		? `${mediaNote}\n${prefixedBody ?? ""}`.trim()
+		: prefixedBody;
 	const templatingCtx: TemplateContext = {
 		...sessionCtx,
-		Body: prefixedBody,
-		BodyStripped: prefixedBody,
+		Body: commandBody,
+		BodyStripped: commandBody,
 	};
 
 	// Optional allowlist by origin number (E.164 without whatsapp: prefix)
@@ -273,6 +281,12 @@ export async function getReplyFromConfig(
 			);
 			const rawStdout = stdout.trim();
 			let trimmed = rawStdout;
+			let mediaFromCommand: string | undefined;
+			const mediaMatch = /MEDIA:\s*(.+)$/im.exec(rawStdout);
+			if (mediaMatch?.[1]) {
+				mediaFromCommand = mediaMatch[1].trim();
+				trimmed = rawStdout.replace(mediaMatch[0], "").trim();
+			}
 			if (stderr?.trim()) {
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
 			}
@@ -311,7 +325,10 @@ export async function getReplyFromConfig(
 				);
 				return undefined;
 			}
-			return trimmed ? { text: trimmed, mediaUrl: reply.mediaUrl } : undefined;
+			const mediaUrl = mediaFromCommand ?? reply.mediaUrl;
+			return trimmed || mediaUrl
+				? { text: trimmed || undefined, mediaUrl }
+				: undefined;
 		} catch (err) {
 			const elapsed = Date.now() - started;
 			const anyErr = err as { killed?: boolean; signal?: string };
