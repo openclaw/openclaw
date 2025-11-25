@@ -1,4 +1,4 @@
-# Image Support Specification (draft) — 2025-11-25
+# Image Support Specification — 2025-11-25
 
 This document defines how `warelay` should handle sending and replying with images across both providers. It is intentionally implementation-ready and keeps the UX consistent with existing CLI patterns and Tailscale Funnel usage.
 
