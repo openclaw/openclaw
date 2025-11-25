@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
+import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
 import { CLAUDE_BIN, parseClaudeJson } from "./claude.js";
 import {
 	applyTemplate,
@@ -15,25 +16,11 @@ import {
 	resolveStorePath,
 	saveSessionStore,
 } from "../config/sessions.js";
-import {
-	type WarelayConfig,
-	loadConfig,
-} from "../config/config.js";
-import {
-	danger,
-	info,
-	isVerbose,
-	logVerbose,
-	warn,
-} from "../globals.js";
-import { normalizeE164, withWhatsAppPrefix } from "../utils.js";
-import {
-	runCommandWithTimeout,
-	type SpawnResult,
-} from "../process/exec.js";
+import { loadConfig, type WarelayConfig } from "../config/config.js";
+import { info, isVerbose, logVerbose } from "../globals.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { sendTypingIndicator } from "../twilio/typing.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
 
 type GetReplyOptions = {
 	onReplyStart?: () => Promise<void> | void;
@@ -59,8 +46,9 @@ function summarizeClaudeMetadata(payload: unknown): string | undefined {
 
 	const usage = obj.usage;
 	if (usage && typeof usage === "object") {
-		const serverToolUse = (usage as { server_tool_use?: Record<string, unknown> })
-			.server_tool_use;
+		const serverToolUse = (
+			usage as { server_tool_use?: Record<string, unknown> }
+		).server_tool_use;
 		if (serverToolUse && typeof serverToolUse === "object") {
 			const toolCalls = Object.values(serverToolUse).reduce((sum, val) => {
 				if (typeof val === "number") return sum + val;
@@ -330,7 +318,11 @@ export async function getReplyFromConfig(
 
 type TwilioLikeClient = {
 	messages: {
-		create: (opts: { from?: string; to?: string; body: string }) => Promise<unknown>;
+		create: (opts: {
+			from?: string;
+			to?: string;
+			body: string;
+		}) => Promise<unknown>;
 	};
 };
 
@@ -380,9 +372,7 @@ export async function autoReplyIfConfigured(
 		});
 		if (isVerbose()) {
 			console.log(
-				info(
-					`↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"})`,
-				),
+				info(`↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"})`),
 			);
 		}
 	} catch (err) {

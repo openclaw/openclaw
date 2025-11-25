@@ -51,10 +51,18 @@ export type ClaudeJsonParseResult = {
 	parsed: unknown;
 };
 
-export function parseClaudeJson(raw: string): ClaudeJsonParseResult | undefined {
+export function parseClaudeJson(
+	raw: string,
+): ClaudeJsonParseResult | undefined {
 	// Handle a single JSON blob or newline-delimited JSON; return the first parsed payload.
 	let firstParsed: unknown;
-	const candidates = [raw, ...raw.split(/\n+/).map((s) => s.trim()).filter(Boolean)];
+	const candidates = [
+		raw,
+		...raw
+			.split(/\n+/)
+			.map((s) => s.trim())
+			.filter(Boolean),
+	];
 	for (const candidate of candidates) {
 		try {
 			const parsed = JSON.parse(candidate);
