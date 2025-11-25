@@ -129,7 +129,7 @@ Templating tokens: `{{Body}}`, `{{BodyStripped}}`, `{{From}}`, `{{To}}`, `{{Mess
 - Web provider dropped: rerun `pnpm warelay login`; credentials live in `~/.warelay/credentials/`.
 - Tailscale Funnel errors: update tailscale/tailscaled; check admin console that Funnel is enabled for this device.
 
-## FAQ & Safety (quick answers)
+## FAQ & Safety
 - Twilio errors: **63016 “permission to send an SMS has not been enabled”** → ensure your number is WhatsApp-enabled; **63007 template not approved** → send a free-form session message within 24h or use an approved template; **63112 policy violation** → adjust content, shorten to <1600 chars, avoid links that trigger spam filters. Re-run `pnpm warelay status` to see the exact Twilio response body.
 - Does this store my messages? warelay only writes `~/.warelay/warelay.json` (config), `~/.warelay/credentials/` (WhatsApp Web auth), and `~/.warelay/sessions.json` (session IDs + timestamps). It does **not** persist message bodies beyond the session store. Logs print to stdout/stderr; redirect or rotate if needed.
 - Personal WhatsApp safety: Automation on personal accounts can be rate-limited or logged out by WhatsApp. Use `--provider web` sparingly, keep messages human-like, and re-run `login` if the session is dropped.
