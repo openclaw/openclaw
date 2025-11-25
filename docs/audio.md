@@ -37,7 +37,8 @@ Requires `OPENAI_API_KEY` in env and `openai` CLI installed:
 
 ## Notes & limits
 - We don’t ship a transcriber; you opt in with any CLI that prints text to stdout (Whisper cloud, whisper.cpp, vosk, Deepgram, etc.).
-- Size guard: inbound audio must be ≤5 MB (same as other media).
+- Size guard: inbound audio must be ≤5 MB (matches the temp media store and transcript pipeline).
+- Outbound caps: Web can send audio/voice up to 16 MB (sends as a voice note with `ptt: true`); Twilio still uses the 5 MB media host guard.
 - If transcription fails, we fall back to the original body/media note; replies still go through.
 - Transcript is available to templates as `{{Transcript}}`; models get both the media path and a `Transcript:` block in the prompt when using command mode.
 

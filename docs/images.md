@@ -5,6 +5,7 @@ This document defines how `warelay` should handle sending and replying with imag
 ## Goals
 - Allow sending an image with an optional caption via `warelay send` for both providers.
 - Allow auto-replies (Twilio webhook, Twilio poller, Web inbox) to return an image (optionally with text) when configured.
+- For the Web provider, also support audio/voice, video, and generic documents with sensible per-type limits.
 - Keep the “one command at a time” queue intact; media fetch/serve must not block other replies longer than necessary.
 - Avoid introducing new external services: reuse the existing Tailscale Funnel port to host media for Twilio.
 
@@ -21,10 +22,12 @@ This document defines how `warelay` should handle sending and replying with imag
 ## Provider Behavior
 ### Web (Baileys)
 - Input: local file path **or** HTTP(S) URL.
-- Flow: load into Buffer, **resize + recompress to JPEG** (max side 2048px, quality step-down) to fit under a configurable cap, then send via `sock.sendMessage(jid, { image: buffer, caption })`.
-- Size cap: default 5 MB; override with `inbound.reply.mediaMaxMb` in `~/.warelay/warelay.json`.
+- Flow: load into Buffer, detect media kind, and apply the right payload:
+  - Images: **resize + recompress to JPEG** (max side 2048px, quality step-down) to fit under `inbound.reply.mediaMaxMb` (default 5 MB) but never above the Web hard cap (6 MB).
+  - Audio/voice and video: pass through up to 16 MB; set `ptt: true` for audio to send as a voice note.
+  - Everything else becomes a document with filename, up to 100 MB.
 - Caption uses `--message` or `reply.text`; if caption is empty, send media-only.
-- Logging: non-verbose shows `↩️`/`✅` with caption; verbose includes `(media, <bytes>B, <ms>ms fetch)`.
+- Logging: non-verbose shows `↩️`/`✅` with caption; verbose includes `(media, <bytes>B, <ms>ms fetch)` and the local/remote path.
 
 ### Twilio
 - Twilio API requires a public HTTPS `MediaUrl`; it will not accept local paths.
@@ -32,7 +35,7 @@ This document defines how `warelay` should handle sending and replying with imag
 - When `--media` is a local path, copy to temp dir (`~/.warelay/media/<uuid>`), serve at `/media/<uuid>` on the existing Express app started for webhook, or spin up a short-lived server on demand for `send`.
   - `MediaUrl` = `https://<tailnet-host>.ts.net/media/<uuid>`.
   - Files auto-removed after TTL (default 2 minutes) or after first successful fetch (best-effort).
-  - Enforce size limit 5 MB; reject early with clear error.
+  - Enforce size limit 5 MB (matches the media host guard); reject early with clear error.
 - If `--media` is already an HTTPS URL, pass through unchanged.
 - Fallback: if Funnel is not enabled (or host unknown) and a local path is provided, fail with guidance to run `warelay webhook --ingress tailscale` (or pass a URL instead).
 
@@ -56,12 +59,12 @@ This document defines how `warelay` should handle sending and replying with imag
 - For completeness: when inbound Twilio/Web messages include media, download to temp file, expose templating variables:
   - `{{MediaUrl}}` original URL (Twilio) or pseudo-URL (web).
   - `{{MediaPath}}` local temp path written before running the command.
-- Size guard: only download if ≤5 MB; else skip and log.
+- Size guard: only download if ≤5 MB; else skip and log (aligns with the temp media store limit).
 - Audio/voice notes: if you set `inbound.transcribeAudio.command`, warelay will run that CLI (templated with `{{MediaPath}}`) and replace `Body` with the transcript before continuing the reply flow; verbose logs indicate when transcription runs. The command prompt includes the original media path plus a `Transcript:` section so the model sees both.
 
 ## Errors & Messaging
 - Local path with twilio + Funnel disabled → error: “Twilio media needs a public URL; start `warelay webhook --ingress tailscale` or pass an https:// URL.”
-- File too large (>5 MB) → “Media exceeds 5 MB limit; resize or host elsewhere.”
+- File too large → error mentions the applicable cap (5 MB for Twilio host, 6/16/100 MB for Web image/audio-video/doc respectively).
 - Download failure for web provider → “Failed to load media from <source>; skipping send.”
 
 ## Tests to Add

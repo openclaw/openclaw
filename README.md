@@ -46,10 +46,10 @@ Install from npm (global): `npm install -g warelay` (Node 22+). Then choose **on
 | `warelay webhook` | Run inbound webhook (`ingress=tailscale` updates Twilio; `none` is local-only) | `--ingress tailscale\|none` `--port <port>` `--path <path>` `--reply <text>` `--verbose` `--yes` `--dry-run` |
 | `warelay login` | Link personal WhatsApp Web via QR | `--verbose` |
 
-### Sending images
-- Twilio: `warelay send --to +1... --message "Hi" --media ./pic.jpg --serve-media` (needs `warelay webhook --ingress tailscale` or `--serve-media` to auto-host via Funnel; max 5 MB).
-- Web: `warelay send --provider web --media ./pic.jpg --message "Hi"` (local path or URL; no hosting needed).
-- Auto-replies can attach `mediaUrl` in `~/.warelay/warelay.json` (used alongside `text` when present). Web auto-replies now auto-resize/recompress images and cap size by config: set `inbound.reply.mediaMaxMb` (default 5) to control the post-compression limit; images are resized (max side 2048px) and JPEG-compressed to fit.
+### Sending media
+- Twilio: `warelay send --to +1... --message "Hi" --media ./pic.jpg --serve-media` (needs `warelay webhook --ingress tailscale` or `--serve-media` to auto-host via Funnel; max 5 MB per file because of the built-in host).
+- Web: `warelay send --provider web --media ./pic.jpg --message "Hi"` (local path or URL; no hosting needed). Web auto-detects media kind: images (≤6 MB), audio/voice or video (≤16 MB), other docs (≤100 MB). Images are resized to max 2048px and JPEG recompressed when the cap would be exceeded.
+- Auto-replies can attach `mediaUrl` in `~/.warelay/warelay.json` (used alongside `text` when present). Web auto-replies honor `inbound.reply.mediaMaxMb` (default 5 MB) as a post-compression target but will never exceed the provider hard limits above.
 
 ### Voice notes (optional transcription)
 - If you set `inbound.transcribeAudio.command`, warelay will run that CLI when inbound audio arrives (e.g., WhatsApp voice notes) and replace the Body with the transcript before templating/Claude.

@@ -58,7 +58,8 @@ Notes on this configuration:
 - To send an image from Claude, include a line like `MEDIA:https://example.com/pic.jpg` in the output. warelay will:
   - Host local paths for Twilio using the media server/Tailscale Funnel.
   - Send buffers directly for the Web provider.
-- Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment. Outbound media from Claude (via `MEDIA:`) is resized/recompressed on the Web provider path; control the cap with `inbound.reply.mediaMaxMb` (default 5).
+- Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment.
+- Outbound media from Claude (via `MEDIA:`) follows provider caps: Web resizes images to the configured target (`inbound.reply.mediaMaxMb`, default 5 MB) within hard limits of 6 MB (image), 16 MB (audio/video voice notes), and 100 MB (documents); Twilio still uses the Funnel host with a 5 MB guard.
 - Voice notes: set `inbound.transcribeAudio.command` to run a CLI that emits the transcript to stdout (e.g., OpenAI Whisper: `openai api audio.transcriptions.create -m whisper-1 -f {{MediaPath}} --response-format text`). If it succeeds, warelay replaces `Body` with the transcript and adds the original media path plus a `Transcript:` block into the prompt before invoking Claude.
 
 ## Testing the setup
