@@ -298,6 +298,7 @@ export async function monitorWebProvider(
 				: new Date().toISOString();
 			console.log(`\n[${ts}] ${msg.from} -> ${msg.to}: ${msg.body}`);
 
+			const replyStarted = Date.now();
 			const replyText = await replyResolver(
 				{
 					Body: msg.body,
@@ -312,8 +313,15 @@ export async function monitorWebProvider(
 			if (!replyText) return;
 			try {
 				await msg.reply(replyText);
+				const durationMs = Date.now() - replyStarted;
 				if (isVerbose()) {
-					console.log(success(`↩️  Auto-replied to ${msg.from} (web)`));
+					console.log(
+						success(
+							`↩️  Auto-replied to ${msg.from} (web, ${replyText.length} chars, ${durationMs}ms)`,
+						),
+					);
+				} else {
+					console.log(`↩️  ${replyText}`);
 				}
 			} catch (err) {
 				console.error(
