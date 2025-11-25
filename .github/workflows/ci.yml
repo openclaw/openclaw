@@ -17,15 +17,15 @@ jobs:
           node-version: 22
           check-latest: true
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.23.0
-
       - name: Node version
         run: |
           node -v
           npm -v
+
+      - name: Enable corepack and pin pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.23.0 --activate
           pnpm -v
 
       - name: Install dependencies
