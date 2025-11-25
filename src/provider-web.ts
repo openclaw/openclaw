@@ -122,6 +122,9 @@ export async function sendMessageWeb(
 				mimetype: media.contentType,
 			};
 		}
+		logInfo(
+			`📤 Sending via web session -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
+		);
 		const result = await sock.sendMessage(jid, payload);
 		const messageId = result?.key?.id ?? "unknown";
 		logInfo(
