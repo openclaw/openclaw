@@ -1,5 +1,15 @@
 # Changelog
 
+## [Unreleased] 0.1.3
+
+_Add notes here for the next release._
+
+## 0.1.2 — 2025-11-25
+
+### CI/build fix
+- Fixed commander help configuration (`subcommandTerm`) so TypeScript builds pass in CI.
+- Bumped version and web UA to 0.1.2; retains the tagline/help polish from 0.1.1.
+
 ## 0.1.1 — 2025-11-25
 
 ### CLI polish
@@ -8,11 +18,6 @@
 - `send` and `status` gained a `--verbose` flag for consistent noisy output when debugging.
 - Lowercased branding in docs/UA; web provider UA is `warelay/cli/0.1.1`.
 
-## 0.1.2 — 2025-11-25
-
-### CI/build fix
-- Fixed commander help configuration (`subcommandTerm`) so TypeScript builds pass in CI.
-- Bumped version/UA to 0.1.2; no functional changes beyond the CI fix.
 
 ## 0.1.0 — 2025-11-25
 
