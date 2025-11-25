@@ -1,6 +1,6 @@
 # 📡 warelay — WhatsApp Relay CLI
 
-Small CLI to send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven).
+Send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven).
 
 ## Quick Start (5 steps)
 1) Prereqs: Node 22+, `pnpm`, a Twilio account with a WhatsApp-enabled number; Tailscale optional for webhooks.
