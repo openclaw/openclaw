@@ -483,6 +483,8 @@ const CONFIG_PATH = path.join(os.homedir(), ".warelay", "warelay.json");
 
 type ReplyMode = "text" | "command";
 
+type ClaudeOutputFormat = "text" | "json" | "stream-json";
+
 type WarelayConfig = {
 	inbound?: {
 		allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
@@ -494,6 +496,7 @@ type WarelayConfig = {
 			timeoutSeconds?: number; // optional command timeout; defaults to 600s
 			bodyPrefix?: string; // optional string prepended to Body before templating
 			session?: SessionConfig;
+			claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
 		};
 	};
 };
@@ -711,6 +714,35 @@ async function getReplyFromConfig(
 			: "";
 		if (templatePrefix && argv.length > 0) {
 			argv = [argv[0], templatePrefix, ...argv.slice(1)];
+		}
+
+		// Ensure Claude commands can emit plain text by forcing --output-format when configured.
+		if (
+			reply.claudeOutputFormat &&
+			argv.length > 0 &&
+			path.basename(argv[0]) === "claude"
+		) {
+			const hasOutputFormat = argv.some(
+				(part) =>
+					part === "--output-format" || part.startsWith("--output-format="),
+			);
+			// Keep the final argument as the prompt/body; insert options just before it.
+			const insertBeforeBody = Math.max(argv.length - 1, 0);
+			if (!hasOutputFormat) {
+				argv = [
+					...argv.slice(0, insertBeforeBody),
+					"--output-format",
+					reply.claudeOutputFormat,
+					...argv.slice(insertBeforeBody),
+				];
+			}
+			const hasPrintFlag = argv.some(
+				(part) => part === "-p" || part === "--print",
+			);
+			if (!hasPrintFlag) {
+				const insertIdx = Math.max(argv.length - 1, 0);
+				argv = [...argv.slice(0, insertIdx), "-p", ...argv.slice(insertIdx)];
+			}
 		}
 
 		// Inject session args if configured (use resume for existing, session-id for new)
