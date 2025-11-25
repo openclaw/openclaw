@@ -12,7 +12,7 @@ import {
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { danger, isVerbose, logVerbose, success, warn } from "./globals.js";
+import { danger, info, isVerbose, logVerbose, success, warn } from "./globals.js";
 import { ensureDir, jidToE164, toWhatsappJid } from "./utils.js";
 import type { Provider } from "./utils.js";
 import { waitForever } from "./cli/wait.js";
@@ -124,9 +124,10 @@ export async function sendMessageWeb(
 export async function loginWeb(
 	verbose: boolean,
 	waitForConnection: typeof waitForWaConnection = waitForWaConnection,
+	runtime: RuntimeEnv = defaultRuntime,
 ) {
 	const sock = await createWaSocket(true, verbose);
-	console.log(info("Waiting for WhatsApp connection..."));
+	logInfo("Waiting for WhatsApp connection...", runtime);
 	try {
 		await waitForConnection(sock);
 		console.log(success("✅ Linked! Credentials saved for future sends."));
