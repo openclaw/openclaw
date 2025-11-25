@@ -110,12 +110,15 @@ export async function getReplyFromConfig(
 		started = true;
 		await opts?.onReplyStart?.();
 	};
+	let transcribedText: string | undefined;
 
 	// Optional audio transcription before templating/session handling.
 	if (cfg.inbound?.transcribeAudio && isAudio(ctx.MediaType)) {
 		const transcribed = await transcribeInboundAudio(cfg, ctx, defaultRuntime);
 		if (transcribed?.text) {
+			transcribedText = transcribed.text;
 			ctx.Body = transcribed.text;
+			ctx.Transcript = transcribed.text;
 			logVerbose("Replaced Body with audio transcript for reply flow");
 		}
 	}
@@ -193,9 +196,15 @@ export async function getReplyFromConfig(
 	const bodyPrefix = reply?.bodyPrefix
 		? applyTemplate(reply.bodyPrefix, sessionCtx)
 		: "";
-	const prefixedBody = bodyPrefix
+	const prefixedBodyBase = bodyPrefix
 		? `${bodyPrefix}${sessionCtx.BodyStripped ?? sessionCtx.Body ?? ""}`
 		: (sessionCtx.BodyStripped ?? sessionCtx.Body);
+	const prefixedBody =
+		transcribedText && reply?.mode === "command"
+			? [prefixedBodyBase, `Transcript:\n${transcribedText}`]
+					.filter(Boolean)
+					.join("\n\n")
+			: prefixedBodyBase;
 	const mediaNote = ctx.MediaPath?.length
 		? `[media attached: ${ctx.MediaPath}${ctx.MediaType ? ` (${ctx.MediaType})` : ""}${ctx.MediaUrl ? ` | ${ctx.MediaUrl}` : ""}]`
 		: undefined;
@@ -543,7 +552,7 @@ export async function autoReplyIfConfigured(
 }
 
 function isAudio(mediaType?: string | null) {
-	return Boolean(mediaType && mediaType.startsWith("audio"));
+	return Boolean(mediaType?.startsWith("audio"));
 }
 
 async function transcribeInboundAudio(
@@ -596,9 +605,7 @@ async function transcribeInboundAudio(
 		return undefined;
 	} finally {
 		if (tmpPath) {
-			void fs
-				.unlink(tmpPath)
-				.catch(() => {});
+			void fs.unlink(tmpPath).catch(() => {});
 		}
 	}
 }

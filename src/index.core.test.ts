@@ -5,8 +5,8 @@ import path from "node:path";
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockTwilio } from "../test/mocks/twilio.js";
-import { withWhatsAppPrefix } from "./utils.js";
 import * as exec from "./process/exec.js";
+import { withWhatsAppPrefix } from "./utils.js";
 
 // Twilio mock factory shared across tests
 vi.mock("twilio", () => {
@@ -125,8 +125,8 @@ describe("config and templating", () => {
 					command: ["echo", "voice transcript"],
 				},
 				reply: {
-					mode: "text" as const,
-					text: "{{Body}}",
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
 				},
 			},
 		};
@@ -134,6 +134,13 @@ describe("config and templating", () => {
 		const runExec = vi.spyOn(exec, "runExec").mockResolvedValue({
 			stdout: "voice transcript\n",
 			stderr: "",
+		});
+		const commandRunner = vi.fn().mockResolvedValue({
+			stdout: "ok",
+			stderr: "",
+			code: 0,
+			signal: null,
+			killed: false,
 		});
 
 		const result = await index.getReplyFromConfig(
@@ -146,11 +153,17 @@ describe("config and templating", () => {
 			},
 			undefined,
 			cfg,
+			commandRunner,
 		);
 
 		expect(runExec).toHaveBeenCalled();
-		expect(result?.text).toContain("voice transcript");
-		expect(result?.text).toContain("/tmp/voice.ogg");
+		expect(commandRunner).toHaveBeenCalled();
+		const argv = commandRunner.mock.calls[0][0];
+		const prompt = argv[argv.length - 1] as string;
+		expect(prompt).toContain("/tmp/voice.ogg");
+		expect(prompt).toContain("Transcript:");
+		expect(prompt).toContain("voice transcript");
+		expect(result?.text).toBeUndefined();
 	});
 
 	it("getReplyFromConfig skips transcription when not configured", async () => {

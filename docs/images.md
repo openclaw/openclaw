@@ -57,7 +57,7 @@ This document defines how `warelay` should handle sending and replying with imag
   - `{{MediaUrl}}` original URL (Twilio) or pseudo-URL (web).
   - `{{MediaPath}}` local temp path written before running the command.
 - Size guard: only download if ≤5 MB; else skip and log.
-- Audio/voice notes: if you set `inbound.transcribeAudio.command`, warelay will run that CLI (templated with `{{MediaPath}}`) and replace `Body` with the transcript before continuing the reply flow; verbose logs indicate when transcription runs.
+- Audio/voice notes: if you set `inbound.transcribeAudio.command`, warelay will run that CLI (templated with `{{MediaPath}}`) and replace `Body` with the transcript before continuing the reply flow; verbose logs indicate when transcription runs. The command prompt includes the original media path plus a `Transcript:` section so the model sees both.
 
 ## Errors & Messaging
 - Local path with twilio + Funnel disabled → error: “Twilio media needs a public URL; start `warelay webhook --ingress tailscale` or pass an https:// URL.”

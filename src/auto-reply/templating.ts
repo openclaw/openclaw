@@ -6,6 +6,7 @@ export type MsgContext = {
 	MediaPath?: string;
 	MediaUrl?: string;
 	MediaType?: string;
+	Transcript?: string;
 };
 
 export type TemplateContext = MsgContext & {
