@@ -28,5 +28,12 @@ describe("claude JSON parsing", () => {
 		const parsed = parseClaudeJson(JSON.stringify(sample));
 		expect(parsed?.text).toBe("hello from result field");
 		expect(parsed?.parsed).toMatchObject({ duration_ms: 1234 });
+		expect(parsed?.valid).toBe(true);
+	});
+
+	it("marks invalid Claude JSON as invalid but still attempts text extraction", () => {
+		const parsed = parseClaudeJson('{"unexpected":1}');
+		expect(parsed?.valid).toBe(false);
+		expect(parsed?.text).toBeUndefined();
 	});
 });

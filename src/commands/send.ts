@@ -10,6 +10,7 @@ export async function sendCommand(
 		wait: string;
 		poll: string;
 		provider: Provider;
+		json?: boolean;
 		dryRun?: boolean;
 	},
 	deps: CliDeps,
@@ -36,7 +37,18 @@ export async function sendCommand(
 		if (waitSeconds !== 0) {
 			runtime.log(info("Wait/poll are Twilio-only; ignored for provider=web."));
 		}
-		await deps.sendMessageWeb(opts.to, opts.message, { verbose: false });
+		const res = await deps.sendMessageWeb(opts.to, opts.message, {
+			verbose: false,
+		});
+		if (opts.json) {
+			runtime.log(
+				JSON.stringify(
+					{ provider: "web", to: opts.to, messageId: res.messageId },
+					null,
+					2,
+				),
+			);
+		}
 		return;
 	}
 
@@ -48,6 +60,15 @@ export async function sendCommand(
 	}
 
 	const result = await deps.sendMessage(opts.to, opts.message, runtime);
+	if (opts.json) {
+		runtime.log(
+			JSON.stringify(
+				{ provider: "twilio", to: opts.to, sid: result?.sid ?? null },
+				null,
+				2,
+			),
+		);
+	}
 	if (!result) return;
 	if (waitSeconds === 0) return;
 	await deps.waitForFinalStatus(

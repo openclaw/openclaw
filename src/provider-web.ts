@@ -23,10 +23,21 @@ import { logInfo, logWarn } from "./logger.js";
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
+	const logger = verbose
+		? pino({ level: "info" })
+		: ({
+				level: "silent",
+				child: () => ({}) as pino.Logger,
+				trace: () => {},
+				debug: () => {},
+				info: () => {},
+				warn: () => {},
+				error: () => {},
+				fatal: () => {},
+			} satisfies Partial<pino.Logger>) as pino.Logger;
 	await ensureDir(WA_WEB_AUTH_DIR);
 	const { state, saveCreds } = await useMultiFileAuthState(WA_WEB_AUTH_DIR);
 	const { version } = await fetchLatestBaileysVersion();
-	const logger = pino({ level: verbose ? "info" : "silent" });
 	const sock = makeWASocket({
 		auth: {
 			creds: state.creds,
@@ -97,7 +108,7 @@ export async function sendMessageWeb(
 	to: string,
 	body: string,
 	options: { verbose: boolean },
-) {
+): Promise<{ messageId: string; toJid: string }> {
 	const sock = await createWaSocket(false, options.verbose);
 	try {
 		await waitForWaConnection(sock);
@@ -109,9 +120,8 @@ export async function sendMessageWeb(
 		}
 		const result = await sock.sendMessage(jid, { text: body });
 		const messageId = result?.key?.id ?? "unknown";
-		console.log(
-			success(`✅ Sent via web session. Message ID: ${messageId} -> ${jid}`),
-		);
+		logInfo(`✅ Sent via web session. Message ID: ${messageId} -> ${jid}`);
+		return { messageId, toJid: jid };
 	} finally {
 		try {
 			sock.ws?.close();

@@ -49,17 +49,18 @@ export function buildProgram() {
 		});
 
 	program
-		.command("send")
-		.description("Send a WhatsApp message")
-		.requiredOption(
-			"-t, --to <number>",
-			"Recipient number in E.164 (e.g. +15551234567)",
-		)
-		.requiredOption("-m, --message <text>", "Message body")
-		.option("-w, --wait <seconds>", "Wait for delivery status (0 to skip)", "20")
-		.option("-p, --poll <seconds>", "Polling interval while waiting", "2")
-		.option("--provider <provider>", "Provider: twilio | web", "twilio")
-		.option("--dry-run", "Print payload and skip sending", false)
+	.command("send")
+	.description("Send a WhatsApp message")
+	.requiredOption(
+		"-t, --to <number>",
+		"Recipient number in E.164 (e.g. +15551234567)",
+	)
+	.requiredOption("-m, --message <text>", "Message body")
+	.option("-w, --wait <seconds>", "Wait for delivery status (0 to skip)", "20")
+	.option("-p, --poll <seconds>", "Polling interval while waiting", "2")
+	.option("--provider <provider>", "Provider: twilio | web", "twilio")
+	.option("--dry-run", "Print payload and skip sending", false)
+	.option("--json", "Output result as JSON", false)
 		.addHelpText(
 			"after",
 			`

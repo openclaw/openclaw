@@ -1,4 +1,5 @@
 // Helpers specific to Claude CLI output/argv handling.
+import { z } from "zod";
 
 // Preferred binary name for Claude CLI invocations.
 export const CLAUDE_BIN = "claude";
@@ -49,7 +50,41 @@ function extractClaudeText(payload: unknown): string | undefined {
 export type ClaudeJsonParseResult = {
 	text?: string;
 	parsed: unknown;
+	valid: boolean;
 };
+
+const ClaudeJsonSchema = z
+	.object({
+		type: z.string().optional(),
+		subtype: z.string().optional(),
+		is_error: z.boolean().optional(),
+		result: z.string().optional(),
+		text: z.string().optional(),
+		completion: z.string().optional(),
+		output: z.string().optional(),
+		message: z.any().optional(),
+		messages: z.any().optional(),
+		content: z.any().optional(),
+		duration_ms: z.number().optional(),
+		duration_api_ms: z.number().optional(),
+		num_turns: z.number().optional(),
+		session_id: z.string().optional(),
+		total_cost_usd: z.number().optional(),
+		usage: z.record(z.any()).optional(),
+		modelUsage: z.record(z.any()).optional(),
+	})
+	.passthrough()
+	.refine(
+		(obj) =>
+			typeof obj.result === "string" ||
+			typeof obj.text === "string" ||
+			typeof obj.completion === "string" ||
+			typeof obj.output === "string" ||
+			obj.message !== undefined ||
+			obj.messages !== undefined ||
+			obj.content !== undefined,
+		{ message: "Not a Claude JSON payload" },
+	);
 
 export function parseClaudeJson(
 	raw: string,
@@ -67,14 +102,52 @@ export function parseClaudeJson(
 		try {
 			const parsed = JSON.parse(candidate);
 			if (firstParsed === undefined) firstParsed = parsed;
-			const text = extractClaudeText(parsed);
-			if (text) return { parsed, text };
+			let validation;
+			try {
+				validation = ClaudeJsonSchema.safeParse(parsed);
+			} catch {
+				validation = { success: false } as const;
+			}
+			const validated = validation.success ? validation.data : parsed;
+			const isLikelyClaude =
+				typeof validated === "object" &&
+				validated !== null &&
+				("result" in validated ||
+					"text" in validated ||
+					"completion" in validated ||
+					"output" in validated);
+			const text = extractClaudeText(validated);
+			if (text)
+				return {
+					parsed: validated,
+					text,
+					// Treat parse as valid when schema passes or we still see Claude-like shape.
+					valid: Boolean(validation?.success || isLikelyClaude),
+				};
 		} catch {
 			// ignore parse errors; try next candidate
 		}
 	}
 	if (firstParsed !== undefined) {
-		return { parsed: firstParsed, text: extractClaudeText(firstParsed) };
+		let validation;
+		try {
+			validation = ClaudeJsonSchema.safeParse(firstParsed);
+		} catch {
+			validation = { success: false } as const;
+		}
+		const validated = validation.success ? validation.data : firstParsed;
+		const isLikelyClaude =
+			typeof validated === "object" &&
+			validated !== null &&
+			("result" in validated ||
+				"text" in validated ||
+				"completion" in validated ||
+				"output" in validated);
+		return {
+			parsed: validated,
+			text: extractClaudeText(validated),
+			valid: Boolean(validation?.success || isLikelyClaude),
+		};
 	}
 	return undefined;
 }

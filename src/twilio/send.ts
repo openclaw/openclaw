@@ -1,4 +1,5 @@
 import { success } from "../globals.js";
+import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { withWhatsAppPrefix, sleep } from "../utils.js";
 import { readEnv } from "../env.js";
@@ -26,11 +27,7 @@ export async function sendMessage(
 			body,
 		});
 
-		console.log(
-			success(
-				`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`,
-			),
-		);
+		logInfo(`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`, runtime);
 		return { client, sid: message.sid };
 	} catch (err) {
 		logTwilioSendError(err, toNumber, runtime);
@@ -50,7 +47,7 @@ export async function waitForFinalStatus(
 		const m = await client.messages(sid).fetch();
 		const status = m.status ?? "unknown";
 		if (successTerminalStatuses.has(status)) {
-			console.log(success(`✅ Delivered (status: ${status})`));
+			logInfo(`✅ Delivered (status: ${status})`, runtime);
 			return;
 		}
 		if (failureTerminalStatuses.has(status)) {
@@ -61,7 +58,8 @@ export async function waitForFinalStatus(
 		}
 		await sleep(pollSeconds * 1000);
 	}
-	console.log(
+	logInfo(
 		"ℹ️  Timed out waiting for final status; message may still be in flight.",
+		runtime,
 	);
 }
