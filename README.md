@@ -36,7 +36,7 @@ Install from npm (global): `npm install -g warelay` (Node 22+). Then choose **on
 | `warelay up` | Turn on webhook + Tailscale Funnel + Twilio callback | `--port <port>` `--path <path>` `--verbose` `--yes` `--dry-run` |
 | `warelay web:login` (`login`) | Link personal WhatsApp Web via QR | `--verbose` |
 
-### Sending images (new)
+### Sending images
 - Twilio: `warelay send --to +1... --message "Hi" --media ./pic.jpg --serve-media` (needs `warelay webhook`/`up` or `--serve-media` to auto-host via Funnel; max 5 MB).
 - Web: `warelay send --provider web --media ./pic.jpg --message "Hi"` (local path or URL; no hosting needed).
 - Auto-replies can attach `mediaUrl` in `~/.warelay/warelay.json` (used alongside `text` when present).
