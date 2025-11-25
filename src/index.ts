@@ -20,7 +20,7 @@ import {
 	setMessagingServiceWebhook as setMessagingServiceWebhookImpl,
 } from "./twilio/update-webhook.js";
 import { listRecentMessages, formatMessageLine, uniqueBySid, sortByDateDesc } from "./twilio/messages.js";
-import { CLAUDE_BIN, parseClaudeJsonText } from "./auto-reply/claude.js";
+import { CLAUDE_BIN } from "./auto-reply/claude.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./auto-reply/templating.js";
 import {
 	CONFIG_PATH,

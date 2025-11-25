@@ -14,11 +14,12 @@ This is a living note capturing the cleanups underway to keep `warelay` small an
 - Added prompt/wait helpers (`src/cli/{prompt,wait}.ts`) and Twilio sender discovery module (`src/twilio/senders.ts`).
 - Slimmed `src/index.ts` to ~130 LOC.
 - README updated to document direct WhatsApp Web support and Claude output handling.
+- Added zod validation for `~/.warelay/warelay.json` and a `--dry-run` flag for `send`.
+- Introduced a tiny logger (`src/logger.ts`) and backoff retry in Twilio polling.
 
 ## In this pass
-- Added config validation for inbound reply settings (claude output format, command/text shape).
-- Added `--dry-run` for `send` to print the outbound payload without contacting providers.
-- Documented roadmap (this file).
+- Wire more modules to the logger; keep colors/verbosity consistent.
+- Add minimal retries/backoff for webhook bring-up and port/Tailscale helpers.
 
 ## Next candidates (not yet done)
 - Centralize logging/verbosity (runtime-aware logger wrapper).

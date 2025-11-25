@@ -16,6 +16,7 @@ function extractClaudeText(payload: unknown): string | undefined {
 	}
 	if (typeof payload === "object") {
 		const obj = payload as Record<string, unknown>;
+		if (typeof obj.result === "string") return obj.result;
 		if (typeof obj.text === "string") return obj.text;
 		if (typeof obj.completion === "string") return obj.completion;
 		if (typeof obj.output === "string") return obj.output;
@@ -45,17 +46,32 @@ function extractClaudeText(payload: unknown): string | undefined {
 	return undefined;
 }
 
-export function parseClaudeJsonText(raw: string): string | undefined {
-    // Handle a single JSON blob or newline-delimited JSON; return the first extracted text.
+export type ClaudeJsonParseResult = {
+	text?: string;
+	parsed: unknown;
+};
+
+export function parseClaudeJson(raw: string): ClaudeJsonParseResult | undefined {
+	// Handle a single JSON blob or newline-delimited JSON; return the first parsed payload.
+	let firstParsed: unknown;
 	const candidates = [raw, ...raw.split(/\n+/).map((s) => s.trim()).filter(Boolean)];
 	for (const candidate of candidates) {
 		try {
 			const parsed = JSON.parse(candidate);
+			if (firstParsed === undefined) firstParsed = parsed;
 			const text = extractClaudeText(parsed);
-			if (text) return text;
+			if (text) return { parsed, text };
 		} catch {
 			// ignore parse errors; try next candidate
 		}
 	}
+	if (firstParsed !== undefined) {
+		return { parsed: firstParsed, text: extractClaudeText(firstParsed) };
+	}
 	return undefined;
+}
+
+export function parseClaudeJsonText(raw: string): string | undefined {
+	const parsed = parseClaudeJson(raw);
+	return parsed?.text;
 }

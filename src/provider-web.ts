@@ -12,12 +12,13 @@ import {
 } from "@whiskeysockets/baileys";
 import pino from "pino";
 import qrcode from "qrcode-terminal";
-import { danger, info, isVerbose, logVerbose, success, warn } from "./globals.js";
+import { danger, isVerbose, logVerbose, success, warn } from "./globals.js";
 import { ensureDir, jidToE164, toWhatsappJid } from "./utils.js";
 import type { Provider } from "./utils.js";
 import { waitForever } from "./cli/wait.js";
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
+import { logInfo, logWarn } from "./logger.js";
 
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 
@@ -319,14 +320,13 @@ export async function monitorWebProvider(
 		},
 	});
 
-	console.log(
-		info(
-			"📡 Listening for personal WhatsApp Web inbound messages. Leave this running; Ctrl+C to stop.",
-		),
+	logInfo(
+		"📡 Listening for personal WhatsApp Web inbound messages. Leave this running; Ctrl+C to stop.",
+		runtime,
 	);
 	process.on("SIGINT", () => {
 		void listener.close().finally(() => {
-			console.log("\n👋 Web monitor stopped");
+			logInfo("👋 Web monitor stopped", runtime);
 			runtime.exit(0);
 		});
 	});

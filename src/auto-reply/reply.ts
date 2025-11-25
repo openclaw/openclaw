@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import path from "node:path";
 
-import { CLAUDE_BIN, parseClaudeJsonText } from "./claude.js";
+import { CLAUDE_BIN, parseClaudeJson } from "./claude.js";
 import {
 	applyTemplate,
 	type MsgContext,
@@ -38,6 +38,52 @@ import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.
 type GetReplyOptions = {
 	onReplyStart?: () => Promise<void> | void;
 };
+
+function summarizeClaudeMetadata(payload: unknown): string | undefined {
+	if (!payload || typeof payload !== "object") return undefined;
+	const obj = payload as Record<string, unknown>;
+	const parts: string[] = [];
+
+	if (typeof obj.duration_ms === "number") {
+		parts.push(`duration=${obj.duration_ms}ms`);
+	}
+	if (typeof obj.duration_api_ms === "number") {
+		parts.push(`api=${obj.duration_api_ms}ms`);
+	}
+	if (typeof obj.num_turns === "number") {
+		parts.push(`turns=${obj.num_turns}`);
+	}
+	if (typeof obj.total_cost_usd === "number") {
+		parts.push(`cost=$${obj.total_cost_usd.toFixed(4)}`);
+	}
+
+	const usage = obj.usage;
+	if (usage && typeof usage === "object") {
+		const serverToolUse = (usage as { server_tool_use?: Record<string, unknown> })
+			.server_tool_use;
+		if (serverToolUse && typeof serverToolUse === "object") {
+			const toolCalls = Object.values(serverToolUse).reduce((sum, val) => {
+				if (typeof val === "number") return sum + val;
+				return sum;
+			}, 0);
+			if (toolCalls > 0) parts.push(`tool_calls=${toolCalls}`);
+		}
+	}
+
+	const modelUsage = obj.modelUsage;
+	if (modelUsage && typeof modelUsage === "object") {
+		const models = Object.keys(modelUsage as Record<string, unknown>);
+		if (models.length) {
+			const display =
+				models.length > 2
+					? `${models.slice(0, 2).join(",")}+${models.length - 2}`
+					: models.join(",");
+			parts.push(`models=${display}`);
+		}
+	}
+
+	return parts.length ? parts.join(", ") : undefined;
+}
 
 export async function getReplyFromConfig(
 	ctx: MsgContext,
@@ -216,18 +262,26 @@ export async function getReplyFromConfig(
 				finalArgv,
 				timeoutMs,
 			);
-			let trimmed = stdout.trim();
+			const rawStdout = stdout.trim();
+			let trimmed = rawStdout;
 			if (stderr?.trim()) {
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
 			}
 			if (reply.claudeOutputFormat === "json" && trimmed) {
-				// Claude JSON mode: extract the human text for both logging and reply.
-				const extracted = parseClaudeJsonText(trimmed);
-				if (extracted) {
+				// Claude JSON mode: extract the human text for both logging and reply while keeping metadata.
+				const parsed = parseClaudeJson(trimmed);
+				if (parsed?.parsed && isVerbose()) {
+					const summary = summarizeClaudeMetadata(parsed.parsed);
+					if (summary) logVerbose(`Claude JSON meta: ${summary}`);
 					logVerbose(
-						`Claude JSON parsed -> ${extracted.slice(0, 120)}${extracted.length > 120 ? "…" : ""}`,
+						`Claude JSON raw: ${JSON.stringify(parsed.parsed, null, 2)}`,
 					);
-					trimmed = extracted.trim();
+				}
+				if (parsed?.text) {
+					logVerbose(
+						`Claude JSON parsed -> ${parsed.text.slice(0, 120)}${parsed.text.length > 120 ? "…" : ""}`,
+					);
+					trimmed = parsed.text.trim();
 				} else {
 					logVerbose("Claude JSON parse failed; returning raw stdout");
 				}

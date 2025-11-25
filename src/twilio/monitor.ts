@@ -1,12 +1,12 @@
-import chalk from "chalk";
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
 
-import { danger, info, logVerbose, warn } from "../globals.js";
+import { danger, warn } from "../globals.js";
 import { sleep, withWhatsAppPrefix } from "../utils.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { autoReplyIfConfigured } from "../auto-reply/reply.js";
 import { createClient } from "./client.js";
 import { readEnv } from "../env.js";
+import { logDebug, logInfo, logWarn } from "../logger.js";
 
 type MonitorDeps = {
 	autoReplyIfConfigured: typeof autoReplyIfConfigured;
@@ -58,19 +58,33 @@ export async function monitorTwilio(
 	const deps = opts?.deps ?? defaultDeps;
 	const runtime = opts?.runtime ?? defaultRuntime;
 	const maxIterations = opts?.maxIterations ?? Infinity;
+	let backoffMs = 1_000;
 
 	const env = deps.readEnv(runtime);
 	const from = withWhatsAppPrefix(env.whatsappFrom);
 	const client = opts?.client ?? deps.createClient(env);
-	console.log(
+	logInfo(
 		`📡 Monitoring inbound messages to ${from} (poll ${pollSeconds}s, lookback ${lookbackMinutes}m)`,
+		runtime,
 	);
 
 	let lastSeenSid: string | undefined;
 	let iterations = 0;
 	while (iterations < maxIterations) {
-		const messages =
-			(await deps.listRecentMessages(lookbackMinutes, 50, client)) ?? [];
+		let messages: ListedMessage[] = [];
+		try {
+			messages =
+				(await deps.listRecentMessages(lookbackMinutes, 50, client)) ?? [];
+			backoffMs = 1_000; // reset after success
+		} catch (err) {
+			logWarn(
+				`Twilio polling failed (will retry in ${backoffMs}ms): ${String(err)}`,
+				runtime,
+			);
+			await deps.sleep(backoffMs);
+			backoffMs = Math.min(backoffMs * 2, 10_000);
+			continue;
+		}
 		const inboundOnly = messages.filter((m) => m.direction === "inbound");
 		// Sort newest -> oldest without relying on external helpers (avoids test mocks clobbering imports).
 		const newestFirst = [...inboundOnly].sort(
@@ -95,7 +109,7 @@ async function handleMessages(
 	for (const m of messages) {
 		if (!m.sid) continue;
 		if (lastSeenSid && m.sid === lastSeenSid) break; // stop at previously seen
-		logVerbose(`[${m.sid}] ${m.from ?? "?"} -> ${m.to ?? "?"}: ${m.body ?? ""}`);
+		logDebug(`[${m.sid}] ${m.from ?? "?"} -> ${m.to ?? "?"}: ${m.body ?? ""}`);
 		if (m.direction !== "inbound") continue;
 		if (!m.from || !m.to) continue;
 		try {
