@@ -558,6 +558,49 @@ describe("config and templating", () => {
 		expect(firstEntry.systemSent).toBe(true);
 	});
 
+	it("keeps sending system prompt when sendSystemOnce is disabled (default)", async () => {
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+			stdout: "ok\n",
+			stderr: "",
+			code: 0,
+			signal: null,
+			killed: false,
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					bodyPrefix: "[sys] ",
+					session: {
+						scope: "per-sender" as const,
+						resetTriggers: ["/new"],
+						idleMinutes: 60,
+					},
+				},
+			},
+		};
+
+		await index.getReplyFromConfig(
+			{ Body: "/new hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+		await index.getReplyFromConfig(
+			{ Body: "next", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+
+		const firstArgv = runSpy.mock.calls[0][0];
+		expect(firstArgv[firstArgv.length - 1]).toBe("[sys] hi");
+
+		const secondArgv = runSpy.mock.calls[1][0];
+		expect(secondArgv[secondArgv.length - 1]).toBe("[sys] next");
+	});
+
 	it("injects Claude output format + print flag when configured", async () => {
 		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
 			stdout: "ok",
