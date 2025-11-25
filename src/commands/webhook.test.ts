@@ -28,7 +28,7 @@ describe("webhookCommand", () => {
 	it("logs dry run instead of starting server", async () => {
 		runtime.log.mockClear();
 		const res = await webhookCommand(
-			{ port: "42873", path: "/hook", reply: "dry-run" },
+			{ port: "42873", path: "/hook", reply: "dry-run", ingress: "none" },
 			deps,
 			runtime,
 		);
@@ -40,7 +40,13 @@ describe("webhookCommand", () => {
 
 	it("starts webhook when valid", async () => {
 		const res = await webhookCommand(
-			{ port: "42873", path: "/hook", reply: "ok", verbose: true },
+			{
+				port: "42873",
+				path: "/hook",
+				reply: "ok",
+				verbose: true,
+				ingress: "none",
+			},
 			deps,
 			runtime,
 		);

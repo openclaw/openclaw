@@ -65,7 +65,9 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
 			if (connection === "close") {
 				const status = getStatusCode(lastDisconnect?.error);
 				if (status === DisconnectReason.loggedOut) {
-					console.error(danger("WhatsApp session logged out. Run: warelay login"));
+					console.error(
+						danger("WhatsApp session logged out. Run: warelay login"),
+					);
 				}
 			}
 			if (connection === "open" && verbose) {

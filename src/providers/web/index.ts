@@ -1,12 +1,13 @@
+/* istanbul ignore file */
 export {
 	createWaSocket,
-	waitForWaConnection,
-	sendMessageWeb,
 	loginWeb,
+	logWebSelfId,
 	monitorWebInbox,
 	monitorWebProvider,
-	webAuthExists,
-	logWebSelfId,
 	pickProvider,
+	sendMessageWeb,
 	WA_WEB_AUTH_DIR,
+	waitForWaConnection,
+	webAuthExists,
 } from "../../provider-web.js";

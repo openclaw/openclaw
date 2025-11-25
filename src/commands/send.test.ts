@@ -91,7 +91,7 @@ describe("sendCommand", () => {
 		);
 		expect(deps.sendMessageWeb).toHaveBeenCalled();
 		expect(runtime.log).toHaveBeenCalledWith(
-			expect.stringContaining("\"provider\": \"web\""),
+			expect.stringContaining('"provider": "web"'),
 		);
 	});
 
@@ -139,7 +139,7 @@ describe("sendCommand", () => {
 		});
 		expect(deps.waitForFinalStatus).not.toHaveBeenCalled();
 		expect(runtime.log).toHaveBeenCalledWith(
-			expect.stringContaining("\"provider\": \"twilio\""),
+			expect.stringContaining('"provider": "twilio"'),
 		);
 	});
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ensureTwilioEnv, readEnv } from "./env.js";
 import type { RuntimeEnv } from "./runtime.js";
@@ -17,8 +17,17 @@ describe("env helpers", () => {
 		}),
 	};
 
+	beforeEach(() => {
+		vi.clearAllMocks();
+		process.env = {};
+	});
+
 	function setEnv(vars: Record<string, string | undefined>) {
-		Object.assign(process.env, vars);
+		process.env = {};
+		for (const [k, v] of Object.entries(vars)) {
+			if (v === undefined) delete process.env[k];
+			else process.env[k] = v;
+		}
 	}
 
 	it("reads env with auth token", () => {
@@ -31,7 +40,11 @@ describe("env helpers", () => {
 		const cfg = readEnv(runtime);
 		expect(cfg.accountSid).toBe("AC123");
 		expect(cfg.whatsappFrom).toBe("whatsapp:+1555");
-		expect("authToken" in cfg.auth && cfg.auth.authToken).toBe("token");
+		if ("authToken" in cfg.auth) {
+			expect(cfg.auth.authToken).toBe("token");
+		} else {
+			throw new Error("Expected auth token");
+		}
 	});
 
 	it("reads env with API key/secret", () => {
@@ -42,8 +55,12 @@ describe("env helpers", () => {
 			TWILIO_API_SECRET: "secret",
 		});
 		const cfg = readEnv(runtime);
-		expect("apiKey" in cfg.auth && cfg.auth.apiKey).toBe("key");
-		expect("apiSecret" in cfg.auth && cfg.auth.apiSecret).toBe("secret");
+		if ("apiKey" in cfg.auth && "apiSecret" in cfg.auth) {
+			expect(cfg.auth.apiKey).toBe("key");
+			expect(cfg.auth.apiSecret).toBe("secret");
+		} else {
+			throw new Error("Expected API key/secret");
+		}
 	});
 
 	it("fails fast on invalid env", () => {

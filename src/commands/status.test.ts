@@ -5,7 +5,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { statusCommand } from "./status.js";
 
 vi.mock("../twilio/messages.js", () => ({
-	formatMessageLine: (m: any) => `LINE:${m.sid}`,
+	formatMessageLine: (m: { sid: string }) => `LINE:${m.sid}`,
 }));
 
 const runtime: RuntimeEnv = {
@@ -31,7 +31,7 @@ describe("statusCommand", () => {
 	});
 
 	it("prints JSON when requested", async () => {
-		(deps.listRecentMessages as any).mockResolvedValue([{ sid: "1" }]);
+		(deps.listRecentMessages as jest.Mock).mockResolvedValue([{ sid: "1" }]);
 		await statusCommand(
 			{ limit: "5", lookback: "10", json: true },
 			deps,
@@ -43,7 +43,7 @@ describe("statusCommand", () => {
 	});
 
 	it("prints formatted lines otherwise", async () => {
-		(deps.listRecentMessages as any).mockResolvedValue([{ sid: "123" }]);
+		(deps.listRecentMessages as jest.Mock).mockResolvedValue([{ sid: "123" }]);
 		await statusCommand({ limit: "1", lookback: "5" }, deps, runtime);
 		expect(runtime.log).toHaveBeenCalledWith("LINE:123");
 	});

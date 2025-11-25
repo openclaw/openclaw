@@ -1,3 +1,4 @@
+/* istanbul ignore file */
 import { startWebhook } from "../twilio/webhook.js";
 
 // Thin wrapper to keep webhook server co-located with other webhook helpers.
