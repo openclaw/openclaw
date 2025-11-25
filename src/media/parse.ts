@@ -17,8 +17,9 @@ export function splitMediaFromOutput(raw: string): {
 	let text = trimmedRaw;
 	let mediaUrl: string | undefined;
 
+	const globalMatch = trimmedRaw.match(MEDIA_TOKEN_RE);
 	let mediaLine = trimmedRaw.split("\n").find((line) => MEDIA_LINE_RE.test(line));
-	let mediaMatch = mediaLine?.match(MEDIA_TOKEN_RE) ?? trimmedRaw.match(MEDIA_TOKEN_RE);
+	let mediaMatch = mediaLine?.match(MEDIA_TOKEN_RE) ?? globalMatch;
 	if (!mediaMatch) {
 		return { text: trimmedRaw };
 	}

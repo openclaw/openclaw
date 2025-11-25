@@ -289,8 +289,17 @@ const mediaNote =
 				},
 			);
 			const rawStdout = stdout.trim();
-			const { text: trimmedText, mediaUrl: mediaFromCommand } =
+			let mediaFromCommand: string | undefined;
+			const { text: trimmedText, mediaUrl: mediaDirect } =
 				splitMediaFromOutput(rawStdout);
+			mediaFromCommand = mediaDirect;
+			if (isVerbose()) {
+				logVerbose(
+					mediaFromCommand
+						? `MEDIA token extracted from stdout: ${mediaFromCommand}`
+						: "No MEDIA token extracted from stdout",
+				);
+			}
 			let trimmed = trimmedText;
 			if (stderr?.trim()) {
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
@@ -310,6 +319,17 @@ const mediaNote =
 						`Claude JSON parsed -> ${parsed.text.slice(0, 120)}${parsed.text.length > 120 ? "…" : ""}`,
 					);
 					trimmed = parsed.text.trim();
+					if (!mediaFromCommand) {
+						const { mediaUrl: mediaFromParsed } = splitMediaFromOutput(
+							parsed.text,
+						);
+						if (mediaFromParsed) {
+							mediaFromCommand = mediaFromParsed;
+							logVerbose(
+								`MEDIA token extracted after JSON parse: ${mediaFromParsed}`,
+							);
+						}
+					}
 				} else {
 					logVerbose("Claude JSON parse failed; returning raw stdout");
 				}
