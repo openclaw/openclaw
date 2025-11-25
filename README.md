@@ -30,7 +30,7 @@ Install from npm (global): `npm install -g warelay` (Node 22+). Then choose **on
 ## Command Cheat Sheet
 | Command | What it does | Core flags |
 | --- | --- | --- |
-| `warelay send` | Send a WhatsApp message (Twilio or Web) | `--to <e164>` `--message <text>` `--wait <sec>` `--poll <sec>` `--provider twilio|web` `--json` `--dry-run` |
+| `warelay send` | Send a WhatsApp message (Twilio or Web) | `--to <e164>` `--message <text>` `--wait <sec>` `--poll <sec>` `--provider twilio\|web` `--json` `--dry-run` |
 | `warelay relay` | Auto-reply loop (poll Twilio or listen on Web) | `--provider <auto\|twilio\|web>` `--interval <sec>` `--lookback <min>` `--verbose` |
 | `warelay status` | Show recent sent/received messages | `--limit <n>` `--lookback <min>` `--json` |
 | `warelay webhook` | Run local inbound webhook server | `--port <port>` `--path <path>` `--reply <text>` `--verbose` `--yes` `--dry-run` |
