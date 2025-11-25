@@ -1,10 +1,9 @@
 import net from "node:net";
 
-import chalk from "chalk";
-
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { danger, info, isVerbose, logVerbose, warn } from "../globals.js";
+import { logDebug } from "../logger.js";
 
 class PortInUseError extends Error {
 	port: number;
@@ -98,8 +97,8 @@ export async function handlePortError(
 	if (isVerbose()) {
 		const stdout = (err as { stdout?: string })?.stdout;
 		const stderr = (err as { stderr?: string })?.stderr;
-		if (stdout?.trim()) runtime.error(chalk.gray(`stdout: ${stdout.trim()}`));
-		if (stderr?.trim()) runtime.error(chalk.gray(`stderr: ${stderr.trim()}`));
+		if (stdout?.trim()) logDebug(`stdout: ${stdout.trim()}`);
+		if (stderr?.trim()) logDebug(`stderr: ${stderr.trim()}`);
 	}
 	return runtime.exit(1);
 }
