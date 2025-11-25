@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import net from "node:net";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
@@ -497,6 +498,64 @@ describe("config and templating", () => {
 		expect(second?.text).toBe("cmd output");
 		const argvSecond = runSpy.mock.calls[1][0];
 		expect(argvSecond[2]).toBe("--resume");
+	});
+
+	it("only sends system prompt once per session when configured", async () => {
+		const tmpStore = path.join(os.tmpdir(), `warelay-store-${Date.now()}.json`);
+		vi.spyOn(crypto, "randomUUID").mockReturnValue("sid-1");
+		const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+			stdout: "ok\n",
+			stderr: "",
+			code: 0,
+			signal: null,
+			killed: false,
+		});
+		const cfg = {
+			inbound: {
+				reply: {
+					mode: "command" as const,
+					command: ["echo", "{{Body}}"],
+					template: "[tmpl]",
+					bodyPrefix: "[pfx] ",
+					session: {
+						sendSystemOnce: true,
+						sessionIntro: "SYS",
+						store: tmpStore,
+						sessionArgNew: ["--sid", "{{SessionId}}"],
+						sessionArgResume: ["--resume", "{{SessionId}}"],
+					},
+				},
+			},
+		};
+
+		await index.getReplyFromConfig(
+			{ Body: "/new hi", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+		await index.getReplyFromConfig(
+			{ Body: "next", From: "+1", To: "+2" },
+			undefined,
+			cfg,
+			runSpy,
+		);
+
+		const firstArgv = runSpy.mock.calls[0][0];
+		expect(firstArgv).toEqual([
+			"echo",
+			"[tmpl]",
+			"--sid",
+			"sid-1",
+			"SYS\n\n[pfx] hi",
+		]);
+
+		const secondArgv = runSpy.mock.calls[1][0];
+		expect(secondArgv).toEqual(["echo", "--resume", "sid-1", "next"]);
+
+		const persisted = JSON.parse(fs.readFileSync(tmpStore, "utf-8"));
+		const firstEntry = Object.values(persisted)[0] as { systemSent?: boolean };
+		expect(firstEntry.systemSent).toBe(true);
 	});
 
 	it("injects Claude output format + print flag when configured", async () => {

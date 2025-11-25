@@ -134,10 +134,13 @@ export async function getReplyFromConfig(
 	);
 	const sessionScope = sessionCfg?.scope ?? "per-sender";
 	const storePath = resolveStorePath(sessionCfg?.store);
+	let sessionStore: ReturnType<typeof loadSessionStore> | undefined;
+	let sessionKey: string | undefined;
 
 	let sessionId: string | undefined;
 	let isNewSession = false;
 	let bodyStripped: string | undefined;
+	let systemSent = false;
 
 	if (sessionCfg) {
 		const trimmedBody = (ctx.Body ?? "").trim();
@@ -156,21 +159,23 @@ export async function getReplyFromConfig(
 			}
 		}
 
-		const sessionKey = deriveSessionKey(sessionScope, ctx);
-		const store = loadSessionStore(storePath);
-		const entry = store[sessionKey];
+		sessionKey = deriveSessionKey(sessionScope, ctx);
+		sessionStore = loadSessionStore(storePath);
+		const entry = sessionStore[sessionKey];
 		const idleMs = idleMinutes * 60_000;
 		const freshEntry = entry && Date.now() - entry.updatedAt <= idleMs;
 
 		if (!isNewSession && freshEntry) {
 			sessionId = entry.sessionId;
+			systemSent = entry.systemSent ?? false;
 		} else {
 			sessionId = crypto.randomUUID();
 			isNewSession = true;
+			systemSent = false;
 		}
 
-		store[sessionKey] = { sessionId, updatedAt: Date.now() };
-		await saveSessionStore(storePath, store);
+		sessionStore[sessionKey] = { sessionId, updatedAt: Date.now(), systemSent };
+		await saveSessionStore(storePath, sessionStore);
 	}
 
 	const sessionCtx: TemplateContext = {
@@ -193,12 +198,43 @@ export async function getReplyFromConfig(
 	}
 
 	// Optional prefix injected before Body for templating/command prompts.
+	const sendSystemOnce = sessionCfg?.sendSystemOnce === true;
+	const isFirstTurnInSession = isNewSession || !systemSent;
+	const sessionIntro =
+		isFirstTurnInSession && sessionCfg?.sessionIntro
+			? applyTemplate(sessionCfg.sessionIntro, sessionCtx)
+			: "";
 	const bodyPrefix = reply?.bodyPrefix
 		? applyTemplate(reply.bodyPrefix, sessionCtx)
 		: "";
-	const prefixedBodyBase = bodyPrefix
-		? `${bodyPrefix}${sessionCtx.BodyStripped ?? sessionCtx.Body ?? ""}`
-		: (sessionCtx.BodyStripped ?? sessionCtx.Body);
+	const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+	const prefixedBodyBase = (() => {
+		let body = baseBody;
+		if (!sendSystemOnce || isFirstTurnInSession) {
+			body = bodyPrefix ? `${bodyPrefix}${body}` : body;
+		}
+		if (sessionIntro) {
+			body = `${sessionIntro}\n\n${body}`;
+		}
+		return body;
+	})();
+	if (
+		sessionCfg &&
+		sendSystemOnce &&
+		isFirstTurnInSession &&
+		sessionStore &&
+		sessionKey
+	) {
+		sessionStore[sessionKey] = {
+			...(sessionStore[sessionKey] ?? {}),
+			sessionId: sessionId ?? crypto.randomUUID(),
+			updatedAt: Date.now(),
+			systemSent: true,
+		};
+		await saveSessionStore(storePath, sessionStore);
+		systemSent = true;
+	}
+
 	const prefixedBody =
 		transcribedText && reply?.mode === "command"
 			? [prefixedBodyBase, `Transcript:\n${transcribedText}`]
@@ -241,9 +277,10 @@ export async function getReplyFromConfig(
 	if (reply.mode === "command" && reply.command?.length) {
 		await onReplyStart();
 		let argv = reply.command.map((part) => applyTemplate(part, templatingCtx));
-		const templatePrefix = reply.template
-			? applyTemplate(reply.template, templatingCtx)
-			: "";
+		const templatePrefix =
+			reply.template && (!sendSystemOnce || isFirstTurnInSession || !systemSent)
+				? applyTemplate(reply.template, templatingCtx)
+				: "";
 		if (templatePrefix && argv.length > 0) {
 			argv = [argv[0], templatePrefix, ...argv.slice(1)];
 		}

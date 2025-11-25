@@ -17,6 +17,8 @@ export type SessionConfig = {
 	sessionArgNew?: string[];
 	sessionArgResume?: string[];
 	sessionArgBeforeBody?: boolean;
+	sendSystemOnce?: boolean;
+	sessionIntro?: string;
 };
 
 export type LoggingConfig = {
@@ -73,6 +75,8 @@ const ReplySchema = z
 				sessionArgNew: z.array(z.string()).optional(),
 				sessionArgResume: z.array(z.string()).optional(),
 				sessionArgBeforeBody: z.boolean().optional(),
+				sendSystemOnce: z.boolean().optional(),
+				sessionIntro: z.string().optional(),
 			})
 			.optional(),
 		claudeOutputFormat: z

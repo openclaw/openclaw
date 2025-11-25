@@ -8,7 +8,11 @@ import { CONFIG_DIR, normalizeE164 } from "../utils.js";
 
 export type SessionScope = "per-sender" | "global";
 
-export type SessionEntry = { sessionId: string; updatedAt: number };
+export type SessionEntry = {
+	sessionId: string;
+	updatedAt: number;
+	systemSent?: boolean;
+};
 
 export const SESSION_STORE_DEFAULT = path.join(CONFIG_DIR, "sessions.json");
 export const DEFAULT_RESET_TRIGGER = "/new";

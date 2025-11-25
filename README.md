@@ -133,7 +133,7 @@ Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business a
 ### Claude CLI setup (how we run it)
 1) Install the official Claude CLI (e.g., `brew install anthropic-ai/cli/claude` or follow the Anthropic docs) and run `claude login` so it can read your API key.
 2) In `warelay.json`, set `reply.mode` to `"command"` and point `command[0]` to `"claude"`; set `claudeOutputFormat` to `"text"` (or `"json"`/`"stream-json"` if you want warelay to parse and trim the JSON output).
-3) (Optional) Add `bodyPrefix` to inject a system prompt and `session` settings to keep multi-turn context (`/new` resets by default).
+3) (Optional) Add `bodyPrefix` to inject a system prompt and `session` settings to keep multi-turn context (`/new` resets by default). Set `sendSystemOnce: true` (plus an optional `sessionIntro`) to only send that prompt on the first turn of each session.
 4) Run `pnpm warelay relay --provider auto` (or `--provider web|twilio`) and send a WhatsApp message; warelay will queue the Claude call, stream typing indicators (Twilio provider), parse the result, and send back the text.
 
 ### Auto-reply parameter table (compact)
@@ -151,6 +151,8 @@ Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business a
 | `inbound.reply.session.resetTriggers` | `string[]` (default: `["/new"]`) | Exact match or prefix (`/new hi`) resets session. |
 | `inbound.reply.session.idleMinutes` | `number` (default: `60`) | Session expires after idle period. |
 | `inbound.reply.session.store` | `string` (default: `~/.warelay/sessions.json`) | Custom session store path. |
+| `inbound.reply.session.sendSystemOnce` | `boolean` (default: `false`) | If `true`, only include the system prompt/template on the first turn of a session. |
+| `inbound.reply.session.sessionIntro` | `string` | Optional intro text sent once per new session (prepended before the body when `sendSystemOnce` is used). |
 | `inbound.reply.session.sessionArgNew` | `string[]` (default: `["--session-id","{{SessionId}}"]`) | Args injected for a new session run. |
 | `inbound.reply.session.sessionArgResume` | `string[]` (default: `["--resume","{{SessionId}}"]`) | Args for resumed sessions. |
 | `inbound.reply.session.sessionArgBeforeBody` | `boolean` (default: `true`) | Place session args before final body arg. |
