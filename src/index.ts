@@ -3,66 +3,56 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
-import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
-import type { TwilioRequester } from "./twilio/types.js";
-import { runCommandWithTimeout, runExec } from "./process/exec.js";
-import { sendTypingIndicator } from "./twilio/typing.js";
-import { autoReplyIfConfigured, getReplyFromConfig } from "./auto-reply/reply.js";
-import { readEnv, ensureTwilioEnv, type EnvConfig } from "./env.js";
-import { createClient } from "./twilio/client.js";
-import { logTwilioSendError, formatTwilioError } from "./twilio/utils.js";
-import { sendMessage, waitForFinalStatus } from "./twilio/send.js";
-import { startWebhook as startWebhookImpl } from "./twilio/webhook.js";
 import {
-	updateWebhook as updateWebhookImpl,
-	findIncomingNumberSid as findIncomingNumberSidImpl,
-	findMessagingServiceSid as findMessagingServiceSidImpl,
-	setMessagingServiceWebhook as setMessagingServiceWebhookImpl,
-} from "./twilio/update-webhook.js";
-import { listRecentMessages, formatMessageLine, uniqueBySid, sortByDateDesc } from "./twilio/messages.js";
-import { CLAUDE_BIN } from "./auto-reply/claude.js";
-import { applyTemplate, type MsgContext, type TemplateContext } from "./auto-reply/templating.js";
+	autoReplyIfConfigured,
+	getReplyFromConfig,
+} from "./auto-reply/reply.js";
+import { applyTemplate } from "./auto-reply/templating.js";
+import { createDefaultDeps, monitorTwilio } from "./cli/deps.js";
+import { promptYesNo } from "./cli/prompt.js";
+import { waitForever } from "./cli/wait.js";
+import { loadConfig } from "./config/config.js";
 import {
-	CONFIG_PATH,
-	type WarelayConfig,
-	type SessionConfig,
-	type SessionScope,
-	type ReplyMode,
-	type ClaudeOutputFormat,
-	loadConfig,
-} from "./config/config.js";
-import { sendCommand } from "./commands/send.js";
-import { statusCommand } from "./commands/status.js";
-import { upCommand } from "./commands/up.js";
-import { webhookCommand } from "./commands/webhook.js";
-import type { Provider } from "./utils.js";
-import {
-	assertProvider,
-	CONFIG_DIR,
-	jidToE164,
-	normalizeE164,
-	normalizePath,
-	sleep,
-	toWhatsappJid,
-	withWhatsAppPrefix,
-} from "./utils.js";
-import {
-	DEFAULT_IDLE_MINUTES,
-	DEFAULT_RESET_TRIGGER,
 	deriveSessionKey,
 	loadSessionStore,
 	resolveStorePath,
 	saveSessionStore,
-	SESSION_STORE_DEFAULT,
 } from "./config/sessions.js";
-import { ensurePortAvailable, describePortOwner, PortInUseError, handlePortError } from "./infra/ports.js";
+import { readEnv } from "./env.js";
 import { ensureBinary } from "./infra/binaries.js";
-import { ensureFunnel, ensureGoInstalled, ensureTailscaledInstalled, getTailnetHostname } from "./infra/tailscale.js";
-import { promptYesNo } from "./cli/prompt.js";
-import { waitForever } from "./cli/wait.js";
-import { findWhatsappSenderSid } from "./twilio/senders.js";
-import { createDefaultDeps, logTwilioFrom, logWebSelfId, monitorTwilio } from "./cli/deps.js";
+import {
+	describePortOwner,
+	ensurePortAvailable,
+	handlePortError,
+	PortInUseError,
+} from "./infra/ports.js";
+import {
+	ensureFunnel,
+	ensureGoInstalled,
+	ensureTailscaledInstalled,
+	getTailnetHostname,
+} from "./infra/tailscale.js";
+import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { monitorWebProvider } from "./provider-web.js";
+import { createClient } from "./twilio/client.js";
+import {
+	formatMessageLine,
+	listRecentMessages,
+	sortByDateDesc,
+	uniqueBySid,
+} from "./twilio/messages.js";
+import { sendMessage, waitForFinalStatus } from "./twilio/send.js";
+import { findWhatsappSenderSid } from "./twilio/senders.js";
+import { sendTypingIndicator } from "./twilio/typing.js";
+import {
+	findIncomingNumberSid as findIncomingNumberSidImpl,
+	findMessagingServiceSid as findMessagingServiceSidImpl,
+	setMessagingServiceWebhook as setMessagingServiceWebhookImpl,
+	updateWebhook as updateWebhookImpl,
+} from "./twilio/update-webhook.js";
+import { formatTwilioError, logTwilioSendError } from "./twilio/utils.js";
+import { startWebhook as startWebhookImpl } from "./twilio/webhook.js";
+import { assertProvider, normalizeE164, toWhatsappJid } from "./utils.js";
 
 dotenv.config({ quiet: true });
 

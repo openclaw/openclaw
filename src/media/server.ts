@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
+import type { Server } from "node:http";
 import path from "node:path";
 import express, { type Express } from "express";
-import type { Server } from "http";
 import { danger } from "../globals.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { cleanOldMedia, getMediaDir } from "./store.js";
@@ -11,7 +11,7 @@ const DEFAULT_TTL_MS = 2 * 60 * 1000;
 export function attachMediaRoutes(
 	app: Express,
 	ttlMs = DEFAULT_TTL_MS,
-	runtime: RuntimeEnv = defaultRuntime,
+	_runtime: RuntimeEnv = defaultRuntime,
 ) {
 	const mediaDir = getMediaDir();
 
@@ -41,7 +41,6 @@ export function attachMediaRoutes(
 	setInterval(() => {
 		void cleanOldMedia(ttlMs);
 	}, ttlMs).unref();
-
 }
 
 export async function startMediaServer(

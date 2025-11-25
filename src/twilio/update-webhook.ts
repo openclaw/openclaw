@@ -1,12 +1,13 @@
-import { isVerbose, success, warn } from "../globals.js";
-import { logError, logInfo } from "../logger.js";
 import { readEnv } from "../env.js";
-import { normalizeE164 } from "../utils.js";
+import { isVerbose } from "../globals.js";
+import { logError, logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { createClient } from "./client.js";
-import type { TwilioSenderListClient, TwilioRequester } from "./types.js";
+import type { createClient } from "./client.js";
+import type { TwilioRequester, TwilioSenderListClient } from "./types.js";
 
-export async function findIncomingNumberSid(client: TwilioSenderListClient): Promise<string | null> {
+export async function findIncomingNumberSid(
+	client: TwilioSenderListClient,
+): Promise<string | null> {
 	// Look up incoming phone number SID matching the configured WhatsApp number.
 	try {
 		const env = readEnv();
@@ -21,7 +22,9 @@ export async function findIncomingNumberSid(client: TwilioSenderListClient): Pro
 	}
 }
 
-export async function findMessagingServiceSid(client: TwilioSenderListClient): Promise<string | null> {
+export async function findMessagingServiceSid(
+	client: TwilioSenderListClient,
+): Promise<string | null> {
 	// Attempt to locate a messaging service tied to the WA phone number (webhook fallback).
 	type IncomingNumberWithService = { messagingServiceSid?: string };
 	try {
@@ -64,7 +67,6 @@ export async function setMessagingServiceWebhook(
 		return false;
 	}
 }
-
 
 // Update sender webhook URL with layered fallbacks (channels, form, helper, phone).
 export async function updateWebhook(

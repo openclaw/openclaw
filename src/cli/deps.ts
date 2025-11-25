@@ -1,21 +1,25 @@
+import { autoReplyIfConfigured } from "../auto-reply/reply.js";
+import { readEnv } from "../env.js";
+import { info } from "../globals.js";
 import { ensureBinary } from "../infra/binaries.js";
 import { ensurePortAvailable, handlePortError } from "../infra/ports.js";
 import { ensureFunnel, getTailnetHostname } from "../infra/tailscale.js";
-import { waitForever } from "./wait.js";
-import { readEnv } from "../env.js";
-import { monitorTwilio as monitorTwilioImpl } from "../twilio/monitor.js";
-import { sendMessage, waitForFinalStatus } from "../twilio/send.js";
-import { sendMessageWeb, monitorWebProvider, logWebSelfId } from "../providers/web/index.js";
-import { assertProvider, sleep } from "../utils.js";
+import { ensureMediaHosted } from "../media/host.js";
+import {
+	logWebSelfId,
+	monitorWebProvider,
+	sendMessageWeb,
+} from "../providers/web/index.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createClient } from "../twilio/client.js";
 import { listRecentMessages } from "../twilio/messages.js";
-import { updateWebhook } from "../webhook/update.js";
+import { monitorTwilio as monitorTwilioImpl } from "../twilio/monitor.js";
+import { sendMessage, waitForFinalStatus } from "../twilio/send.js";
 import { findWhatsappSenderSid } from "../twilio/senders.js";
+import { assertProvider, sleep } from "../utils.js";
 import { startWebhook } from "../webhook/server.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { info } from "../globals.js";
-import { autoReplyIfConfigured } from "../auto-reply/reply.js";
-import { ensureMediaHosted } from "../media/host.js";
+import { updateWebhook } from "../webhook/update.js";
+import { waitForever } from "./wait.js";
 
 export type CliDeps = {
 	sendMessage: typeof sendMessage;

@@ -15,7 +15,11 @@ function isValidMedia(candidate: string) {
 	if (!candidate) return false;
 	if (candidate.length > 1024) return false;
 	if (/\s/.test(candidate)) return false;
-	return /^https?:\/\//i.test(candidate) || candidate.startsWith("/") || candidate.startsWith("./");
+	return (
+		/^https?:\/\//i.test(candidate) ||
+		candidate.startsWith("/") ||
+		candidate.startsWith("./")
+	);
 }
 
 export function splitMediaFromOutput(raw: string): {
@@ -29,22 +33,21 @@ export function splitMediaFromOutput(raw: string): {
 	const candidate = normalizeMediaSource(cleanCandidate(match[1]));
 	const mediaUrl = isValidMedia(candidate) ? candidate : undefined;
 
-	const cleanedText =
-		mediaUrl
-			? trimmedRaw
-					.replace(match[0], "")
-					.replace(/[ \t]+\n/g, "\n")
-					.replace(/[ \t]{2,}/g, " ")
-					.replace(/\n{2,}/g, "\n")
-					.trim()
-			: trimmedRaw
-					.split("\n")
-					.filter((line) => !MEDIA_TOKEN_RE.test(line))
-					.join("\n")
-					.replace(/[ \t]+\n/g, "\n")
-					.replace(/[ \t]{2,}/g, " ")
-					.replace(/\n{2,}/g, "\n")
-					.trim();
+	const cleanedText = mediaUrl
+		? trimmedRaw
+				.replace(match[0], "")
+				.replace(/[ \t]+\n/g, "\n")
+				.replace(/[ \t]{2,}/g, " ")
+				.replace(/\n{2,}/g, "\n")
+				.trim()
+		: trimmedRaw
+				.split("\n")
+				.filter((line) => !MEDIA_TOKEN_RE.test(line))
+				.join("\n")
+				.replace(/[ \t]+\n/g, "\n")
+				.replace(/[ \t]{2,}/g, " ")
+				.replace(/\n{2,}/g, "\n")
+				.trim();
 
 	return mediaUrl ? { text: cleanedText, mediaUrl } : { text: cleanedText };
 }

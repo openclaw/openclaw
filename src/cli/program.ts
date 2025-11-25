@@ -1,16 +1,19 @@
 import { Command } from "commander";
-
-import { setVerbose, setYes, danger, info, warn } from "../globals.js";
-import { defaultRuntime } from "../runtime.js";
 import { sendCommand } from "../commands/send.js";
 import { statusCommand } from "../commands/status.js";
 import { upCommand } from "../commands/up.js";
 import { webhookCommand } from "../commands/webhook.js";
-import { loginWeb, monitorWebProvider } from "../provider-web.js";
-import { pickProvider } from "../provider-web.js";
-import type { Provider } from "../utils.js";
-import { createDefaultDeps, logWebSelfId, logTwilioFrom, monitorTwilio } from "./deps.js";
 import { ensureTwilioEnv } from "../env.js";
+import { danger, info, setVerbose, setYes, warn } from "../globals.js";
+import { loginWeb, monitorWebProvider, pickProvider } from "../provider-web.js";
+import { defaultRuntime } from "../runtime.js";
+import type { Provider } from "../utils.js";
+import {
+	createDefaultDeps,
+	logTwilioFrom,
+	logWebSelfId,
+	monitorTwilio,
+} from "./deps.js";
 import { spawnRelayTmux } from "./relay_tmux.js";
 
 export function buildProgram() {
@@ -50,20 +53,31 @@ export function buildProgram() {
 		});
 
 	program
-	.command("send")
-	.description("Send a WhatsApp message")
-	.requiredOption(
-		"-t, --to <number>",
-		"Recipient number in E.164 (e.g. +15551234567)",
-	)
-	.requiredOption("-m, --message <text>", "Message body")
-	.option("--media <path-or-url>", "Attach image (<=5MB). Web: path or URL. Twilio: https URL or local path hosted via webhook/funnel.")
-	.option("--serve-media", "For Twilio: start a temporary media server if webhook is not running", false)
-	.option("-w, --wait <seconds>", "Wait for delivery status (0 to skip)", "20")
-	.option("-p, --poll <seconds>", "Polling interval while waiting", "2")
-	.option("--provider <provider>", "Provider: twilio | web", "twilio")
-	.option("--dry-run", "Print payload and skip sending", false)
-	.option("--json", "Output result as JSON", false)
+		.command("send")
+		.description("Send a WhatsApp message")
+		.requiredOption(
+			"-t, --to <number>",
+			"Recipient number in E.164 (e.g. +15551234567)",
+		)
+		.requiredOption("-m, --message <text>", "Message body")
+		.option(
+			"--media <path-or-url>",
+			"Attach image (<=5MB). Web: path or URL. Twilio: https URL or local path hosted via webhook/funnel.",
+		)
+		.option(
+			"--serve-media",
+			"For Twilio: start a temporary media server if webhook is not running",
+			false,
+		)
+		.option(
+			"-w, --wait <seconds>",
+			"Wait for delivery status (0 to skip)",
+			"20",
+		)
+		.option("-p, --poll <seconds>", "Polling interval while waiting", "2")
+		.option("--provider <provider>", "Provider: twilio | web", "twilio")
+		.option("--dry-run", "Print payload and skip sending", false)
+		.option("--json", "Output result as JSON", false)
 		.addHelpText(
 			"after",
 			`
@@ -201,7 +215,9 @@ With Tailscale:
 			try {
 				const server = await webhookCommand(opts, deps, defaultRuntime);
 				if (!server) {
-					defaultRuntime.log(info("Webhook dry-run complete; no server started."));
+					defaultRuntime.log(
+						info("Webhook dry-run complete; no server started."),
+					);
 					return;
 				}
 				process.on("SIGINT", () => {
@@ -226,7 +242,11 @@ With Tailscale:
 		.option("--path <path>", "Webhook path", "/webhook/whatsapp")
 		.option("--verbose", "Verbose logging during setup/webhook", false)
 		.option("-y, --yes", "Auto-confirm prompts when possible", false)
-		.option("--dry-run", "Print planned actions without touching network", false)
+		.option(
+			"--dry-run",
+			"Print planned actions without touching network",
+			false,
+		)
 		// istanbul ignore next
 		.action(async (opts) => {
 			setVerbose(Boolean(opts.verbose));
@@ -258,27 +278,36 @@ With Tailscale:
 		)
 		.action(async () => {
 			try {
-				const session = await spawnRelayTmux("pnpm warelay relay --verbose", true);
+				const session = await spawnRelayTmux(
+					"pnpm warelay relay --verbose",
+					true,
+				);
 				defaultRuntime.log(
 					info(
 						`tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose")`,
 					),
 				);
 			} catch (err) {
-				defaultRuntime.error(danger(`Failed to start relay tmux session: ${String(err)}`));
+				defaultRuntime.error(
+					danger(`Failed to start relay tmux session: ${String(err)}`),
+				);
 				defaultRuntime.exit(1);
 			}
 		});
 
 	program
 		.command("relay:tmux:attach")
-		.description("Attach to the existing warelay-relay tmux session (no restart)")
+		.description(
+			"Attach to the existing warelay-relay tmux session (no restart)",
+		)
 		.action(async () => {
 			try {
 				await spawnRelayTmux("pnpm warelay relay --verbose", true, false);
 				defaultRuntime.log(info("Attached to warelay-relay session."));
 			} catch (err) {
-				defaultRuntime.error(danger(`Failed to attach to warelay-relay: ${String(err)}`));
+				defaultRuntime.error(
+					danger(`Failed to attach to warelay-relay: ${String(err)}`),
+				);
 				defaultRuntime.exit(1);
 			}
 		});

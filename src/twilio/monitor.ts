@@ -1,12 +1,11 @@
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
-
-import { danger, warn } from "../globals.js";
-import { sleep, withWhatsAppPrefix } from "../utils.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { autoReplyIfConfigured } from "../auto-reply/reply.js";
-import { createClient } from "./client.js";
 import { readEnv } from "../env.js";
+import { danger } from "../globals.js";
 import { logDebug, logInfo, logWarn } from "../logger.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { sleep, withWhatsAppPrefix } from "../utils.js";
+import { createClient } from "./client.js";
 
 type MonitorDeps = {
 	autoReplyIfConfigured: typeof autoReplyIfConfigured;
@@ -95,7 +94,9 @@ export async function monitorTwilio(
 		lastSeenSid = newestFirst.length ? newestFirst[0].sid : lastSeenSid;
 		iterations += 1;
 		if (iterations >= maxIterations) break;
-		await deps.sleep(Math.max(pollSeconds, DEFAULT_POLL_INTERVAL_SECONDS) * 1000);
+		await deps.sleep(
+			Math.max(pollSeconds, DEFAULT_POLL_INTERVAL_SECONDS) * 1000,
+		);
 	}
 }
 

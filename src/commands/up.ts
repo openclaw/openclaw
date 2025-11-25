@@ -1,10 +1,16 @@
 import type { CliDeps } from "../cli/deps.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { waitForever as defaultWaitForever } from "../cli/wait.js";
 import { retryAsync } from "../infra/retry.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export async function upCommand(
-	opts: { port: string; path: string; verbose?: boolean; yes?: boolean; dryRun?: boolean },
+	opts: {
+		port: string;
+		path: string;
+		verbose?: boolean;
+		yes?: boolean;
+		dryRun?: boolean;
+	},
 	deps: CliDeps,
 	runtime: RuntimeEnv,
 	waiter: typeof defaultWaitForever = defaultWaitForever,

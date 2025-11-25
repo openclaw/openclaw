@@ -1,13 +1,10 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { danger, warn } from "../globals.js";
-import { logInfo, logWarn } from "../logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { ensurePortAvailable, PortInUseError } from "../infra/ports.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
-import { saveMediaSource } from "./store.js";
+import { logInfo } from "../logger.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { startMediaServer } from "./server.js";
+import { saveMediaSource } from "./store.js";
 
 const DEFAULT_PORT = 42873;
 const TTL_MS = 2 * 60 * 1000;

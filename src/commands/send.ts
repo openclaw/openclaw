@@ -1,7 +1,7 @@
-import { info } from "../globals.js";
 import type { CliDeps } from "../cli/deps.js";
-import type { Provider } from "../utils.js";
+import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import type { Provider } from "../utils.js";
 
 export async function sendCommand(
 	opts: {
@@ -40,14 +40,10 @@ export async function sendCommand(
 			runtime.log(info("Wait/poll are Twilio-only; ignored for provider=web."));
 		}
 		const res = await deps
-			.sendMessageWeb(
-				opts.to,
-				opts.message,
-				{
-					verbose: false,
-					mediaUrl: opts.media,
-				},
-			)
+			.sendMessageWeb(opts.to, opts.message, {
+				verbose: false,
+				mediaUrl: opts.media,
+			})
 			.catch((err) => {
 				runtime.error(`❌ Web send failed: ${String(err)}`);
 				throw err;
@@ -76,7 +72,7 @@ export async function sendCommand(
 		return;
 	}
 
-	let mediaUrl: string | undefined = undefined;
+	let mediaUrl: string | undefined;
 	if (opts.media) {
 		mediaUrl = await deps.resolveTwilioMediaUrl(opts.media, {
 			serveMedia: Boolean(opts.serveMedia),

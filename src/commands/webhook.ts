@@ -1,6 +1,6 @@
 import type { CliDeps } from "../cli/deps.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { retryAsync } from "../infra/retry.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export async function webhookCommand(
 	opts: {
@@ -19,7 +19,9 @@ export async function webhookCommand(
 	}
 	await deps.ensurePortAvailable(port);
 	if (opts.reply === "dry-run") {
-		runtime.log(`[dry-run] would start webhook on port ${port} path ${opts.path}`);
+		runtime.log(
+			`[dry-run] would start webhook on port ${port} path ${opts.path}`,
+		);
 		return undefined;
 	}
 	const server = await retryAsync(

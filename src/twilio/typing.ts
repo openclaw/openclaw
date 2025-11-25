@@ -1,4 +1,4 @@
-import { warn, isVerbose, logVerbose } from "../globals.js";
+import { isVerbose, logVerbose, warn } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 type TwilioRequestOptions = {

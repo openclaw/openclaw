@@ -1,9 +1,8 @@
 import net from "node:net";
-
-import { runExec } from "../process/exec.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { danger, info, isVerbose, logVerbose, warn } from "../globals.js";
 import { logDebug } from "../logger.js";
+import { runExec } from "../process/exec.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
 class PortInUseError extends Error {
 	port: number;
@@ -21,7 +20,9 @@ function isErrno(err: unknown): err is NodeJS.ErrnoException {
 	return Boolean(err && typeof err === "object" && "code" in err);
 }
 
-export async function describePortOwner(port: number): Promise<string | undefined> {
+export async function describePortOwner(
+	port: number,
+): Promise<string | undefined> {
 	// Best-effort process info for a listening port (macOS/Linux).
 	try {
 		const { stdout } = await runExec("lsof", [

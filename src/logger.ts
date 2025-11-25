@@ -1,4 +1,11 @@
-import { danger, info, success, warn, logVerbose, isVerbose } from "./globals.js";
+import {
+	danger,
+	info,
+	isVerbose,
+	logVerbose,
+	success,
+	warn,
+} from "./globals.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 export function logInfo(message: string, runtime: RuntimeEnv = defaultRuntime) {
@@ -16,7 +23,10 @@ export function logSuccess(
 	runtime.log(success(message));
 }
 
-export function logError(message: string, runtime: RuntimeEnv = defaultRuntime) {
+export function logError(
+	message: string,
+	runtime: RuntimeEnv = defaultRuntime,
+) {
 	runtime.error(danger(message));
 }
 

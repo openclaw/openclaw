@@ -2,12 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
-import { CLAUDE_BIN, CLAUDE_IDENTITY_PREFIX, parseClaudeJson } from "./claude.js";
-import {
-	applyTemplate,
-	type MsgContext,
-	type TemplateContext,
-} from "./templating.js";
+import { loadConfig, type WarelayConfig } from "../config/config.js";
 import {
 	DEFAULT_IDLE_MINUTES,
 	DEFAULT_RESET_TRIGGER,
@@ -16,16 +11,25 @@ import {
 	resolveStorePath,
 	saveSessionStore,
 } from "../config/sessions.js";
-import { loadConfig, type WarelayConfig } from "../config/config.js";
 import { info, isVerbose, logVerbose } from "../globals.js";
-import { enqueueCommand } from "../process/command-queue.js";
-import { runCommandWithTimeout } from "../process/exec.js";
-import { sendTypingIndicator } from "../twilio/typing.js";
-import type { TwilioRequester } from "../twilio/types.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { logError } from "../logger.js";
 import { ensureMediaHosted } from "../media/host.js";
-import { normalizeMediaSource, splitMediaFromOutput } from "../media/parse.js";
+import { splitMediaFromOutput } from "../media/parse.js";
+import { enqueueCommand } from "../process/command-queue.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import type { TwilioRequester } from "../twilio/types.js";
+import { sendTypingIndicator } from "../twilio/typing.js";
+import {
+	CLAUDE_BIN,
+	CLAUDE_IDENTITY_PREFIX,
+	parseClaudeJson,
+} from "./claude.js";
+import {
+	applyTemplate,
+	type MsgContext,
+	type TemplateContext,
+} from "./templating.js";
 
 type GetReplyOptions = {
 	onReplyStart?: () => Promise<void> | void;
@@ -51,20 +55,20 @@ function summarizeClaudeMetadata(payload: unknown): string | undefined {
 
 	const usage = obj.usage;
 	if (usage && typeof usage === "object") {
-			const serverToolUse = (
-				usage as { server_tool_use?: Record<string, unknown> }
-			).server_tool_use;
-			if (serverToolUse && typeof serverToolUse === "object") {
-				const toolCalls = Object.values(serverToolUse).reduce<number>(
-					(sum, val) => {
-						if (typeof val === "number") return sum + val;
-						return sum;
-					},
-					0,
-				);
-				if (toolCalls > 0) parts.push(`tool_calls=${toolCalls}`);
-			}
+		const serverToolUse = (
+			usage as { server_tool_use?: Record<string, unknown> }
+		).server_tool_use;
+		if (serverToolUse && typeof serverToolUse === "object") {
+			const toolCalls = Object.values(serverToolUse).reduce<number>(
+				(sum, val) => {
+					if (typeof val === "number") return sum + val;
+					return sum;
+				},
+				0,
+			);
+			if (toolCalls > 0) parts.push(`tool_calls=${toolCalls}`);
 		}
+	}
 
 	const modelUsage = obj.modelUsage;
 	if (modelUsage && typeof modelUsage === "object") {
@@ -168,8 +172,7 @@ export async function getReplyFromConfig(
 	const prefixedBody = bodyPrefix
 		? `${bodyPrefix}${sessionCtx.BodyStripped ?? sessionCtx.Body ?? ""}`
 		: (sessionCtx.BodyStripped ?? sessionCtx.Body);
-const mediaNote =
-	ctx.MediaPath && ctx.MediaPath.length
+	const mediaNote = ctx.MediaPath?.length
 		? `[media attached: ${ctx.MediaPath}${ctx.MediaType ? ` (${ctx.MediaType})` : ""}${ctx.MediaUrl ? ` | ${ctx.MediaUrl}` : ""}]`
 		: undefined;
 	// For command prompts we prepend the media note so Claude et al. see it; text replies stay clean.
@@ -208,7 +211,10 @@ const mediaNote =
 	if (reply.mode === "text" && reply.text) {
 		await onReplyStart();
 		logVerbose("Using text auto-reply from config");
-		return { text: applyTemplate(reply.text, templatingCtx), mediaUrl: reply.mediaUrl };
+		return {
+			text: applyTemplate(reply.text, templatingCtx),
+			mediaUrl: reply.mediaUrl,
+		};
 	}
 
 	if (reply.mode === "command" && reply.command?.length) {
@@ -303,7 +309,10 @@ const mediaNote =
 				logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
 			}
 			let parsed: ClaudeJsonParseResult | undefined;
-			if (trimmed && (reply.claudeOutputFormat === "json" || isClaudeInvocation)) {
+			if (
+				trimmed &&
+				(reply.claudeOutputFormat === "json" || isClaudeInvocation)
+			) {
 				// Claude JSON mode: extract the human text for both logging and reply while keeping metadata.
 				parsed = parseClaudeJson(trimmed);
 				if (parsed?.parsed && isVerbose()) {
@@ -333,7 +342,9 @@ const mediaNote =
 				logVerbose("No MEDIA token extracted from final text");
 			}
 			if (!trimmed && !mediaFromCommand) {
-				const meta = parsed ? summarizeClaudeMetadata(parsed.parsed) : undefined;
+				const meta = parsed
+					? summarizeClaudeMetadata(parsed.parsed)
+					: undefined;
 				trimmed = `(command produced no output${meta ? `; ${meta}` : ""})`;
 				logVerbose("No text/media produced; injecting fallback notice to user");
 			}
@@ -373,7 +384,9 @@ const mediaNote =
 					`Command auto-reply timed out after ${elapsed}ms (limit ${timeoutMs}ms)`,
 				);
 			} else {
-				logError(`Command auto-reply failed after ${elapsed}ms: ${String(err)}`);
+				logError(
+					`Command auto-reply failed after ${elapsed}ms: ${String(err)}`,
+				);
 			}
 			return undefined;
 		}
@@ -431,7 +444,9 @@ export async function autoReplyIfConfigured(
 			`Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyResult.text.length}`,
 		);
 	} else {
-		logVerbose(`Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media)`);
+		logVerbose(
+			`Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media)`,
+		);
 	}
 
 	try {

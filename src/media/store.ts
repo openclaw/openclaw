@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import os from "node:os";
-import { pipeline } from "node:stream/promises";
 import { createWriteStream } from "node:fs";
+import fs from "node:fs/promises";
 import { request } from "node:https";
+import os from "node:os";
+import path from "node:path";
+import { pipeline } from "node:stream/promises";
 
 const MEDIA_DIR = path.join(os.homedir(), ".warelay", "media");
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB
@@ -58,7 +58,9 @@ async function downloadToFile(
 					req.destroy(new Error("Media exceeds 5MB limit"));
 				}
 			});
-			pipeline(res, out).then(() => resolve()).catch(reject);
+			pipeline(res, out)
+				.then(() => resolve())
+				.catch(reject);
 		});
 		req.on("error", reject);
 		req.end();

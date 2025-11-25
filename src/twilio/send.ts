@@ -1,8 +1,7 @@
-import { success } from "../globals.js";
+import { readEnv } from "../env.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { withWhatsAppPrefix, sleep } from "../utils.js";
-import { readEnv } from "../env.js";
+import { sleep, withWhatsAppPrefix } from "../utils.js";
 import { createClient } from "./client.js";
 import { logTwilioSendError } from "./utils.js";
 
@@ -29,7 +28,10 @@ export async function sendMessage(
 			mediaUrl: opts?.mediaUrl ? [opts.mediaUrl] : undefined,
 		});
 
-		logInfo(`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`, runtime);
+		logInfo(
+			`✅ Request accepted. Message SID: ${message.sid} -> ${toNumber}`,
+			runtime,
+		);
 		return { client, sid: message.sid };
 	} catch (err) {
 		logTwilioSendError(err, toNumber, runtime);

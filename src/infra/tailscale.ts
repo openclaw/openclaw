@@ -1,7 +1,6 @@
 import chalk from "chalk";
-
-import { danger, info, isVerbose, logVerbose, warn } from "../globals.js";
 import { promptYesNo } from "../cli/prompt.js";
+import { danger, info, isVerbose, logVerbose, warn } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { ensureBinary } from "./binaries.js";

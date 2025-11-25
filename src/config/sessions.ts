@@ -3,9 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 import JSON5 from "json5";
-
-import { CONFIG_DIR, normalizeE164 } from "../utils.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { CONFIG_DIR, normalizeE164 } from "../utils.js";
 
 export type SessionScope = "per-sender" | "global";
 
@@ -22,7 +21,9 @@ export function resolveStorePath(store?: string) {
 	return path.resolve(store);
 }
 
-export function loadSessionStore(storePath: string): Record<string, SessionEntry> {
+export function loadSessionStore(
+	storePath: string,
+): Record<string, SessionEntry> {
 	try {
 		const raw = fs.readFileSync(storePath, "utf-8");
 		const parsed = JSON5.parse(raw);
