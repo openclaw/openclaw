@@ -4,94 +4,94 @@ import { ensureTwilioEnv, readEnv } from "./env.js";
 import type { RuntimeEnv } from "./runtime.js";
 
 const baseEnv = {
-	TWILIO_ACCOUNT_SID: "AC123",
-	TWILIO_WHATSAPP_FROM: "whatsapp:+1555",
+  TWILIO_ACCOUNT_SID: "AC123",
+  TWILIO_WHATSAPP_FROM: "whatsapp:+1555",
 };
 
 describe("env helpers", () => {
-	const runtime: RuntimeEnv = {
-		log: vi.fn(),
-		error: vi.fn(),
-		exit: vi.fn(() => {
-			throw new Error("exit");
-		}),
-	};
+  const runtime: RuntimeEnv = {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(() => {
+      throw new Error("exit");
+    }),
+  };
 
-	beforeEach(() => {
-		vi.clearAllMocks();
-		process.env = {};
-	});
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env = {};
+  });
 
-	function setEnv(vars: Record<string, string | undefined>) {
-		process.env = {};
-		for (const [k, v] of Object.entries(vars)) {
-			if (v === undefined) delete process.env[k];
-			else process.env[k] = v;
-		}
-	}
+  function setEnv(vars: Record<string, string | undefined>) {
+    process.env = {};
+    for (const [k, v] of Object.entries(vars)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
 
-	it("reads env with auth token", () => {
-		setEnv({
-			...baseEnv,
-			TWILIO_AUTH_TOKEN: "token",
-			TWILIO_API_KEY: undefined,
-			TWILIO_API_SECRET: undefined,
-		});
-		const cfg = readEnv(runtime);
-		expect(cfg.accountSid).toBe("AC123");
-		expect(cfg.whatsappFrom).toBe("whatsapp:+1555");
-		if ("authToken" in cfg.auth) {
-			expect(cfg.auth.authToken).toBe("token");
-		} else {
-			throw new Error("Expected auth token");
-		}
-	});
+  it("reads env with auth token", () => {
+    setEnv({
+      ...baseEnv,
+      TWILIO_AUTH_TOKEN: "token",
+      TWILIO_API_KEY: undefined,
+      TWILIO_API_SECRET: undefined,
+    });
+    const cfg = readEnv(runtime);
+    expect(cfg.accountSid).toBe("AC123");
+    expect(cfg.whatsappFrom).toBe("whatsapp:+1555");
+    if ("authToken" in cfg.auth) {
+      expect(cfg.auth.authToken).toBe("token");
+    } else {
+      throw new Error("Expected auth token");
+    }
+  });
 
-	it("reads env with API key/secret", () => {
-		setEnv({
-			...baseEnv,
-			TWILIO_AUTH_TOKEN: undefined,
-			TWILIO_API_KEY: "key",
-			TWILIO_API_SECRET: "secret",
-		});
-		const cfg = readEnv(runtime);
-		if ("apiKey" in cfg.auth && "apiSecret" in cfg.auth) {
-			expect(cfg.auth.apiKey).toBe("key");
-			expect(cfg.auth.apiSecret).toBe("secret");
-		} else {
-			throw new Error("Expected API key/secret");
-		}
-	});
+  it("reads env with API key/secret", () => {
+    setEnv({
+      ...baseEnv,
+      TWILIO_AUTH_TOKEN: undefined,
+      TWILIO_API_KEY: "key",
+      TWILIO_API_SECRET: "secret",
+    });
+    const cfg = readEnv(runtime);
+    if ("apiKey" in cfg.auth && "apiSecret" in cfg.auth) {
+      expect(cfg.auth.apiKey).toBe("key");
+      expect(cfg.auth.apiSecret).toBe("secret");
+    } else {
+      throw new Error("Expected API key/secret");
+    }
+  });
 
-	it("fails fast on invalid env", () => {
-		setEnv({
-			TWILIO_ACCOUNT_SID: "",
-			TWILIO_WHATSAPP_FROM: "",
-			TWILIO_AUTH_TOKEN: undefined,
-			TWILIO_API_KEY: undefined,
-			TWILIO_API_SECRET: undefined,
-		});
-		expect(() => readEnv(runtime)).toThrow("exit");
-		expect(runtime.error).toHaveBeenCalled();
-	});
+  it("fails fast on invalid env", () => {
+    setEnv({
+      TWILIO_ACCOUNT_SID: "",
+      TWILIO_WHATSAPP_FROM: "",
+      TWILIO_AUTH_TOKEN: undefined,
+      TWILIO_API_KEY: undefined,
+      TWILIO_API_SECRET: undefined,
+    });
+    expect(() => readEnv(runtime)).toThrow("exit");
+    expect(runtime.error).toHaveBeenCalled();
+  });
 
-	it("ensureTwilioEnv passes when token present", () => {
-		setEnv({
-			...baseEnv,
-			TWILIO_AUTH_TOKEN: "token",
-			TWILIO_API_KEY: undefined,
-			TWILIO_API_SECRET: undefined,
-		});
-		expect(() => ensureTwilioEnv(runtime)).not.toThrow();
-	});
+  it("ensureTwilioEnv passes when token present", () => {
+    setEnv({
+      ...baseEnv,
+      TWILIO_AUTH_TOKEN: "token",
+      TWILIO_API_KEY: undefined,
+      TWILIO_API_SECRET: undefined,
+    });
+    expect(() => ensureTwilioEnv(runtime)).not.toThrow();
+  });
 
-	it("ensureTwilioEnv fails when missing auth", () => {
-		setEnv({
-			...baseEnv,
-			TWILIO_AUTH_TOKEN: undefined,
-			TWILIO_API_KEY: undefined,
-			TWILIO_API_SECRET: undefined,
-		});
-		expect(() => ensureTwilioEnv(runtime)).toThrow("exit");
-	});
+  it("ensureTwilioEnv fails when missing auth", () => {
+    setEnv({
+      ...baseEnv,
+      TWILIO_AUTH_TOKEN: undefined,
+      TWILIO_API_KEY: undefined,
+      TWILIO_API_SECRET: undefined,
+    });
+    expect(() => ensureTwilioEnv(runtime)).toThrow("exit");
+  });
 });

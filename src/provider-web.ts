@@ -4,21 +4,28 @@ import os from "node:os";
 import path from "node:path";
 import type { proto } from "@whiskeysockets/baileys";
 import {
-	type AnyMessageContent,
-	DisconnectReason,
-	downloadMediaMessage,
-	fetchLatestBaileysVersion,
-	makeCacheableSignalKeyStore,
-	makeWASocket,
-	useMultiFileAuthState,
-	type WAMessage,
+  type AnyMessageContent,
+  DisconnectReason,
+  downloadMediaMessage,
+  fetchLatestBaileysVersion,
+  makeCacheableSignalKeyStore,
+  makeWASocket,
+  useMultiFileAuthState,
+  type WAMessage,
 } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
 import sharp from "sharp";
 import { getReplyFromConfig } from "./auto-reply/reply.js";
 import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
-import { danger, info, isVerbose, logVerbose, success } from "./globals.js";
+import {
+  danger,
+  info,
+  isVerbose,
+  logVerbose,
+  success,
+  warn,
+} from "./globals.js";
 import { logInfo } from "./logger.js";
 import { getChildLogger } from "./logging.js";
 import { maxBytesForKind, mediaKindFromMime } from "./media/constants.js";
@@ -29,893 +36,894 @@ import { ensureDir, jidToE164, toWhatsappJid } from "./utils.js";
 import { VERSION } from "./version.js";
 
 function formatDuration(ms: number) {
-	return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
+  return ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
 }
 
 const WA_WEB_AUTH_DIR = path.join(os.homedir(), ".warelay", "credentials");
 const DEFAULT_WEB_MEDIA_BYTES = 5 * 1024 * 1024;
 
 export async function createWaSocket(printQr: boolean, verbose: boolean) {
-	const logger = getChildLogger(
-		{ module: "baileys" },
-		{
-			level: verbose ? "info" : "silent",
-		},
-	);
-	// Some Baileys internals call logger.trace even when silent; ensure it's present.
-	const loggerAny = logger as unknown as Record<string, unknown>;
-	if (typeof loggerAny.trace !== "function") {
-		loggerAny.trace = () => {};
-	}
-	await ensureDir(WA_WEB_AUTH_DIR);
-	const { state, saveCreds } = await useMultiFileAuthState(WA_WEB_AUTH_DIR);
-	const { version } = await fetchLatestBaileysVersion();
-	const sock = makeWASocket({
-		auth: {
-			creds: state.creds,
-			keys: makeCacheableSignalKeyStore(state.keys, logger),
-		},
-		version,
-		logger,
-		printQRInTerminal: false,
-		browser: ["warelay", "cli", VERSION],
-		syncFullHistory: false,
-		markOnlineOnConnect: false,
-	});
+  const logger = getChildLogger(
+    { module: "baileys" },
+    {
+      level: verbose ? "info" : "silent",
+    },
+  );
+  // Some Baileys internals call logger.trace even when silent; ensure it's present.
+  const loggerAny = logger as unknown as Record<string, unknown>;
+  if (typeof loggerAny.trace !== "function") {
+    loggerAny.trace = () => {};
+  }
+  await ensureDir(WA_WEB_AUTH_DIR);
+  const { state, saveCreds } = await useMultiFileAuthState(WA_WEB_AUTH_DIR);
+  const { version } = await fetchLatestBaileysVersion();
+  const sock = makeWASocket({
+    auth: {
+      creds: state.creds,
+      keys: makeCacheableSignalKeyStore(state.keys, logger),
+    },
+    version,
+    logger,
+    printQRInTerminal: false,
+    browser: ["warelay", "cli", VERSION],
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
+  });
 
-	sock.ev.on("creds.update", saveCreds);
-	sock.ev.on(
-		"connection.update",
-		(update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
-			const { connection, lastDisconnect, qr } = update;
-			if (qr && printQr) {
-				console.log("Scan this QR in WhatsApp (Linked Devices):");
-				qrcode.generate(qr, { small: true });
-			}
-			if (connection === "close") {
-				const status = getStatusCode(lastDisconnect?.error);
-				if (status === DisconnectReason.loggedOut) {
-					console.error(
-						danger("WhatsApp session logged out. Run: warelay login"),
-					);
-				}
-			}
-			if (connection === "open" && verbose) {
-				console.log(success("WhatsApp Web connected."));
-			}
-		},
-	);
+  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on(
+    "connection.update",
+    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+      const { connection, lastDisconnect, qr } = update;
+      if (qr && printQr) {
+        console.log("Scan this QR in WhatsApp (Linked Devices):");
+        qrcode.generate(qr, { small: true });
+      }
+      if (connection === "close") {
+        const status = getStatusCode(lastDisconnect?.error);
+        if (status === DisconnectReason.loggedOut) {
+          console.error(
+            danger("WhatsApp session logged out. Run: warelay login"),
+          );
+        }
+      }
+      if (connection === "open" && verbose) {
+        console.log(success("WhatsApp Web connected."));
+      }
+    },
+  );
 
-	return sock;
+  return sock;
 }
 
 export async function waitForWaConnection(
-	sock: ReturnType<typeof makeWASocket>,
+  sock: ReturnType<typeof makeWASocket>,
 ) {
-	return new Promise<void>((resolve, reject) => {
-		type OffCapable = {
-			off?: (event: string, listener: (...args: unknown[]) => void) => void;
-		};
-		const evWithOff = sock.ev as unknown as OffCapable;
+  return new Promise<void>((resolve, reject) => {
+    type OffCapable = {
+      off?: (event: string, listener: (...args: unknown[]) => void) => void;
+    };
+    const evWithOff = sock.ev as unknown as OffCapable;
 
-		const handler = (...args: unknown[]) => {
-			const update = (args[0] ?? {}) as Partial<
-				import("@whiskeysockets/baileys").ConnectionState
-			>;
-			if (update.connection === "open") {
-				evWithOff.off?.("connection.update", handler);
-				resolve();
-			}
-			if (update.connection === "close") {
-				evWithOff.off?.("connection.update", handler);
-				reject(update.lastDisconnect ?? new Error("Connection closed"));
-			}
-		};
+    const handler = (...args: unknown[]) => {
+      const update = (args[0] ?? {}) as Partial<
+        import("@whiskeysockets/baileys").ConnectionState
+      >;
+      if (update.connection === "open") {
+        evWithOff.off?.("connection.update", handler);
+        resolve();
+      }
+      if (update.connection === "close") {
+        evWithOff.off?.("connection.update", handler);
+        reject(update.lastDisconnect ?? new Error("Connection closed"));
+      }
+    };
 
-		sock.ev.on("connection.update", handler);
-	});
+    sock.ev.on("connection.update", handler);
+  });
 }
 
 export async function sendMessageWeb(
-	to: string,
-	body: string,
-	options: { verbose: boolean; mediaUrl?: string },
+  to: string,
+  body: string,
+  options: { verbose: boolean; mediaUrl?: string },
 ): Promise<{ messageId: string; toJid: string }> {
-	const sock = await createWaSocket(false, options.verbose);
-	try {
-		logInfo("🔌 Connecting to WhatsApp Web…");
-		await waitForWaConnection(sock);
-		const jid = toWhatsappJid(to);
-		try {
-			await sock.sendPresenceUpdate("composing", jid);
-		} catch (err) {
-			logVerbose(`Presence update skipped: ${String(err)}`);
-		}
-		let payload: AnyMessageContent = { text: body };
-		if (options.mediaUrl) {
-			const media = await loadWebMedia(options.mediaUrl);
-			payload = {
-				image: media.buffer,
-				caption: body || undefined,
-				mimetype: media.contentType,
-			};
-		}
-		logInfo(
-			`📤 Sending via web session -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
-		);
-		const result = await sock.sendMessage(jid, payload);
-		const messageId = result?.key?.id ?? "unknown";
-		logInfo(
-			`✅ Sent via web session. Message ID: ${messageId} -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
-		);
-		return { messageId, toJid: jid };
-	} finally {
-		try {
-			sock.ws?.close();
-		} catch (err) {
-			logVerbose(`Socket close failed: ${String(err)}`);
-		}
-	}
+  const sock = await createWaSocket(false, options.verbose);
+  try {
+    logInfo("🔌 Connecting to WhatsApp Web…");
+    await waitForWaConnection(sock);
+    const jid = toWhatsappJid(to);
+    try {
+      await sock.sendPresenceUpdate("composing", jid);
+    } catch (err) {
+      logVerbose(`Presence update skipped: ${String(err)}`);
+    }
+    let payload: AnyMessageContent = { text: body };
+    if (options.mediaUrl) {
+      const media = await loadWebMedia(options.mediaUrl);
+      payload = {
+        image: media.buffer,
+        caption: body || undefined,
+        mimetype: media.contentType,
+      };
+    }
+    logInfo(
+      `📤 Sending via web session -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
+    );
+    const result = await sock.sendMessage(jid, payload);
+    const messageId = result?.key?.id ?? "unknown";
+    logInfo(
+      `✅ Sent via web session. Message ID: ${messageId} -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
+    );
+    return { messageId, toJid: jid };
+  } finally {
+    try {
+      sock.ws?.close();
+    } catch (err) {
+      logVerbose(`Socket close failed: ${String(err)}`);
+    }
+  }
 }
 
 export async function loginWeb(
-	verbose: boolean,
-	waitForConnection: typeof waitForWaConnection = waitForWaConnection,
-	runtime: RuntimeEnv = defaultRuntime,
+  verbose: boolean,
+  waitForConnection: typeof waitForWaConnection = waitForWaConnection,
+  runtime: RuntimeEnv = defaultRuntime,
 ) {
-	const sock = await createWaSocket(true, verbose);
-	logInfo("Waiting for WhatsApp connection...", runtime);
-	try {
-		await waitForConnection(sock);
-		console.log(success("✅ Linked! Credentials saved for future sends."));
-	} catch (err) {
-		const code =
-			(err as { error?: { output?: { statusCode?: number } } })?.error?.output
-				?.statusCode ??
-			(err as { output?: { statusCode?: number } })?.output?.statusCode;
-		if (code === 515) {
-			console.log(
-				info(
-					"WhatsApp asked for a restart after pairing (code 515); creds are saved. Restarting connection once…",
-				),
-			);
-			try {
-				sock.ws?.close();
-			} catch {
-				// ignore
-			}
-			const retry = await createWaSocket(false, verbose);
-			try {
-				await waitForConnection(retry);
-				console.log(
-					success(
-						"✅ Linked after restart; web session ready. You can now send with provider=web.",
-					),
-				);
-				return;
-			} finally {
-				setTimeout(() => retry.ws?.close(), 500);
-			}
-		}
-		if (code === DisconnectReason.loggedOut) {
-			await fs.rm(WA_WEB_AUTH_DIR, { recursive: true, force: true });
-			console.error(
-				danger(
-					"WhatsApp reported the session is logged out. Cleared cached web session; please rerun warelay login and scan the QR again.",
-				),
-			);
-			throw new Error("Session logged out; cache cleared. Re-run login.");
-		}
-		const formatted = formatError(err);
-		console.error(
-			danger(
-				`WhatsApp Web connection ended before fully opening. ${formatted}`,
-			),
-		);
-		throw new Error(formatted);
-	} finally {
-		setTimeout(() => {
-			try {
-				sock.ws?.close();
-			} catch {
-				// ignore
-			}
-		}, 500);
-	}
+  const sock = await createWaSocket(true, verbose);
+  logInfo("Waiting for WhatsApp connection...", runtime);
+  try {
+    await waitForConnection(sock);
+    console.log(success("✅ Linked! Credentials saved for future sends."));
+  } catch (err) {
+    const code =
+      (err as { error?: { output?: { statusCode?: number } } })?.error?.output
+        ?.statusCode ??
+      (err as { output?: { statusCode?: number } })?.output?.statusCode;
+    if (code === 515) {
+      console.log(
+        info(
+          "WhatsApp asked for a restart after pairing (code 515); creds are saved. Restarting connection once…",
+        ),
+      );
+      try {
+        sock.ws?.close();
+      } catch {
+        // ignore
+      }
+      const retry = await createWaSocket(false, verbose);
+      try {
+        await waitForConnection(retry);
+        console.log(
+          success(
+            "✅ Linked after restart; web session ready. You can now send with provider=web.",
+          ),
+        );
+        return;
+      } finally {
+        setTimeout(() => retry.ws?.close(), 500);
+      }
+    }
+    if (code === DisconnectReason.loggedOut) {
+      await fs.rm(WA_WEB_AUTH_DIR, { recursive: true, force: true });
+      console.error(
+        danger(
+          "WhatsApp reported the session is logged out. Cleared cached web session; please rerun warelay login and scan the QR again.",
+        ),
+      );
+      throw new Error("Session logged out; cache cleared. Re-run login.");
+    }
+    const formatted = formatError(err);
+    console.error(
+      danger(
+        `WhatsApp Web connection ended before fully opening. ${formatted}`,
+      ),
+    );
+    throw new Error(formatted);
+  } finally {
+    setTimeout(() => {
+      try {
+        sock.ws?.close();
+      } catch {
+        // ignore
+      }
+    }, 500);
+  }
 }
 
 export { WA_WEB_AUTH_DIR };
 
 export function webAuthExists() {
-	return fs
-		.access(WA_WEB_AUTH_DIR)
-		.then(() => true)
-		.catch(() => false);
+  return fs
+    .access(WA_WEB_AUTH_DIR)
+    .then(() => true)
+    .catch(() => false);
 }
 
 type WebListenerCloseReason = {
-	status?: number;
-	isLoggedOut: boolean;
-	error?: unknown;
+  status?: number;
+  isLoggedOut: boolean;
+  error?: unknown;
 };
 
 export type WebInboundMessage = {
-	id?: string;
-	from: string;
-	to: string;
-	body: string;
-	pushName?: string;
-	timestamp?: number;
-	sendComposing: () => Promise<void>;
-	reply: (text: string) => Promise<void>;
-	sendMedia: (payload: {
-		image: Buffer;
-		caption?: string;
-		mimetype?: string;
-	}) => Promise<void>;
-	mediaPath?: string;
-	mediaType?: string;
-	mediaUrl?: string;
+  id?: string;
+  from: string;
+  to: string;
+  body: string;
+  pushName?: string;
+  timestamp?: number;
+  sendComposing: () => Promise<void>;
+  reply: (text: string) => Promise<void>;
+  sendMedia: (payload: {
+    image: Buffer;
+    caption?: string;
+    mimetype?: string;
+  }) => Promise<void>;
+  mediaPath?: string;
+  mediaType?: string;
+  mediaUrl?: string;
 };
 
 export async function monitorWebInbox(options: {
-	verbose: boolean;
-	onMessage: (msg: WebInboundMessage) => Promise<void>;
+  verbose: boolean;
+  onMessage: (msg: WebInboundMessage) => Promise<void>;
 }) {
-	const inboundLogger = getChildLogger({ module: "web-inbound" });
-	const sock = await createWaSocket(false, options.verbose);
-	await waitForWaConnection(sock);
-	let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
-	const onClose = new Promise<WebListenerCloseReason>((resolve) => {
-		onCloseResolve = resolve;
-	});
-	try {
-		// Advertise that the relay is online right after connecting.
-		await sock.sendPresenceUpdate("available");
-		if (isVerbose()) logVerbose("Sent global 'available' presence on connect");
-	} catch (err) {
-		logVerbose(
-			`Failed to send 'available' presence on connect: ${String(err)}`,
-		);
-	}
-	const selfJid = sock.user?.id;
-	const selfE164 = selfJid ? jidToE164(selfJid) : null;
-	const seen = new Set<string>();
+  const inboundLogger = getChildLogger({ module: "web-inbound" });
+  const sock = await createWaSocket(false, options.verbose);
+  await waitForWaConnection(sock);
+  let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
+  const onClose = new Promise<WebListenerCloseReason>((resolve) => {
+    onCloseResolve = resolve;
+  });
+  try {
+    // Advertise that the relay is online right after connecting.
+    await sock.sendPresenceUpdate("available");
+    if (isVerbose()) logVerbose("Sent global 'available' presence on connect");
+  } catch (err) {
+    logVerbose(
+      `Failed to send 'available' presence on connect: ${String(err)}`,
+    );
+  }
+  const selfJid = sock.user?.id;
+  const selfE164 = selfJid ? jidToE164(selfJid) : null;
+  const seen = new Set<string>();
 
-	sock.ev.on("messages.upsert", async (upsert) => {
-		if (upsert.type !== "notify") return;
-		for (const msg of upsert.messages) {
-			const id = msg.key?.id ?? undefined;
-			// De-dupe on message id; Baileys can emit retries.
-			if (id && seen.has(id)) continue;
-			if (id) seen.add(id);
-			if (msg.key?.fromMe) continue;
-			const remoteJid = msg.key?.remoteJid;
-			if (!remoteJid) continue;
-			// Ignore status/broadcast traffic; we only care about direct chats.
-			if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast"))
-				continue;
-			if (id) {
-				const participant = msg.key?.participant;
-				try {
-					await sock.readMessages([
-						{ remoteJid, id, participant, fromMe: false },
-					]);
-					if (isVerbose()) {
-						const suffix = participant ? ` (participant ${participant})` : "";
-						logVerbose(
-							`Marked message ${id} as read for ${remoteJid}${suffix}`,
-						);
-					}
-				} catch (err) {
-					logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
-				}
-			}
-			const from = jidToE164(remoteJid);
-			if (!from) continue;
-			let body = extractText(msg.message ?? undefined);
-			if (!body) {
-				body = extractMediaPlaceholder(msg.message ?? undefined);
-				if (!body) continue;
-			}
-			let mediaPath: string | undefined;
-			let mediaType: string | undefined;
-			try {
-				const inboundMedia = await downloadInboundMedia(msg, sock);
-				if (inboundMedia) {
-					const saved = await saveMediaBuffer(
-						inboundMedia.buffer,
-						inboundMedia.mimetype,
-					);
-					mediaPath = saved.path;
-					mediaType = inboundMedia.mimetype;
-				}
-			} catch (err) {
-				logVerbose(`Inbound media download failed: ${String(err)}`);
-			}
-			const chatJid = remoteJid;
-			const sendComposing = async () => {
-				try {
-					await sock.sendPresenceUpdate("composing", chatJid);
-				} catch (err) {
-					logVerbose(`Presence update failed: ${String(err)}`);
-				}
-			};
-			const reply = async (text: string) => {
-				await sock.sendMessage(chatJid, { text });
-			};
-			const sendMedia = async (payload: {
-				image: Buffer;
-				caption?: string;
-				mimetype?: string;
-			}) => {
-				await sock.sendMessage(chatJid, payload);
-			};
-			const timestamp = msg.messageTimestamp
-				? Number(msg.messageTimestamp) * 1000
-				: undefined;
-			inboundLogger.info(
-				{
-					from,
-					to: selfE164 ?? "me",
-					body,
-					mediaPath,
-					mediaType,
-					timestamp,
-				},
-				"inbound message",
-			);
-			try {
-				await options.onMessage({
-					id,
-					from,
-					to: selfE164 ?? "me",
-					body,
-					pushName: msg.pushName ?? undefined,
-					timestamp,
-					sendComposing,
-					reply,
-					sendMedia,
-					mediaPath,
-					mediaType,
-				});
-			} catch (err) {
-				console.error(
-					danger(`Failed handling inbound web message: ${String(err)}`),
-				);
-			}
-		}
-	});
+  sock.ev.on("messages.upsert", async (upsert) => {
+    if (upsert.type !== "notify") return;
+    for (const msg of upsert.messages) {
+      const id = msg.key?.id ?? undefined;
+      // De-dupe on message id; Baileys can emit retries.
+      if (id && seen.has(id)) continue;
+      if (id) seen.add(id);
+      if (msg.key?.fromMe) continue;
+      const remoteJid = msg.key?.remoteJid;
+      if (!remoteJid) continue;
+      // Ignore status/broadcast traffic; we only care about direct chats.
+      if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast"))
+        continue;
+      if (id) {
+        const participant = msg.key?.participant;
+        try {
+          await sock.readMessages([
+            { remoteJid, id, participant, fromMe: false },
+          ]);
+          if (isVerbose()) {
+            const suffix = participant ? ` (participant ${participant})` : "";
+            logVerbose(
+              `Marked message ${id} as read for ${remoteJid}${suffix}`,
+            );
+          }
+        } catch (err) {
+          logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
+        }
+      }
+      const from = jidToE164(remoteJid);
+      if (!from) continue;
+      let body = extractText(msg.message ?? undefined);
+      if (!body) {
+        body = extractMediaPlaceholder(msg.message ?? undefined);
+        if (!body) continue;
+      }
+      let mediaPath: string | undefined;
+      let mediaType: string | undefined;
+      try {
+        const inboundMedia = await downloadInboundMedia(msg, sock);
+        if (inboundMedia) {
+          const saved = await saveMediaBuffer(
+            inboundMedia.buffer,
+            inboundMedia.mimetype,
+          );
+          mediaPath = saved.path;
+          mediaType = inboundMedia.mimetype;
+        }
+      } catch (err) {
+        logVerbose(`Inbound media download failed: ${String(err)}`);
+      }
+      const chatJid = remoteJid;
+      const sendComposing = async () => {
+        try {
+          await sock.sendPresenceUpdate("composing", chatJid);
+        } catch (err) {
+          logVerbose(`Presence update failed: ${String(err)}`);
+        }
+      };
+      const reply = async (text: string) => {
+        await sock.sendMessage(chatJid, { text });
+      };
+      const sendMedia = async (payload: {
+        image: Buffer;
+        caption?: string;
+        mimetype?: string;
+      }) => {
+        await sock.sendMessage(chatJid, payload);
+      };
+      const timestamp = msg.messageTimestamp
+        ? Number(msg.messageTimestamp) * 1000
+        : undefined;
+      inboundLogger.info(
+        {
+          from,
+          to: selfE164 ?? "me",
+          body,
+          mediaPath,
+          mediaType,
+          timestamp,
+        },
+        "inbound message",
+      );
+      try {
+        await options.onMessage({
+          id,
+          from,
+          to: selfE164 ?? "me",
+          body,
+          pushName: msg.pushName ?? undefined,
+          timestamp,
+          sendComposing,
+          reply,
+          sendMedia,
+          mediaPath,
+          mediaType,
+        });
+      } catch (err) {
+        console.error(
+          danger(`Failed handling inbound web message: ${String(err)}`),
+        );
+      }
+    }
+  });
 
-	sock.ev.on(
-		"connection.update",
-		(update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
-			if (update.connection === "close") {
-				const status = getStatusCode(update.lastDisconnect?.error);
-				onCloseResolve?.({
-					status,
-					isLoggedOut: status === DisconnectReason.loggedOut,
-					error: update.lastDisconnect?.error,
-				});
-			}
-		},
-	);
+  sock.ev.on(
+    "connection.update",
+    (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
+      if (update.connection === "close") {
+        const status = getStatusCode(update.lastDisconnect?.error);
+        onCloseResolve?.({
+          status,
+          isLoggedOut: status === DisconnectReason.loggedOut,
+          error: update.lastDisconnect?.error,
+        });
+      }
+    },
+  );
 
-	return {
-		close: async () => {
-			try {
-				sock.ws?.close();
-			} catch (err) {
-				logVerbose(`Socket close failed: ${String(err)}`);
-			}
-		},
-		onClose,
-	};
+  return {
+    close: async () => {
+      try {
+        sock.ws?.close();
+      } catch (err) {
+        logVerbose(`Socket close failed: ${String(err)}`);
+      }
+    },
+    onClose,
+  };
 }
 
 export async function monitorWebProvider(
-	verbose: boolean,
-	listenerFactory = monitorWebInbox,
-	keepAlive = true,
-	replyResolver: typeof getReplyFromConfig = getReplyFromConfig,
-	runtime: RuntimeEnv = defaultRuntime,
-	abortSignal?: AbortSignal,
+  verbose: boolean,
+  listenerFactory = monitorWebInbox,
+  keepAlive = true,
+  replyResolver: typeof getReplyFromConfig = getReplyFromConfig,
+  runtime: RuntimeEnv = defaultRuntime,
+  abortSignal?: AbortSignal,
 ) {
-	const replyLogger = getChildLogger({ module: "web-auto-reply" });
-	const cfg = loadConfig();
-	const configuredMaxMb = cfg.inbound?.reply?.mediaMaxMb;
-	const maxMediaBytes =
-		typeof configuredMaxMb === "number" && configuredMaxMb > 0
-			? configuredMaxMb * 1024 * 1024
-			: DEFAULT_WEB_MEDIA_BYTES;
-	const stopRequested = () => abortSignal?.aborted === true;
-	const abortPromise =
-		abortSignal &&
-		new Promise<"aborted">((resolve) =>
-			abortSignal.addEventListener("abort", () => resolve("aborted"), {
-				once: true,
-			}),
-		);
+  const replyLogger = getChildLogger({ module: "web-auto-reply" });
+  const cfg = loadConfig();
+  const configuredMaxMb = cfg.inbound?.reply?.mediaMaxMb;
+  const maxMediaBytes =
+    typeof configuredMaxMb === "number" && configuredMaxMb > 0
+      ? configuredMaxMb * 1024 * 1024
+      : DEFAULT_WEB_MEDIA_BYTES;
+  const stopRequested = () => abortSignal?.aborted === true;
+  const abortPromise =
+    abortSignal &&
+    new Promise<"aborted">((resolve) =>
+      abortSignal.addEventListener("abort", () => resolve("aborted"), {
+        once: true,
+      }),
+    );
 
-	const sleep = (ms: number) =>
-		new Promise<void>((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-	while (true) {
-		if (stopRequested()) break;
+  while (true) {
+    if (stopRequested()) break;
 
-		const listener = await listenerFactory({
-			verbose,
-			onMessage: async (msg) => {
-				const ts = msg.timestamp
-					? new Date(msg.timestamp).toISOString()
-					: new Date().toISOString();
-				console.log(`\n[${ts}] ${msg.from} -> ${msg.to}: ${msg.body}`);
+    const listener = await listenerFactory({
+      verbose,
+      onMessage: async (msg) => {
+        const ts = msg.timestamp
+          ? new Date(msg.timestamp).toISOString()
+          : new Date().toISOString();
+        console.log(`\n[${ts}] ${msg.from} -> ${msg.to}: ${msg.body}`);
 
-				const replyStarted = Date.now();
-				const replyResult = await replyResolver(
-					{
-						Body: msg.body,
-						From: msg.from,
-						To: msg.to,
-						MessageSid: msg.id,
-						MediaPath: msg.mediaPath,
-						MediaUrl: msg.mediaUrl,
-						MediaType: msg.mediaType,
-					},
-					{
-						onReplyStart: msg.sendComposing,
-					},
-				);
-				if (!replyResult || (!replyResult.text && !replyResult.mediaUrl)) {
-					logVerbose(
-						"Skipping auto-reply: no text/media returned from resolver",
-					);
-					return;
-				}
-				try {
-					if (replyResult.mediaUrl) {
-						logVerbose(
-							`Web auto-reply media detected: ${replyResult.mediaUrl}`,
-						);
-						try {
-							const media = await loadWebMedia(
-								replyResult.mediaUrl,
-								maxMediaBytes,
-							);
-							if (isVerbose()) {
-								logVerbose(
-									`Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
-								);
-								logVerbose(
-									`Web auto-reply media source: ${replyResult.mediaUrl} (kind ${media.kind})`,
-								);
-							}
-							if (media.kind === "image") {
-								await msg.sendMedia({
-									image: media.buffer,
-									caption: replyResult.text || undefined,
-									mimetype: media.contentType,
-								});
-							} else if (media.kind === "audio") {
-								await msg.sendMedia({
-									audio: media.buffer,
-									ptt: true,
-									mimetype: media.contentType,
-									caption: replyResult.text || undefined,
-								} as AnyMessageContent);
-							} else if (media.kind === "video") {
-								await msg.sendMedia({
-									video: media.buffer,
-									caption: replyResult.text || undefined,
-									mimetype: media.contentType,
-								});
-							} else {
-								const fileName =
-									replyResult.mediaUrl.split("/").pop() ?? "file";
-								await msg.sendMedia({
-									document: media.buffer,
-									fileName,
-									caption: replyResult.text || undefined,
-									mimetype: media.contentType,
-								} as AnyMessageContent);
-							}
-							logInfo(
-								`✅ Sent web media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
-								runtime,
-							);
-							replyLogger.info(
-								{
-									to: msg.from,
-									from: msg.to,
-									text: replyResult.text ?? null,
-									mediaUrl: replyResult.mediaUrl,
-									mediaSizeBytes: media.buffer.length,
-									mediaKind: media.kind,
-									durationMs: Date.now() - replyStarted,
-								},
-								"auto-reply sent (media)",
-							);
-						} catch (err) {
-							console.error(
-								danger(
-									`Failed sending web media to ${msg.from}: ${String(err)}`,
-								),
-							);
-							if (replyResult.text) {
-								await msg.reply(replyResult.text);
-								logInfo(
-									`⚠️  Media skipped; sent text-only to ${msg.from}`,
-									runtime,
-								);
-								replyLogger.info(
-									{
-										to: msg.from,
-										from: msg.to,
-										text: replyResult.text,
-										mediaUrl: replyResult.mediaUrl,
-										durationMs: Date.now() - replyStarted,
-										mediaSendFailed: true,
-									},
-									"auto-reply sent (text fallback)",
-								);
-							}
-						}
-					} else {
-						await msg.reply(replyResult.text ?? "");
-					}
-					const durationMs = Date.now() - replyStarted;
-					if (isVerbose()) {
-						console.log(
-							success(
-								`↩️  Auto-replied to ${msg.from} (web, ${replyResult.text?.length ?? 0} chars${replyResult.mediaUrl ? ", media" : ""}, ${formatDuration(durationMs)})`,
-							),
-						);
-					} else {
-						console.log(
-							success(
-								`↩️  ${replyResult.text ?? "<media>"}${replyResult.mediaUrl ? " (media)" : ""}`,
-							),
-						);
-					}
-					replyLogger.info(
-						{
-							to: msg.from,
-							from: msg.to,
-							text: replyResult.text ?? null,
-							mediaUrl: replyResult.mediaUrl,
-							durationMs,
-						},
-						"auto-reply sent",
-					);
-				} catch (err) {
-					console.error(
-						danger(
-							`Failed sending web auto-reply to ${msg.from}: ${String(err)}`,
-						),
-					);
-				}
-			},
-		});
+        const replyStarted = Date.now();
+        const replyResult = await replyResolver(
+          {
+            Body: msg.body,
+            From: msg.from,
+            To: msg.to,
+            MessageSid: msg.id,
+            MediaPath: msg.mediaPath,
+            MediaUrl: msg.mediaUrl,
+            MediaType: msg.mediaType,
+          },
+          {
+            onReplyStart: msg.sendComposing,
+          },
+        );
+        if (
+          !replyResult ||
+          (!replyResult.text &&
+            !replyResult.mediaUrl &&
+            !replyResult.mediaUrls?.length)
+        ) {
+          logVerbose(
+            "Skipping auto-reply: no text/media returned from resolver",
+          );
+          return;
+        }
+        try {
+          const mediaList = replyResult.mediaUrls?.length
+            ? replyResult.mediaUrls
+            : replyResult.mediaUrl
+              ? [replyResult.mediaUrl]
+              : [];
 
-		logInfo(
-			"📡 Listening for personal WhatsApp Web inbound messages. Leave this running; Ctrl+C to stop.",
-			runtime,
-		);
-		let stop = false;
-		process.on("SIGINT", () => {
-			stop = true;
-			void listener.close().finally(() => {
-				logInfo("👋 Web monitor stopped", runtime);
-				runtime.exit(0);
-			});
-		});
+          if (mediaList.length > 0) {
+            logVerbose(
+              `Web auto-reply media detected: ${mediaList.filter(Boolean).join(", ")}`,
+            );
+            for (const [index, mediaUrl] of mediaList.entries()) {
+              try {
+                const media = await loadWebMedia(mediaUrl, maxMediaBytes);
+                if (isVerbose()) {
+                  logVerbose(
+                    `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
+                  );
+                  logVerbose(
+                    `Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`,
+                  );
+                }
+                const caption =
+                  index === 0 ? replyResult.text || undefined : undefined;
+                if (media.kind === "image") {
+                  await msg.sendMedia({
+                    image: media.buffer,
+                    caption,
+                    mimetype: media.contentType,
+                  });
+                } else if (media.kind === "audio") {
+                  await msg.sendMedia({
+                    audio: media.buffer,
+                    ptt: true,
+                    mimetype: media.contentType,
+                    caption,
+                  } as AnyMessageContent);
+                } else if (media.kind === "video") {
+                  await msg.sendMedia({
+                    video: media.buffer,
+                    caption,
+                    mimetype: media.contentType,
+                  });
+                } else {
+                  const fileName = mediaUrl.split("/").pop() ?? "file";
+                  await msg.sendMedia({
+                    document: media.buffer,
+                    fileName,
+                    caption,
+                    mimetype: media.contentType,
+                  } as AnyMessageContent);
+                }
+                logInfo(
+                  `✅ Sent web media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
+                  runtime,
+                );
+                replyLogger.info(
+                  {
+                    to: msg.from,
+                    from: msg.to,
+                    text: index === 0 ? (replyResult.text ?? null) : null,
+                    mediaUrl,
+                    mediaSizeBytes: media.buffer.length,
+                    mediaKind: media.kind,
+                    durationMs: Date.now() - replyStarted,
+                  },
+                  "auto-reply sent (media)",
+                );
+              } catch (err) {
+                console.error(
+                  danger(
+                    `Failed sending web media to ${msg.from}: ${String(err)}`,
+                  ),
+                );
+                if (index === 0 && replyResult.text) {
+                  console.log(
+                    warn(`⚠️  Media skipped; sent text-only to ${msg.from}`),
+                  );
+                  await msg.reply(replyResult.text || "");
+                }
+              }
+            }
+          } else if (replyResult.text) {
+            await msg.reply(replyResult.text);
+          }
 
-		if (!keepAlive) return;
+          const durationMs = Date.now() - replyStarted;
+          const hasMedia = mediaList.length > 0;
+          if (isVerbose()) {
+            console.log(
+              success(
+                `↩️  Auto-replied to ${msg.from} (web, ${replyResult.text?.length ?? 0} chars${hasMedia ? ", media" : ""}, ${formatDuration(durationMs)})`,
+              ),
+            );
+          } else {
+            console.log(
+              success(
+                `↩️  ${replyResult.text ?? "<media>"}${hasMedia ? " (media)" : ""}`,
+              ),
+            );
+          }
+          replyLogger.info(
+            {
+              to: msg.from,
+              from: msg.to,
+              text: replyResult.text ?? null,
+              mediaUrl: mediaList[0] ?? null,
+              durationMs,
+            },
+            "auto-reply sent",
+          );
+        } catch (err) {
+          console.error(
+            danger(
+              `Failed sending web auto-reply to ${msg.from}: ${String(err)}`,
+            ),
+          );
+        }
+      },
+    });
 
-		const reason = await Promise.race([
-			listener.onClose ?? waitForever(),
-			abortPromise ?? waitForever(),
-		]);
+    logInfo(
+      "📡 Listening for personal WhatsApp Web inbound messages. Leave this running; Ctrl+C to stop.",
+      runtime,
+    );
+    let stop = false;
+    process.on("SIGINT", () => {
+      stop = true;
+      void listener.close().finally(() => {
+        logInfo("👋 Web monitor stopped", runtime);
+        runtime.exit(0);
+      });
+    });
 
-		if (stopRequested() || stop || reason === "aborted") {
-			await listener.close();
-			break;
-		}
+    if (!keepAlive) return;
 
-		const status =
-			(typeof reason === "object" && reason && "status" in reason
-				? (reason as WebListenerCloseReason).status
-				: undefined) ?? "unknown";
-		const loggedOut =
-			typeof reason === "object" &&
-			reason &&
-			"isLoggedOut" in reason &&
-			(reason as WebListenerCloseReason).isLoggedOut;
+    const reason = await Promise.race([
+      listener.onClose ?? waitForever(),
+      abortPromise ?? waitForever(),
+    ]);
 
-		if (loggedOut) {
-			runtime.error(
-				danger(
-					"WhatsApp session logged out. Run `warelay login --provider web` to relink.",
-				),
-			);
-			break;
-		}
+    if (stopRequested() || stop || reason === "aborted") {
+      await listener.close();
+      break;
+    }
 
-		runtime.error(
-			danger(
-				`WhatsApp Web connection closed (status ${status}). Reconnecting in 2s…`,
-			),
-		);
-		await listener.close();
-		await sleep(2_000);
-	}
+    const status =
+      (typeof reason === "object" && reason && "status" in reason
+        ? (reason as WebListenerCloseReason).status
+        : undefined) ?? "unknown";
+    const loggedOut =
+      typeof reason === "object" &&
+      reason &&
+      "isLoggedOut" in reason &&
+      (reason as WebListenerCloseReason).isLoggedOut;
+
+    if (loggedOut) {
+      runtime.error(
+        danger(
+          "WhatsApp session logged out. Run `warelay login --provider web` to relink.",
+        ),
+      );
+      break;
+    }
+
+    runtime.error(
+      danger(
+        `WhatsApp Web connection closed (status ${status}). Reconnecting in 2s…`,
+      ),
+    );
+    await listener.close();
+    await sleep(2_000);
+  }
 }
 
 function readWebSelfId() {
-	// Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
-	const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
-	try {
-		if (!fsSync.existsSync(credsPath)) {
-			return { e164: null, jid: null };
-		}
-		const raw = fsSync.readFileSync(credsPath, "utf-8");
-		const parsed = JSON.parse(raw) as { me?: { id?: string } } | undefined;
-		const jid = parsed?.me?.id ?? null;
-		const e164 = jid ? jidToE164(jid) : null;
-		return { e164, jid };
-	} catch {
-		return { e164: null, jid: null };
-	}
+  // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
+  const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
+  try {
+    if (!fsSync.existsSync(credsPath)) {
+      return { e164: null, jid: null };
+    }
+    const raw = fsSync.readFileSync(credsPath, "utf-8");
+    const parsed = JSON.parse(raw) as { me?: { id?: string } } | undefined;
+    const jid = parsed?.me?.id ?? null;
+    const e164 = jid ? jidToE164(jid) : null;
+    return { e164, jid };
+  } catch {
+    return { e164: null, jid: null };
+  }
 }
 
 export function logWebSelfId(
-	runtime: RuntimeEnv = defaultRuntime,
-	includeProviderPrefix = false,
+  runtime: RuntimeEnv = defaultRuntime,
+  includeProviderPrefix = false,
 ) {
-	// Human-friendly log of the currently linked personal web session.
-	const { e164, jid } = readWebSelfId();
-	const details =
-		e164 || jid
-			? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
-			: "unknown";
-	const prefix = includeProviderPrefix ? "Web Provider: " : "";
-	runtime.log(info(`${prefix}${details}`));
+  // Human-friendly log of the currently linked personal web session.
+  const { e164, jid } = readWebSelfId();
+  const details =
+    e164 || jid
+      ? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
+      : "unknown";
+  const prefix = includeProviderPrefix ? "Web Provider: " : "";
+  runtime.log(info(`${prefix}${details}`));
 }
 
 export async function pickProvider(pref: Provider | "auto"): Promise<Provider> {
-	// Auto-select web when logged in; otherwise fall back to twilio.
-	if (pref !== "auto") return pref;
-	const hasWeb = await webAuthExists();
-	if (hasWeb) return "web";
-	return "twilio";
+  // Auto-select web when logged in; otherwise fall back to twilio.
+  if (pref !== "auto") return pref;
+  const hasWeb = await webAuthExists();
+  if (hasWeb) return "web";
+  return "twilio";
 }
 
 function extractText(message: proto.IMessage | undefined): string | undefined {
-	if (!message) return undefined;
-	if (typeof message.conversation === "string" && message.conversation.trim()) {
-		return message.conversation.trim();
-	}
-	const extended = message.extendedTextMessage?.text;
-	if (extended?.trim()) return extended.trim();
-	const caption =
-		message.imageMessage?.caption ?? message.videoMessage?.caption;
-	if (caption?.trim()) return caption.trim();
-	return undefined;
+  if (!message) return undefined;
+  if (typeof message.conversation === "string" && message.conversation.trim()) {
+    return message.conversation.trim();
+  }
+  const extended = message.extendedTextMessage?.text;
+  if (extended?.trim()) return extended.trim();
+  const caption =
+    message.imageMessage?.caption ?? message.videoMessage?.caption;
+  if (caption?.trim()) return caption.trim();
+  return undefined;
 }
 
 function extractMediaPlaceholder(
-	message: proto.IMessage | undefined,
+  message: proto.IMessage | undefined,
 ): string | undefined {
-	if (!message) return undefined;
-	if (message.imageMessage) return "<media:image>";
-	if (message.videoMessage) return "<media:video>";
-	if (message.audioMessage) return "<media:audio>";
-	if (message.documentMessage) return "<media:document>";
-	if (message.stickerMessage) return "<media:sticker>";
-	return undefined;
+  if (!message) return undefined;
+  if (message.imageMessage) return "<media:image>";
+  if (message.videoMessage) return "<media:video>";
+  if (message.audioMessage) return "<media:audio>";
+  if (message.documentMessage) return "<media:document>";
+  if (message.stickerMessage) return "<media:sticker>";
+  return undefined;
 }
 
 async function downloadInboundMedia(
-	msg: proto.IWebMessageInfo,
-	sock: ReturnType<typeof makeWASocket>,
+  msg: proto.IWebMessageInfo,
+  sock: ReturnType<typeof makeWASocket>,
 ): Promise<{ buffer: Buffer; mimetype?: string } | undefined> {
-	const message = msg.message;
-	if (!message) return undefined;
-	const mimetype =
-		message.imageMessage?.mimetype ??
-		message.videoMessage?.mimetype ??
-		message.documentMessage?.mimetype ??
-		message.audioMessage?.mimetype ??
-		message.stickerMessage?.mimetype ??
-		undefined;
-	if (
-		!message.imageMessage &&
-		!message.videoMessage &&
-		!message.documentMessage &&
-		!message.audioMessage &&
-		!message.stickerMessage
-	) {
-		return undefined;
-	}
-	try {
-		const buffer = (await downloadMediaMessage(
-			msg as WAMessage,
-			"buffer",
-			{},
-			{
-				reuploadRequest: sock.updateMediaMessage,
-				logger: sock.logger,
-			},
-		)) as Buffer;
-		return { buffer, mimetype };
-	} catch (err) {
-		logVerbose(`downloadMediaMessage failed: ${String(err)}`);
-		return undefined;
-	}
+  const message = msg.message;
+  if (!message) return undefined;
+  const mimetype =
+    message.imageMessage?.mimetype ??
+    message.videoMessage?.mimetype ??
+    message.documentMessage?.mimetype ??
+    message.audioMessage?.mimetype ??
+    message.stickerMessage?.mimetype ??
+    undefined;
+  if (
+    !message.imageMessage &&
+    !message.videoMessage &&
+    !message.documentMessage &&
+    !message.audioMessage &&
+    !message.stickerMessage
+  ) {
+    return undefined;
+  }
+  try {
+    const buffer = (await downloadMediaMessage(
+      msg as WAMessage,
+      "buffer",
+      {},
+      {
+        reuploadRequest: sock.updateMediaMessage,
+        logger: sock.logger,
+      },
+    )) as Buffer;
+    return { buffer, mimetype };
+  } catch (err) {
+    logVerbose(`downloadMediaMessage failed: ${String(err)}`);
+    return undefined;
+  }
 }
 
 async function loadWebMedia(
-	mediaUrl: string,
-	maxBytes?: number,
+  mediaUrl: string,
+  maxBytes?: number,
 ): Promise<{ buffer: Buffer; contentType?: string; kind: MediaKind }> {
-	if (mediaUrl.startsWith("file://")) {
-		mediaUrl = mediaUrl.replace("file://", "");
-	}
+  if (mediaUrl.startsWith("file://")) {
+    mediaUrl = mediaUrl.replace("file://", "");
+  }
 
-	const optimizeAndClampImage = async (buffer: Buffer, cap: number) => {
-		const originalSize = buffer.length;
-		const optimized = await optimizeImageToJpeg(buffer, cap);
-		if (optimized.optimizedSize < originalSize && isVerbose()) {
-			logVerbose(
-				`Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
-			);
-		}
-		if (optimized.buffer.length > cap) {
-			throw new Error(
-				`Media could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(
-					optimized.buffer.length / (1024 * 1024)
-				).toFixed(2)}MB)`,
-			);
-		}
-		return {
-			buffer: optimized.buffer,
-			contentType: "image/jpeg",
-			kind: "image" as const,
-		};
-	};
+  const optimizeAndClampImage = async (buffer: Buffer, cap: number) => {
+    const originalSize = buffer.length;
+    const optimized = await optimizeImageToJpeg(buffer, cap);
+    if (optimized.optimizedSize < originalSize && isVerbose()) {
+      logVerbose(
+        `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
+      );
+    }
+    if (optimized.buffer.length > cap) {
+      throw new Error(
+        `Media could not be reduced below ${(maxBytes / (1024 * 1024)).toFixed(0)}MB (got ${(
+          optimized.buffer.length / (1024 * 1024)
+        ).toFixed(2)}MB)`,
+      );
+    }
+    return {
+      buffer: optimized.buffer,
+      contentType: "image/jpeg",
+      kind: "image" as const,
+    };
+  };
 
-	if (/^https?:\/\//i.test(mediaUrl)) {
-		const res = await fetch(mediaUrl);
-		if (!res.ok || !res.body) {
-			throw new Error(`Failed to fetch media: HTTP ${res.status}`);
-		}
-		const array = Buffer.from(await res.arrayBuffer());
-		const contentType = res.headers.get("content-type");
-		const kind = mediaKindFromMime(contentType);
-		const cap = Math.min(
-			maxBytes ?? maxBytesForKind(kind),
-			maxBytesForKind(kind),
-		);
-		if (kind === "image") {
-			return optimizeAndClampImage(array, cap);
-		}
-		if (array.length > cap) {
-			throw new Error(
-				`Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-					array.length / (1024 * 1024)
-				).toFixed(2)}MB)`,
-			);
-		}
-		return { buffer: array, contentType: contentType ?? undefined, kind };
-	}
-	// Local path
-	const data = await fs.readFile(mediaUrl);
-	const ext = path.extname(mediaUrl);
-	const mime =
-		(ext &&
-			(
-				{
-					".jpg": "image/jpeg",
-					".jpeg": "image/jpeg",
-					".png": "image/png",
-					".webp": "image/webp",
-					".gif": "image/gif",
-					".ogg": "audio/ogg",
-					".opus": "audio/ogg",
-					".mp3": "audio/mpeg",
-					".mp4": "video/mp4",
-					".pdf": "application/pdf",
-				} as Record<string, string | undefined>
-			)[ext.toLowerCase()]) ??
-		undefined;
-	const kind = mediaKindFromMime(mime);
-	const cap = Math.min(
-		maxBytes ?? maxBytesForKind(kind),
-		maxBytesForKind(kind),
-	);
-	if (kind === "image") {
-		return optimizeAndClampImage(data, cap);
-	}
-	if (data.length > cap) {
-		throw new Error(
-			`Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-				data.length / (1024 * 1024)
-			).toFixed(2)}MB)`,
-		);
-	}
-	return { buffer: data, contentType: mime, kind };
+  if (/^https?:\/\//i.test(mediaUrl)) {
+    const res = await fetch(mediaUrl);
+    if (!res.ok || !res.body) {
+      throw new Error(`Failed to fetch media: HTTP ${res.status}`);
+    }
+    const array = Buffer.from(await res.arrayBuffer());
+    const contentType = res.headers.get("content-type");
+    const kind = mediaKindFromMime(contentType);
+    const cap = Math.min(
+      maxBytes ?? maxBytesForKind(kind),
+      maxBytesForKind(kind),
+    );
+    if (kind === "image") {
+      return optimizeAndClampImage(array, cap);
+    }
+    if (array.length > cap) {
+      throw new Error(
+        `Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+          array.length / (1024 * 1024)
+        ).toFixed(2)}MB)`,
+      );
+    }
+    return { buffer: array, contentType: contentType ?? undefined, kind };
+  }
+  // Local path
+  const data = await fs.readFile(mediaUrl);
+  const ext = path.extname(mediaUrl);
+  const mime =
+    (ext &&
+      (
+        {
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".png": "image/png",
+          ".webp": "image/webp",
+          ".gif": "image/gif",
+          ".ogg": "audio/ogg",
+          ".opus": "audio/ogg",
+          ".mp3": "audio/mpeg",
+          ".mp4": "video/mp4",
+          ".pdf": "application/pdf",
+        } as Record<string, string | undefined>
+      )[ext.toLowerCase()]) ??
+    undefined;
+  const kind = mediaKindFromMime(mime);
+  const cap = Math.min(
+    maxBytes ?? maxBytesForKind(kind),
+    maxBytesForKind(kind),
+  );
+  if (kind === "image") {
+    return optimizeAndClampImage(data, cap);
+  }
+  if (data.length > cap) {
+    throw new Error(
+      `Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+        data.length / (1024 * 1024)
+      ).toFixed(2)}MB)`,
+    );
+  }
+  return { buffer: data, contentType: mime, kind };
 }
 
 function getStatusCode(err: unknown) {
-	return (
-		(err as { output?: { statusCode?: number } })?.output?.statusCode ??
-		(err as { status?: number })?.status
-	);
+  return (
+    (err as { output?: { statusCode?: number } })?.output?.statusCode ??
+    (err as { status?: number })?.status
+  );
 }
 
 function formatError(err: unknown): string {
-	if (err instanceof Error) return err.message;
-	if (typeof err === "string") return err;
-	const status = getStatusCode(err);
-	const code = (err as { code?: unknown })?.code;
-	if (status || code)
-		return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
-	return String(err);
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  const status = getStatusCode(err);
+  const code = (err as { code?: unknown })?.code;
+  if (status || code)
+    return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
+  return String(err);
 }
 
 async function optimizeImageToJpeg(
-	buffer: Buffer,
-	maxBytes: number,
+  buffer: Buffer,
+  maxBytes: number,
 ): Promise<{
-	buffer: Buffer;
-	optimizedSize: number;
-	resizeSide: number;
-	quality: number;
+  buffer: Buffer;
+  optimizedSize: number;
+  resizeSide: number;
+  quality: number;
 }> {
-	// Try a grid of sizes/qualities until under the limit.
-	const sides = [2048, 1536, 1280, 1024, 800];
-	const qualities = [80, 70, 60, 50, 40];
-	let smallest: {
-		buffer: Buffer;
-		size: number;
-		resizeSide: number;
-		quality: number;
-	} | null = null;
+  // Try a grid of sizes/qualities until under the limit.
+  const sides = [2048, 1536, 1280, 1024, 800];
+  const qualities = [80, 70, 60, 50, 40];
+  let smallest: {
+    buffer: Buffer;
+    size: number;
+    resizeSide: number;
+    quality: number;
+  } | null = null;
 
-	for (const side of sides) {
-		for (const quality of qualities) {
-			const out = await sharp(buffer)
-				.resize({
-					width: side,
-					height: side,
-					fit: "inside",
-					withoutEnlargement: true,
-				})
-				.jpeg({ quality, mozjpeg: true })
-				.toBuffer();
-			const size = out.length;
-			if (!smallest || size < smallest.size) {
-				smallest = { buffer: out, size, resizeSide: side, quality };
-			}
-			if (size <= maxBytes) {
-				return {
-					buffer: out,
-					optimizedSize: size,
-					resizeSide: side,
-					quality,
-				};
-			}
-		}
-	}
+  for (const side of sides) {
+    for (const quality of qualities) {
+      const out = await sharp(buffer)
+        .resize({
+          width: side,
+          height: side,
+          fit: "inside",
+          withoutEnlargement: true,
+        })
+        .jpeg({ quality, mozjpeg: true })
+        .toBuffer();
+      const size = out.length;
+      if (!smallest || size < smallest.size) {
+        smallest = { buffer: out, size, resizeSide: side, quality };
+      }
+      if (size <= maxBytes) {
+        return {
+          buffer: out,
+          optimizedSize: size,
+          resizeSide: side,
+          quality,
+        };
+      }
+    }
+  }
 
-	if (smallest) {
-		return {
-			buffer: smallest.buffer,
-			optimizedSize: smallest.size,
-			resizeSide: smallest.resizeSide,
-			quality: smallest.quality,
-		};
-	}
+  if (smallest) {
+    return {
+      buffer: smallest.buffer,
+      optimizedSize: smallest.size,
+      resizeSide: smallest.resizeSide,
+      quality: smallest.quality,
+    };
+  }
 
-	throw new Error("Failed to optimize image");
+  throw new Error("Failed to optimize image");
 }

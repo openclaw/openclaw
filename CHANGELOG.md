@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased] 1.0.5
+## 1.1.0 — 2025-11-25
 
 ### Pending
 - Web auto-replies now resize/recompress media and honor `inbound.reply.mediaMaxMb` in `~/.warelay/warelay.json` (default 5 MB) to avoid provider/API limits.

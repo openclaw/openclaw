@@ -4,23 +4,23 @@ let globalVerbose = false;
 let globalYes = false;
 
 export function setVerbose(v: boolean) {
-	globalVerbose = v;
+  globalVerbose = v;
 }
 
 export function isVerbose() {
-	return globalVerbose;
+  return globalVerbose;
 }
 
 export function logVerbose(message: string) {
-	if (globalVerbose) console.log(chalk.gray(message));
+  if (globalVerbose) console.log(chalk.gray(message));
 }
 
 export function setYes(v: boolean) {
-	globalYes = v;
+  globalYes = v;
 }
 
 export function isYes() {
-	return globalYes;
+  return globalYes;
 }
 
 export const success = chalk.green;

@@ -4,8 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import dotenv from "dotenv";
 import {
-	autoReplyIfConfigured,
-	getReplyFromConfig,
+  autoReplyIfConfigured,
+  getReplyFromConfig,
 } from "./auto-reply/reply.js";
 import { applyTemplate } from "./auto-reply/templating.js";
 import { createDefaultDeps, monitorTwilio } from "./cli/deps.js";
@@ -13,42 +13,42 @@ import { promptYesNo } from "./cli/prompt.js";
 import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
 import {
-	deriveSessionKey,
-	loadSessionStore,
-	resolveStorePath,
-	saveSessionStore,
+  deriveSessionKey,
+  loadSessionStore,
+  resolveStorePath,
+  saveSessionStore,
 } from "./config/sessions.js";
 import { readEnv } from "./env.js";
 import { ensureBinary } from "./infra/binaries.js";
 import {
-	describePortOwner,
-	ensurePortAvailable,
-	handlePortError,
-	PortInUseError,
+  describePortOwner,
+  ensurePortAvailable,
+  handlePortError,
+  PortInUseError,
 } from "./infra/ports.js";
 import {
-	ensureFunnel,
-	ensureGoInstalled,
-	ensureTailscaledInstalled,
-	getTailnetHostname,
+  ensureFunnel,
+  ensureGoInstalled,
+  ensureTailscaledInstalled,
+  getTailnetHostname,
 } from "./infra/tailscale.js";
 import { runCommandWithTimeout, runExec } from "./process/exec.js";
 import { monitorWebProvider } from "./provider-web.js";
 import { createClient } from "./twilio/client.js";
 import {
-	formatMessageLine,
-	listRecentMessages,
-	sortByDateDesc,
-	uniqueBySid,
+  formatMessageLine,
+  listRecentMessages,
+  sortByDateDesc,
+  uniqueBySid,
 } from "./twilio/messages.js";
 import { sendMessage, waitForFinalStatus } from "./twilio/send.js";
 import { findWhatsappSenderSid } from "./twilio/senders.js";
 import { sendTypingIndicator } from "./twilio/typing.js";
 import {
-	findIncomingNumberSid as findIncomingNumberSidImpl,
-	findMessagingServiceSid as findMessagingServiceSidImpl,
-	setMessagingServiceWebhook as setMessagingServiceWebhookImpl,
-	updateWebhook as updateWebhookImpl,
+  findIncomingNumberSid as findIncomingNumberSidImpl,
+  findMessagingServiceSid as findMessagingServiceSidImpl,
+  setMessagingServiceWebhook as setMessagingServiceWebhookImpl,
+  updateWebhook as updateWebhookImpl,
 } from "./twilio/update-webhook.js";
 import { formatTwilioError, logTwilioSendError } from "./twilio/utils.js";
 import { startWebhook as startWebhookImpl } from "./twilio/webhook.js";
@@ -66,56 +66,56 @@ const setMessagingServiceWebhook = setMessagingServiceWebhookImpl;
 const updateWebhook = updateWebhookImpl;
 
 export {
-	assertProvider,
-	autoReplyIfConfigured,
-	applyTemplate,
-	createClient,
-	deriveSessionKey,
-	describePortOwner,
-	ensureBinary,
-	ensureFunnel,
-	ensureGoInstalled,
-	ensurePortAvailable,
-	ensureTailscaledInstalled,
-	findIncomingNumberSidImpl as findIncomingNumberSid,
-	findMessagingServiceSidImpl as findMessagingServiceSid,
-	findWhatsappSenderSid,
-	formatMessageLine,
-	formatTwilioError,
-	getReplyFromConfig,
-	getTailnetHostname,
-	handlePortError,
-	logTwilioSendError,
-	listRecentMessages,
-	loadConfig,
-	loadSessionStore,
-	monitorTwilio,
-	monitorWebProvider,
-	normalizeE164,
-	PortInUseError,
-	promptYesNo,
-	createDefaultDeps,
-	readEnv,
-	resolveStorePath,
-	runCommandWithTimeout,
-	runExec,
-	saveSessionStore,
-	sendMessage,
-	sendTypingIndicator,
-	setMessagingServiceWebhook,
-	sortByDateDesc,
-	startWebhook,
-	updateWebhook,
-	uniqueBySid,
-	waitForFinalStatus,
-	waitForever,
-	toWhatsappJid,
-	program,
+  assertProvider,
+  autoReplyIfConfigured,
+  applyTemplate,
+  createClient,
+  deriveSessionKey,
+  describePortOwner,
+  ensureBinary,
+  ensureFunnel,
+  ensureGoInstalled,
+  ensurePortAvailable,
+  ensureTailscaledInstalled,
+  findIncomingNumberSidImpl as findIncomingNumberSid,
+  findMessagingServiceSidImpl as findMessagingServiceSid,
+  findWhatsappSenderSid,
+  formatMessageLine,
+  formatTwilioError,
+  getReplyFromConfig,
+  getTailnetHostname,
+  handlePortError,
+  logTwilioSendError,
+  listRecentMessages,
+  loadConfig,
+  loadSessionStore,
+  monitorTwilio,
+  monitorWebProvider,
+  normalizeE164,
+  PortInUseError,
+  promptYesNo,
+  createDefaultDeps,
+  readEnv,
+  resolveStorePath,
+  runCommandWithTimeout,
+  runExec,
+  saveSessionStore,
+  sendMessage,
+  sendTypingIndicator,
+  setMessagingServiceWebhook,
+  sortByDateDesc,
+  startWebhook,
+  updateWebhook,
+  uniqueBySid,
+  waitForFinalStatus,
+  waitForever,
+  toWhatsappJid,
+  program,
 };
 
 const isMain =
-	process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isMain) {
-	program.parseAsync(process.argv);
+  program.parseAsync(process.argv);
 }
