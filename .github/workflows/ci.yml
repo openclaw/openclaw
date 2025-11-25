@@ -20,13 +20,7 @@ jobs:
         run: node -v
 
       - name: Install dependencies
-        env:
-          PNPM_HOME: ~/.pnpm
-          PNPM_IGNORE_SCRIPTS: "false"
-        run: |
-          export PNPM_HOME="${PNPM_HOME:-$HOME/.pnpm}"
-          export PATH="$PNPM_HOME:$PATH"
-          pnpm install --frozen-lockfile --ignore-scripts=false
+        run: pnpm install --frozen-lockfile --ignore-scripts=false
 
       - name: Lint
         run: pnpm lint
