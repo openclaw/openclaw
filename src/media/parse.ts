@@ -1,12 +1,21 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
-export const MEDIA_LINE_RE = /\bMEDIA:/i;
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\s`]+)`?/i;
 
 export function normalizeMediaSource(src: string) {
-	if (src.startsWith("file://")) return src.replace("file://", "");
-	return src;
+	return src.startsWith("file://") ? src.replace("file://", "") : src;
+}
+
+function cleanCandidate(raw: string) {
+	return raw.replace(/^[`"'[{(]+/, "").replace(/[`"'\\})\],]+$/, "");
+}
+
+function isValidMedia(candidate: string) {
+	if (!candidate) return false;
+	if (candidate.length > 1024) return false;
+	if (/\s/.test(candidate)) return false;
+	return /^https?:\/\//i.test(candidate) || candidate.startsWith("/") || candidate.startsWith("./");
 }
 
 export function splitMediaFromOutput(raw: string): {
@@ -14,52 +23,28 @@ export function splitMediaFromOutput(raw: string): {
 	mediaUrl?: string;
 } {
 	const trimmedRaw = raw.trim();
-	let text = trimmedRaw;
-	let mediaUrl: string | undefined;
+	const match = MEDIA_TOKEN_RE.exec(trimmedRaw);
+	if (!match?.[1]) return { text: trimmedRaw };
 
-	const globalMatch = trimmedRaw.match(MEDIA_TOKEN_RE);
-	let mediaLine = trimmedRaw.split("\n").find((line) => MEDIA_LINE_RE.test(line));
-	let mediaMatch = mediaLine?.match(MEDIA_TOKEN_RE) ?? globalMatch;
-	if (!mediaMatch) {
-		return { text: trimmedRaw };
-	}
-	if (!mediaLine && mediaMatch) {
-		mediaLine = mediaMatch[0];
-	}
+	const candidate = normalizeMediaSource(cleanCandidate(match[1]));
+	const mediaUrl = isValidMedia(candidate) ? candidate : undefined;
 
-	let isValidMedia = false;
-	if (mediaMatch?.[1]) {
-		const cleaned = mediaMatch[1]
-			.replace(/^[`"'[{(]+/, "")
-			.replace(/[`"'\\})\],]+$/, "");
-		const candidate = normalizeMediaSource(cleaned);
-		const looksLikeUrl = /^https?:\/\//i.test(candidate);
-		const looksLikePath = candidate.startsWith("/") || candidate.startsWith("./");
-		const hasWhitespace = /\s/.test(candidate);
-		isValidMedia =
-			!hasWhitespace && candidate.length <= 1024 && (looksLikeUrl || looksLikePath);
-		if (isValidMedia) {
-			mediaUrl = candidate;
-		}
-	}
+	const cleanedText =
+		mediaUrl
+			? trimmedRaw
+					.replace(match[0], "")
+					.replace(/[ \t]+\n/g, "\n")
+					.replace(/[ \t]{2,}/g, " ")
+					.replace(/\n{2,}/g, "\n")
+					.trim()
+			: trimmedRaw
+					.split("\n")
+					.filter((line) => !MEDIA_TOKEN_RE.test(line))
+					.join("\n")
+					.replace(/[ \t]+\n/g, "\n")
+					.replace(/[ \t]{2,}/g, " ")
+					.replace(/\n{2,}/g, "\n")
+					.trim();
 
-	if (isValidMedia && mediaMatch?.[0]) {
-		text = trimmedRaw
-			.replace(mediaMatch[0], "")
-			.replace(/[ \t]{2,}/g, " ")
-			.replace(/[ \t]+\n/g, "\n")
-			.replace(/\n{2,}/g, "\n")
-			.trim();
-	} else {
-		text = trimmedRaw
-			.split("\n")
-			.filter((line) => line !== mediaLine)
-			.join("\n")
-			.replace(/[ \t]{2,}/g, " ")
-			.replace(/[ \t]+\n/g, "\n")
-			.replace(/\n{2,}/g, "\n")
-			.trim();
-	}
-
-	return { text, mediaUrl };
+	return mediaUrl ? { text: cleanedText, mediaUrl } : { text: cleanedText };
 }
