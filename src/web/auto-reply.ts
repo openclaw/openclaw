@@ -81,8 +81,9 @@ export async function runWebHeartbeatOnce(opts: {
   replyResolver?: typeof getReplyFromConfig;
   runtime?: RuntimeEnv;
   sender?: typeof sendMessageWeb;
+  sessionId?: string;
 }) {
-  const { cfg: cfgOverride, to, verbose = false } = opts;
+  const { cfg: cfgOverride, to, verbose = false, sessionId } = opts;
   const _runtime = opts.runtime ?? defaultRuntime;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
   const sender = opts.sender ?? sendMessageWeb;
@@ -100,7 +101,7 @@ export async function runWebHeartbeatOnce(opts: {
       {
         to,
         sessionKey: sessionSnapshot.key,
-        sessionId: sessionSnapshot.entry?.sessionId ?? null,
+        sessionId: sessionId ?? sessionSnapshot.entry?.sessionId ?? null,
         sessionFresh: sessionSnapshot.fresh,
         idleMinutes: sessionSnapshot.idleMinutes,
       },
@@ -114,7 +115,7 @@ export async function runWebHeartbeatOnce(opts: {
         Body: HEARTBEAT_PROMPT,
         From: to,
         To: to,
-        MessageSid: sessionSnapshot.entry?.sessionId,
+        MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
       },
       undefined,
       cfg,
@@ -577,23 +578,40 @@ export async function monitorWebProvider(
           console.log(success("heartbeat: skipped (no recent inbound)"));
           return;
         }
+        const snapshot = getSessionSnapshot(cfg, fallbackTo, true);
+        if (!snapshot.entry) {
+          heartbeatLogger.info(
+            { connectionId, to: fallbackTo, reason: "no-session-for-fallback" },
+            "reply heartbeat skipped",
+          );
+          console.log(success("heartbeat: skipped (no session to resume)"));
+          return;
+        }
         if (isVerbose()) {
           heartbeatLogger.info(
-            { connectionId, to: fallbackTo, reason: "fallback-session" },
+            {
+              connectionId,
+              to: fallbackTo,
+              reason: "fallback-session",
+              sessionId: snapshot.entry?.sessionId ?? null,
+              sessionFresh: snapshot.fresh,
+            },
             "reply heartbeat start",
           );
         }
         await runWebHeartbeatOnce({
+          cfg,
           to: fallbackTo,
           verbose,
           replyResolver,
           runtime,
+          sessionId: snapshot.entry.sessionId,
         });
         heartbeatLogger.info(
           {
             connectionId,
             to: fallbackTo,
-            ...getSessionSnapshot(cfg, fallbackTo),
+            ...snapshot,
             durationMs: Date.now() - tickStart,
           },
           "reply heartbeat sent (fallback session)",

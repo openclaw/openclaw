@@ -194,7 +194,7 @@ Examples:
   warelay heartbeat                 # uses web session + first allowFrom contact
   warelay heartbeat --verbose       # prints detailed heartbeat logs
   warelay heartbeat --to +1555123   # override destination
-  warelay heartbeat --all           # send to every active session recipient`,
+  warelay heartbeat --all           # send to every active session recipient or allowFrom entry`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
