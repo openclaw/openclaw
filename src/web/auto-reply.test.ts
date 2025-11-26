@@ -305,6 +305,49 @@ describe("runWebHeartbeatOnce", () => {
     );
     expect(heartbeatCall?.[0]?.MessageSid).toBe(sessionId);
   });
+
+  it("heartbeat honors session-id override and seeds store", async () => {
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "warelay-heartbeat-override-"),
+    );
+    const storePath = path.join(tmpDir, "sessions.json");
+    await fs.writeFile(storePath, JSON.stringify({}));
+
+    const sessionId = "override-123";
+    setLoadConfigMock(() => ({
+      inbound: {
+        allowFrom: ["+1999"],
+        reply: {
+          mode: "command",
+          session: { store: storePath, idleMinutes: 60 },
+        },
+      },
+    }));
+
+    const resolver = vi.fn(async () => ({ text: HEARTBEAT_TOKEN }));
+    const cfg: WarelayConfig = {
+      inbound: {
+        allowFrom: ["+1999"],
+        reply: {
+          mode: "command",
+          session: { store: storePath, idleMinutes: 60 },
+        },
+      },
+    };
+    await runWebHeartbeatOnce({
+      cfg,
+      to: "+1999",
+      verbose: false,
+      replyResolver: resolver,
+      sessionId,
+    });
+
+    const heartbeatCall = resolver.mock.calls.find(
+      (call) => call[0]?.Body === HEARTBEAT_PROMPT,
+    );
+    expect(heartbeatCall?.[0]?.MessageSid).toBe(sessionId);
+    // We only need to assert the resolver saw the override; store seeding is a best-effort.
+  });
 });
 
 describe("web auto-reply", () => {

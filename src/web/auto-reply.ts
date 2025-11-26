@@ -95,6 +95,16 @@ export async function runWebHeartbeatOnce(opts: {
   });
 
   const cfg = cfgOverride ?? loadConfig();
+  if (sessionId) {
+    const storePath = resolveStorePath(cfg.inbound?.reply?.session?.store);
+    const store = loadSessionStore(storePath);
+    store[to] = {
+      ...(store[to] ?? {}),
+      sessionId,
+      updatedAt: Date.now(),
+    };
+    saveSessionStore(storePath, store);
+  }
   const sessionSnapshot = getSessionSnapshot(cfg, to, true);
   if (verbose) {
     heartbeatLogger.info(
