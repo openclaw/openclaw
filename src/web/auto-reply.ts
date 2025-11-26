@@ -2,7 +2,12 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  DEFAULT_IDLE_MINUTES,
+  deriveSessionKey,
+  loadSessionStore,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { danger, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
@@ -158,6 +163,22 @@ function getFallbackRecipient(cfg: ReturnType<typeof loadConfig>) {
     (a, b) => (b[1]?.updatedAt ?? 0) - (a[1]?.updatedAt ?? 0),
   )[0];
   return mostRecent ? normalizeE164(mostRecent[0]) : null;
+}
+
+function getSessionSnapshot(cfg: ReturnType<typeof loadConfig>, from: string) {
+  const sessionCfg = cfg.inbound?.reply?.session;
+  const scope = sessionCfg?.scope ?? "per-sender";
+  const key = deriveSessionKey(scope, { From: from, To: "", Body: "" });
+  const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
+  const entry = store[key];
+  const idleMinutes = Math.max(
+    sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
+    1,
+  );
+  const fresh = !!(
+    entry && Date.now() - entry.updatedAt <= idleMinutes * 60_000
+  );
+  return { key, entry, fresh, idleMinutes };
 }
 
 async function deliverWebReply(params: {
@@ -485,6 +506,7 @@ export async function monitorWebProvider(
           {
             connectionId,
             to: fallbackTo,
+            ...getSessionSnapshot(cfg, fallbackTo),
             durationMs: Date.now() - tickStart,
           },
           "reply heartbeat sent (fallback session)",
@@ -494,11 +516,15 @@ export async function monitorWebProvider(
 
       try {
         if (isVerbose()) {
+          const snapshot = getSessionSnapshot(cfg, lastInboundMsg.from);
           heartbeatLogger.info(
             {
               connectionId,
               to: lastInboundMsg.from,
               intervalMinutes: replyHeartbeatMinutes,
+              sessionKey: snapshot.key,
+              sessionId: snapshot.entry?.sessionId ?? null,
+              sessionFresh: snapshot.fresh,
             },
             "reply heartbeat start",
           );
