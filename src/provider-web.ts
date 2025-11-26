@@ -2,7 +2,10 @@
 // module keeps responsibilities small and testable without changing the public API.
 export {
   DEFAULT_WEB_MEDIA_BYTES,
+  HEARTBEAT_PROMPT,
+  HEARTBEAT_TOKEN,
   monitorWebProvider,
+  runWebHeartbeatOnce,
   type WebMonitorTuning,
 } from "./web/auto-reply.js";
 export {

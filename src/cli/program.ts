@@ -11,6 +11,7 @@ import {
   logoutWeb,
   monitorWebProvider,
   pickProvider,
+  runWebHeartbeatOnce,
   type WebMonitorTuning,
 } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
@@ -175,6 +176,62 @@ Examples:
     });
 
   program
+    .command("heartbeat")
+    .description("Trigger a heartbeat poll once (web provider)")
+    .option("--provider <provider>", "auto | web", "auto")
+    .option("--to <number>", "Override target E.164; defaults to allowFrom[0]")
+    .option("--verbose", "Verbose logging", false)
+    .addHelpText(
+      "after",
+      `
+Examples:
+  warelay heartbeat                 # uses web session + first allowFrom contact
+  warelay heartbeat --verbose       # prints detailed heartbeat logs
+  warelay heartbeat --to +1555123   # override destination`,
+    )
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      const cfg = loadConfig();
+      const to =
+        opts.to ??
+        (Array.isArray(cfg.inbound?.allowFrom) &&
+        cfg.inbound?.allowFrom?.length > 0
+          ? cfg.inbound.allowFrom[0]
+          : null);
+      if (!to) {
+        defaultRuntime.error(
+          danger(
+            "No destination found. Set inbound.allowFrom in ~/.warelay/warelay.json or pass --to <E.164>.",
+          ),
+        );
+        defaultRuntime.exit(1);
+      }
+      const providerPref = String(opts.provider ?? "auto");
+      if (!["auto", "web"].includes(providerPref)) {
+        defaultRuntime.error("--provider must be auto or web");
+        defaultRuntime.exit(1);
+      }
+      const provider = await pickProvider(providerPref as "auto" | "web");
+      if (provider !== "web") {
+        defaultRuntime.error(
+          danger(
+            "Heartbeat is only supported for the web provider. Link with `warelay login --verbose`.",
+          ),
+        );
+        defaultRuntime.exit(1);
+      }
+      try {
+        await runWebHeartbeatOnce({
+          to,
+          verbose: Boolean(opts.verbose),
+          runtime: defaultRuntime,
+        });
+      } catch {
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
     .command("relay")
     .description("Auto-reply to inbound messages (auto-selects web or twilio)")
     .option("--provider <provider>", "auto | web | twilio", "auto")
@@ -197,6 +254,11 @@ Examples:
       "Initial reconnect backoff for web relay (ms)",
     )
     .option("--web-retry-max <ms>", "Max reconnect backoff for web relay (ms)")
+    .option(
+      "--heartbeat-now",
+      "Run a heartbeat immediately when relay starts (web provider)",
+      false,
+    )
     .option("--verbose", "Verbose logging", false)
     .addHelpText(
       "after",
@@ -234,6 +296,7 @@ Examples:
         opts.webRetryMax !== undefined
           ? Number.parseInt(String(opts.webRetryMax), 10)
           : undefined;
+      const heartbeatNow = Boolean(opts.heartbeatNow);
       if (Number.isNaN(intervalSeconds) || intervalSeconds <= 0) {
         defaultRuntime.error("Interval must be a positive integer");
         defaultRuntime.exit(1);
@@ -281,6 +344,7 @@ Examples:
 
       const webTuning: WebMonitorTuning = {};
       if (webHeartbeat !== undefined) webTuning.heartbeatSeconds = webHeartbeat;
+      if (heartbeatNow) webTuning.replyHeartbeatNow = true;
       const reconnect: WebMonitorTuning["reconnect"] = {};
       if (webRetries !== undefined) reconnect.maxAttempts = webRetries;
       if (webRetryInitial !== undefined) reconnect.initialMs = webRetryInitial;
@@ -446,6 +510,32 @@ Examples:
       } catch (err) {
         defaultRuntime.error(
           danger(`Failed to attach to warelay-relay: ${String(err)}`),
+        );
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("relay:tmux:heartbeat")
+    .description(
+      "Run relay --verbose with an immediate heartbeat inside tmux (session warelay-relay), then attach",
+    )
+    .action(async () => {
+      try {
+        const session = await spawnRelayTmux(
+          "pnpm warelay relay --verbose --heartbeat-now",
+          true,
+        );
+        defaultRuntime.log(
+          info(
+            `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose --heartbeat-now")`,
+          ),
+        );
+      } catch (err) {
+        defaultRuntime.error(
+          danger(
+            `Failed to start relay tmux session with heartbeat: ${String(err)}`,
+          ),
         );
         defaultRuntime.exit(1);
       }

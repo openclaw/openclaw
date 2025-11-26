@@ -3,13 +3,109 @@ import fs from "node:fs/promises";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { WarelayConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { monitorWebProvider } from "./auto-reply.js";
+import {
+  HEARTBEAT_TOKEN,
+  monitorWebProvider,
+  resolveReplyHeartbeatMinutes,
+  runWebHeartbeatOnce,
+  stripHeartbeatToken,
+} from "./auto-reply.js";
+import type { sendMessageWeb } from "./outbound.js";
 import {
   resetBaileysMocks,
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./test-helpers.js";
+
+describe("heartbeat helpers", () => {
+  it("strips heartbeat token and skips when only token", () => {
+    expect(stripHeartbeatToken(undefined)).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+    expect(stripHeartbeatToken("  ")).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+    expect(stripHeartbeatToken(HEARTBEAT_TOKEN)).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+  });
+
+  it("keeps content and removes token when mixed", () => {
+    expect(stripHeartbeatToken(`ALERT ${HEARTBEAT_TOKEN}`)).toEqual({
+      shouldSkip: false,
+      text: "ALERT",
+    });
+    expect(stripHeartbeatToken(`hello`)).toEqual({
+      shouldSkip: false,
+      text: "hello",
+    });
+  });
+
+  it("resolves heartbeat minutes with default and overrides", () => {
+    const cfgBase: WarelayConfig = {
+      inbound: {
+        reply: { mode: "command" as const },
+      },
+    };
+    expect(resolveReplyHeartbeatMinutes(cfgBase)).toBe(30);
+    expect(
+      resolveReplyHeartbeatMinutes({
+        inbound: { reply: { mode: "command", heartbeatMinutes: 5 } },
+      }),
+    ).toBe(5);
+    expect(
+      resolveReplyHeartbeatMinutes({
+        inbound: { reply: { mode: "command", heartbeatMinutes: 0 } },
+      }),
+    ).toBeNull();
+    expect(resolveReplyHeartbeatMinutes(cfgBase, 7)).toBe(7);
+    expect(
+      resolveReplyHeartbeatMinutes({
+        inbound: { reply: { mode: "text" } },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("runWebHeartbeatOnce", () => {
+  it("skips when heartbeat token returned", async () => {
+    const sender: typeof sendMessageWeb = vi.fn();
+    const resolver = vi.fn(async () => ({ text: HEARTBEAT_TOKEN }));
+    setLoadConfigMock({
+      inbound: { allowFrom: ["+1555"], reply: { mode: "command" } },
+    });
+    await runWebHeartbeatOnce({
+      to: "+1555",
+      verbose: false,
+      sender,
+      replyResolver: resolver,
+    });
+    expect(resolver).toHaveBeenCalled();
+    expect(sender).not.toHaveBeenCalled();
+  });
+
+  it("sends when alert text present", async () => {
+    const sender: typeof sendMessageWeb = vi
+      .fn()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+    const resolver = vi.fn(async () => ({ text: "ALERT" }));
+    setLoadConfigMock({
+      inbound: { allowFrom: ["+1555"], reply: { mode: "command" } },
+    });
+    await runWebHeartbeatOnce({
+      to: "+1555",
+      verbose: false,
+      sender,
+      replyResolver: resolver,
+    });
+    expect(sender).toHaveBeenCalledWith("+1555", "ALERT", { verbose: false });
+  });
+});
 
 describe("web auto-reply", () => {
   beforeEach(() => {
