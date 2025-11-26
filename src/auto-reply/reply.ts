@@ -1,7 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
@@ -14,85 +11,20 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { info, isVerbose, logVerbose } from "../globals.js";
-import { logError } from "../logger.js";
 import { ensureMediaHosted } from "../media/host.js";
-import { splitMediaFromOutput } from "../media/parse.js";
-import { enqueueCommand } from "../process/command-queue.js";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { TwilioRequester } from "../twilio/types.js";
 import { sendTypingIndicator } from "../twilio/typing.js";
-import {
-  CLAUDE_BIN,
-  CLAUDE_IDENTITY_PREFIX,
-  type ClaudeJsonParseResult,
-  parseClaudeJson,
-} from "./claude.js";
+import { runCommandReply } from "./command-reply.js";
+import { transcribeInboundAudio, isAudio } from "./transcription.js";
 import {
   applyTemplate,
   type MsgContext,
   type TemplateContext,
 } from "./templating.js";
-
-type GetReplyOptions = {
-  onReplyStart?: () => Promise<void> | void;
-};
-
-function summarizeClaudeMetadata(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object") return undefined;
-  const obj = payload as Record<string, unknown>;
-  const parts: string[] = [];
-
-  if (typeof obj.duration_ms === "number") {
-    parts.push(`duration=${obj.duration_ms}ms`);
-  }
-  if (typeof obj.duration_api_ms === "number") {
-    parts.push(`api=${obj.duration_api_ms}ms`);
-  }
-  if (typeof obj.num_turns === "number") {
-    parts.push(`turns=${obj.num_turns}`);
-  }
-  if (typeof obj.total_cost_usd === "number") {
-    parts.push(`cost=$${obj.total_cost_usd.toFixed(4)}`);
-  }
-
-  const usage = obj.usage;
-  if (usage && typeof usage === "object") {
-    const serverToolUse = (
-      usage as { server_tool_use?: Record<string, unknown> }
-    ).server_tool_use;
-    if (serverToolUse && typeof serverToolUse === "object") {
-      const toolCalls = Object.values(serverToolUse).reduce<number>(
-        (sum, val) => {
-          if (typeof val === "number") return sum + val;
-          return sum;
-        },
-        0,
-      );
-      if (toolCalls > 0) parts.push(`tool_calls=${toolCalls}`);
-    }
-  }
-
-  const modelUsage = obj.modelUsage;
-  if (modelUsage && typeof modelUsage === "object") {
-    const models = Object.keys(modelUsage as Record<string, unknown>);
-    if (models.length) {
-      const display =
-        models.length > 2
-          ? `${models.slice(0, 2).join(",")}+${models.length - 2}`
-          : models.join(",");
-      parts.push(`models=${display}`);
-    }
-  }
-
-  return parts.length ? parts.join(", ") : undefined;
-}
-
-export type ReplyPayload = {
-  text?: string;
-  mediaUrl?: string;
-  mediaUrls?: string[];
-};
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
+export type { ReplyPayload, GetReplyOptions } from "./types.js";
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
@@ -308,200 +240,21 @@ export async function getReplyFromConfig(
 
   if (reply.mode === "command" && reply.command?.length) {
     await onReplyStart();
-    let argv = reply.command.map((part) => applyTemplate(part, templatingCtx));
-    const templatePrefix =
-      reply.template && (!sendSystemOnce || isFirstTurnInSession || !systemSent)
-        ? applyTemplate(reply.template, templatingCtx)
-        : "";
-    if (templatePrefix && argv.length > 0) {
-      argv = [argv[0], templatePrefix, ...argv.slice(1)];
-    }
-
-    // Ensure Claude commands can emit plain text by forcing --output-format when configured.
-    // We inject the flags only when the user points at the `claude` binary and has opted in via config,
-    // so existing custom argv or non-Claude commands remain untouched.
-    if (
-      reply.claudeOutputFormat &&
-      argv.length > 0 &&
-      path.basename(argv[0]) === CLAUDE_BIN
-    ) {
-      const hasOutputFormat = argv.some(
-        (part) =>
-          part === "--output-format" || part.startsWith("--output-format="),
-      );
-      // Keep the final argument as the prompt/body; insert options just before it.
-      const insertBeforeBody = Math.max(argv.length - 1, 0);
-      if (!hasOutputFormat) {
-        argv = [
-          ...argv.slice(0, insertBeforeBody),
-          "--output-format",
-          reply.claudeOutputFormat,
-          ...argv.slice(insertBeforeBody),
-        ];
-      }
-      const hasPrintFlag = argv.some(
-        (part) => part === "-p" || part === "--print",
-      );
-      if (!hasPrintFlag) {
-        const insertIdx = Math.max(argv.length - 1, 0);
-        argv = [...argv.slice(0, insertIdx), "-p", ...argv.slice(insertIdx)];
-      }
-    }
-
-    // Inject session args if configured (use resume for existing, session-id for new)
-    if (reply.session) {
-      const sessionArgList = (
-        isNewSession
-          ? (reply.session.sessionArgNew ?? ["--session-id", "{{SessionId}}"])
-          : (reply.session.sessionArgResume ?? ["--resume", "{{SessionId}}"])
-      ).map((part) => applyTemplate(part, templatingCtx));
-      if (sessionArgList.length) {
-        const insertBeforeBody = reply.session.sessionArgBeforeBody ?? true;
-        const insertAt =
-          insertBeforeBody && argv.length > 1 ? argv.length - 1 : argv.length;
-        argv = [
-          ...argv.slice(0, insertAt),
-          ...sessionArgList,
-          ...argv.slice(insertAt),
-        ];
-      }
-    }
-    let finalArgv = argv;
-    const isClaudeInvocation =
-      finalArgv.length > 0 && path.basename(finalArgv[0]) === CLAUDE_BIN;
-    if (isClaudeInvocation && finalArgv.length > 0) {
-      const bodyIdx = finalArgv.length - 1;
-      const existingBody = finalArgv[bodyIdx] ?? "";
-      finalArgv = [
-        ...finalArgv.slice(0, bodyIdx),
-        [CLAUDE_IDENTITY_PREFIX, existingBody].filter(Boolean).join("\n\n"),
-      ];
-    }
-    logVerbose(
-      `Running command auto-reply: ${finalArgv.join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
-    );
-    const started = Date.now();
     try {
-      const { stdout, stderr, code, signal, killed } = await enqueueCommand(
-        () => commandRunner(finalArgv, { timeoutMs, cwd: reply.cwd }),
-        {
-          onWait: (waitMs, queuedAhead) => {
-            if (isVerbose()) {
-              logVerbose(
-                `Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`,
-              );
-            }
-          },
-        },
-      );
-      const rawStdout = stdout.trim();
-      let mediaFromCommand: string[] | undefined;
-      let trimmed = rawStdout;
-      if (stderr?.trim()) {
-        logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
-      }
-      let parsed: ClaudeJsonParseResult | undefined;
-      if (
-        trimmed &&
-        (reply.claudeOutputFormat === "json" || isClaudeInvocation)
-      ) {
-        // Claude JSON mode: extract the human text for both logging and reply while keeping metadata.
-        parsed = parseClaudeJson(trimmed);
-        if (parsed?.parsed && isVerbose()) {
-          const summary = summarizeClaudeMetadata(parsed.parsed);
-          if (summary) logVerbose(`Claude JSON meta: ${summary}`);
-          logVerbose(
-            `Claude JSON raw: ${JSON.stringify(parsed.parsed, null, 2)}`,
-          );
-        }
-        if (parsed?.text) {
-          logVerbose(
-            `Claude JSON parsed -> ${parsed.text.slice(0, 120)}${parsed.text.length > 120 ? "…" : ""}`,
-          );
-          trimmed = parsed.text.trim();
-        } else {
-          logVerbose("Claude JSON parse failed; returning raw stdout");
-        }
-      }
-      // Run media extraction once on the final human text (post-JSON parse if available).
-      const { text: cleanedText, mediaUrls: mediaFound } =
-        splitMediaFromOutput(trimmed);
-      trimmed = cleanedText;
-      if (mediaFound?.length) {
-        mediaFromCommand = mediaFound;
-        if (isVerbose()) logVerbose(`MEDIA token extracted: ${mediaFound}`);
-      } else if (isVerbose()) {
-        logVerbose("No MEDIA token extracted from final text");
-      }
-      if (!trimmed && !mediaFromCommand) {
-        const meta = parsed
-          ? summarizeClaudeMetadata(parsed.parsed)
-          : undefined;
-        trimmed = `(command produced no output${meta ? `; ${meta}` : ""})`;
-        logVerbose("No text/media produced; injecting fallback notice to user");
-      }
-      logVerbose(
-        `Command auto-reply stdout (trimmed): ${trimmed || "<empty>"}`,
-      );
-      logVerbose(`Command auto-reply finished in ${Date.now() - started}ms`);
-      if ((code ?? 0) !== 0) {
-        console.error(
-          `Command auto-reply exited with code ${code ?? "unknown"} (signal: ${signal ?? "none"})`,
-        );
-        return undefined;
-      }
-      if (killed && !signal) {
-        console.error(
-          `Command auto-reply process killed before completion (exit code ${code ?? "unknown"})`,
-        );
-        return undefined;
-      }
-      const mediaUrls =
-        mediaFromCommand ?? (reply.mediaUrl ? [reply.mediaUrl] : undefined);
-      const result =
-        trimmed || mediaUrls?.length
-          ? {
-              text: trimmed || undefined,
-              mediaUrl: mediaUrls?.[0],
-              mediaUrls,
-            }
-          : undefined;
-      cleanupTyping();
+      const result = await runCommandReply({
+        reply,
+        templatingCtx,
+        sendSystemOnce,
+        isNewSession,
+        isFirstTurnInSession,
+        systemSent,
+        timeoutMs,
+        timeoutSeconds,
+        commandRunner,
+      });
       return result;
-    } catch (err) {
-      const elapsed = Date.now() - started;
-      const anyErr = err as { killed?: boolean; signal?: string };
-      const timeoutHit = anyErr.killed === true || anyErr.signal === "SIGKILL";
-      const errorObj = err as {
-        stdout?: string;
-        stderr?: string;
-      };
-      if (errorObj.stderr?.trim()) {
-        logVerbose(`Command auto-reply stderr: ${errorObj.stderr.trim()}`);
-      }
-      if (timeoutHit) {
-        console.error(
-          `Command auto-reply timed out after ${elapsed}ms (limit ${timeoutMs}ms)`,
-        );
-        const baseMsg = `Command timed out after ${timeoutSeconds}s. Try a shorter prompt or split the request.`;
-        const partial = errorObj.stdout?.trim();
-        const partialSnippet =
-          partial && partial.length > 800
-            ? `${partial.slice(0, 800)}...`
-            : partial;
-        const text = partialSnippet
-          ? `${baseMsg}\n\nPartial output before timeout:\n${partialSnippet}`
-          : baseMsg;
-        const result = { text };
-        cleanupTyping();
-        return result;
-      } else {
-        logError(
-          `Command auto-reply failed after ${elapsed}ms: ${String(err)}`,
-        );
-      }
+    } finally {
       cleanupTyping();
-      return undefined;
     }
   }
 
@@ -647,65 +400,6 @@ export async function autoReplyIfConfigured(
     if (responseBody) {
       runtime.error("Response body:");
       runtime.error(JSON.stringify(responseBody, null, 2));
-    }
-  }
-}
-
-function isAudio(mediaType?: string | null) {
-  return Boolean(mediaType?.startsWith("audio"));
-}
-
-async function transcribeInboundAudio(
-  cfg: WarelayConfig,
-  ctx: MsgContext,
-  runtime: RuntimeEnv,
-): Promise<{ text: string } | undefined> {
-  const transcriber = cfg.inbound?.transcribeAudio;
-  if (!transcriber?.command?.length) return undefined;
-
-  const timeoutMs = Math.max((transcriber.timeoutSeconds ?? 45) * 1000, 1_000);
-  let tmpPath: string | undefined;
-  let mediaPath = ctx.MediaPath;
-  try {
-    if (!mediaPath && ctx.MediaUrl) {
-      const res = await fetch(ctx.MediaUrl);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const arrayBuf = await res.arrayBuffer();
-      const buffer = Buffer.from(arrayBuf);
-      tmpPath = path.join(
-        os.tmpdir(),
-        `warelay-audio-${crypto.randomUUID()}.ogg`,
-      );
-      await fs.writeFile(tmpPath, buffer);
-      mediaPath = tmpPath;
-      if (isVerbose()) {
-        logVerbose(
-          `Downloaded audio for transcription (${(buffer.length / (1024 * 1024)).toFixed(2)}MB) -> ${tmpPath}`,
-        );
-      }
-    }
-    if (!mediaPath) return undefined;
-
-    const templCtx: MsgContext = { ...ctx, MediaPath: mediaPath };
-    const argv = transcriber.command.map((part) =>
-      applyTemplate(part, templCtx),
-    );
-    if (isVerbose()) {
-      logVerbose(`Transcribing audio via command: ${argv.join(" ")}`);
-    }
-    const { stdout } = await runExec(argv[0], argv.slice(1), {
-      timeoutMs,
-      maxBuffer: 5 * 1024 * 1024,
-    });
-    const text = stdout.trim();
-    if (!text) return undefined;
-    return { text };
-  } catch (err) {
-    runtime.error?.(`Audio transcription failed: ${String(err)}`);
-    return undefined;
-  } finally {
-    if (tmpPath) {
-      void fs.unlink(tmpPath).catch(() => {});
     }
   }
 }
