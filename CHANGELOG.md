@@ -1,8 +1,8 @@
 # Changelog
 
-## 1.1.0 — 2025-11-25
+## 1.1.0 — 2025-11-26
 
-### Pending
+### Changes
 - Web auto-replies now resize/recompress media and honor `inbound.reply.mediaMaxMb` in `~/.warelay/warelay.json` (default 5 MB) to avoid provider/API limits.
 - Web provider now detects media kind (image/audio/video/document), logs the source path, and enforces provider caps: images ≤6 MB, audio/video ≤16 MB, documents ≤100 MB; images still target the configurable cap above with resize + JPEG recompress.
 - Sessions can now send the system prompt only once: set `inbound.reply.session.sendSystemOnce` (optional `sessionIntro` for the first turn) to avoid re-sending large prompts every message.
@@ -10,6 +10,9 @@
 - Optional voice-note transcription: set `inbound.transcribeAudio.command` (e.g., OpenAI Whisper CLI) to turn inbound audio into text before templating/Claude; verbose logs surface when transcription runs. Prompts now include the original media path plus a `Transcript:` block so models see both.
 - Auto-reply command replies now return structured `{ payload, meta }`, respect `mediaMaxMb` for local media, log Claude metadata, and include the command `cwd` in timeout messages for easier debugging.
 - Added unit coverage for command helper edge cases (Claude flags, session args, media tokens, timeouts) and transcription download/command invocation.
+- Split the monolithic web provider into focused modules under `src/web/` plus a barrel; added logout command, no-fallback relay behavior, and web-only relay start helper.
+- Introduced structured reconnect/heartbeat logging (`web-reconnect`, `web-heartbeat`), bounded exponential backoff with CLI and config knobs, and a troubleshooting guide at `docs/refactor/web-relay-troubleshooting.md`.
+- Relay help now prints effective heartbeat/backoff settings when running in web mode for quick triage.
 
 ## 1.0.4 — 2025-11-25
 

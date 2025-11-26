@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { sendCommand } from "../commands/send.js";
 import { statusCommand } from "../commands/status.js";
 import { webhookCommand } from "../commands/webhook.js";
+import { loadConfig } from "../config/config.js";
 import { ensureTwilioEnv } from "../env.js";
 import { danger, info, setVerbose, setYes } from "../globals.js";
 import {
@@ -15,6 +16,10 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import type { Provider } from "../utils.js";
 import { VERSION } from "../version.js";
+import {
+  resolveHeartbeatSeconds,
+  resolveReconnectPolicy,
+} from "../web/reconnect.js";
 import {
   createDefaultDeps,
   logTwilioFrom,
@@ -201,6 +206,7 @@ Examples:
   warelay relay --provider web      # force personal web session
   warelay relay --provider twilio   # force twilio poll
   warelay relay --provider twilio --interval 2 --lookback 30
+  # Troubleshooting: docs/refactor/web-relay-troubleshooting.md
 `,
     )
     .action(async (opts) => {
@@ -287,6 +293,20 @@ Examples:
 
       if (provider === "web") {
         logWebSelfId(defaultRuntime, true);
+        const cfg = loadConfig();
+        const effectiveHeartbeat = resolveHeartbeatSeconds(
+          cfg,
+          webTuning.heartbeatSeconds,
+        );
+        const effectivePolicy = resolveReconnectPolicy(
+          cfg,
+          webTuning.reconnect,
+        );
+        defaultRuntime.log(
+          info(
+            `Web relay health: heartbeat ${effectiveHeartbeat}s, retries ${effectivePolicy.maxAttempts || "∞"}, backoff ${effectivePolicy.initialMs}→${effectivePolicy.maxMs}ms x${effectivePolicy.factor} (jitter ${Math.round(effectivePolicy.jitter * 100)}%)`,
+          ),
+        );
         try {
           await monitorWebProvider(
             Boolean(opts.verbose),
