@@ -38,4 +38,5 @@ Goal: add a simple heartbeat poll for command-based auto-replies (Claude-driven)
 - Expose CLI triggers:
   - `warelay heartbeat` (web provider, defaults to first `allowFrom`; optional `--to` override)
   - `warelay relay:heartbeat` to run the relay loop with an immediate heartbeat (no tmux)
-  - Relay supports `--heartbeat-now` to fire once at startup (including `relay:tmux:heartbeat`).
+  - `warelay relay:heartbeat:tmux` to run the same in tmux (detached, attachable)
+  - Relay supports `--heartbeat-now` to fire once at startup (including the tmux helper).

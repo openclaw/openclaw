@@ -6,6 +6,7 @@ import { webhookCommand } from "../commands/webhook.js";
 import { loadConfig } from "../config/config.js";
 import { ensureTwilioEnv } from "../env.js";
 import { danger, info, setVerbose, setYes } from "../globals.js";
+import { getResolvedLoggerSettings } from "../logging.js";
 import {
   loginWeb,
   logoutWeb,
@@ -273,6 +274,8 @@ Examples:
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
+      const { file: logFile, level: logLevel } = getResolvedLoggerSettings();
+      defaultRuntime.log(info(`logs: ${logFile} (level ${logLevel})`));
       const providerPref = String(opts.provider ?? "auto");
       if (!["auto", "web", "twilio"].includes(providerPref)) {
         defaultRuntime.error("--provider must be auto, web, or twilio");
@@ -406,6 +409,8 @@ Examples:
     .option("--verbose", "Verbose logging", false)
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
+      const { file: logFile, level: logLevel } = getResolvedLoggerSettings();
+      defaultRuntime.log(info(`logs: ${logFile} (level ${logLevel})`));
       const providerPref = String(opts.provider ?? "auto");
       if (!["auto", "web"].includes(providerPref)) {
         defaultRuntime.error("--provider must be auto or web");
@@ -584,7 +589,7 @@ Examples:
     });
 
   program
-    .command("relay:tmux:heartbeat")
+    .command("relay:heartbeat:tmux")
     .description(
       "Run relay --verbose with an immediate heartbeat inside tmux (session warelay-relay), then attach",
     )

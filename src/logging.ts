@@ -28,6 +28,7 @@ type ResolvedSettings = {
   level: LevelWithSilent;
   file: string;
 };
+export type LoggerResolvedSettings = ResolvedSettings;
 
 let cachedLogger: Logger | null = null;
 let cachedSettings: ResolvedSettings | null = null;
@@ -85,6 +86,10 @@ export function getChildLogger(
   opts?: { level?: LevelWithSilent },
 ): Logger {
   return getLogger().child(bindings ?? {}, opts);
+}
+
+export function getResolvedLoggerSettings(): LoggerResolvedSettings {
+  return resolveSettings();
 }
 
 // Test helpers

@@ -116,4 +116,14 @@ describe("cli program", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
     runtime.exit = originalExit;
   });
+
+  it("runs relay heartbeat tmux helper", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["relay:heartbeat:tmux"], { from: "user" });
+    const shouldAttach = Boolean(process.stdout.isTTY);
+    expect(spawnRelayTmux).toHaveBeenCalledWith(
+      "pnpm warelay relay --verbose --heartbeat-now",
+      shouldAttach,
+    );
+  });
 });
