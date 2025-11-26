@@ -23,7 +23,9 @@ describe("web logout", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await fsPromises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    await fsPromises
+      .rm(tmpDir, { recursive: true, force: true })
+      .catch(() => {});
     // restore for safety
     // eslint-disable-next-line @typescript-eslint/unbound-method
     (os.homedir as unknown as typeof origHomedir) = origHomedir;

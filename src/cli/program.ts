@@ -4,7 +4,7 @@ import { sendCommand } from "../commands/send.js";
 import { statusCommand } from "../commands/status.js";
 import { webhookCommand } from "../commands/webhook.js";
 import { ensureTwilioEnv } from "../env.js";
-import { danger, info, setVerbose, setYes, warn } from "../globals.js";
+import { danger, info, setVerbose, setYes } from "../globals.js";
 import {
   loginWeb,
   logoutWeb,
@@ -215,14 +215,12 @@ Examples:
           await monitorWebProvider(Boolean(opts.verbose));
           return;
         } catch (err) {
-          if (providerPref === "auto") {
-            defaultRuntime.error(
-              warn("Web session unavailable; falling back to twilio."),
-            );
-          } else {
-            defaultRuntime.error(danger(`Web relay failed: ${String(err)}`));
-            defaultRuntime.exit(1);
-          }
+          defaultRuntime.error(
+            danger(
+              `Web relay failed: ${String(err)}. Not falling back; re-link with 'warelay login --provider web'.`,
+            ),
+          );
+          defaultRuntime.exit(1);
         }
       }
 

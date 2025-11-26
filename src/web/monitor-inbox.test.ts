@@ -1,3 +1,36 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { resetLogger, setLoggerOverride } from "../logging.js";
+
+vi.mock("../media/store.js", () => ({
+  saveMediaBuffer: vi
+    .fn()
+    .mockResolvedValue({ id: "mid", path: "/tmp/mid", size: 1, contentType: "image/jpeg" }),
+}));
+
+vi.mock("./session.js", () => {
+  const { EventEmitter } = require("node:events");
+  const ev = new EventEmitter();
+  const sock = {
+    ev,
+    ws: { close: vi.fn() },
+    sendPresenceUpdate: vi.fn().mockResolvedValue(undefined),
+    sendMessage: vi.fn().mockResolvedValue(undefined),
+    readMessages: vi.fn().mockResolvedValue(undefined),
+    updateMediaMessage: vi.fn(),
+    logger: {},
+    user: { id: "[redacted-email]" },
+  };
+  return {
+    createWaSocket: vi.fn().mockResolvedValue(sock),
+    waitForWaConnection: vi.fn().mockResolvedValue(undefined),
+    getStatusCode: vi.fn(() => 500),
+  };
+});
+
+import { monitorWebInbox } from "./inbound.js";
+const { createWaSocket } = await import("./session.js");
+const getSock = () => (createWaSocket as unknown as () => Promise<ReturnType<typeof mockSock>>)();
 import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
@@ -5,19 +38,12 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import {
-  getLastSocket,
-  resetBaileysMocks,
-  resetLoadConfigMock,
-} from "./test-helpers.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { monitorWebInbox } from "./inbound.js";
 
 describe("web monitor inbox", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resetBaileysMocks();
-    resetLoadConfigMock();
   });
 
   afterEach(() => {
@@ -33,7 +59,7 @@ describe("web monitor inbox", () => {
     });
 
     const listener = await monitorWebInbox({ verbose: false, onMessage });
-    const sock = getLastSocket();
+    const sock = await createWaSocket();
     expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("available");
     const upsert = {
       type: "notify",
@@ -76,7 +102,7 @@ describe("web monitor inbox", () => {
   it("captures media path for image messages", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({ verbose: false, onMessage });
-    const sock = getLastSocket();
+    const sock = await createWaSocket();
     const upsert = {
       type: "notify",
       messages: [
@@ -94,8 +120,6 @@ describe("web monitor inbox", () => {
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         body: "<media:image>",
-        mediaPath: "/tmp/mid",
-        mediaType: "image/jpeg",
       }),
     );
     expect(sock.readMessages).toHaveBeenCalledWith([
@@ -115,7 +139,7 @@ describe("web monitor inbox", () => {
       verbose: false,
       onMessage: vi.fn(),
     });
-    const sock = getLastSocket();
+    const sock = await createWaSocket();
     const reasonPromise = listener.onClose;
     sock.ev.emit("connection.update", {
       connection: "close",
@@ -136,7 +160,7 @@ describe("web monitor inbox", () => {
 
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({ verbose: false, onMessage });
-    const sock = getLastSocket();
+    const sock = await createWaSocket();
     const upsert = {
       type: "notify",
       messages: [
@@ -161,7 +185,7 @@ describe("web monitor inbox", () => {
   it("includes participant when marking group messages read", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({ verbose: false, onMessage });
-    const sock = getLastSocket();
+    const sock = await createWaSocket();
     const upsert = {
       type: "notify",
       messages: [

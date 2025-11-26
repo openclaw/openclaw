@@ -68,13 +68,15 @@ describe("cli program", () => {
     pickProvider.mockResolvedValue("web");
     monitorWebProvider.mockRejectedValue(new Error("no web"));
     const program = buildProgram();
-    await program.parseAsync(
-      ["relay", "--provider", "auto", "--interval", "2", "--lookback", "1"],
-      { from: "user" },
-    );
+    await expect(
+      program.parseAsync(
+        ["relay", "--provider", "auto", "--interval", "2", "--lookback", "1"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("exit");
     expect(logWebSelfId).toHaveBeenCalled();
-    expect(ensureTwilioEnv).toHaveBeenCalled();
-    expect(monitorTwilio).toHaveBeenCalledWith(2, 1);
+    expect(ensureTwilioEnv).not.toHaveBeenCalled();
+    expect(monitorTwilio).not.toHaveBeenCalled();
   });
 
   it("runs relay tmux attach command", async () => {
