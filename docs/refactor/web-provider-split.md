@@ -10,6 +10,7 @@ Context: `src/provider-web.ts` was a 900+ line ball of mud mixing session manage
 - Structured logging + heartbeats: web relay now emits structured logs with `runId`/`connectionId` plus periodic heartbeats (default every 60s) that include auth age and message counts.
 - Bounded reconnects: web relay uses capped exponential backoff (default 2s→30s, max 12 attempts). CLI knobs `--web-retries`, `--web-retry-initial`, `--web-retry-max`, `--web-heartbeat` and config `web.reconnect`/`web.heartbeatSeconds` tune the behavior.
 - Backoff reset after healthy uptime; logged-out state still exits immediately.
+- Extracted reconnect/heartbeat helpers to `src/web/reconnect.ts` with unit tests.
 
 ## How to use
 - Link: `warelay login --provider web`

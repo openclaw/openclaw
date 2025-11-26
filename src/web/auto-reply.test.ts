@@ -61,7 +61,10 @@ describe("web auto-reply", () => {
     closeResolvers[0]?.();
     const waitForSecondCall = async () => {
       const started = Date.now();
-      while (listenerFactory.mock.calls.length < 2 && Date.now() - started < 200) {
+      while (
+        listenerFactory.mock.calls.length < 2 &&
+        Date.now() - started < 200
+      ) {
         await new Promise((resolve) => setTimeout(resolve, 10));
       }
     };

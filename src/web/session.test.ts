@@ -1,18 +1,17 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import {
   baileys,
   getLastSocket,
   resetBaileysMocks,
   resetLoadConfigMock,
 } from "./test-helpers.js";
-import { resetLogger, setLoggerOverride } from "../logging.js";
-import {
-  createWaSocket,
-  logWebSelfId,
-  waitForWaConnection,
-} from "./session.js";
+
+const { createWaSocket, logWebSelfId, waitForWaConnection } = await import(
+  "./session.js"
+);
 
 describe("web session", () => {
   beforeEach(() => {
