@@ -1,0 +1,74 @@
+import fs from "node:fs/promises";
+
+import { DisconnectReason } from "@whiskeysockets/baileys";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.useFakeTimers();
+
+const rmMock = vi.spyOn(fs, "rm");
+
+vi.mock("./session.js", () => {
+  const sockA = { ws: { close: vi.fn() } };
+  const sockB = { ws: { close: vi.fn() } };
+  const createWaSocket = vi.fn(async () =>
+    createWaSocket.mock.calls.length === 0 ? sockA : sockB,
+  );
+  const waitForWaConnection = vi.fn();
+  const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
+  return {
+    createWaSocket,
+    waitForWaConnection,
+    formatError,
+    WA_WEB_AUTH_DIR: "/tmp/wa-creds",
+  };
+});
+
+const { createWaSocket, waitForWaConnection, formatError } = await import(
+  "./session.js"
+);
+const { loginWeb } = await import("./login.js");
+
+describe("loginWeb coverage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rmMock.mockClear();
+  });
+
+  it("restarts once when WhatsApp requests code 515", async () => {
+    waitForWaConnection
+      .mockRejectedValueOnce({ output: { statusCode: 515 } })
+      .mockResolvedValueOnce(undefined);
+
+    const runtime = { log: vi.fn(), error: vi.fn() } as never;
+    await loginWeb(false, waitForWaConnection as never, runtime);
+
+    expect(createWaSocket).toHaveBeenCalledTimes(2);
+    const firstSock = await createWaSocket.mock.results[0].value;
+    expect(firstSock.ws.close).toHaveBeenCalled();
+    vi.runAllTimers();
+    const secondSock = await createWaSocket.mock.results[1].value;
+    expect(secondSock.ws.close).toHaveBeenCalled();
+  });
+
+  it("clears creds and throws when logged out", async () => {
+    waitForWaConnection.mockRejectedValueOnce({
+      output: { statusCode: DisconnectReason.loggedOut },
+    });
+
+    await expect(loginWeb(false, waitForWaConnection as never)).rejects.toThrow(
+      /cache cleared/i,
+    );
+    expect(rmMock).toHaveBeenCalledWith("/tmp/wa-creds", {
+      recursive: true,
+      force: true,
+    });
+  });
+
+  it("formats and rethrows generic errors", async () => {
+    waitForWaConnection.mockRejectedValueOnce(new Error("boom"));
+    await expect(loginWeb(false, waitForWaConnection as never)).rejects.toThrow(
+      "formatted:Error: boom",
+    );
+    expect(formatError).toHaveBeenCalled();
+  });
+});

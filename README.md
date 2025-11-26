@@ -18,7 +18,7 @@ Install from npm (global): `npm install -g warelay` (Node 22+). Then choose **on
 **A) Personal WhatsApp Web (preferred: no Twilio creds, fastest setup)**
 1. Link your account: `warelay login` (scan the QR).
 2. Send a message: `warelay send --to +12345550000 --message "Hi from warelay"` (add `--provider web` if you want to force the web session).
-3. Stay online & auto-reply: `warelay relay --verbose` (defaults to Web when logged in, falls back to Twilio otherwise).
+3. Stay online & auto-reply: `warelay relay --verbose` (uses Web when you're logged in; if you're not linked, start it with `--provider twilio`). When a Web session drops, the relay exits instead of silently falling back so you notice and re-login.
 
 **B) Twilio WhatsApp number (for delivery status + webhooks)**
 1. Copy `.env.example` → `.env`; set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` **or** `TWILIO_API_KEY`/`TWILIO_API_SECRET`, and `TWILIO_WHATSAPP_FROM=whatsapp:+19995550123` (optional `TWILIO_SENDER_SID`).
@@ -79,8 +79,8 @@ Install from npm (global): `npm install -g warelay` (Node 22+). Then choose **on
 
 ## Providers
 - **Twilio (default):** needs `.env` creds + WhatsApp-enabled number; supports delivery tracking, polling, webhooks, and auto-reply typing indicators.
-- **Web (`--provider web`):** uses your personal WhatsApp via Baileys; supports send/receive + auto-reply, but no delivery-status wait; cache lives in `~/.warelay/credentials/` (rerun `login` if logged out).
-- **Auto-select (`relay` only):** `--provider auto` uses Web when logged in, otherwise Twilio polling.
+- **Web (`--provider web`):** uses your personal WhatsApp via Baileys; supports send/receive + auto-reply, but no delivery-status wait; cache lives in `~/.warelay/credentials/` (rerun `login` if logged out). If the Web socket closes, the relay exits instead of pivoting to Twilio.
+- **Auto-select (`relay` only):** `--provider auto` picks Web when a cache exists at start, otherwise Twilio polling. It will not swap from Web to Twilio mid-run if the Web session drops.
 
 Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business account) for automation instead of your primary personal account to avoid unexpected logouts or rate limits.
 
@@ -170,6 +170,11 @@ Templating tokens: `{{Body}}`, `{{BodyStripped}}`, `{{From}}`, `{{To}}`, `{{Mess
 - Auto-reply not firing: ensure sender is in `allowFrom` (or unset), and confirm `.env` + `warelay.json` are loaded (reload shell after edits).
 - Web provider dropped: rerun `pnpm warelay login`; credentials live in `~/.warelay/credentials/`.
 - Tailscale Funnel errors: update tailscale/tailscaled; check admin console that Funnel is enabled for this device.
+
+### Maintainer notes (web provider internals)
+- Web logic lives under `src/web/`: `session.ts` (auth/cache + provider pick), `login.ts` (QR login/logout), `outbound.ts`/`inbound.ts` (send/receive plumbing), `auto-reply.ts` (relay loop + reconnect/backoff), `media.ts` (download/resize helpers), and `reconnect.ts` (shared retry math). `test-helpers.ts` provides fixtures.
+- The public surface remains the `src/provider-web.ts` barrel so existing imports keep working.
+- Reconnects are capped and logged; no Twilio fallback occurs after a Web disconnect—restart the relay after re-linking.
 
 ## FAQ & Safety
 - Twilio errors: **63016 “permission to send an SMS has not been enabled”** → ensure your number is WhatsApp-enabled; **63007 template not approved** → send a free-form session message within 24h or use an approved template; **63112 policy violation** → adjust content, shorten to <1600 chars, avoid links that trigger spam filters. Re-run `pnpm warelay status` to see the exact Twilio response body.
