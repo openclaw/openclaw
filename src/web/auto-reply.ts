@@ -92,6 +92,19 @@ export async function runWebHeartbeatOnce(opts: {
   });
 
   const cfg = loadConfig();
+  const sessionSnapshot = getSessionSnapshot(cfg, to);
+  if (verbose) {
+    heartbeatLogger.info(
+      {
+        to,
+        sessionKey: sessionSnapshot.key,
+        sessionId: sessionSnapshot.entry?.sessionId ?? null,
+        sessionFresh: sessionSnapshot.fresh,
+        idleMinutes: sessionSnapshot.idleMinutes,
+      },
+      "heartbeat session snapshot",
+    );
+  }
 
   try {
     const replyResult = await replyResolver(
@@ -110,7 +123,14 @@ export async function runWebHeartbeatOnce(opts: {
         !replyResult.mediaUrl &&
         !replyResult.mediaUrls?.length)
     ) {
-      heartbeatLogger.info({ to, reason: "empty-reply" }, "heartbeat skipped");
+      heartbeatLogger.info(
+        {
+          to,
+          reason: "empty-reply",
+          sessionId: sessionSnapshot.entry?.sessionId ?? null,
+        },
+        "heartbeat skipped",
+      );
       if (verbose) console.log(success("heartbeat: ok (empty reply)"));
       return;
     }
