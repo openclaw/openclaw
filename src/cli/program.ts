@@ -177,7 +177,7 @@ Examples:
 
   program
     .command("heartbeat")
-    .description("Trigger a heartbeat poll once (web provider)")
+    .description("Trigger a heartbeat poll once (web provider, no tmux)")
     .option("--provider <provider>", "auto | web", "auto")
     .option("--to <number>", "Override target E.164; defaults to allowFrom[0]")
     .option("--verbose", "Verbose logging", false)
@@ -398,6 +398,62 @@ Examples:
     });
 
   program
+    .command("relay:heartbeat")
+    .description(
+      "Run relay with an immediate heartbeat (no tmux); requires web provider",
+    )
+    .option("--provider <provider>", "auto | web", "auto")
+    .option("--verbose", "Verbose logging", false)
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      const providerPref = String(opts.provider ?? "auto");
+      if (!["auto", "web"].includes(providerPref)) {
+        defaultRuntime.error("--provider must be auto or web");
+        defaultRuntime.exit(1);
+        return;
+      }
+      const provider = await pickProvider(providerPref as "auto" | "web");
+      if (provider !== "web") {
+        defaultRuntime.error(
+          danger(
+            "Heartbeat relay is only supported for the web provider. Link with `warelay login --verbose`.",
+          ),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+
+      logWebSelfId(defaultRuntime, true);
+      const cfg = loadConfig();
+      const effectiveHeartbeat = resolveHeartbeatSeconds(cfg, undefined);
+      const effectivePolicy = resolveReconnectPolicy(cfg, undefined);
+      defaultRuntime.log(
+        info(
+          `Web relay health: heartbeat ${effectiveHeartbeat}s, retries ${effectivePolicy.maxAttempts || "∞"}, backoff ${effectivePolicy.initialMs}→${effectivePolicy.maxMs}ms x${effectivePolicy.factor} (jitter ${Math.round(effectivePolicy.jitter * 100)}%)`,
+        ),
+      );
+
+      try {
+        await monitorWebProvider(
+          Boolean(opts.verbose),
+          undefined,
+          true,
+          undefined,
+          defaultRuntime,
+          undefined,
+          { replyHeartbeatNow: true },
+        );
+      } catch (err) {
+        defaultRuntime.error(
+          danger(
+            `Web relay failed: ${String(err)}. Re-link with 'warelay login --provider web'.`,
+          ),
+        );
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
     .command("status")
     .description("Show recent WhatsApp messages (sent and received)")
     .option("-l, --limit <count>", "Number of messages to show", "20")
@@ -481,13 +537,16 @@ Examples:
     )
     .action(async () => {
       try {
+        const shouldAttach = Boolean(process.stdout.isTTY);
         const session = await spawnRelayTmux(
           "pnpm warelay relay --verbose",
-          true,
+          shouldAttach,
         );
         defaultRuntime.log(
           info(
-            `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose")`,
+            shouldAttach
+              ? `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose")`
+              : `tmux session started: ${session} (pane running "pnpm warelay relay --verbose"); attach manually with "tmux attach -t ${session}"`,
           ),
         );
       } catch (err) {
@@ -505,6 +564,15 @@ Examples:
     )
     .action(async () => {
       try {
+        if (!process.stdout.isTTY) {
+          defaultRuntime.error(
+            danger(
+              "Cannot attach: stdout is not a TTY. Run this in a terminal or use 'tmux attach -t warelay-relay' manually.",
+            ),
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
         await spawnRelayTmux("pnpm warelay relay --verbose", true, false);
         defaultRuntime.log(info("Attached to warelay-relay session."));
       } catch (err) {
@@ -522,13 +590,16 @@ Examples:
     )
     .action(async () => {
       try {
+        const shouldAttach = Boolean(process.stdout.isTTY);
         const session = await spawnRelayTmux(
           "pnpm warelay relay --verbose --heartbeat-now",
-          true,
+          shouldAttach,
         );
         defaultRuntime.log(
           info(
-            `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose --heartbeat-now")`,
+            shouldAttach
+              ? `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose --heartbeat-now")`
+              : `tmux session started: ${session} (pane running "pnpm warelay relay --verbose --heartbeat-now"); attach manually with "tmux attach -t ${session}"`,
           ),
         );
       } catch (err) {

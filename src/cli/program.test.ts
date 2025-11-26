@@ -80,6 +80,10 @@ describe("cli program", () => {
   });
 
   it("runs relay tmux attach command", async () => {
+    const originalIsTTY = process.stdout.isTTY;
+    (process.stdout as typeof process.stdout & { isTTY?: boolean }).isTTY =
+      true;
+
     const program = buildProgram();
     await program.parseAsync(["relay:tmux:attach"], { from: "user" });
     expect(spawnRelayTmux).toHaveBeenCalledWith(
@@ -87,5 +91,29 @@ describe("cli program", () => {
       true,
       false,
     );
+
+    (process.stdout as typeof process.stdout & { isTTY?: boolean }).isTTY =
+      originalIsTTY;
+  });
+
+  it("runs relay heartbeat command", async () => {
+    pickProvider.mockResolvedValue("web");
+    monitorWebProvider.mockResolvedValue(undefined);
+    const originalExit = runtime.exit;
+    runtime.exit = vi.fn();
+    const program = buildProgram();
+    await program.parseAsync(["relay:heartbeat"], { from: "user" });
+    expect(logWebSelfId).toHaveBeenCalled();
+    expect(monitorWebProvider).toHaveBeenCalledWith(
+      false,
+      undefined,
+      true,
+      undefined,
+      runtime,
+      undefined,
+      { replyHeartbeatNow: true },
+    );
+    expect(runtime.exit).not.toHaveBeenCalled();
+    runtime.exit = originalExit;
   });
 });

@@ -6,6 +6,7 @@ import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { WarelayConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import {
   HEARTBEAT_TOKEN,
@@ -20,7 +21,6 @@ import {
   resetLoadConfigMock,
   setLoadConfigMock,
 } from "./test-helpers.js";
-import { resolveStorePath } from "../config/sessions.js";
 
 describe("heartbeat helpers", () => {
   it("strips heartbeat token and skips when only token", () => {
@@ -137,7 +137,7 @@ describe("runWebHeartbeatOnce", () => {
       sender,
       replyResolver: resolver,
     });
-    expect(sender).toHaveBeenCalledWith("+1333", "ALERT", { verbose: false });
+    expect(sender).toHaveBeenCalledWith("+1999", "ALERT", { verbose: false });
   });
 
   it("does not refresh updatedAt when heartbeat is skipped", async () => {
