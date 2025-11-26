@@ -7,6 +7,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveStorePath,
+  saveSessionStore,
 } from "../config/sessions.js";
 import { danger, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
@@ -92,7 +93,7 @@ export async function runWebHeartbeatOnce(opts: {
   });
 
   const cfg = loadConfig();
-  const sessionSnapshot = getSessionSnapshot(cfg, to);
+  const sessionSnapshot = getSessionSnapshot(cfg, to, true);
   if (verbose) {
     heartbeatLogger.info(
       {
@@ -112,7 +113,7 @@ export async function runWebHeartbeatOnce(opts: {
         Body: HEARTBEAT_PROMPT,
         From: to,
         To: to,
-        MessageSid: undefined,
+        MessageSid: sessionSnapshot.entry?.sessionId,
       },
       undefined,
       cfg,
@@ -139,6 +140,15 @@ export async function runWebHeartbeatOnce(opts: {
       (replyResult.mediaUrl ?? replyResult.mediaUrls?.length ?? 0) > 0;
     const stripped = stripHeartbeatToken(replyResult.text);
     if (stripped.shouldSkip && !hasMedia) {
+      // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.
+      const sessionCfg = cfg.inbound?.reply?.session;
+      const storePath = resolveStorePath(sessionCfg?.store);
+      const store = loadSessionStore(storePath);
+      if (sessionSnapshot.entry && store[sessionSnapshot.key]) {
+        store[sessionSnapshot.key].updatedAt = sessionSnapshot.entry.updatedAt;
+        await saveSessionStore(storePath, store);
+      }
+
       heartbeatLogger.info(
         { to, reason: "heartbeat-token", rawLength: replyResult.text?.length },
         "heartbeat skipped",
@@ -185,14 +195,20 @@ function getFallbackRecipient(cfg: ReturnType<typeof loadConfig>) {
   return mostRecent ? normalizeE164(mostRecent[0]) : null;
 }
 
-function getSessionSnapshot(cfg: ReturnType<typeof loadConfig>, from: string) {
+function getSessionSnapshot(
+  cfg: ReturnType<typeof loadConfig>,
+  from: string,
+  isHeartbeat = false,
+) {
   const sessionCfg = cfg.inbound?.reply?.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const key = deriveSessionKey(scope, { From: from, To: "", Body: "" });
   const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
   const entry = store[key];
   const idleMinutes = Math.max(
-    sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
+    (isHeartbeat
+      ? (sessionCfg?.heartbeatIdleMinutes ?? sessionCfg?.idleMinutes)
+      : sessionCfg?.idleMinutes) ?? DEFAULT_IDLE_MINUTES,
     1,
   );
   const fresh = !!(

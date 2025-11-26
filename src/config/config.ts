@@ -13,6 +13,7 @@ export type SessionConfig = {
   scope?: SessionScope;
   resetTriggers?: string[];
   idleMinutes?: number;
+  heartbeatIdleMinutes?: number;
   store?: string;
   sessionArgNew?: string[];
   sessionArgResume?: string[];
@@ -89,6 +90,7 @@ const ReplySchema = z
           .optional(),
         resetTriggers: z.array(z.string()).optional(),
         idleMinutes: z.number().int().positive().optional(),
+        heartbeatIdleMinutes: z.number().int().positive().optional(),
         store: z.string().optional(),
         sessionArgNew: z.array(z.string()).optional(),
         sessionArgResume: z.array(z.string()).optional(),
