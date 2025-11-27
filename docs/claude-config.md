@@ -242,6 +242,24 @@ MCP (Model Context Protocol) servers supercharge your assistant by giving Claude
 | **iTerm** | Run commands in visible terminal window | [iterm-mcp](https://github.com/pashpashpash/iterm-mcp) |
 | **Firecrawl** | Scrape and parse web pages | Via API key |
 
+### Recommended CLI Tools
+
+These aren't MCPs but work great alongside your assistant:
+
+| Tool | What It Does | Link |
+|------|--------------|------|
+| **[Peekaboo](https://github.com/steipete/peekaboo)** | macOS screenshots, UI automation, AI vision analysis, click/type anywhere | `brew install steipete/tap/peekaboo` |
+| **[mcporter](https://github.com/steipete/mcporter)** | Manage MCPs across AI clients, OAuth flows, health checks | `npm install -g mcporter` |
+
+**Peekaboo** is especially powerful - it lets Claude:
+- 📸 Take screenshots of any app or screen
+- 🖱️ Click buttons, type text, scroll - full GUI automation
+- 👁️ Analyze images with AI vision (GPT-4, Claude, Grok)
+- 📋 Extract menu bar items and keyboard shortcuts
+- 🪟 List and manage windows across displays
+
+Example: "Take a screenshot of Safari and tell me what's on the page" or "Click the Submit button in the frontmost app"
+
 ### Adding MCPs to Claude Code
 
 ```bash
