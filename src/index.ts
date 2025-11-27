@@ -119,10 +119,10 @@ const isMain =
 if (isMain) {
   // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
   // These log the error and exit gracefully instead of crashing without trace.
-  process.on("unhandledRejection", (reason, promise) => {
+  process.on("unhandledRejection", (reason, _promise) => {
     console.error(
       "[warelay] Unhandled promise rejection:",
-      reason instanceof Error ? reason.stack ?? reason.message : reason,
+      reason instanceof Error ? (reason.stack ?? reason.message) : reason,
     );
     process.exit(1);
   });

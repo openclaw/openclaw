@@ -90,7 +90,10 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
   );
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
-  if (sock.ws) {
+  if (
+    sock.ws &&
+    typeof (sock.ws as unknown as { on?: unknown }).on === "function"
+  ) {
     sock.ws.on("error", (err: Error) => {
       sessionLogger.error({ error: String(err) }, "WebSocket error");
     });

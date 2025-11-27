@@ -45,7 +45,7 @@ export type WebMonitorTuning = {
 const formatDuration = (ms: number) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
 
-const DEFAULT_REPLY_HEARTBEAT_MINUTES = 10;
+const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const HEARTBEAT_PROMPT = "HEARTBEAT ultrathink";
 
