@@ -323,6 +323,7 @@ These make your AI much more capable:
 | Tool | What It Does | Install |
 |------|--------------|---------|
 | **[spotify-player](https://github.com/aome510/spotify-player)** | Control Spotify from CLI - play, pause, search, queue | `brew install spotify-player` |
+| **[browser-tools](https://github.com/steipete/agent-scripts)** | Chrome DevTools CLI - navigate, screenshot, eval JS, extract DOM | Clone repo |
 | **say** | macOS text-to-speech | Built-in |
 | **afplay** | Play audio files | Built-in |
 | **pmset** | Battery status monitoring | Built-in |
@@ -394,6 +395,32 @@ mcporter handles OAuth flows for services like Linear and Notion, and keeps your
 4. **Chrome DevTools** = AI can see and interact with web pages
 
 The combination of warelay (WhatsApp) + MCPs (services) + Claude Code (execution) creates a surprisingly capable personal assistant.
+
+### browser-tools for Web Scraping
+
+[browser-tools](https://github.com/steipete/agent-scripts) is a lightweight Chrome DevTools CLI that doesn't require MCP (saves ~17k tokens!). Great for reading tweets, scraping pages, or automating browser tasks:
+
+```bash
+# Start Chrome with your profile (logged into sites)
+~/Projects/agent-scripts/bin/browser-tools start --profile
+
+# Navigate and extract tweet content
+browser-tools nav "https://x.com/steipete/status/123"
+browser-tools eval 'Array.from(document.querySelectorAll("[data-testid=\"tweetText\"]")).map(el => el.innerText).join("\n")'
+
+# Kill ONLY the devtools Chrome (your regular Chrome stays open!)
+browser-tools kill --all --force
+```
+
+---
+
+## See It In Action
+
+Check out these tweets showing warelay + Clawd in the wild:
+
+- [Clawd with full system access via WhatsApp](https://x.com/steipete/status/1993342394184745270) - "I'll be nice to Clawd"
+- [Voice support - talk with Clawd on the go](https://x.com/steipete/status/1993455673229840588) - and it talks back!
+- [Wake-up alarm demo](https://x.com/steipete/status/1994089740367253572) - "Took me 2 days to glue things together. Didn't even need 150 Million in funding."
 
 ---
 
