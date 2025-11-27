@@ -304,7 +304,7 @@ These aren't MCPs but work great alongside your assistant:
 | **[Peekaboo](https://github.com/steipete/peekaboo)** | macOS screenshots, UI automation, AI vision analysis, click/type anywhere | `brew install steipete/tap/peekaboo` |
 | **[mcporter](https://github.com/steipete/mcporter)** | Manage MCPs across AI clients, OAuth flows, health checks | `npm install -g mcporter` |
 
-**Peekaboo** is especially powerful - it lets Claude:
+**[Peekaboo](https://github.com/steipete/peekaboo)** is especially powerful - it lets Claude:
 - 📸 Take screenshots of any app or screen
 - 🖱️ Click buttons, type text, scroll - full GUI automation
 - 👁️ Analyze images with AI vision (GPT-4, Claude, Grok)
@@ -312,6 +312,43 @@ These aren't MCPs but work great alongside your assistant:
 - 🪟 List and manage windows across displays
 
 Example: "Take a screenshot of Safari and tell me what's on the page" or "Click the Submit button in the frontmost app"
+
+### Useful CLI Tools for Your Assistant
+
+These make your AI much more capable:
+
+| Tool | What It Does | Install |
+|------|--------------|---------|
+| **[spotify-player](https://github.com/aome510/spotify-player)** | Control Spotify from CLI - play, pause, search, queue | `brew install spotify-player` |
+| **say** | macOS text-to-speech | Built-in |
+| **afplay** | Play audio files | Built-in |
+| **pmset** | Battery status monitoring | Built-in |
+| **osascript** | AppleScript for system control (volume, apps) | Built-in |
+| **curl + OpenAI TTS** | Generate speech with custom voices | API key |
+
+**spotify-player** is great for music control:
+```bash
+spotify_player playback play
+spotify_player playback pause
+spotify_player search "Gareth Emery"
+spotify_player playback volume 50
+```
+
+**Wake-up alarm example** (what Clawd actually does):
+```bash
+# Generate voice message
+curl -s "https://api.openai.com/v1/audio/speech" \
+  -H "Authorization: Bearer $OPENAI_API_KEY" \
+  -d '{"model":"tts-1-hd","voice":"echo","input":"Wake up! Time for your meeting."}' \
+  -o /tmp/wakeup.mp3
+
+# Set volume and play
+osascript -e 'set volume output volume 60'
+afplay /tmp/wakeup.mp3
+
+# Start music
+spotify_player playback play
+```
 
 ### Adding MCPs to Claude Code
 
