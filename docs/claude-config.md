@@ -61,6 +61,8 @@ The second phone just needs to stay on and connected to the internet occasionall
 
 ## Meet Clawd 👋
 
+![Clawd in action on WhatsApp](whatsapp-clawd.jpg)
+
 Clawd is @steipete's personal AI assistant built on warelay. Here's what makes it special:
 
 - **Always available** via WhatsApp - no app switching, works on any device
