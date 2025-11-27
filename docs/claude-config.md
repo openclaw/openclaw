@@ -54,7 +54,7 @@ This is the actual config running on @steipete's Mac (`~/.warelay/warelay.json`)
 {
   logging: { level: "trace", file: "/tmp/warelay/warelay.log" },
   inbound: {
-    allowFrom: ["***REMOVED***"],  // your phone number
+    allowFrom: ["+1234567890"],  // your phone number
     reply: {
       mode: "command",
       cwd: "/Users/steipete/clawd",              // Clawd's home - give your AI a workspace!
@@ -134,7 +134,7 @@ Set to `0` to disable heartbeats entirely.
 
 Test it anytime:
 ```sh
-warelay heartbeat --provider web --to ***REMOVED*** --verbose
+warelay heartbeat --provider web --to +1234567890 --verbose
 ```
 
 ## How Messages Flow
