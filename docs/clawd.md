@@ -161,14 +161,20 @@ Claude is instructed to reply with exactly `HEARTBEAT_OK` if nothing needs atten
 
 ### What Can Heartbeats Do?
 
-Clawd uses heartbeats to:
-- 🔋 **Monitor battery** - warns when laptop is low
-- ⏰ **Wake-up alarms** - checks the time and triggers alarms (voice + music!)
-- 📅 **Calendar reminders** - surfaces upcoming events
-- 🌤️ **Contextual updates** - weather, travel info, whatever's relevant
-- 💡 **Surprise check-ins** - occasionally just says hi with something fun
+Clawd uses heartbeats to do **real work**, not just check in:
 
-The key insight: heartbeats let your AI be **proactive**, not just reactive.
+- 🔋 **Monitor battery** - `pmset -g batt` - warns <30%, critical <15%
+- 📅 **Calendar** - checks upcoming meetings in next 2 hours
+- 📧 **Email** - scans inbox for urgent/important unread messages
+- 🐦 **Twitter** - checks @mentions and replies worth seeing (via browser-tools)
+- 📺 **TV Shows** - reminds about new episodes of shows you're watching
+- 🏰 **Server health** - SSH to verify backup servers are running
+- ✈️ **Flights** - reminds about upcoming travel
+- 🧹 **Home tidying** - occasionally cleans temp files, updates memories
+- ⏰ **Wake-up alarms** - triggers voice + music alarms at scheduled times
+- 💡 **Surprise** - occasionally shares something fun or interesting
+
+The key insight: heartbeats let your AI be **proactive**, not just reactive. Configure what matters to you!
 
 ### Heartbeat Config
 
