@@ -1,6 +1,6 @@
-# Claude Auto-Reply Setup (2025-11-25)
+# Claude Auto-Reply Setup (2025-11-27)
 
-This guide shows the exact way to wire **warelay** to the Claude CLI so inbound WhatsApp messages get command-driven replies. It matches the current code paths and defaults in this repo.
+This is the live Claude configuration used by @steipete’s personal assistant “Clawd”. It matches the current code paths and defaults in this repo.
 
 ## Prerequisites
 - Node 22+, `warelay` installed globally (`npm install -g warelay`) or run via `pnpm warelay` inside the repo.
@@ -11,39 +11,55 @@ This guide shows the exact way to wire **warelay** to the Claude CLI so inbound 
   ```
 - Optional: set `ANTHROPIC_API_KEY` in your shell profile for non-interactive use.
 
-## Create your warelay config
-warelay reads `~/.warelay/warelay.json` (JSON5 accepted). Add a command-mode reply that points at the Claude CLI:
+## Current personal config (`~/.warelay/warelay.json`)
 
 ```json5
 {
+  logging: { level: "trace", file: "/tmp/warelay/warelay.log" },
   inbound: {
-    // Only people in this list can trigger the command reply (remove to allow anyone).
-    allowFrom: ["+15551234567"],
+    allowFrom: ["***REMOVED***"],
     reply: {
       mode: "command",
-      // Working directory for command execution (useful for Claude Code project context).
-      cwd: "/Users/you/Projects/my-project",
-      // Prepended before the inbound body; good for system prompts.
-      bodyPrefix: "You are a concise WhatsApp assistant. Keep replies under 1500 characters.\n\n",
-      // Claude CLI argv; the final element is the prompt/body provided by warelay.
-      command: ["claude", "--model", "claude-3-5-sonnet-20240620", "{{BodyStripped}}"],
-      claudeOutputFormat: "text",          // warelay injects --output-format text and -p for Claude
-      timeoutSeconds: 120,
+      cwd: "/Users/steipete/clawd",              // Clawd’s home/project context
+      bodyPrefix: "ultrathink ",                 // prepended to every inbound body
+      sessionIntro: "You are Clawd, an AI assistant running on the user's Mac. User writes messages via WhatsApp and you respond. This folder (/Users/steipete/clawd) is your personal workspace - you can store Markdown files, images, notes, and any data you like here. Keep WhatsApp replies under 1500 characters (platform limit), but feel free to save longer content to files in your folder.",
+      command: [
+        "claude",
+        "--model",
+        "claude-opus-4-5-20251101",
+        "-p",
+        "--output-format",
+        "json",
+        "--dangerously-skip-permissions",
+        "{{BodyStripped}}"
+      ],
       session: {
-        scope: "per-sender",               // keep conversation per phone number
-        resetTriggers: ["/new"],           // send "/new" to reset context
-        idleMinutes: 60
-      }
+        scope: "per-sender",
+        resetTriggers: ["/new"],
+        idleMinutes: 10080,              // 7 days before a fresh session is forced
+        heartbeatIdleMinutes: 10080,     // same window for heartbeat-based expiry
+        sessionArgNew: ["--session-id", "{{SessionId}}"],
+        sessionArgResume: ["--resume", "{{SessionId}}"],
+        sessionArgBeforeBody: true,
+        sendSystemOnce: true             // sessionIntro sent only on first turn
+      },
+      timeoutSeconds: 900
     }
   }
 }
 ```
 
-Notes on this configuration:
-- `cwd` sets the working directory where the command runs. This is essential for Claude Code to have the right project context—Claude will see the project's `CLAUDE.md`, have access to project files, and understand the codebase structure.
-- warelay automatically injects a Claude identity prefix and the correct `--output-format`/`-p` flags when `command[0]` is `claude` and `claudeOutputFormat` is set.
-- Sessions are stored in `~/.warelay/sessions.json`; `scope: per-sender` keeps separate threads for each contact.
-- `bodyPrefix` is added before the inbound message body that reaches Claude. The string above mirrors the built-in 1500-character WhatsApp guardrail.
+Key behaviors:
+- **System prompt once:** `sessionIntro` is injected only on the first turn of each session because `sendSystemOnce=true`. Later turns only see the per-message prefix.
+- **Per-message prefix:** Every inbound body gets `ultrathink ` prepended (`bodyPrefix`) before being passed to Claude.
+- **Session stickiness:** Sessions are per-sender and live up to 7 days of inactivity; `/new` forces a reset.
+- **Clawd’s home:** Claude runs in `/Users/steipete/clawd`, so it can read and write there.
+
+## Heartbeats (proactive pings)
+- Warelay can poll Claude on a cadence (default 30 m when `mode=command`) using the prompt body **`HEARTBEAT ultrathink`**.
+- Claude is instructed (via `CLAUDE_IDENTITY_PREFIX`) to reply with exactly `HEARTBEAT_OK` when nothing needs attention. If that token is returned, the outbound message is suppressed but the event is logged.
+- Replies without `HEARTBEAT_OK` (or with media) are forwarded as alerts. Suppressed heartbeats do **not** extend session `updatedAt`, so idle expiry still works.
+- You can trigger one manually: `warelay heartbeat --provider web --to ***REMOVED*** --session-id <session-uuid> --verbose`.
 
 ## How the flow works
 1. An inbound message (Twilio webhook, Twilio poller, or WhatsApp Web listener) arrives.
@@ -61,7 +77,7 @@ Notes on this configuration:
 - Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment.
 - Outbound media from Claude (via `MEDIA:`) follows provider caps: Web resizes images to the configured target (`inbound.reply.mediaMaxMb`, default 5 MB) within hard limits of 6 MB (image), 16 MB (audio/video voice notes), and 100 MB (documents); Twilio still uses the Funnel host with a 5 MB guard.
 - Voice notes: set `inbound.transcribeAudio.command` to run a CLI that emits the transcript to stdout (e.g., OpenAI Whisper: `openai api audio.transcriptions.create -m whisper-1 -f {{MediaPath}} --response-format text`). If it succeeds, warelay replaces `Body` with the transcript and adds the original media path plus a `Transcript:` block into the prompt before invoking Claude.
-- To avoid re-sending long system prompts every turn, set `inbound.reply.session.sendSystemOnce: true` and keep your prompt in `bodyPrefix` or `sessionIntro`; they are sent only on the first message of each session (resets on `/new` or idle expiry).
+- To avoid re-sending long system prompts every turn, set `inbound.reply.session.sendSystemOnce: true` and keep your prompt in `sessionIntro`; use `bodyPrefix` for lightweight per-message tags (e.g., `ultrathink `).
 - Typing indicators: for long-running Claude/command replies, `inbound.reply.typingIntervalSeconds` (or the session-level equivalent) refreshes the “composing” indicator periodically (default 8 s for command replies).
 
 ## Testing the setup

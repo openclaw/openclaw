@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-Send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven).
+Send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven). I’m using warelay to run my personal, pro-active assistant, Clawd—follow me on Twitter: [@steipete](https://twitter.com/steipete). See my exact Claude setup in [`docs/claude-config.md`](https://github.com/steipete/warelay/blob/main/docs/claude-config.md).
 
 I'm using warelay to run **my personal, pro-active assistant, Clawd**.
 Follow me on Twitter - @steipete, this project is brand-new and there's a lot to discover.
