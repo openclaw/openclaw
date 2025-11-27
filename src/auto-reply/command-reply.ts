@@ -179,7 +179,9 @@ export async function runCommandReply(
   let finalArgv = argv;
   const isClaudeInvocation =
     finalArgv.length > 0 && path.basename(finalArgv[0]) === CLAUDE_BIN;
-  if (isClaudeInvocation && finalArgv.length > 0) {
+  const shouldPrependIdentity =
+    isClaudeInvocation && !(sendSystemOnce && systemSent);
+  if (shouldPrependIdentity && finalArgv.length > 0) {
     const bodyIdx = finalArgv.length - 1;
     const existingBody = finalArgv[bodyIdx] ?? "";
     finalArgv = [

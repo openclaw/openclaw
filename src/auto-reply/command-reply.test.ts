@@ -91,6 +91,29 @@ describe("runCommandReply", () => {
     expect(finalArgv.at(-1)).toContain("You are Clawd (Claude)");
   });
 
+  it("omits identity prefix on resumed session when sendSystemOnce=true", async () => {
+    const captures: ReplyPayload[] = [];
+    const runner = makeRunner({ stdout: "ok" }, captures);
+    await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["claude", "{{Body}}"],
+        claudeOutputFormat: "json",
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: true,
+      isNewSession: false,
+      isFirstTurnInSession: false,
+      systemSent: true,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: runner,
+      enqueue: enqueueImmediate,
+    });
+    const finalArgv = captures[0].argv as string[];
+    expect(finalArgv.at(-1)).not.toContain("You are Clawd (Claude)");
+  });
+
   it("picks session resume args when not new", async () => {
     const captures: ReplyPayload[] = [];
     const runner = makeRunner({ stdout: "hi" }, captures);
