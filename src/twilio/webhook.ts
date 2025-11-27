@@ -5,7 +5,7 @@ import express, { type Request, type Response } from "express";
 import { getReplyFromConfig, type ReplyPayload } from "../auto-reply/reply.js";
 import { type EnvConfig, readEnv } from "../env.js";
 import { danger, success } from "../globals.js";
-import { ensureMediaHosted } from "../media/host.js";
+import * as mediaHost from "../media/host.js";
 import { attachMediaRoutes } from "../media/server.js";
 import { saveMediaSource } from "../media/store.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -92,7 +92,7 @@ export async function startWebhook(
       try {
         let mediaUrl = replyResult.mediaUrl;
         if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) {
-          const hosted = await ensureMediaHosted(mediaUrl);
+          const hosted = await mediaHost.ensureMediaHosted(mediaUrl);
           mediaUrl = hosted.url;
         }
         await client.messages.create({
