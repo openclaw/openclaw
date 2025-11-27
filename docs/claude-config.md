@@ -296,6 +296,7 @@ MCP (Model Context Protocol) servers supercharge your assistant by giving Claude
 | **Chrome DevTools** | Control browser, take screenshots, debug | `npx chrome-devtools-mcp@latest` |
 | **iTerm** | Run commands in visible terminal window | [iterm-mcp](https://github.com/pashpashpash/iterm-mcp) |
 | **Firecrawl** | Scrape and parse web pages | Via API key |
+| **gowa** | Read/send WhatsApp messages directly | [go-whatsapp-web-multidevice](https://github.com/aldinokemal/go-whatsapp-web-multidevice) |
 
 ### Recommended CLI Tools
 
