@@ -1,103 +1,189 @@
-# Claude Auto-Reply Setup (2025-11-27)
+# Building Your Own AI Personal Assistant with Warelay
 
-This is the live Claude configuration used by @steipete’s personal assistant “Clawd”. It matches the current code paths and defaults in this repo.
+> **TL;DR:** Warelay lets you turn Claude into a proactive personal assistant that lives in your pocket via WhatsApp. It can check in on you, remember context across conversations, run commands on your Mac, and even wake you up with music. This doc shows you how.
+
+## Meet Clawd 👋
+
+Clawd is @steipete's personal AI assistant built on warelay. Here's what makes it special:
+
+- **Always available** via WhatsApp - no app switching, works on any device
+- **Proactive heartbeats** - Clawd checks in every 10 minutes and can alert you to things (low battery, calendar reminders, anything it notices)
+- **Persistent memory** - conversations span days/weeks with full context
+- **Full Mac access** - can run commands, take screenshots, control Spotify, read/write files
+- **Personal workspace** - has its own folder (`~/clawd`) where it stores notes, memories, and artifacts
+
+The magic is in the combination: WhatsApp's ubiquity + Claude's intelligence + warelay's plumbing + your Mac's capabilities.
 
 ## Prerequisites
-- Node 22+, `warelay` installed globally (`npm install -g warelay`) or run via `pnpm warelay` inside the repo.
+
+- Node 22+, `warelay` installed: `npm install -g warelay`
 - Claude CLI installed and logged in:
   ```sh
   brew install anthropic-ai/cli/claude
   claude login
   ```
-- Optional: set `ANTHROPIC_API_KEY` in your shell profile for non-interactive use.
+- Optional: set `ANTHROPIC_API_KEY` in your shell profile for non-interactive use
 
-## Current personal config (`~/.warelay/warelay.json`)
+## The Config That Powers Clawd
+
+This is the actual config running on @steipete's Mac (`~/.warelay/warelay.json`):
 
 ```json5
 {
   logging: { level: "trace", file: "/tmp/warelay/warelay.log" },
   inbound: {
-    allowFrom: ["***REMOVED***"],
+    allowFrom: ["***REMOVED***"],  // your phone number
     reply: {
       mode: "command",
-      cwd: "/Users/steipete/clawd",              // Clawd’s home/project context
-      bodyPrefix: "ultrathink ",                 // prepended to every inbound body
+      cwd: "/Users/steipete/clawd",              // Clawd's home - give your AI a workspace!
+      bodyPrefix: "ultrathink ",                 // triggers extended thinking on every message
       sessionIntro: "You are Clawd, an AI assistant running on the user's Mac. User writes messages via WhatsApp and you respond. This folder (/Users/steipete/clawd) is your personal workspace - you can store Markdown files, images, notes, and any data you like here. Keep WhatsApp replies under 1500 characters (platform limit), but feel free to save longer content to files in your folder.",
       command: [
         "claude",
-        "--model",
-        "claude-opus-4-5-20251101",
+        "--model", "claude-opus-4-5-20251101",   // or claude-sonnet-4-5 for faster/cheaper
         "-p",
-        "--output-format",
-        "json",
-        "--dangerously-skip-permissions",
+        "--output-format", "json",
+        "--dangerously-skip-permissions",        // lets Claude run commands freely
         "{{BodyStripped}}"
       ],
       session: {
         scope: "per-sender",
-        resetTriggers: ["/new"],
-        idleMinutes: 10080,              // 7 days before a fresh session is forced
-        heartbeatIdleMinutes: 10080,     // same window for heartbeat-based expiry
+        resetTriggers: ["/new"],                 // say /new to start fresh
+        idleMinutes: 10080,                      // 7 days of context!
+        heartbeatIdleMinutes: 10080,
         sessionArgNew: ["--session-id", "{{SessionId}}"],
         sessionArgResume: ["--resume", "{{SessionId}}"],
         sessionArgBeforeBody: true,
-        sendSystemOnce: true             // sessionIntro sent only on first turn
+        sendSystemOnce: true                     // intro only on first message
       },
-      timeoutSeconds: 900
+      timeoutSeconds: 900                        // 15 min timeout for complex tasks
     }
   }
 }
 ```
 
-Key behaviors:
-- **System prompt once:** `sessionIntro` is injected only on the first turn of each session because `sendSystemOnce=true`. Later turns only see the per-message prefix.
-- **Per-message prefix:** Every inbound body gets `ultrathink ` prepended (`bodyPrefix`) before being passed to Claude.
-- **Session stickiness:** Sessions are per-sender and live up to 7 days of inactivity; `/new` forces a reset.
-- **Clawd’s home:** Claude runs in `/Users/steipete/clawd`, so it can read and write there.
+### Key Design Decisions
 
-## Heartbeats (proactive pings)
-- Warelay can poll Claude on a cadence (default 30 m when `mode=command`) using the prompt body **`HEARTBEAT ultrathink`**.
-- Claude is instructed (via `CLAUDE_IDENTITY_PREFIX`) to reply with exactly `HEARTBEAT_OK` when nothing needs attention. If that token is returned, the outbound message is suppressed but the event is logged.
-- Replies without `HEARTBEAT_OK` (or with media) are forwarded as alerts. Suppressed heartbeats do **not** extend session `updatedAt`, so idle expiry still works.
-- You can trigger one manually: `warelay heartbeat --provider web --to ***REMOVED*** --session-id <session-uuid> --verbose`.
+| Setting | Why |
+|---------|-----|
+| `cwd: ~/clawd` | Give your AI a home! It can store memories, notes, images here |
+| `bodyPrefix: "ultrathink "` | Extended thinking = better reasoning on every message |
+| `idleMinutes: 10080` | 7 days of context - your AI remembers conversations |
+| `sendSystemOnce: true` | Intro prompt only on first message, saves tokens |
+| `--dangerously-skip-permissions` | Full autonomy - Claude can run any command |
 
-## How the flow works
-1. An inbound message (Twilio webhook, Twilio poller, or WhatsApp Web listener) arrives.
-2. warelay enqueues the command in a process-wide FIFO queue so only one Claude run happens at a time (`src/process/command-queue.ts`).
-3. Typing indicators are sent (Twilio) or `composing` presence is sent (Web) while Claude runs.
-4. Claude stdout is parsed:
-   - JSON mode is handled automatically if you set `claudeOutputFormat: "json"`; otherwise text is used.
-   - If stdout contains `MEDIA:https://...` (or a local path), warelay strips it from the text, hosts the media if needed, and sends it along with the reply.
-5. The reply (text and optional media) is sent back via the same provider that received the message.
+## Heartbeats: Your Proactive Assistant
 
-## Media and attachments
-- To send an image from Claude, include a line like `MEDIA:https://example.com/pic.jpg` in the output. warelay will:
-  - Host local paths for Twilio using the media server/Tailscale Funnel.
-  - Send buffers directly for the Web provider.
-- Inbound media is downloaded (≤5 MB) and exposed to your templates as `{{MediaPath}}`, `{{MediaUrl}}`, and `{{MediaType}}`. You can mention this in your prompt if you want Claude to reason about the attachment.
-- Outbound media from Claude (via `MEDIA:`) follows provider caps: Web resizes images to the configured target (`inbound.reply.mediaMaxMb`, default 5 MB) within hard limits of 6 MB (image), 16 MB (audio/video voice notes), and 100 MB (documents); Twilio still uses the Funnel host with a 5 MB guard.
-- Voice notes: set `inbound.transcribeAudio.command` to run a CLI that emits the transcript to stdout (e.g., OpenAI Whisper: `openai api audio.transcriptions.create -m whisper-1 -f {{MediaPath}} --response-format text`). If it succeeds, warelay replaces `Body` with the transcript and adds the original media path plus a `Transcript:` block into the prompt before invoking Claude.
-- To avoid re-sending long system prompts every turn, set `inbound.reply.session.sendSystemOnce: true` and keep your prompt in `sessionIntro`; use `bodyPrefix` for lightweight per-message tags (e.g., `ultrathink `).
-- Typing indicators: for long-running Claude/command replies, `inbound.reply.typingIntervalSeconds` (or the session-level equivalent) refreshes the “composing” indicator periodically (default 8 s for command replies).
+This is where warelay gets interesting. Every 10 minutes (configurable), warelay pings Claude with:
 
-## Testing the setup
-1. Start a relay (auto-selects Web when logged in, otherwise Twilio polling):
-   ```sh
-   warelay relay --provider auto --verbose
-   ```
-2. Send a WhatsApp message from an allowed number. Watch the terminal for:
-   - Queue logs if multiple messages arrive close together.
-   - Claude stderr (verbose) and timing info.
-3. If you see `(command produced no output)`, check Claude CLI auth or model name.
+```
+HEARTBEAT ultrathink
+```
 
-## Troubleshooting tips
-- Command takes too long: lower `timeoutSeconds` or simplify the prompt. Timeouts kill the Claude process.
-- No reply: ensure the sender number is in `allowFrom` (or remove the allowlist), and confirm `claude login` was run in the same environment.
-- Media fails on Twilio: run `warelay webhook --ingress tailscale` (or `warelay webhook --serve-media` via `send --serve-media`) so the media host is reachable over HTTPS.
-- Stuck queue: enable `--verbose` to see “queued for …ms” messages and confirm commands are draining. Use `pnpm vitest` to run unit tests if you change queue logic.
+Claude is instructed to reply with exactly `HEARTBEAT_OK` if nothing needs attention. That response is **suppressed** - you don't see it. But if Claude notices something worth mentioning, it sends a real message.
 
-## Minimal text-only variant
-If you just want short text replies and no sessions:
+### What Can Heartbeats Do?
+
+Clawd uses heartbeats to:
+- 🔋 **Monitor battery** - warns when laptop is low
+- ⏰ **Wake-up alarms** - checks the time and triggers alarms (voice + music!)
+- 📅 **Calendar reminders** - surfaces upcoming events
+- 🌤️ **Contextual updates** - weather, travel info, whatever's relevant
+- 💡 **Surprise check-ins** - occasionally just says hi with something fun
+
+The key insight: heartbeats let your AI be **proactive**, not just reactive.
+
+### Heartbeat Config
+
+```json5
+{
+  inbound: {
+    reply: {
+      heartbeatMinutes: 10,  // how often to ping (default 10 for command mode)
+      // ... rest of config
+    }
+  }
+}
+```
+
+Set to `0` to disable heartbeats entirely.
+
+### Manual Heartbeat
+
+Test it anytime:
+```sh
+warelay heartbeat --provider web --to ***REMOVED*** --verbose
+```
+
+## How Messages Flow
+
+```
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│  WhatsApp   │────▶│   warelay   │────▶│   Claude    │────▶│  Your Mac   │
+│  (phone)    │◀────│   relay     │◀────│   CLI       │◀────│  (commands) │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+```
+
+1. **Inbound**: WhatsApp message arrives via Baileys (WhatsApp Web protocol)
+2. **Queue**: warelay queues it (one Claude run at a time)
+3. **Typing**: "composing" indicator shows while Claude thinks
+4. **Execute**: Claude runs with full shell access in your `cwd`
+5. **Parse**: warelay extracts text + any `MEDIA:` paths from output
+6. **Reply**: Response sent back to WhatsApp
+
+## Media: Images, Voice, Documents
+
+### Receiving Media
+Inbound images/audio/video are downloaded and available as `{{MediaPath}}`. Voice notes can be auto-transcribed:
+
+```json5
+{
+  inbound: {
+    transcribeAudio: {
+      command: "openai api audio.transcriptions.create -m whisper-1 -f {{MediaPath}} --response-format text"
+    }
+  }
+}
+```
+
+### Sending Media
+Include `MEDIA:/path/to/file.png` in Claude's output to attach images. warelay handles resizing and format conversion automatically.
+
+## Starting the Relay
+
+```sh
+# Foreground (see all logs)
+warelay relay --provider web --verbose
+
+# Background in tmux (recommended)
+warelay relay:tmux
+
+# With immediate heartbeat on startup
+warelay relay:heartbeat:tmux
+```
+
+## Tips for a Great Personal Assistant
+
+1. **Give it a home** - A dedicated folder (`~/clawd`) lets your AI build persistent memory
+2. **Use extended thinking** - `bodyPrefix: "ultrathink "` dramatically improves reasoning
+3. **Long sessions** - 7-day `idleMinutes` means rich context across conversations
+4. **Let it surprise you** - Configure heartbeats to occasionally share something fun
+5. **Trust but verify** - Start with `--dangerously-skip-permissions` off, add it once comfortable
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| No reply | Check `claude login` was run in same environment |
+| Timeout | Increase `timeoutSeconds` or simplify the task |
+| Media fails | Ensure file exists and is under size limits |
+| Heartbeat spam | Tune `heartbeatMinutes` or set to 0 |
+| Session lost | Check `idleMinutes` hasn't expired; use `/new` to reset |
+
+## Minimal Config (Just Chat)
+
+Don't need the fancy stuff? Here's the simplest setup:
+
 ```json5
 {
   inbound: {
@@ -110,4 +196,72 @@ If you just want short text replies and no sessions:
 }
 ```
 
-This still benefits from the queue, typing indicators, and provider auto-selection.
+Still gets you: message queue, typing indicators, auto-reconnect. Just no sessions or heartbeats.
+
+## Recommended MCPs
+
+MCP (Model Context Protocol) servers supercharge your assistant by giving Claude access to external services. Here are the ones Clawd uses daily:
+
+### Essential for Personal Assistant Use
+
+| MCP | What It Does | Install |
+|-----|--------------|---------|
+| **Google Calendar** | Read/create events, check availability, set reminders | `npx @cocal/google-calendar-mcp` |
+| **Gmail** | Search, read, send emails with attachments | `npx @gongrzhe/server-gmail-autoauth-mcp` |
+| **Obsidian** | Read/write notes in your Obsidian vault | `npx obsidian-mcp-server@latest` |
+
+### Power User Add-ons
+
+| MCP | What It Does | Install |
+|-----|--------------|---------|
+| **GitHub** | Manage repos, issues, PRs, code search | `npx @anthropic/mcp-server-github` |
+| **Linear** | Project management, create/update issues | Via [mcporter](https://github.com/steipete/mcporter) |
+| **Chrome DevTools** | Control browser, take screenshots, debug | `npx chrome-devtools-mcp@latest` |
+| **iTerm** | Run commands in visible terminal window | [iterm-mcp](https://github.com/pashpashpash/iterm-mcp) |
+| **Firecrawl** | Scrape and parse web pages | Via API key |
+
+### Adding MCPs to Claude Code
+
+```bash
+# Add an MCP server (run from your cwd folder)
+claude mcp add google-calendar -- npx @cocal/google-calendar-mcp
+
+# With environment variables
+claude mcp add gmail -e GMAIL_OAUTH_PATH=~/.gmail-mcp -- npx @gongrzhe/server-gmail-autoauth-mcp
+
+# List configured servers
+claude mcp list
+
+# Check health
+claude mcp list  # shows status for each
+```
+
+### MCP Manager: mcporter
+
+For managing multiple MCPs across different AI clients, check out [mcporter](https://github.com/steipete/mcporter):
+
+```bash
+# Install
+npm install -g mcporter
+
+# List all servers with health status
+mcporter list
+
+# Sync config to all AI clients
+mcporter sync
+```
+
+mcporter handles OAuth flows for services like Linear and Notion, and keeps your MCP configs in sync across Claude Code, Cursor, and other clients.
+
+### Pro Tips
+
+1. **Calendar + Heartbeats** = Your AI reminds you of upcoming meetings
+2. **Gmail + Obsidian** = AI can search emails and save summaries to notes
+3. **GitHub + Linear** = AI manages your dev workflow end-to-end
+4. **Chrome DevTools** = AI can see and interact with web pages
+
+The combination of warelay (WhatsApp) + MCPs (services) + Claude Code (execution) creates a surprisingly capable personal assistant.
+
+---
+
+*Built by [@steipete](https://twitter.com/steipete). PRs welcome!*

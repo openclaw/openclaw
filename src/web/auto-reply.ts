@@ -45,7 +45,7 @@ export type WebMonitorTuning = {
 const formatDuration = (ms: number) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
 
-const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
+const DEFAULT_REPLY_HEARTBEAT_MINUTES = 10;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const HEARTBEAT_PROMPT = "HEARTBEAT ultrathink";
 
@@ -758,7 +758,13 @@ export async function monitorWebProvider(
     }
 
     const reason = await Promise.race([
-      listener.onClose ?? waitForever(),
+      listener.onClose?.catch((err) => {
+        reconnectLogger.error(
+          { error: String(err) },
+          "listener.onClose rejected",
+        );
+        return { status: 500, isLoggedOut: false, error: err };
+      }) ?? waitForever(),
       abortPromise ?? waitForever(),
     ]);
 

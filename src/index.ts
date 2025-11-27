@@ -117,5 +117,23 @@ const isMain =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 
 if (isMain) {
+  // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.
+  // These log the error and exit gracefully instead of crashing without trace.
+  process.on("unhandledRejection", (reason, promise) => {
+    console.error(
+      "[warelay] Unhandled promise rejection:",
+      reason instanceof Error ? reason.stack ?? reason.message : reason,
+    );
+    process.exit(1);
+  });
+
+  process.on("uncaughtException", (error) => {
+    console.error(
+      "[warelay] Uncaught exception:",
+      error.stack ?? error.message,
+    );
+    process.exit(1);
+  });
+
   program.parseAsync(process.argv);
 }

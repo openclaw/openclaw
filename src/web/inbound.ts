@@ -165,12 +165,24 @@ export async function monitorWebInbox(options: {
   sock.ev.on(
     "connection.update",
     (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
-      if (update.connection === "close") {
-        const status = getStatusCode(update.lastDisconnect?.error);
+      try {
+        if (update.connection === "close") {
+          const status = getStatusCode(update.lastDisconnect?.error);
+          onCloseResolve?.({
+            status,
+            isLoggedOut: status === DisconnectReason.loggedOut,
+            error: update.lastDisconnect?.error,
+          });
+        }
+      } catch (err) {
+        inboundLogger.error(
+          { error: String(err) },
+          "connection.update handler error",
+        );
         onCloseResolve?.({
-          status,
-          isLoggedOut: status === DisconnectReason.loggedOut,
-          error: update.lastDisconnect?.error,
+          status: undefined,
+          isLoggedOut: false,
+          error: err,
         });
       }
     },

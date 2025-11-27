@@ -57,28 +57,44 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
     markOnlineOnConnect: false,
   });
 
+  const sessionLogger = getChildLogger({ module: "web-session" });
+
   sock.ev.on("creds.update", saveCreds);
   sock.ev.on(
     "connection.update",
     (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr && printQr) {
-        console.log("Scan this QR in WhatsApp (Linked Devices):");
-        qrcode.generate(qr, { small: true });
-      }
-      if (connection === "close") {
-        const status = getStatusCode(lastDisconnect?.error);
-        if (status === DisconnectReason.loggedOut) {
-          console.error(
-            danger("WhatsApp session logged out. Run: warelay login"),
-          );
+      try {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr && printQr) {
+          console.log("Scan this QR in WhatsApp (Linked Devices):");
+          qrcode.generate(qr, { small: true });
         }
-      }
-      if (connection === "open" && verbose) {
-        console.log(success("WhatsApp Web connected."));
+        if (connection === "close") {
+          const status = getStatusCode(lastDisconnect?.error);
+          if (status === DisconnectReason.loggedOut) {
+            console.error(
+              danger("WhatsApp session logged out. Run: warelay login"),
+            );
+          }
+        }
+        if (connection === "open" && verbose) {
+          console.log(success("WhatsApp Web connected."));
+        }
+      } catch (err) {
+        sessionLogger.error(
+          { error: String(err) },
+          "connection.update handler error",
+        );
       }
     },
   );
+
+  // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
+  if (sock.ws) {
+    sock.ws.on("error", (err: Error) => {
+      sessionLogger.error({ error: String(err) }, "WebSocket error");
+    });
+  }
 
   return sock;
 }

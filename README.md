@@ -10,7 +10,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-Send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven). I’m using warelay to run my personal, pro-active assistant, Clawd—follow me on Twitter: [@steipete](https://twitter.com/steipete). See my exact Claude setup in [`docs/claude-config.md`](https://github.com/steipete/warelay/blob/main/docs/claude-config.md).
+Send, receive, auto-reply, and inspect WhatsApp messages over **Twilio** or your personal **WhatsApp Web** session. Ships with a one-command webhook setup (Tailscale Funnel + Twilio callback) and a configurable auto-reply engine (plain text or command/Claude driven).
+
+### Clawd (personal assistant)
+I'm using warelay to run my personal, pro-active assistant, **Clawd**. Follow me on Twitter: [@steipete](https://twitter.com/steipete). This project is brand-new and there's a lot to discover. See the exact Claude setup in [`docs/claude-config.md`](https://github.com/steipete/warelay/blob/main/docs/claude-config.md).
 
 I'm using warelay to run **my personal, pro-active assistant, Clawd**.
 Follow me on Twitter - @steipete, this project is brand-new and there's a lot to discover.
@@ -118,14 +121,14 @@ Best practice: use a dedicated WhatsApp account (separate SIM/eSIM or business a
       command: ["claude", "--dangerously-skip-permissions", "{{BodyStripped}}"],
       claudeOutputFormat: "text",
       session: { scope: "per-sender", resetTriggers: ["/new"], idleMinutes: 60 },
-      heartbeatMinutes: 30 // optional; pings Claude every 30m with "HEARTBEAT ultrathink" and only sends if it omits HEARTBEAT_OK
+      heartbeatMinutes: 10 // optional; pings Claude every 10m with "HEARTBEAT ultrathink" and only sends if it omits HEARTBEAT_OK
     }
   }
 }
 ```
 
 #### Heartbeat pings (command mode)
-- When `heartbeatMinutes` is set (default 30 for `mode: "command"`), the relay periodically runs your command/Claude session with a heartbeat prompt.
+- When `heartbeatMinutes` is set (default 10 for `mode: "command"`), the relay periodically runs your command/Claude session with a heartbeat prompt.
 - Heartbeat body is `HEARTBEAT ultrathink` (so the model can recognize the probe); if Claude replies exactly `HEARTBEAT_OK`, the message is suppressed; otherwise the reply (or media) is forwarded. Suppressions are still logged so you know the heartbeat ran.
 - Override session freshness for heartbeats with `session.heartbeatIdleMinutes` (defaults to `session.idleMinutes`). Heartbeat skips do **not** bump `updatedAt`, so sessions still expire normally.
 - Trigger one manually with `warelay heartbeat` (web provider only, `--verbose` prints session info). Use `--session-id <uuid>` to force resuming a specific Claude session, `--all` to ping every active session, `warelay relay:heartbeat` for a full relay run with an immediate heartbeat, or `--heartbeat-now` on `relay`/`relay:heartbeat:tmux`.
