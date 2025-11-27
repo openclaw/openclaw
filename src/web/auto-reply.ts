@@ -147,8 +147,9 @@ export async function runWebHeartbeatOnce(opts: {
       return;
     }
 
-    const hasMedia =
-      (replyResult.mediaUrl ?? replyResult.mediaUrls?.length ?? 0) > 0;
+    const hasMedia = Boolean(
+      replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+    );
     const stripped = stripHeartbeatToken(replyResult.text);
     if (stripped.shouldSkip && !hasMedia) {
       // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.
@@ -677,8 +678,9 @@ export async function monitorWebProvider(
         }
 
         const stripped = stripHeartbeatToken(replyResult.text);
-        const hasMedia =
-          (replyResult.mediaUrl ?? replyResult.mediaUrls?.length ?? 0) > 0;
+        const hasMedia = Boolean(
+          replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+        );
         if (stripped.shouldSkip && !hasMedia) {
           heartbeatLogger.info(
             {

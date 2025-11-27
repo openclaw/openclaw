@@ -64,6 +64,7 @@ export type WarelayConfig = {
       claudeOutputFormat?: ClaudeOutputFormat; // when command starts with `claude`, force an output format
       mediaMaxMb?: number; // optional cap for outbound media (default 5MB)
       typingIntervalSeconds?: number; // how often to refresh typing indicator while command runs
+      heartbeatMinutes?: number; // auto-ping cadence for command mode
     };
   };
   web?: WebConfig;
