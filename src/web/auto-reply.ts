@@ -47,8 +47,7 @@ const formatDuration = (ms: number) =>
 
 const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
-export const HEARTBEAT_PROMPT =
-  "HEARTBEAT ping — if nothing important happened, reply exactly HEARTBEAT_OK. Otherwise return a concise alert.";
+export const HEARTBEAT_PROMPT = "HEARTBEAT";
 
 export function resolveReplyHeartbeatMinutes(
   cfg: ReturnType<typeof loadConfig>,
