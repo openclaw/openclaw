@@ -26,6 +26,7 @@ This document defines how `warelay` should handle sending and replying with imag
   - Images: **resize + recompress to JPEG** (max side 2048px, quality step-down) to fit under `inbound.reply.mediaMaxMb` (default 5 MB) but never above the Web hard cap (6 MB).
   - Audio/voice and video: pass through up to 16 MB; set `ptt: true` for audio to send as a voice note.
   - Everything else becomes a document with filename, up to 100 MB.
+- MIME is detected by magic bytes first (then header, then path); wrong file extensions are tolerated and the detected MIME drives payload kind and recompression.
 - Caption uses `--message` or `reply.text`; if caption is empty, send media-only.
 - Logging: non-verbose shows `↩️`/`✅` with caption; verbose includes `(media, <bytes>B, <ms>ms fetch)` and the local/remote path.
 
@@ -45,7 +46,7 @@ This document defines how `warelay` should handle sending and replying with imag
   - 404/410 if expired or missing.
   - Optional `?delete=1` to self-delete after fetch (used by Twilio fetch hook if we detect first hit).
 - Temp storage: `~/.warelay/media`; cleaned on startup (remove files older than 15 minutes) and during TTL eviction.
-- Security: no directory listing; only UUID file names; CORS open (Twilio fetch); content-type derived from `mime-types` lookup by extension or `content-type` header on download, else `application/octet-stream`.
+- Security: no directory listing; only UUID file names; CORS open (Twilio fetch); content-type derived from sniffed bytes (fallback to header, then extension). Saved files are renamed with an extension that matches the detected MIME so downstream fetches present the correct type.
 
 ## Auto-Reply Pipeline
 - `getReplyFromConfig` returns `{ text?, mediaUrl? }`.
@@ -60,6 +61,7 @@ This document defines how `warelay` should handle sending and replying with imag
   - `{{MediaUrl}}` original URL (Twilio) or pseudo-URL (web).
   - `{{MediaPath}}` local temp path written before running the command.
 - Size guard: only download if ≤5 MB; else skip and log (aligns with the temp media store limit).
+- Saved inbound media is named with the detected MIME-based extension (e.g., `.jpg`), so later CLI sends reuse a correct filename/content-type even if WhatsApp omitted an extension.
 - Audio/voice notes: if you set `inbound.transcribeAudio.command`, warelay will run that CLI (templated with `{{MediaPath}}`) and replace `Body` with the transcript before continuing the reply flow; verbose logs indicate when transcription runs. The command prompt includes the original media path plus a `Transcript:` section so the model sees both.
 
 ## Errors & Messaging

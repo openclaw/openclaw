@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.1 — Unreleased
+
+### Changes
+- **Manual heartbeat sends:** `warelay heartbeat` now accepts `--message/--body` with `--provider web|twilio` to push real outbound messages through the same plumbing; `--dry-run` previews payloads without sending.
+- **Media MIME-first handling:** Media loading now sniffs magic bytes/header before trusting extensions for both providers; local files with the wrong suffix still get correct MIME and image recompression.
+- **Hosted media extensions:** Saved/hosted media (web inbound, webhook hosting, Twilio hosting) now writes files with an extension derived from detected MIME (e.g., `.jpg`, `.png`, `.mp4`), so downstream CLI sends carry the right Content-Type. Added tests covering inbound Baileys downloads and buffer saves.
+
+### Planned / in progress
+- **Heartbeat targeting quality:** Allow `warelay heartbeat --provider web --all` to fall back to `inbound.allowFrom` when no sessions exist, and surface a clear error when neither sessions nor allow-list entries are present. Add verbose log lines that state exactly which recipients were chosen and why.
+- **Heartbeat delivery preview (Claude path):** Add a dry-run mode that resolves the heartbeat reply (text/media) and prints it without sending, to help test Claude prompt changes safely.
+- **Simulated inbound hook (debug):** Optional local-only endpoint to inject synthetic inbound messages into the web relay loop, sharing the same command queue and reply path. Useful for testing auto-replies and heartbeats without WhatsApp.
+
 ## 1.2.0 — 2025-11-27
 
 ### Changes
