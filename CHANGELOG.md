@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.1 — Unreleased
+## 1.2.1 — 2025-11-28
 
 ### Changes
 - **Manual heartbeat sends:** `warelay heartbeat` now accepts `--message/--body` with `--provider web|twilio` to push real outbound messages through the same plumbing; `--dry-run` previews payloads without sending.

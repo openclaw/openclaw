@@ -41,15 +41,14 @@ function looksLikeUrl(src: string) {
   return /^https?:\/\//i.test(src);
 }
 
+/**
+ * Download media to disk while capturing the first few KB for mime sniffing.
+ */
 async function downloadToFile(
   url: string,
   dest: string,
   headers?: Record<string, string>,
-): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }>
-/**
- * Download media to disk while capturing the first few KB for mime sniffing.
- */
-{
+): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
   return await new Promise((resolve, reject) => {
     const req = request(url, { headers }, (res) => {
       if (!res.statusCode || res.statusCode >= 400) {
@@ -72,9 +71,14 @@ async function downloadToFile(
       });
       pipeline(res, out)
         .then(() => {
-          const sniffBuffer = Buffer.concat(sniffChunks, Math.min(sniffLen, 16384));
+          const sniffBuffer = Buffer.concat(
+            sniffChunks,
+            Math.min(sniffLen, 16384),
+          );
           const rawHeader = res.headers["content-type"];
-          const headerMime = Array.isArray(rawHeader) ? rawHeader[0] : rawHeader;
+          const headerMime = Array.isArray(rawHeader)
+            ? rawHeader[0]
+            : rawHeader;
           resolve({
             headerMime,
             sniffBuffer,
@@ -116,7 +120,8 @@ export async function saveMediaSource(
       headerMime,
       filePath: source,
     });
-    const ext = extensionForMime(mime) ?? path.extname(new URL(source).pathname);
+    const ext =
+      extensionForMime(mime) ?? path.extname(new URL(source).pathname);
     const finalDest = path.join(dir, ext ? `${id}${ext}` : id);
     await fs.rename(tempDest, finalDest);
     return { id, path: finalDest, size, contentType: mime };

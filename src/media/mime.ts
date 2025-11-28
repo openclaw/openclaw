@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { mediaKindFromMime, type MediaKind } from "./constants.js";
+import { type MediaKind, mediaKindFromMime } from "./constants.js";
 
 // Map common mimes to preferred file extensions.
 const EXT_BY_MIME: Record<string, string> = {
@@ -82,7 +82,10 @@ function sniffMime(buffer?: Buffer): string | undefined {
   }
 
   // MP4: "ftyp" at offset 4.
-  if (buffer.length >= 12 && buffer.subarray(4, 8).toString("ascii") === "ftyp") {
+  if (
+    buffer.length >= 12 &&
+    buffer.subarray(4, 8).toString("ascii") === "ftyp"
+  ) {
     return "video/mp4";
   }
 
