@@ -562,10 +562,13 @@ export async function monitorWebProvider(
 
         lastInboundMsg = msg;
 
-        // Build timestamp prefix if enabled
+        // Build timestamp prefix (default: enabled with UTC)
+        // Can be: true (UTC), false (disabled), or "America/New_York" (custom timezone)
         let timestampStr = "";
-        if (cfg.inbound?.timestampPrefix) {
-          const tz = cfg.inbound?.timestampTimezone ?? "UTC";
+        const tsCfg = cfg.inbound?.timestampPrefix;
+        const tsEnabled = tsCfg !== false; // default true
+        if (tsEnabled) {
+          const tz = typeof tsCfg === "string" ? tsCfg : "UTC";
           const now = new Date();
           try {
             // Format: "Nov 29 06:30" - compact but informative
