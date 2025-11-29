@@ -167,6 +167,10 @@ warelay supports running on the same phone number you message from—you chat wi
 | Key | Type & default | Notes |
 | --- | --- | --- |
 | `inbound.allowFrom` | `string[]` (default: empty) | E.164 numbers allowed to trigger auto-reply (no `whatsapp:`); `"*"` allows any sender. |
+| `inbound.messagePrefix` | `string` (default: `"[warelay]"` if no allowFrom, else `""`) | Prefix added to all inbound messages before passing to command. |
+| `inbound.responsePrefix` | `string` (default: —) | Prefix auto-added to all outbound replies (e.g., `"🦞"`). |
+| `inbound.timestampPrefix` | `boolean` (default: `false`) | Prepend compact timestamp `[Nov 29 06:30]` to messages. |
+| `inbound.timestampTimezone` | `string` (default: `"UTC"`) | IANA timezone for timestamp (e.g., `"Europe/Vienna"`). |
 | `inbound.reply.mode` | `"text"` \| `"command"` (default: —) | Reply style. |
 | `inbound.reply.text` | `string` (default: —) | Used when `mode=text`; templating supported. |
 | `inbound.reply.command` | `string[]` (default: —) | Argv for `mode=command`; each element templated. Stdout (trimmed) is sent. |

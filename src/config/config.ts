@@ -46,8 +46,8 @@ export type WarelayConfig = {
   logging?: LoggingConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
-    samePhoneMarker?: string; // Prefix for same-phone mode messages (default: "[same-phone]")
-    samePhoneResponsePrefix?: string; // Prefix auto-added to replies in same-phone mode (e.g., "🦞")
+    messagePrefix?: string; // Prefix added to all inbound messages (default: "[warelay]" if no allowFrom, else "")
+    responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
     timestampPrefix?: boolean; // Prepend compact timestamp to messages (default: false)
     timestampTimezone?: string; // IANA timezone for timestamp (default: UTC), e.g., "Europe/Vienna"
     transcribeAudio?: {
@@ -143,8 +143,8 @@ const WarelaySchema = z.object({
   inbound: z
     .object({
       allowFrom: z.array(z.string()).optional(),
-      samePhoneMarker: z.string().optional(),
-      samePhoneResponsePrefix: z.string().optional(),
+      messagePrefix: z.string().optional(),
+      responsePrefix: z.string().optional(),
       timestampPrefix: z.boolean().optional(),
       timestampTimezone: z.string().optional(),
       transcribeAudio: z

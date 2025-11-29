@@ -576,12 +576,16 @@ export async function monitorWebProvider(
           }
         }
 
-        // Prefix body with marker in same-phone mode so the assistant knows to prefix replies
-        // The marker can be customized via config (default: "[same-phone]")
-        const samePhoneMarker = cfg.inbound?.samePhoneMarker ?? "[same-phone]";
-        const bodyForCommand = isSamePhoneMode
-          ? `${timestampStr}${samePhoneMarker} ${msg.body}`
-          : `${timestampStr}${msg.body}`;
+        // Build message prefix: explicit config > default based on allowFrom
+        // If allowFrom is configured, user likely has a specific setup - no default prefix
+        // If no allowFrom, add "[warelay]" so AI knows it's coming through warelay
+        let messagePrefix = cfg.inbound?.messagePrefix;
+        if (messagePrefix === undefined) {
+          const hasAllowFrom = (cfg.inbound?.allowFrom?.length ?? 0) > 0;
+          messagePrefix = hasAllowFrom ? "" : "[warelay]";
+        }
+        const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
+        const bodyForCommand = `${timestampStr}${prefixStr}${msg.body}`;
 
         const replyResult = await (replyResolver ?? getReplyFromConfig)(
           {
@@ -608,12 +612,12 @@ export async function monitorWebProvider(
           );
           return;
         }
-        // Apply same-phone response prefix if configured and in same-phone mode
-        const samePhoneResponsePrefix = cfg.inbound?.samePhoneResponsePrefix;
-        if (isSamePhoneMode && samePhoneResponsePrefix && replyResult.text) {
+        // Apply response prefix if configured (for all messages)
+        const responsePrefix = cfg.inbound?.responsePrefix;
+        if (responsePrefix && replyResult.text) {
           // Only add prefix if not already present
-          if (!replyResult.text.startsWith(samePhoneResponsePrefix)) {
-            replyResult.text = `${samePhoneResponsePrefix} ${replyResult.text}`;
+          if (!replyResult.text.startsWith(responsePrefix)) {
+            replyResult.text = `${responsePrefix} ${replyResult.text}`;
           }
         }
 
