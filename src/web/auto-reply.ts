@@ -615,9 +615,9 @@ export async function monitorWebProvider(
           );
           return;
         }
-        // Apply response prefix if configured (for all messages)
+        // Apply response prefix if configured (skip for HEARTBEAT_OK to preserve exact match)
         const responsePrefix = cfg.inbound?.responsePrefix;
-        if (responsePrefix && replyResult.text) {
+        if (responsePrefix && replyResult.text && replyResult.text.trim() !== HEARTBEAT_TOKEN) {
           // Only add prefix if not already present
           if (!replyResult.text.startsWith(responsePrefix)) {
             replyResult.text = `${responsePrefix} ${replyResult.text}`;
