@@ -13,6 +13,9 @@ vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({
     inbound: {
       allowFrom: ["*"], // Allow all in tests
+      messagePrefix: undefined,
+      responsePrefix: undefined,
+      timestampPrefix: false,
     },
   }),
 }));

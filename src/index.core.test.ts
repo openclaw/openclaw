@@ -9,6 +9,18 @@ import { createMockTwilio } from "../test/mocks/twilio.js";
 import * as exec from "./process/exec.js";
 import { withWhatsAppPrefix } from "./utils.js";
 
+// Mock config to avoid loading real user config
+vi.mock("../src/config/config.js", () => ({
+  loadConfig: vi.fn().mockReturnValue({
+    inbound: {
+      allowFrom: ["*"],
+      messagePrefix: undefined,
+      responsePrefix: undefined,
+      timestampPrefix: false,
+    },
+  }),
+}));
+
 // Twilio mock factory shared across tests
 vi.mock("twilio", () => {
   const { factory } = createMockTwilio();

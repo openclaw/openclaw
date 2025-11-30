@@ -3,14 +3,28 @@ import { vi } from "vitest";
 import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 
-let loadConfigMock: () => unknown = () => ({});
+let loadConfigMock: () => unknown = () => ({
+  inbound: {
+    allowFrom: ["*"], // Allow all in tests by default
+    messagePrefix: undefined, // No message prefix in tests
+    responsePrefix: undefined, // No response prefix in tests
+    timestampPrefix: false, // No timestamp in tests
+  },
+});
 
 export function setLoadConfigMock(fn: () => unknown) {
   loadConfigMock = fn;
 }
 
 export function resetLoadConfigMock() {
-  loadConfigMock = () => ({});
+  loadConfigMock = () => ({
+    inbound: {
+      allowFrom: ["*"],
+      messagePrefix: undefined,
+      responsePrefix: undefined,
+      timestampPrefix: false,
+    },
+  });
 }
 
 vi.mock("../config/config.js", () => ({
