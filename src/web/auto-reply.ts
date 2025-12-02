@@ -9,12 +9,13 @@ import {
   resolveStorePath,
   saveSessionStore,
 } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose, success } from "../globals.js";
+import { danger, info, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
+import { sendViaIpc, startIpcServer, stopIpcServer } from "./ipc.js";
 import { loadWebMedia } from "./media.js";
 import { sendMessageWeb } from "./outbound.js";
 import { getQueueSize } from "../process/command-queue.js";
@@ -27,6 +28,26 @@ import {
   sleepWithAbort,
 } from "./reconnect.js";
 import { getWebAuthAgeMs } from "./session.js";
+
+/**
+ * Send a message via IPC if relay is running, otherwise fall back to direct.
+ * This avoids Signal session corruption from multiple Baileys connections.
+ */
+async function sendWithIpcFallback(
+  to: string,
+  message: string,
+  opts: { verbose: boolean; mediaUrl?: string },
+): Promise<{ messageId: string; toJid: string }> {
+  const ipcResult = await sendViaIpc(to, message, opts.mediaUrl);
+  if (ipcResult?.success && ipcResult.messageId) {
+    if (opts.verbose) {
+      console.log(info(`Sent via relay IPC (avoiding session corruption)`));
+    }
+    return { messageId: ipcResult.messageId, toJid: `${to}@s.whatsapp.net` };
+  }
+  // Fall back to direct send
+  return sendMessageWeb(to, message, opts);
+}
 
 const DEFAULT_WEB_MEDIA_BYTES = 5 * 1024 * 1024;
 type WebInboundMsg = Parameters<
@@ -95,7 +116,7 @@ export async function runWebHeartbeatOnce(opts: {
   } = opts;
   const _runtime = opts.runtime ?? defaultRuntime;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
-  const sender = opts.sender ?? sendMessageWeb;
+  const sender = opts.sender ?? sendWithIpcFallback;
   const runId = newConnectionId();
   const heartbeatLogger = getChildLogger({
     module: "web-heartbeat",
@@ -526,6 +547,8 @@ export async function monitorWebProvider(
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
       onMessage: async (msg) => {
+        // Also add IPC-sent messages to echo detection
+        // (this is handled below in the IPC sendHandler)
         handledMessages += 1;
         lastMessageAt = Date.now();
         const ts = msg.timestamp
@@ -677,7 +700,33 @@ export async function monitorWebProvider(
       },
     });
 
+    // Start IPC server so `warelay send` can use this connection
+    // instead of creating a new one (which would corrupt Signal session)
+    if ("sendMessage" in listener) {
+      startIpcServer(async (to, message, mediaUrl) => {
+        let mediaBuffer: Buffer | undefined;
+        let mediaType: string | undefined;
+        if (mediaUrl) {
+          const media = await loadWebMedia(mediaUrl);
+          mediaBuffer = media.buffer;
+          mediaType = media.contentType;
+        }
+        const result = await listener.sendMessage(to, message, mediaBuffer, mediaType);
+        // Add to echo detection so we don't process our own message
+        if (message) {
+          recentlySent.add(message);
+          if (recentlySent.size > MAX_RECENT_MESSAGES) {
+            const firstKey = recentlySent.values().next().value;
+            if (firstKey) recentlySent.delete(firstKey);
+          }
+        }
+        logInfo(`📤 IPC send to ${to}: ${message.substring(0, 50)}...`, runtime);
+        return result;
+      });
+    }
+
     const closeListener = async () => {
+      stopIpcServer();
       if (heartbeat) clearInterval(heartbeat);
       if (replyHeartbeatTimer) clearInterval(replyHeartbeatTimer);
       if (watchdogTimer) clearInterval(watchdogTimer);

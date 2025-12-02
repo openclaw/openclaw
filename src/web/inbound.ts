@@ -212,6 +212,51 @@ export async function monitorWebInbox(options: {
       }
     },
     onClose,
+    /**
+     * Send a message through this connection's socket.
+     * Used by IPC to avoid creating new connections.
+     */
+    sendMessage: async (
+      to: string,
+      text: string,
+      mediaBuffer?: Buffer,
+      mediaType?: string,
+    ): Promise<{ messageId: string }> => {
+      const jid = `${to.replace(/^\+/, "")}@s.whatsapp.net`;
+      let payload: AnyMessageContent;
+      if (mediaBuffer && mediaType) {
+        if (mediaType.startsWith("image/")) {
+          payload = {
+            image: mediaBuffer,
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        } else if (mediaType.startsWith("audio/")) {
+          payload = {
+            audio: mediaBuffer,
+            ptt: true,
+            mimetype: mediaType,
+          };
+        } else if (mediaType.startsWith("video/")) {
+          payload = {
+            video: mediaBuffer,
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        } else {
+          payload = {
+            document: mediaBuffer,
+            fileName: "file",
+            caption: text || undefined,
+            mimetype: mediaType,
+          };
+        }
+      } else {
+        payload = { text };
+      }
+      const result = await sock.sendMessage(jid, payload);
+      return { messageId: result?.key?.id ?? "unknown" };
+    },
   } as const;
 }
 
