@@ -42,9 +42,11 @@ export function attachMediaRoutes(
       if (mime) res.type(mime);
       res.send(data);
       // best-effort single-use cleanup after response ends
-      setTimeout(() => {
-        fs.rm(realPath).catch(() => {});
-      }, 500);
+      res.on("finish", () => {
+        setTimeout(() => {
+          fs.rm(realPath).catch(() => {});
+        }, 50);
+      });
     } catch {
       res.status(404).send("not found");
     }
