@@ -28,6 +28,8 @@ import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
+const TWILIO_TEXT_LIMIT = 1600;
+
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 
@@ -450,37 +452,47 @@ export async function autoReplyIfConfigured(
     };
 
     for (const replyPayload of replies) {
-      if (replyPayload.text) {
-        logVerbose(
-          `Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyPayload.text.length}`,
-        );
-      } else {
-        logVerbose(
-          `Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media)`,
-        );
-      }
-
       const mediaList = replyPayload.mediaUrls?.length
         ? replyPayload.mediaUrls
         : replyPayload.mediaUrl
           ? [replyPayload.mediaUrl]
           : [];
 
-      if (mediaList.length === 0) {
-        await sendTwilio(replyPayload.text ?? "");
-      } else {
-        await sendTwilio(replyPayload.text ?? "", mediaList[0]);
-        for (const extra of mediaList.slice(1)) {
-          await sendTwilio("", extra);
-        }
-      }
+      const text = replyPayload.text ?? "";
+      const chunks =
+        text.length > 0
+          ? (text.match(new RegExp(`.{1,${TWILIO_TEXT_LIMIT}}`, "g")) ?? [])
+          : [""];
 
-      if (isVerbose()) {
-        console.log(
-          info(
-            `↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${replyPayload.mediaUrl ? ", media" : ""})`,
-          ),
-        );
+      for (let i = 0; i < chunks.length; i++) {
+        const body = chunks[i];
+        const attachMedia = i === 0 ? mediaList[0] : undefined;
+
+        if (body) {
+          logVerbose(
+            `Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${body.length}`,
+          );
+        } else if (attachMedia) {
+          logVerbose(
+            `Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media only)`,
+          );
+        }
+
+        await sendTwilio(body, attachMedia);
+
+        if (i === 0 && mediaList.length > 1) {
+          for (const extra of mediaList.slice(1)) {
+            await sendTwilio("", extra);
+          }
+        }
+
+        if (isVerbose()) {
+          console.log(
+            info(
+              `↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${attachMedia ? ", media" : ""})`,
+            ),
+          );
+        }
       }
     }
   } catch (err) {

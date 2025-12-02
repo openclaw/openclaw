@@ -29,6 +29,8 @@ import {
 } from "./reconnect.js";
 import { getWebAuthAgeMs } from "./session.js";
 
+const WEB_TEXT_LIMIT = 4000;
+
 /**
  * Send a message via IPC if relay is running, otherwise fall back to direct.
  * This avoids Signal session corruption from multiple Baileys connections.
@@ -371,14 +373,23 @@ async function deliverWebReply(params: {
     skipLog,
   } = params;
   const replyStarted = Date.now();
+  const textChunks =
+    (replyResult.text || "").length > 0
+      ? ((replyResult.text || "").match(
+          new RegExp(`.{1,${WEB_TEXT_LIMIT}}`, "g"),
+        ) ?? [])
+      : [];
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl
       ? [replyResult.mediaUrl]
       : [];
 
-  if (mediaList.length === 0 && replyResult.text) {
-    await msg.reply(replyResult.text || "");
+  // Text-only replies
+  if (mediaList.length === 0 && textChunks.length) {
+    for (const chunk of textChunks) {
+      await msg.reply(chunk);
+    }
     if (!skipLog) {
       logInfo(
         `✅ Sent web reply to ${msg.from} (${(Date.now() - replyStarted).toFixed(0)}ms)`,
@@ -402,7 +413,9 @@ async function deliverWebReply(params: {
     return;
   }
 
-  const cleanText = replyResult.text ?? undefined;
+  const remainingText = [...textChunks];
+
+  // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
     try {
       const media = await loadWebMedia(mediaUrl, maxMediaBytes);
@@ -414,7 +427,8 @@ async function deliverWebReply(params: {
           `Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`,
         );
       }
-      const caption = index === 0 ? cleanText || undefined : undefined;
+      const caption =
+        index === 0 ? remainingText.shift() || undefined : undefined;
       if (media.kind === "image") {
         await msg.sendMedia({
           image: media.buffer,
@@ -454,7 +468,7 @@ async function deliverWebReply(params: {
           connectionId: connectionId ?? null,
           to: msg.from,
           from: msg.to,
-          text: index === 0 ? (cleanText ?? null) : null,
+          text: caption ?? null,
           mediaUrl,
           mediaSizeBytes: media.buffer.length,
           mediaKind: media.kind,
@@ -466,11 +480,17 @@ async function deliverWebReply(params: {
       console.error(
         danger(`Failed sending web media to ${msg.from}: ${String(err)}`),
       );
-      if (index === 0 && cleanText) {
+      replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
+      if (index === 0 && remainingText.length) {
         console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
-        await msg.reply(cleanText || "");
+        await msg.reply(remainingText.shift() || "");
       }
     }
+  }
+
+  // Remaining text chunks after media
+  for (const chunk of remainingText) {
+    await msg.reply(chunk);
   }
 }
 

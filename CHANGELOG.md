@@ -55,6 +55,7 @@
 ### Fixed
 - Support multiple assistant text replies when using Tau RPC: agents now emit `texts` arrays and command auto-replies deliver each message separately without leaking raw JSON.
 - Normalized agent parsers (pi/claude/opencode/codex/gemini) to the new plural output shape.
+- Enforce outbound text size caps: WhatsApp/Twilio messages chunked at 1600 chars; web replies chunked at 4000 chars.
 
 ### Changes
 - **Heartbeat backpressure:** Web reply heartbeats now check the shared command queue and skip while any command/Claude runs are in flight, preventing concurrent prompts during long-running requests.
