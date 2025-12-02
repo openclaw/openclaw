@@ -1,3 +1,10 @@
+// Import test-helpers FIRST to set up mocks before other imports
+import {
+  resetBaileysMocks,
+  resetLoadConfigMock,
+  setLoadConfigMock,
+} from "./test-helpers.js";
+
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -18,11 +25,6 @@ import {
   stripHeartbeatToken,
 } from "./auto-reply.js";
 import type { sendMessageWeb } from "./outbound.js";
-import {
-  resetBaileysMocks,
-  resetLoadConfigMock,
-  setLoadConfigMock,
-} from "./test-helpers.js";
 
 describe("heartbeat helpers", () => {
   it("strips heartbeat token and skips when only token", () => {
@@ -186,6 +188,11 @@ describe("runWebHeartbeatOnce", () => {
   });
 
   it("falls back to most recent session when no to is provided", async () => {
+    // Use temp directory to avoid corrupting production sessions.json
+    const tmpDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "warelay-fallback-session-"),
+    );
+    const storePath = path.join(tmpDir, "sessions.json");
     const sender: typeof sendMessageWeb = vi
       .fn()
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
@@ -196,15 +203,11 @@ describe("runWebHeartbeatOnce", () => {
       "+1222": { sessionId: "s1", updatedAt: now - 1000 },
       "+1333": { sessionId: "s2", updatedAt: now },
     };
-    const storePath = resolveStorePath();
-    await fs.mkdir(resolveStorePath().replace("sessions.json", ""), {
-      recursive: true,
-    });
     await fs.writeFile(storePath, JSON.stringify(store));
     setLoadConfigMock({
       inbound: {
         allowFrom: ["+1999"],
-        reply: { mode: "command", session: {} },
+        reply: { mode: "command", session: { store: storePath } },
       },
     });
     await runWebHeartbeatOnce({
@@ -947,6 +950,16 @@ describe("web auto-reply", () => {
   });
 
   it("prefixes body with same-phone marker when from === to", async () => {
+    // Enable messagePrefix for same-phone mode testing
+    setLoadConfigMock(() => ({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: "[same-phone]",
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    }));
+
     let capturedOnMessage:
       | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
       | undefined;
@@ -974,12 +987,11 @@ describe("web auto-reply", () => {
       sendMedia: vi.fn(),
     });
 
-    // The resolver should receive a prefixed body (the exact marker depends on config)
-    // Key test: body should start with some marker and end with original message
+    // The resolver should receive a prefixed body with the configured marker
     const callArg = resolver.mock.calls[0]?.[0] as { Body?: string };
     expect(callArg?.Body).toBeDefined();
-    expect(callArg?.Body).toMatch(/^\[.*\] hello$/);
-    expect(callArg?.Body).not.toBe("hello"); // Should be prefixed
+    expect(callArg?.Body).toBe("[same-phone] hello");
+    resetLoadConfigMock();
   });
 
   it("does not prefix body when from !== to", async () => {
@@ -1013,5 +1025,136 @@ describe("web auto-reply", () => {
     // Body should NOT be prefixed
     const callArg = resolver.mock.calls[0]?.[0] as { Body?: string };
     expect(callArg?.Body).toBe("hello");
+  });
+
+  it("applies responsePrefix to regular replies", async () => {
+    setLoadConfigMock(() => ({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: "🦞",
+        timestampPrefix: false,
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const reply = vi.fn();
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const resolver = vi.fn().mockResolvedValue({ text: "hello there" });
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hi",
+      from: "+1555",
+      to: "+2666",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply,
+      sendMedia: vi.fn(),
+    });
+
+    // Reply should have responsePrefix prepended
+    expect(reply).toHaveBeenCalledWith("🦞 hello there");
+    resetLoadConfigMock();
+  });
+
+  it("skips responsePrefix for HEARTBEAT_OK responses", async () => {
+    setLoadConfigMock(() => ({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: "🦞",
+        timestampPrefix: false,
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const reply = vi.fn();
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    // Resolver returns exact HEARTBEAT_OK
+    const resolver = vi.fn().mockResolvedValue({ text: HEARTBEAT_TOKEN });
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "test",
+      from: "+1555",
+      to: "+2666",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply,
+      sendMedia: vi.fn(),
+    });
+
+    // HEARTBEAT_OK should NOT have prefix - warelay needs exact match
+    expect(reply).toHaveBeenCalledWith(HEARTBEAT_TOKEN);
+    resetLoadConfigMock();
+  });
+
+  it("does not double-prefix if responsePrefix already present", async () => {
+    setLoadConfigMock(() => ({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: "🦞",
+        timestampPrefix: false,
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const reply = vi.fn();
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    // Resolver returns text that already has prefix
+    const resolver = vi.fn().mockResolvedValue({ text: "🦞 already prefixed" });
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "test",
+      from: "+1555",
+      to: "+2666",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply,
+      sendMedia: vi.fn(),
+    });
+
+    // Should not double-prefix
+    expect(reply).toHaveBeenCalledWith("🦞 already prefixed");
+    resetLoadConfigMock();
   });
 });
