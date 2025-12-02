@@ -47,7 +47,11 @@ function parsePiJson(raw: string): AgentParseResult {
 
 export const piSpec: AgentSpec = {
   kind: "pi",
-  isInvocation: (argv) => argv.length > 0 && path.basename(argv[0]) === "pi",
+  isInvocation: (argv) => {
+    if (argv.length === 0) return false;
+    const base = path.basename(argv[0]).replace(/\.(m?js)$/i, "");
+    return base === "pi" || base === "tau";
+  },
   buildArgs: (ctx) => {
     const argv = [...ctx.argv];
     // Non-interactive print + JSON
