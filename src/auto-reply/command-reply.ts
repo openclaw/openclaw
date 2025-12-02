@@ -230,7 +230,7 @@ export async function runCommandReply(
           `Claude JSON raw: ${JSON.stringify(parsed.parsed, null, 2)}`,
         );
       }
-      if (parsed?.text) {
+      if (typeof parsed?.text === "string") {
         logVerbose(
           `Claude JSON parsed -> ${parsed.text.slice(0, 120)}${parsed.text.length > 120 ? "…" : ""}`,
         );

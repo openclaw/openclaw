@@ -862,9 +862,16 @@ export async function monitorWebProvider(
           return;
         }
 
+        // Apply response prefix if configured (same as regular messages)
+        let finalText = stripped.text;
+        const responsePrefix = cfg.inbound?.responsePrefix;
+        if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
+          finalText = `${responsePrefix} ${finalText}`;
+        }
+
         const cleanedReply: ReplyPayload = {
           ...replyResult,
-          text: stripped.text,
+          text: finalText,
         };
 
         await deliverWebReply({
