@@ -16,7 +16,7 @@ export type AgentMeta = {
 };
 
 export type AgentParseResult = {
-  text?: string;
+  texts?: string[];
   mediaUrls?: string[];
   meta?: AgentMeta;
 };

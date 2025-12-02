@@ -10,7 +10,8 @@ export const GEMINI_IDENTITY_PREFIX =
 // keep parsing minimal and let MEDIA token stripping happen later in the pipeline.
 function parseGeminiOutput(raw: string): { text?: string; meta?: AgentMeta } {
   const trimmed = raw.trim();
-  return { text: trimmed || undefined, meta: undefined };
+  const text = trimmed || undefined;
+  return { texts: text ? [text] : undefined, meta: undefined };
 }
 
 export const geminiSpec: AgentSpec = {

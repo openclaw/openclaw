@@ -305,7 +305,7 @@ export async function getReplyFromConfig(
       mediaUrl: reply.mediaUrl,
     };
     cleanupTyping();
-    return result;
+    return [result];
   }
 
   if (reply && reply.mode === "command" && reply.command?.length) {
@@ -316,7 +316,7 @@ export async function getReplyFromConfig(
       mode: "command" as const,
     };
     try {
-      const { payload, meta } = await runCommandReply({
+      const { payloads, meta } = await runCommandReply({
         reply: commandReply,
         templatingCtx,
         sendSystemOnce,
@@ -355,7 +355,7 @@ export async function getReplyFromConfig(
       if (meta.agentMeta && isVerbose()) {
         logVerbose(`Agent meta: ${JSON.stringify(meta.agentMeta)}`);
       }
-      return payload;
+      return payloads;
     } finally {
       cleanupTyping();
     }
@@ -416,13 +416,12 @@ export async function autoReplyIfConfigured(
     },
     cfg,
   );
-  if (
-    !replyResult ||
-    (!replyResult.text &&
-      !replyResult.mediaUrl &&
-      !replyResult.mediaUrls?.length)
-  )
-    return;
+  const replies = replyResult
+    ? Array.isArray(replyResult)
+      ? replyResult
+      : [replyResult]
+    : [];
+  if (replies.length === 0) return;
 
   const replyFrom = message.to;
   const replyTo = message.from;
@@ -435,23 +434,7 @@ export async function autoReplyIfConfigured(
     return;
   }
 
-  if (replyResult.text) {
-    logVerbose(
-      `Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyResult.text.length}`,
-    );
-  } else {
-    logVerbose(
-      `Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media)`,
-    );
-  }
-
   try {
-    const mediaList = replyResult.mediaUrls?.length
-      ? replyResult.mediaUrls
-      : replyResult.mediaUrl
-        ? [replyResult.mediaUrl]
-        : [];
-
     const sendTwilio = async (body: string, media?: string) => {
       let resolvedMedia = media;
       if (resolvedMedia && !/^https?:\/\//i.test(resolvedMedia)) {
@@ -466,21 +449,39 @@ export async function autoReplyIfConfigured(
       });
     };
 
-    if (mediaList.length === 0) {
-      await sendTwilio(replyResult.text ?? "");
-    } else {
-      // First media with body (if any), then remaining as separate media-only sends.
-      await sendTwilio(replyResult.text ?? "", mediaList[0]);
-      for (const extra of mediaList.slice(1)) {
-        await sendTwilio("", extra);
+    for (const replyPayload of replies) {
+      if (replyPayload.text) {
+        logVerbose(
+          `Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${replyPayload.text.length}`,
+        );
+      } else {
+        logVerbose(
+          `Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media)`,
+        );
       }
-    }
-    if (isVerbose()) {
-      console.log(
-        info(
-          `↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${replyResult.mediaUrl ? ", media" : ""})`,
-        ),
-      );
+
+      const mediaList = replyPayload.mediaUrls?.length
+        ? replyPayload.mediaUrls
+        : replyPayload.mediaUrl
+          ? [replyPayload.mediaUrl]
+          : [];
+
+      if (mediaList.length === 0) {
+        await sendTwilio(replyPayload.text ?? "");
+      } else {
+        await sendTwilio(replyPayload.text ?? "", mediaList[0]);
+        for (const extra of mediaList.slice(1)) {
+          await sendTwilio("", extra);
+        }
+      }
+
+      if (isVerbose()) {
+        console.log(
+          info(
+            `↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${replyPayload.mediaUrl ? ", media" : ""})`,
+          ),
+        );
+      }
     }
   } catch (err) {
     const anyErr = err as {

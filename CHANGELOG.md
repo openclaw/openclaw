@@ -52,6 +52,10 @@
 
 ## Unreleased
 
+### Fixed
+- Support multiple assistant text replies when using Tau RPC: agents now emit `texts` arrays and command auto-replies deliver each message separately without leaking raw JSON.
+- Normalized agent parsers (pi/claude/opencode/codex/gemini) to the new plural output shape.
+
 ### Changes
 - **Heartbeat backpressure:** Web reply heartbeats now check the shared command queue and skip while any command/Claude runs are in flight, preventing concurrent prompts during long-running requests.
 - **Isolated session fixtures in web tests:** Heartbeat/auto-reply tests now create temporary session stores instead of using the default `~/.warelay/sessions.json`, preventing local config pollution during test runs.

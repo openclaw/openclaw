@@ -69,7 +69,7 @@ export const claudeSpec: AgentSpec = {
     const parsed = parseClaudeJson(rawStdout);
     const text = parsed?.text ?? rawStdout.trim();
     return {
-      text: text?.trim(),
+      texts: text ? [text.trim()] : undefined,
       meta: toMeta(parsed),
     };
   },

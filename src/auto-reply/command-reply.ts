@@ -44,7 +44,7 @@ export type CommandReplyMeta = {
 };
 
 export type CommandReplyResult = {
-  payload?: ReplyPayload;
+  payloads?: ReplyPayload[];
   meta: CommandReplyMeta;
 };
 
@@ -189,7 +189,7 @@ export async function runCommandReply(
         systemSent,
         identityPrefix: agentCfg.identityPrefix,
         format: agentCfg.format,
-    })
+      })
     : argv;
 
   logVerbose(
@@ -249,33 +249,54 @@ export async function runCommandReply(
     });
     const rawStdout = stdout.trim();
     let mediaFromCommand: string[] | undefined;
-    let trimmed = rawStdout;
+    const trimmed = rawStdout;
     if (stderr?.trim()) {
       logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
     }
 
     const parsed = trimmed ? agent.parseOutput(trimmed) : undefined;
-    // Treat empty string as "no content" so we can fall back to the friendly
-    // "(command produced no output)" message instead of echoing raw JSON.
-    if (parsed && parsed.text !== undefined) {
-      trimmed = parsed.text.trim();
+
+    // Collect one message per assistant text from parseOutput (tau RPC can emit many).
+    const parsedTexts =
+      parsed?.texts?.map((t) => t.trim()).filter(Boolean) ??
+      (parsed?.text ? [parsed.text.trim()] : []);
+
+    type ReplyItem = { text: string; media?: string[] };
+    const replyItems: ReplyItem[] = [];
+
+    for (const t of parsedTexts) {
+      const { text: cleanedText, mediaUrls: mediaFound } =
+        splitMediaFromOutput(t);
+      replyItems.push({
+        text: cleanedText,
+        media: mediaFound?.length ? mediaFound : undefined,
+      });
     }
 
-    const { text: cleanedText, mediaUrls: mediaFound } =
-      splitMediaFromOutput(trimmed);
-    trimmed = cleanedText;
-    if (mediaFound?.length) {
-      mediaFromCommand = mediaFound;
-      verboseLog(`MEDIA token extracted: ${mediaFound}`);
-    } else {
-      verboseLog("No MEDIA token extracted from final text");
+    // If parser gave nothing, fall back to raw stdout as a single message.
+    if (replyItems.length === 0 && trimmed) {
+      const { text: cleanedText, mediaUrls: mediaFound } =
+        splitMediaFromOutput(trimmed);
+      if (cleanedText || mediaFound?.length) {
+        replyItems.push({
+          text: cleanedText,
+          media: mediaFound?.length ? mediaFound : undefined,
+        });
+      }
     }
-    if (!trimmed && !mediaFromCommand) {
+
+    // No content at all → fallback notice.
+    if (replyItems.length === 0) {
       const meta = parsed?.meta?.extra?.summary ?? undefined;
-      trimmed = `(command produced no output${meta ? `; ${meta}` : ""})`;
+      replyItems.push({
+        text: `(command produced no output${meta ? `; ${meta}` : ""})`,
+      });
       verboseLog("No text/media produced; injecting fallback notice to user");
     }
-    verboseLog(`Command auto-reply stdout (trimmed): ${trimmed || "<empty>"}`);
+
+    verboseLog(
+      `Command auto-reply stdout produced ${replyItems.length} message(s)`,
+    );
     const elapsed = Date.now() - started;
     verboseLog(`Command auto-reply finished in ${elapsed}ms`);
     logger.info(
@@ -292,7 +313,7 @@ export async function runCommandReply(
         : "";
       const errorText = `⚠️ Command exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}${partialOut}`;
       return {
-        payload: { text: errorText },
+        payloads: [{ text: errorText }],
         meta: {
           durationMs: Date.now() - started,
           queuedMs,
@@ -310,7 +331,7 @@ export async function runCommandReply(
       );
       const errorText = `⚠️ Command was killed before completion (exit code ${code ?? "unknown"})`;
       return {
-        payload: { text: errorText },
+        payloads: [{ text: errorText }],
         meta: {
           durationMs: Date.now() - started,
           queuedMs,
@@ -322,43 +343,6 @@ export async function runCommandReply(
         },
       };
     }
-    let mediaUrls =
-      mediaFromCommand ?? (reply.mediaUrl ? [reply.mediaUrl] : undefined);
-
-    // If mediaMaxMb is set, skip local media paths larger than the cap.
-    if (mediaUrls?.length && reply.mediaMaxMb) {
-      const maxBytes = reply.mediaMaxMb * 1024 * 1024;
-      const filtered: string[] = [];
-      for (const url of mediaUrls) {
-        if (/^https?:\/\//i.test(url)) {
-          filtered.push(url);
-          continue;
-        }
-        const abs = path.isAbsolute(url) ? url : path.resolve(url);
-        try {
-          const stats = await fs.stat(abs);
-          if (stats.size <= maxBytes) {
-            filtered.push(url);
-          } else if (isVerbose()) {
-            logVerbose(
-              `Skipping media ${url} (${(stats.size / (1024 * 1024)).toFixed(2)}MB) over cap ${reply.mediaMaxMb}MB`,
-            );
-          }
-        } catch {
-          filtered.push(url);
-        }
-      }
-      mediaUrls = filtered;
-    }
-
-    const payload =
-      trimmed || mediaUrls?.length
-        ? {
-            text: trimmed || undefined,
-            mediaUrl: mediaUrls?.[0],
-            mediaUrls,
-          }
-        : undefined;
     const meta: CommandReplyMeta = {
       durationMs: Date.now() - started,
       queuedMs,
@@ -368,8 +352,56 @@ export async function runCommandReply(
       killed,
       agentMeta: parsed?.meta,
     };
+
+    const payloads: ReplyPayload[] = [];
+
+    // Build each reply item sequentially (delivery handled by caller).
+    for (const item of replyItems) {
+      let mediaUrls =
+        item.media ??
+        mediaFromCommand ??
+        (reply.mediaUrl ? [reply.mediaUrl] : undefined);
+
+      // If mediaMaxMb is set, skip local media paths larger than the cap.
+      if (mediaUrls?.length && reply.mediaMaxMb) {
+        const maxBytes = reply.mediaMaxMb * 1024 * 1024;
+        const filtered: string[] = [];
+        for (const url of mediaUrls) {
+          if (/^https?:\/\//i.test(url)) {
+            filtered.push(url);
+            continue;
+          }
+          const abs = path.isAbsolute(url) ? url : path.resolve(url);
+          try {
+            const stats = await fs.stat(abs);
+            if (stats.size <= maxBytes) {
+              filtered.push(url);
+            } else if (isVerbose()) {
+              logVerbose(
+                `Skipping media ${url} (${(stats.size / (1024 * 1024)).toFixed(2)}MB) over cap ${reply.mediaMaxMb}MB`,
+              );
+            }
+          } catch {
+            filtered.push(url);
+          }
+        }
+        mediaUrls = filtered;
+      }
+
+      const payload =
+        item.text || mediaUrls?.length
+          ? {
+              text: item.text || undefined,
+              mediaUrl: mediaUrls?.[0],
+              mediaUrls,
+            }
+          : undefined;
+
+      if (payload) payloads.push(payload);
+    }
+
     verboseLog(`Command auto-reply meta: ${JSON.stringify(meta)}`);
-    return { payload, meta };
+    return { payloads, meta };
   } catch (err) {
     const elapsed = Date.now() - started;
     logger.info(
@@ -414,7 +446,7 @@ export async function runCommandReply(
     const errMsg = err instanceof Error ? err.message : String(err);
     const errorText = `⚠️ Command failed: ${errMsg}`;
     return {
-      payload: { text: errorText },
+      payloads: [{ text: errorText }],
       meta: {
         durationMs: elapsed,
         queuedMs,
