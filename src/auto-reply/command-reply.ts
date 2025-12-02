@@ -189,7 +189,7 @@ export async function runCommandReply(
         systemSent,
         identityPrefix: agentCfg.identityPrefix,
         format: agentCfg.format,
-    })
+      })
     : argv;
 
   logVerbose(
@@ -208,7 +208,7 @@ export async function runCommandReply(
         const rpcArgv = (() => {
           const copy = [...finalArgv];
           copy.splice(bodyIndex, 1);
-          const modeIdx = copy.findIndex((a) => a === "--mode");
+          const modeIdx = copy.indexOf("--mode");
           if (modeIdx >= 0 && copy[modeIdx + 1]) {
             copy.splice(modeIdx, 2, "--mode", "rpc");
           } else if (!copy.includes("--mode")) {
@@ -231,7 +231,9 @@ export async function runCommandReply(
         queuedMs = waitMs;
         queuedAhead = ahead;
         if (isVerbose()) {
-          logVerbose(`Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`);
+          logVerbose(
+            `Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`,
+          );
         }
       },
     });
@@ -266,7 +268,10 @@ export async function runCommandReply(
     verboseLog(`Command auto-reply stdout (trimmed): ${trimmed || "<empty>"}`);
     const elapsed = Date.now() - started;
     verboseLog(`Command auto-reply finished in ${elapsed}ms`);
-    logger.info({ durationMs: elapsed, agent: agentKind, cwd: reply.cwd }, "command auto-reply finished");
+    logger.info(
+      { durationMs: elapsed, agent: agentKind, cwd: reply.cwd },
+      "command auto-reply finished",
+    );
     if ((code ?? 0) !== 0) {
       console.error(
         `Command auto-reply exited with code ${code ?? "unknown"} (signal: ${signal ?? "none"})`,
@@ -357,7 +362,10 @@ export async function runCommandReply(
     return { payload, meta };
   } catch (err) {
     const elapsed = Date.now() - started;
-    logger.info({ durationMs: elapsed, agent: agentKind, cwd: reply.cwd }, "command auto-reply failed");
+    logger.info(
+      { durationMs: elapsed, agent: agentKind, cwd: reply.cwd },
+      "command auto-reply failed",
+    );
     const anyErr = err as { killed?: boolean; signal?: string };
     const timeoutHit = anyErr.killed === true || anyErr.signal === "SIGKILL";
     const errorObj = err as { stdout?: string; stderr?: string };
