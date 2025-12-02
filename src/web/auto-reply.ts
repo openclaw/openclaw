@@ -17,6 +17,7 @@ import { normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
 import { sendMessageWeb } from "./outbound.js";
+import { getQueueSize } from "../process/command-queue.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -739,6 +740,15 @@ export async function monitorWebProvider(
     }
 
     const runReplyHeartbeat = async () => {
+      const queued = getQueueSize();
+      if (queued > 0) {
+        heartbeatLogger.info(
+          { connectionId, reason: "requests-in-flight", queued },
+          "reply heartbeat skipped",
+        );
+        console.log(success("heartbeat: skipped (requests in flight)"));
+        return;
+      }
       if (!replyHeartbeatMinutes) return;
       const tickStart = Date.now();
       if (!lastInboundMsg) {
