@@ -17,4 +17,4 @@ export function getAgentSpec(kind: AgentKind): AgentSpec {
   return specs[kind];
 }
 
-export { AgentKind, AgentMeta, AgentParseResult } from "./types.js";
+export type { AgentKind, AgentMeta, AgentParseResult } from "./types.js";
