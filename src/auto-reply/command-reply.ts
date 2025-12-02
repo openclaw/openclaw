@@ -189,11 +189,21 @@ export async function runCommandReply(
         systemSent,
         identityPrefix: agentCfg.identityPrefix,
         format: agentCfg.format,
-      })
+    })
     : argv;
 
   logVerbose(
     `Running command auto-reply: ${finalArgv.join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
+  );
+  logger.info(
+    {
+      agent: agentKind,
+      sessionId: templatingCtx.SessionId,
+      newSession: isNewSession,
+      cwd: reply.cwd,
+      command: finalArgv.slice(0, -1), // omit body to reduce noise
+    },
+    "command auto-reply start",
   );
 
   const started = Date.now();
