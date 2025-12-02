@@ -263,6 +263,7 @@ export async function getReplyFromConfig(
     };
     sessionStore[sessionKey] = sessionEntry;
     await saveSessionStore(storePath, sessionStore);
+    systemSent = true;
   }
 
   const prefixedBody =
