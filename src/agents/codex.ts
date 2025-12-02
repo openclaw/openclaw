@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { AgentMeta, AgentParseResult, AgentSpec, BuildArgsContext } from "./types.js";
+import type { AgentMeta, AgentParseResult, AgentSpec } from "./types.js";
 
 function parseCodexJson(raw: string): AgentParseResult {
   const lines = raw.split(/\n+/).filter((l) => l.trim().startsWith("{"));
@@ -9,11 +9,25 @@ function parseCodexJson(raw: string): AgentParseResult {
 
   for (const line of lines) {
     try {
-      const ev = JSON.parse(line) as { type?: string; item?: { type?: string; text?: string }; usage?: unknown };
-      if (ev.type === "item.completed" && ev.item?.type === "agent_message" && typeof ev.item.text === "string") {
+      const ev = JSON.parse(line) as {
+        type?: string;
+        item?: { type?: string; text?: string };
+        usage?: unknown;
+      };
+      // Codex streams multiple events; capture the last agent_message text and
+      // the final turn usage for cost/telemetry.
+      if (
+        ev.type === "item.completed" &&
+        ev.item?.type === "agent_message" &&
+        typeof ev.item.text === "string"
+      ) {
         text = ev.item.text;
       }
-      if (ev.type === "turn.completed" && ev.usage && typeof ev.usage === "object") {
+      if (
+        ev.type === "turn.completed" &&
+        ev.usage &&
+        typeof ev.usage === "object"
+      ) {
         const u = ev.usage as {
           input_tokens?: number;
           cached_input_tokens?: number;
@@ -63,4 +77,3 @@ export const codexSpec: AgentSpec = {
   },
   parseOutput: parseCodexJson,
 };
-

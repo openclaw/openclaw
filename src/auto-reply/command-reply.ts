@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { getAgentSpec } from "../agents/index.js";
+import { type AgentKind, getAgentSpec } from "../agents/index.js";
 import type { AgentMeta } from "../agents/types.js";
 import type { WarelayConfig } from "../config/config.js";
 import { isVerbose, logVerbose } from "../globals.js";
@@ -116,7 +116,8 @@ export async function runCommandReply(
     throw new Error("reply.command is required for mode=command");
   }
   const agentCfg = reply.agent ?? { kind: "claude" };
-  const agent = getAgentSpec(agentCfg.kind as any);
+  const agentKind: AgentKind = agentCfg.kind ?? "claude";
+  const agent = getAgentSpec(agentKind);
 
   let argv = reply.command.map((part) => applyTemplate(part, templatingCtx));
   const templatePrefix =
@@ -142,14 +143,18 @@ export async function runCommandReply(
         : ["--session", "{{SessionId}}"];
     const sessionArgList = (
       isNewSession
-        ? reply.session.sessionArgNew ?? defaultNew
-        : reply.session.sessionArgResume ?? defaultResume
+        ? (reply.session.sessionArgNew ?? defaultNew)
+        : (reply.session.sessionArgResume ?? defaultResume)
     ).map((p) => applyTemplate(p, templatingCtx));
     if (sessionArgList.length) {
       const insertBeforeBody = reply.session.sessionArgBeforeBody ?? true;
       const insertAt =
         insertBeforeBody && argv.length > 1 ? argv.length - 1 : argv.length;
-      argv = [...argv.slice(0, insertAt), ...sessionArgList, ...argv.slice(insertAt)];
+      argv = [
+        ...argv.slice(0, insertAt),
+        ...sessionArgList,
+        ...argv.slice(insertAt),
+      ];
       bodyIndex = Math.max(argv.length - 1, 0);
     }
   }
@@ -198,6 +203,8 @@ export async function runCommandReply(
     }
 
     const parsed = trimmed ? agent.parseOutput(trimmed) : undefined;
+    // Treat empty string as "no content" so we can fall back to the friendly
+    // "(command produced no output)" message instead of echoing raw JSON.
     if (parsed && parsed.text !== undefined) {
       trimmed = parsed.text.trim();
     }
@@ -223,7 +230,9 @@ export async function runCommandReply(
         `Command auto-reply exited with code ${code ?? "unknown"} (signal: ${signal ?? "none"})`,
       );
       // Include any partial output or stderr in error message
-      const partialOut = trimmed ? `\n\nOutput: ${trimmed.slice(0, 500)}${trimmed.length > 500 ? "..." : ""}` : "";
+      const partialOut = trimmed
+        ? `\n\nOutput: ${trimmed.slice(0, 500)}${trimmed.length > 500 ? "..." : ""}`
+        : "";
       const errorText = `⚠️ Command exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}${partialOut}`;
       return {
         payload: { text: errorText },

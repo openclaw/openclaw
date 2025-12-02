@@ -39,4 +39,3 @@ export interface AgentSpec {
   buildArgs: (ctx: BuildArgsContext) => string[];
   parseOutput: (rawStdout: string) => AgentParseResult;
 }
-

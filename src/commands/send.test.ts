@@ -4,6 +4,10 @@ import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sendCommand } from "./send.js";
 
+vi.mock("../web/ipc.js", () => ({
+  sendViaIpc: vi.fn().mockResolvedValue(null),
+}));
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),

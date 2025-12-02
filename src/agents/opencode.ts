@@ -6,42 +6,50 @@ import {
   parseOpencodeJson,
   summarizeOpencodeMetadata,
 } from "../auto-reply/opencode.js";
-import type { AgentMeta, AgentParseResult, AgentSpec, BuildArgsContext } from "./types.js";
+import type { AgentMeta, AgentSpec } from "./types.js";
 
-function toMeta(parsed: ReturnType<typeof parseOpencodeJson>): AgentMeta | undefined {
+function toMeta(
+  parsed: ReturnType<typeof parseOpencodeJson>,
+): AgentMeta | undefined {
   const summary = summarizeOpencodeMetadata(parsed.meta);
   return summary ? { extra: { summary } } : undefined;
 }
 
 export const opencodeSpec: AgentSpec = {
   kind: "opencode",
-  isInvocation: (argv) => argv.length > 0 && path.basename(argv[0]) === OPENCODE_BIN,
+  isInvocation: (argv) =>
+    argv.length > 0 && path.basename(argv[0]) === OPENCODE_BIN,
   buildArgs: (ctx) => {
+    // Split around the body so we can insert flags without losing the prompt.
     const argv = [...ctx.argv];
+    const body = argv[ctx.bodyIndex] ?? "";
+    const beforeBody = argv.slice(0, ctx.bodyIndex);
+    const afterBody = argv.slice(ctx.bodyIndex + 1);
     const wantsJson = ctx.format === "json";
 
     // Ensure format json for parsing
     if (wantsJson) {
-      const hasFormat = argv.some(
+      const hasFormat = [...beforeBody, body, ...afterBody].some(
         (part) => part === "--format" || part.startsWith("--format="),
       );
       if (!hasFormat) {
-        const insertBeforeBody = Math.max(argv.length - 1, 0);
-        argv.splice(insertBeforeBody, 0, "--format", "json");
+        beforeBody.push("--format", "json");
       }
     }
 
     // Session args default to --session
     // Identity prefix
+    // Opencode streams text tokens; we still seed an identity so the agent
+    // keeps context on first turn.
     const shouldPrependIdentity = !(ctx.sendSystemOnce && ctx.systemSent);
-    if (shouldPrependIdentity && argv[ctx.bodyIndex]) {
-      const existingBody = argv[ctx.bodyIndex];
-      argv[ctx.bodyIndex] = [ctx.identityPrefix ?? OPENCODE_IDENTITY_PREFIX, existingBody]
-        .filter(Boolean)
-        .join("\n\n");
-    }
+    const bodyWithIdentity =
+      shouldPrependIdentity && body
+        ? [ctx.identityPrefix ?? OPENCODE_IDENTITY_PREFIX, body]
+            .filter(Boolean)
+            .join("\n\n")
+        : body;
 
-    return argv;
+    return [...beforeBody, bodyWithIdentity, ...afterBody];
   },
   parseOutput: (rawStdout) => {
     const parsed = parseOpencodeJson(rawStdout);

@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { AgentMeta, AgentParseResult, AgentSpec, BuildArgsContext } from "./types.js";
+import type { AgentMeta, AgentParseResult, AgentSpec } from "./types.js";
 
 type PiAssistantMessage = {
   role?: string;
@@ -16,7 +16,11 @@ function parsePiJson(raw: string): AgentParseResult {
   let lastMessage: PiAssistantMessage | undefined;
   for (const line of lines) {
     try {
-      const ev = JSON.parse(line) as { type?: string; message?: PiAssistantMessage };
+      const ev = JSON.parse(line) as {
+        type?: string;
+        message?: PiAssistantMessage;
+      };
+      // Pi emits a stream; we only care about the terminal assistant message_end.
       if (ev.type === "message_end" && ev.message?.role === "assistant") {
         lastMessage = ev.message;
       }
@@ -50,14 +54,20 @@ export const piSpec: AgentSpec = {
     if (!argv.includes("-p") && !argv.includes("--print")) {
       argv.splice(argv.length - 1, 0, "-p");
     }
-    if (ctx.format === "json" && !argv.includes("--mode") && !argv.some((a) => a === "--mode")) {
+    if (
+      ctx.format === "json" &&
+      !argv.includes("--mode") &&
+      !argv.some((a) => a === "--mode")
+    ) {
       argv.splice(argv.length - 1, 0, "--mode", "json");
     }
     // Session defaults
-    // Identity prefix optional; Pi usually doesn't need, but allow
+    // Identity prefix optional; Pi usually doesn't need it, but allow injection
     if (!(ctx.sendSystemOnce && ctx.systemSent) && argv[ctx.bodyIndex]) {
       const existingBody = argv[ctx.bodyIndex];
-      argv[ctx.bodyIndex] = [ctx.identityPrefix, existingBody].filter(Boolean).join("\n\n");
+      argv[ctx.bodyIndex] = [ctx.identityPrefix, existingBody]
+        .filter(Boolean)
+        .join("\n\n");
     }
     return argv;
   },

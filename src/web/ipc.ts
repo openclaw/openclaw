@@ -78,13 +78,13 @@ export function startIpcServer(sendHandler: SendHandler): void {
                 success: true,
                 messageId: result.messageId,
               };
-              conn.write(JSON.stringify(response) + "\n");
+              conn.write(`${JSON.stringify(response)}\n`);
             } catch (err) {
               const response: IpcSendResponse = {
                 success: false,
                 error: String(err),
               };
-              conn.write(JSON.stringify(response) + "\n");
+              conn.write(`${JSON.stringify(response)}\n`);
             }
           }
         } catch (err) {
@@ -93,7 +93,7 @@ export function startIpcServer(sendHandler: SendHandler): void {
             success: false,
             error: "Invalid request format",
           };
-          conn.write(JSON.stringify(response) + "\n");
+          conn.write(`${JSON.stringify(response)}\n`);
         }
       }
     });
@@ -174,7 +174,7 @@ export async function sendViaIpc(
         message,
         mediaUrl,
       };
-      client.write(JSON.stringify(request) + "\n");
+      client.write(`${JSON.stringify(request)}\n`);
     });
 
     client.on("data", (data) => {
@@ -198,7 +198,7 @@ export async function sendViaIpc(
       }
     });
 
-    client.on("error", (err) => {
+    client.on("error", (_err) => {
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);

@@ -45,7 +45,9 @@ export async function sendCommand(
     const ipcResult = await sendViaIpc(opts.to, opts.message, opts.media);
     if (ipcResult) {
       if (ipcResult.success) {
-        runtime.log(success(`✅ Sent via relay IPC. Message ID: ${ipcResult.messageId}`));
+        runtime.log(
+          success(`✅ Sent via relay IPC. Message ID: ${ipcResult.messageId}`),
+        );
         if (opts.json) {
           runtime.log(
             JSON.stringify(
@@ -64,7 +66,11 @@ export async function sendCommand(
         return;
       }
       // IPC failed but relay is running - warn and fall back
-      runtime.log(info(`IPC send failed (${ipcResult.error}), falling back to direct connection`));
+      runtime.log(
+        info(
+          `IPC send failed (${ipcResult.error}), falling back to direct connection`,
+        ),
+      );
     }
 
     // Fall back to direct connection (creates new Baileys socket)

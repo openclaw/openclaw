@@ -3,16 +3,11 @@ import path from "node:path";
 import {
   CLAUDE_BIN,
   CLAUDE_IDENTITY_PREFIX,
+  type ClaudeJsonParseResult,
   parseClaudeJson,
   summarizeClaudeMetadata,
-  type ClaudeJsonParseResult,
 } from "../auto-reply/claude.js";
-import type {
-  AgentMeta,
-  AgentParseResult,
-  AgentSpec,
-  BuildArgsContext,
-} from "./types.js";
+import type { AgentMeta, AgentSpec } from "./types.js";
 
 function toMeta(parsed?: ClaudeJsonParseResult): AgentMeta | undefined {
   if (!parsed?.parsed) return undefined;
@@ -22,10 +17,11 @@ function toMeta(parsed?: ClaudeJsonParseResult): AgentMeta | undefined {
 
 export const claudeSpec: AgentSpec = {
   kind: "claude",
-  isInvocation: (argv) => argv.length > 0 && path.basename(argv[0]) === CLAUDE_BIN,
+  isInvocation: (argv) =>
+    argv.length > 0 && path.basename(argv[0]) === CLAUDE_BIN,
   buildArgs: (ctx) => {
-    // Work off a split of "before body" and "after body" so we don't lose the
-    // body index when inserting flags.
+    // Split around the body so we can inject flags without losing the body
+    // position. This keeps templated prompts intact even when we add flags.
     const argv = [...ctx.argv];
     const body = argv[ctx.bodyIndex] ?? "";
     const beforeBody = argv.slice(0, ctx.bodyIndex);
@@ -34,14 +30,18 @@ export const claudeSpec: AgentSpec = {
     const wantsOutputFormat = typeof ctx.format === "string";
     if (wantsOutputFormat) {
       const hasOutputFormat = argv.some(
-        (part) => part === "--output-format" || part.startsWith("--output-format="),
+        (part) =>
+          part === "--output-format" || part.startsWith("--output-format="),
       );
       if (!hasOutputFormat) {
-        beforeBody.push("--output-format", ctx.format!);
+        const outputFormat = ctx.format ?? "json";
+        beforeBody.push("--output-format", outputFormat);
       }
     }
 
-    const hasPrintFlag = argv.some((part) => part === "-p" || part === "--print");
+    const hasPrintFlag = argv.some(
+      (part) => part === "-p" || part === "--print",
+    );
     if (!hasPrintFlag) {
       beforeBody.push("-p");
     }

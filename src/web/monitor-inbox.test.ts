@@ -251,7 +251,11 @@ describe("web monitor inbox", () => {
       type: "notify",
       messages: [
         {
-          key: { id: "unauth1", fromMe: false, remoteJid: "[redacted-email]" },
+          key: {
+            id: "unauth1",
+            fromMe: false,
+            remoteJid: "[redacted-email]",
+          },
           message: { conversation: "unauthorized message" },
           messageTimestamp: 1_700_000_000,
         },

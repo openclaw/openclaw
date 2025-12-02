@@ -193,7 +193,11 @@ describe("runCommandReply", () => {
       throw { stdout: "partial output here", killed: true, signal: "SIGKILL" };
     });
     const { payload, meta } = await runCommandReply({
-      reply: { mode: "command", command: ["echo", "hi"], agent: { kind: "claude" } },
+      reply: {
+        mode: "command",
+        command: ["echo", "hi"],
+        agent: { kind: "claude" },
+      },
       templatingCtx: noopTemplateCtx,
       sendSystemOnce: false,
       isNewSession: true,
@@ -214,7 +218,12 @@ describe("runCommandReply", () => {
       throw { stdout: "", killed: true, signal: "SIGKILL" };
     });
     const { payload } = await runCommandReply({
-      reply: { mode: "command", command: ["echo", "hi"], cwd: "/tmp/work", agent: { kind: "claude" } },
+      reply: {
+        mode: "command",
+        command: ["echo", "hi"],
+        cwd: "/tmp/work",
+        agent: { kind: "claude" },
+      },
       templatingCtx: noopTemplateCtx,
       sendSystemOnce: false,
       isNewSession: true,
@@ -236,7 +245,12 @@ describe("runCommandReply", () => {
       stdout: `hi\nMEDIA:${tmp}\nMEDIA:https://example.com/img.jpg`,
     });
     const { payload } = await runCommandReply({
-      reply: { mode: "command", command: ["echo", "hi"], mediaMaxMb: 1, agent: { kind: "claude" } },
+      reply: {
+        mode: "command",
+        command: ["echo", "hi"],
+        mediaMaxMb: 1,
+        agent: { kind: "claude" },
+      },
       templatingCtx: noopTemplateCtx,
       sendSystemOnce: false,
       isNewSession: true,
@@ -279,7 +293,11 @@ describe("runCommandReply", () => {
   it("captures queue wait metrics in meta", async () => {
     const runner = makeRunner({ stdout: "ok" });
     const { meta } = await runCommandReply({
-      reply: { mode: "command", command: ["echo", "{{Body}}"], agent: { kind: "claude" } },
+      reply: {
+        mode: "command",
+        command: ["echo", "{{Body}}"],
+        agent: { kind: "claude" },
+      },
       templatingCtx: noopTemplateCtx,
       sendSystemOnce: false,
       isNewSession: true,

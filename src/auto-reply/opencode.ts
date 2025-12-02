@@ -102,4 +102,3 @@ export function summarizeOpencodeMetadata(
   }
   return parts.length ? parts.join(", ") : undefined;
 }
-

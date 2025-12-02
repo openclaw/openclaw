@@ -103,8 +103,13 @@ export async function monitorWebInbox(options: {
       const isSamePhone = from === selfE164;
 
       if (!isSamePhone && Array.isArray(allowFrom) && allowFrom.length > 0) {
-        if (!allowFrom.includes("*") && !allowFrom.map(normalizeE164).includes(from)) {
-          logVerbose(`Blocked unauthorized sender ${from} (not in allowFrom list)`);
+        if (
+          !allowFrom.includes("*") &&
+          !allowFrom.map(normalizeE164).includes(from)
+        ) {
+          logVerbose(
+            `Blocked unauthorized sender ${from} (not in allowFrom list)`,
+          );
           continue; // Skip processing entirely
         }
       }

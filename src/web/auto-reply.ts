@@ -12,13 +12,13 @@ import {
 import { danger, info, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
+import { enqueueCommand, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
 import { sendViaIpc, startIpcServer, stopIpcServer } from "./ipc.js";
 import { loadWebMedia } from "./media.js";
 import { sendMessageWeb } from "./outbound.js";
-import { enqueueCommand, getQueueSize } from "../process/command-queue.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -697,9 +697,7 @@ export async function monitorWebProvider(
         }
       } catch (err) {
         console.error(
-          danger(
-            `Failed sending web auto-reply to ${from}: ${String(err)}`,
-          ),
+          danger(`Failed sending web auto-reply to ${from}: ${String(err)}`),
         );
       }
     };
@@ -713,7 +711,8 @@ export async function monitorWebProvider(
       if (getQueueSize() === 0) {
         await processBatch(msg.from);
       } else {
-        bucket.timer = bucket.timer ?? setTimeout(() => void processBatch(msg.from), 150);
+        bucket.timer =
+          bucket.timer ?? setTimeout(() => void processBatch(msg.from), 150);
       }
     };
 
@@ -754,7 +753,12 @@ export async function monitorWebProvider(
           mediaBuffer = media.buffer;
           mediaType = media.contentType;
         }
-        const result = await listener.sendMessage(to, message, mediaBuffer, mediaType);
+        const result = await listener.sendMessage(
+          to,
+          message,
+          mediaBuffer,
+          mediaType,
+        );
         // Add to echo detection so we don't process our own message
         if (message) {
           recentlySent.add(message);
@@ -763,7 +767,10 @@ export async function monitorWebProvider(
             if (firstKey) recentlySent.delete(firstKey);
           }
         }
-        logInfo(`📤 IPC send to ${to}: ${message.substring(0, 50)}...`, runtime);
+        logInfo(
+          `📤 IPC send to ${to}: ${message.substring(0, 50)}...`,
+          runtime,
+        );
         // Show typing indicator after send so user knows more may be coming
         try {
           await listener.sendComposingTo(to);
@@ -807,7 +814,10 @@ export async function monitorWebProvider(
 
         // Warn if no messages in 30+ minutes
         if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
-          heartbeatLogger.warn(logData, "⚠️ web relay heartbeat - no messages in 30+ minutes");
+          heartbeatLogger.warn(
+            logData,
+            "⚠️ web relay heartbeat - no messages in 30+ minutes",
+          );
         } else {
           heartbeatLogger.info(logData, "web relay heartbeat");
         }
@@ -818,7 +828,9 @@ export async function monitorWebProvider(
         if (lastMessageAt) {
           const timeSinceLastMessage = Date.now() - lastMessageAt;
           if (timeSinceLastMessage > MESSAGE_TIMEOUT_MS) {
-            const minutesSinceLastMessage = Math.floor(timeSinceLastMessage / 60000);
+            const minutesSinceLastMessage = Math.floor(
+              timeSinceLastMessage / 60000,
+            );
             heartbeatLogger.warn(
               {
                 connectionId,
@@ -978,7 +990,11 @@ export async function monitorWebProvider(
         // Apply response prefix if configured (same as regular messages)
         let finalText = stripped.text;
         const responsePrefix = cfg.inbound?.responsePrefix;
-        if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
+        if (
+          responsePrefix &&
+          finalText &&
+          !finalText.startsWith(responsePrefix)
+        ) {
           finalText = `${responsePrefix} ${finalText}`;
         }
 
