@@ -189,7 +189,7 @@ export async function runCommandReply(
         systemSent,
         identityPrefix: agentCfg.identityPrefix,
         format: agentCfg.format,
-    })
+      })
     : argv;
 
   logVerbose(
@@ -208,7 +208,7 @@ export async function runCommandReply(
         const rpcArgv = (() => {
           const copy = [...finalArgv];
           copy.splice(bodyIndex, 1);
-          const modeIdx = copy.findIndex((a) => a === "--mode");
+          const modeIdx = copy.indexOf("--mode");
           if (modeIdx >= 0 && copy[modeIdx + 1]) {
             copy.splice(modeIdx, 2, "--mode", "rpc");
           } else if (!copy.includes("--mode")) {
@@ -231,7 +231,9 @@ export async function runCommandReply(
         queuedMs = waitMs;
         queuedAhead = ahead;
         if (isVerbose()) {
-          logVerbose(`Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`);
+          logVerbose(
+            `Command auto-reply queued for ${waitMs}ms (${queuedAhead} ahead)`,
+          );
         }
       },
     });
