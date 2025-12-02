@@ -1,3 +1,5 @@
+// ABOUTME: Media storage utilities - downloads from URLs and saves to disk
+// ABOUTME: Handles both remote URLs (with redirect support) and local file paths
 import crypto from "node:crypto";
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
@@ -48,9 +50,21 @@ async function downloadToFile(
   url: string,
   dest: string,
   headers?: Record<string, string>,
+  maxRedirects = 5,
 ): Promise<{ headerMime?: string; sniffBuffer: Buffer; size: number }> {
   return await new Promise((resolve, reject) => {
     const req = request(url, { headers }, (res) => {
+      // Follow redirects
+      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400) {
+        const location = res.headers.location;
+        if (!location || maxRedirects <= 0) {
+          reject(new Error(`Redirect loop or missing Location header`));
+          return;
+        }
+        const redirectUrl = new URL(location, url).href;
+        resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+        return;
+      }
       if (!res.statusCode || res.statusCode >= 400) {
         reject(new Error(`HTTP ${res.statusCode ?? "?"} downloading media`));
         return;
