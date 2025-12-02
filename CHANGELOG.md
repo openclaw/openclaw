@@ -11,6 +11,11 @@
 ### Performance
 - Web auto-replies using the Pi agent now keep a single long-lived `tau` process in RPC mode instead of spawning per message, eliminating cold-start latency while preserving session/cwd handling.
 
+### Bug Fixes
+- Media downloads now follow up to 5 redirects and still derive MIME/extension from sniffed content or headers; added regression test for redirected downloads.
+- Hosted media responses set `Content-Type` from sniffed MIME (not the file name) and still clean up single-use files after send.
+- Claude system prompt is guaranteed to be included on the first session turn even when `sendSystemOnce` is enabled, while later turns stay system-free.
+
 ## 1.3.0 — 2025-12-02
 
 ### Highlights
