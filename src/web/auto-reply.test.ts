@@ -699,7 +699,60 @@ describe("web auto-reply", () => {
     });
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    expect(reply).toHaveBeenCalledWith("hi");
+    const fallback = reply.mock.calls[0]?.[0] as string;
+    expect(fallback).toContain("hi");
+    expect(fallback).toContain("Media failed");
+    fetchMock.mockRestore();
+  });
+
+  it("returns a warning when remote media fetch 404s", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({
+      text: "caption",
+      mediaUrl: "https://example.com/missing.jpg",
+    });
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: false,
+      status: 404,
+      body: null,
+      arrayBuffer: async () => new ArrayBuffer(0),
+      headers: { get: () => "text/plain" },
+    } as unknown as Response);
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hello",
+      from: "+1",
+      to: "+2",
+      id: "msg1",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(sendMedia).not.toHaveBeenCalled();
+    const fallback = reply.mock.calls[0]?.[0] as string;
+    expect(fallback).toContain("caption");
+    expect(fallback).toContain("Media failed");
+    expect(fallback).toContain("404");
+
     fetchMock.mockRestore();
   });
 

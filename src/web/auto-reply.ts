@@ -559,7 +559,15 @@ async function deliverWebReply(params: {
       );
       replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
       if (index === 0) {
-        const fallbackText = remainingText.shift() ?? caption ?? "";
+        const warning =
+          err instanceof Error
+            ? `⚠️ Media failed: ${err.message}`
+            : "⚠️ Media failed.";
+        const fallbackTextParts = [
+          remainingText.shift() ?? caption ?? "",
+          warning,
+        ].filter(Boolean);
+        const fallbackText = fallbackTextParts.join("\n");
         if (fallbackText) {
           console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
           await msg.reply(fallbackText);
