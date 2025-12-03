@@ -93,12 +93,7 @@ function inferToolMeta(message?: ToolMessageLike): string | undefined {
   const limit = details && typeof details.limit === "number" ? details.limit : undefined;
   const command = details && typeof details.command === "string" ? details.command : undefined;
 
-  const formatPath = (p: string) => {
-    const home = process.env.HOME;
-    if (home && p.startsWith(home + "/")) return p.replace(home, "~");
-    if (home && p === home) return "~";
-    return p;
-  };
+  const formatPath = shortenPath;
 
   if (pathVal) {
     const displayPath = formatPath(pathVal);
@@ -120,7 +115,7 @@ function normalizeToolResults(
     .map((tr) => ({
       text: (tr.text ?? "").trim(),
       toolName: tr.toolName?.trim() || undefined,
-      meta: tr.meta?.trim() || undefined,
+      meta: tr.meta ? shortenMetaPath(tr.meta) : undefined,
     }))
     .filter((tr) => tr.text.length > 0);
 }
@@ -131,8 +126,24 @@ function formatToolPrefix(toolName?: string, meta?: string) {
   return extra ? `[🛠️ ${label} ${extra}]` : `[🛠️ ${label}]`;
 }
 
+function shortenPath(p: string): string {
+  const home = process.env.HOME;
+  if (home && p.startsWith(home + "/")) return p.replace(home, "~");
+  if (home && p === home) return "~";
+  return p;
+}
+
+function shortenMetaPath(meta: string): string {
+  if (!meta) return meta;
+  const colonIdx = meta.indexOf(":");
+  if (colonIdx === -1) return shortenPath(meta);
+  const base = meta.slice(0, colonIdx);
+  const rest = meta.slice(colonIdx);
+  return `${shortenPath(base)}${rest}`;
+}
+
 function formatToolAggregate(toolName?: string, metas?: string[]) {
-  const filtered = (metas ?? []).filter(Boolean);
+  const filtered = (metas ?? []).filter(Boolean).map(shortenMetaPath);
   if (!filtered.length) return formatToolPrefix(toolName);
 
   // Group paths under common directory to reduce noise
