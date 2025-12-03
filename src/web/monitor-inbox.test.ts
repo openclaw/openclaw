@@ -270,6 +270,58 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("still forwards group messages (with sender info) even when allowFrom is restrictive", async () => {
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["+111"], // does not include +777
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp-allow",
+            fromMe: false,
+            remoteJid: "[redacted-email]",
+            participant: "[redacted-email]",
+          },
+          message: {
+            extendedTextMessage: {
+              text: "@bot hi",
+              contextInfo: { mentionedJid: ["[redacted-email]"] },
+            },
+          },
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatType: "group",
+        from: "[redacted-email]",
+        senderE164: "+777",
+        senderJid: "[redacted-email]",
+        mentionedJids: ["[redacted-email]"],
+        selfE164: "+123",
+        selfJid: "[redacted-email]",
+      }),
+    );
+
+    await listener.close();
+  });
+
   it("blocks messages from unauthorized senders not in allowFrom", async () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
