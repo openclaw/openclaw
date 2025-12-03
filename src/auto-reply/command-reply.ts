@@ -93,11 +93,19 @@ function inferToolMeta(message?: ToolMessageLike): string | undefined {
   const limit = details && typeof details.limit === "number" ? details.limit : undefined;
   const command = details && typeof details.command === "string" ? details.command : undefined;
 
+  const formatPath = (p: string) => {
+    const home = process.env.HOME;
+    if (home && p.startsWith(home + "/")) return p.replace(home, "~");
+    if (home && p === home) return "~";
+    return p;
+  };
+
   if (pathVal) {
+    const displayPath = formatPath(pathVal);
     if (offset !== undefined && limit !== undefined) {
-      return `${pathVal}:${offset}-${offset + limit}`;
+      return `${displayPath}:${offset}-${offset + limit}`;
     }
-    return pathVal;
+    return displayPath;
   }
   if (command) return command;
   return undefined;
