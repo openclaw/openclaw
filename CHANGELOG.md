@@ -10,7 +10,7 @@
 - **Pi/Tau stability:** RPC replies buffered until the assistant turn finishes; parsers return consistent `texts[]`; web auto-replies keep a warm Tau RPC process to avoid cold starts.
 - **Claude prompt flow:** One-time `sessionIntro` with per-message `/think:high` bodyPrefix; system prompt always sent on first turn even with `sendSystemOnce`.
 - **Heartbeat UX:** Backpressure skips reply heartbeats while other commands run; skips don’t refresh session `updatedAt`; web/Twilio heartbeats normalize array payloads and optional `heartbeatCommand`.
-- **Tau completion signal:** RPC now resolves on Tau’s `agent_end` event so late assistant messages (e.g., camera snap + weather) aren’t truncated.
+- **Tau completion signal:** RPC now resolves on Tau’s `agent_end` (or process exit) so late assistant messages aren’t truncated; 5-minute hard cap only as a failsafe.
 
 ### Reliability & UX
 - Outbound chunking prefers newlines/word boundaries and enforces caps (1600 WhatsApp/Twilio, 4000 web).
