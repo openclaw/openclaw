@@ -109,7 +109,21 @@ function isBotMentioned(
       if (normalizedMentions.includes(bareSelf)) return true;
     }
   }
-  return mentionCfg.mentionRegexes.some((re) => re.test(msg.body));
+  if (mentionCfg.mentionRegexes.some((re) => re.test(msg.body))) return true;
+
+  // Fallback: detect body containing our own number (with or without +, spacing)
+  if (msg.selfE164) {
+    const selfDigits = msg.selfE164.replace(/\D/g, "");
+    if (selfDigits) {
+      const bodyDigits = msg.body.replace(/[^\d]/g, "");
+      if (bodyDigits.includes(selfDigits)) return true;
+      const bodyNoSpace = msg.body.replace(/[\s-]/g, "");
+      const pattern = new RegExp(`\\+?${selfDigits}`, "i");
+      if (pattern.test(bodyNoSpace)) return true;
+    }
+  }
+
+  return false;
 }
 
 export function resolveReplyHeartbeatMinutes(
