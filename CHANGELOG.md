@@ -33,6 +33,7 @@
 - Web group chats now bypass the second `allowFrom` check (we still enforce it on the group participant at inbox ingest), so mentioned group messages reply even when the group JID isn’t in your allowlist.
 - `logVerbose` also writes to the configured Pino logger at debug level (without breaking stdout).
 - Group auto-replies now append the triggering sender (`[from: Name (+E164)]`) to the batch body so agents can address the right person in group chats.
+- Media-only pings now pick up mentions inside captions (image/video/etc.), so @-mentions on media-only messages trigger replies.
 - MIME sniffing and redirect handling for downloads/hosted media.
 - Response prefix applied to heartbeat alerts; heartbeat array payloads handled for both providers.
 - Tau RPC typing exposes `signal`/`killed`; NDJSON parsers normalized across agents.
