@@ -489,11 +489,11 @@ export async function getReplyFromConfig(
 
   const isHeartbeat = opts?.isHeartbeat === true;
 
-  if (reply && reply.mode === "command") {
-    const heartbeatCommand = isHeartbeat
-      ? (reply as { heartbeatCommand?: string[] }).heartbeatCommand
-      : undefined;
-    const commandArgs = heartbeatCommand?.length
+	if (reply && reply.mode === "command") {
+		const heartbeatCommand = isHeartbeat
+			? (reply as { heartbeatCommand?: string[] }).heartbeatCommand
+			: undefined;
+		const commandArgs = heartbeatCommand?.length
       ? heartbeatCommand
       : reply.command;
 
@@ -502,38 +502,34 @@ export async function getReplyFromConfig(
       return undefined;
     }
 
-    await onReplyStart();
-    const commandReply = {
-      ...reply,
-      command: commandArgs,
-      mode: "command" as const,
-    };
-    try {
-      const runResult = await runCommandReply({
-        reply: commandReply,
-        templatingCtx,
-        sendSystemOnce,
-        isNewSession,
-        isFirstTurnInSession,
-        systemSent,
-        timeoutMs,
-        timeoutSeconds,
-        commandRunner,
-        thinkLevel: resolvedThinkLevel,
-        verboseLevel: resolvedVerboseLevel,
-      });
-      const payloadArray = runResult.payloads ?? [];
-      const meta = runResult.meta;
-      const normalizedPayloads =
-        payloadArray.length === 1 ? payloadArray[0] : payloadArray;
-      if (
-        !normalizedPayloads ||
-        (Array.isArray(normalizedPayloads) && normalizedPayloads.length === 0)
-      ) {
-        return undefined;
-      }
-      if (sessionCfg && sessionStore && sessionKey) {
-        const returnedSessionId = meta.agentMeta?.sessionId;
+		await onReplyStart();
+		const commandReply = {
+			...reply,
+			command: commandArgs,
+			mode: "command" as const,
+		};
+		try {
+			const runResult = await runCommandReply({
+				reply: commandReply,
+				templatingCtx,
+				sendSystemOnce,
+				isNewSession,
+				isFirstTurnInSession,
+				systemSent,
+				timeoutMs,
+				timeoutSeconds,
+				commandRunner,
+				thinkLevel: resolvedThinkLevel,
+				verboseLevel: resolvedVerboseLevel,
+			});
+			const payloadArray = runResult.payloads ?? [];
+			const meta = runResult.meta;
+			let finalPayloads = payloadArray;
+			if (!finalPayloads || finalPayloads.length === 0) {
+				return undefined;
+			}
+			if (sessionCfg && sessionStore && sessionKey) {
+				const returnedSessionId = meta.agentMeta?.sessionId;
         if (returnedSessionId && returnedSessionId !== sessionId) {
           const entry = sessionEntry ??
             sessionStore[sessionKey] ?? {
@@ -557,14 +553,28 @@ export async function getReplyFromConfig(
           }
         }
       }
-      if (meta.agentMeta && isVerbose()) {
-        logVerbose(`Agent meta: ${JSON.stringify(meta.agentMeta)}`);
-      }
-      return normalizedPayloads;
-    } finally {
-      cleanupTyping();
-    }
-  }
+			if (meta.agentMeta && isVerbose()) {
+				logVerbose(`Agent meta: ${JSON.stringify(meta.agentMeta)}`);
+			}
+			// If verbose is enabled and this is a new session, prepend a session hint.
+			const sessionIdHint =
+				resolvedVerboseLevel === "on" && isNewSession
+					? sessionId ??
+					  meta.agentMeta?.sessionId ??
+					  templatingCtx.SessionId ??
+					  "unknown"
+					: undefined;
+			if (sessionIdHint) {
+				finalPayloads = [
+					{ text: `🧭 New session: ${sessionIdHint}` },
+					...payloadArray,
+				];
+			}
+			return finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads;
+		} finally {
+			cleanupTyping();
+		}
+	}
 
   cleanupTyping();
   return undefined;

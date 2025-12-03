@@ -750,6 +750,42 @@ describe("config and templating", () => {
     );
   });
 
+  it("prepends session hint when new session and verbose on", async () => {
+    const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "ok",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    vi.spyOn(crypto, "randomUUID").mockReturnValue("sess-uuid");
+    const storeDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "warelay-session-"),
+    );
+    const storePath = path.join(storeDir, "sessions.json");
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["echo", "{{Body}}"],
+          agent: { kind: "claude" },
+          session: { store: storePath },
+        },
+      },
+    };
+
+    const res = await index.getReplyFromConfig(
+      { Body: "/new /v on hi", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+    expect(payloads[0]?.text).toBe("🧭 New session: sess-uuid");
+    expect(payloads[1]?.text).toBe("ok");
+  });
+
   it("treats directive-only even when bracket prefixes are present", async () => {
     const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
       stdout: "ok",
