@@ -98,6 +98,12 @@ function isBotMentioned(
   msg: WebInboundMsg,
   mentionCfg: MentionConfig,
 ): boolean {
+  const clean = (text: string) =>
+    text
+      // Remove zero-width and directionality markers WhatsApp injects around display names
+      .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+      .toLowerCase();
+
   if (msg.mentionedJids?.length) {
     const normalizedMentions = msg.mentionedJids
       .map((jid) => jidToE164(jid) ?? jid)
@@ -109,13 +115,14 @@ function isBotMentioned(
       if (normalizedMentions.includes(bareSelf)) return true;
     }
   }
-  if (mentionCfg.mentionRegexes.some((re) => re.test(msg.body))) return true;
+  const bodyClean = clean(msg.body);
+  if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) return true;
 
   // Fallback: detect body containing our own number (with or without +, spacing)
   if (msg.selfE164) {
     const selfDigits = msg.selfE164.replace(/\D/g, "");
     if (selfDigits) {
-      const bodyDigits = msg.body.replace(/[^\d]/g, "");
+      const bodyDigits = bodyClean.replace(/[^\d]/g, "");
       if (bodyDigits.includes(selfDigits)) return true;
       const bodyNoSpace = msg.body.replace(/[\s-]/g, "");
       const pattern = new RegExp(`\\+?${selfDigits}`, "i");
@@ -124,6 +131,24 @@ function isBotMentioned(
   }
 
   return false;
+}
+
+function debugMention(
+  msg: WebInboundMsg,
+  mentionCfg: MentionConfig,
+): { wasMentioned: boolean; details: Record<string, unknown> } {
+  const result = isBotMentioned(msg, mentionCfg);
+  const details = {
+    from: msg.from,
+    body: msg.body,
+    bodyClean: msg.body
+      .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+      .toLowerCase(),
+    mentionedJids: msg.mentionedJids ?? null,
+    selfJid: msg.selfJid ?? null,
+    selfE164: msg.selfE164 ?? null,
+  };
+  return { wasMentioned: result, details };
 }
 
 export function resolveReplyHeartbeatMinutes(
@@ -669,7 +694,6 @@ export async function monitorWebProvider(
       const batch = pendingBatches.get(conversationId);
       if (!batch || batch.messages.length === 0) return;
       if (getQueueSize() > 0) {
-        // Wait until command queue is free to run the combined prompt.
         batch.timer = setTimeout(() => void processBatch(conversationId), 150);
         return;
       }
@@ -814,8 +838,6 @@ export async function monitorWebProvider(
         const bucket = pendingBatches.get(key) ?? { messages: [] };
         bucket.messages.push(msg);
         pendingBatches.set(key, bucket);
-
-        // Process immediately when queue is free; otherwise wait until it drains.
         if (getQueueSize() === 0) {
           await processBatch(key);
         } else {
@@ -859,10 +881,19 @@ export async function monitorWebProvider(
           while (history.length > groupHistoryLimit) history.shift();
           groupHistories.set(conversationId, history);
 
-          const wasMentioned = isBotMentioned(msg, mentionConfig);
+          const mentionDebug = debugMention(msg, mentionConfig);
+          replyLogger.debug(
+            {
+              conversationId,
+              wasMentioned: mentionDebug.wasMentioned,
+              ...mentionDebug.details,
+            },
+            "group mention debug",
+          );
+          const wasMentioned = mentionDebug.wasMentioned;
           if (mentionConfig.requireMention && !wasMentioned) {
             logVerbose(
-              `Group message stored for context (no mention detected) in ${conversationId}`,
+              `Group message stored for context (no mention detected) in ${conversationId}: ${msg.body}`,
             );
             return;
           }

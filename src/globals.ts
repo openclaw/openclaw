@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { getLogger } from "./logging.js";
 
 let globalVerbose = false;
 let globalYes = false;
@@ -12,7 +13,14 @@ export function isVerbose() {
 }
 
 export function logVerbose(message: string) {
-  if (globalVerbose) console.log(chalk.gray(message));
+  if (globalVerbose) {
+    console.log(chalk.gray(message));
+    try {
+      getLogger().debug({ message }, "verbose");
+    } catch {
+      // ignore logger failures to avoid breaking verbose printing
+    }
+  }
 }
 
 export function setYes(v: boolean) {

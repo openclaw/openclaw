@@ -348,6 +348,9 @@ export async function getReplyFromConfig(
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const isSamePhone = from && to && from === to;
+  const isGroup =
+    typeof ctx.From === "string" &&
+    (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
   const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
   const rawBodyNormalized = (
     sessionCtx.BodyStripped ?? sessionCtx.Body ?? ""
@@ -362,7 +365,7 @@ export async function getReplyFromConfig(
   // Same-phone mode (self-messaging) is always allowed
   if (isSamePhone) {
     logVerbose(`Allowing same-phone mode: from === to (${from})`);
-  } else if (Array.isArray(allowFrom) && allowFrom.length > 0) {
+  } else if (!isGroup && Array.isArray(allowFrom) && allowFrom.length > 0) {
     // Support "*" as wildcard to allow all senders
     if (!allowFrom.includes("*") && !allowFrom.includes(from)) {
       logVerbose(

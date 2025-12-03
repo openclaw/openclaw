@@ -36,6 +36,7 @@
 ## Agent-Specific Notes
 - Relay is managed by launchctl (label `com.steipete.warelay`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.warelay` and verify via `launchctl list | grep warelay`. Use tmux only if you spin up a temporary relay yourself and clean it up afterward.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
+- When asked to open a “session” file, open the Pi/Tau session logs under `~/.pi/agent/sessions/warelay/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`.
 
 ## Exclamation Mark Escaping Workaround
 The Claude Code Bash tool escapes `!` to `\!` in command arguments. When using `warelay send` with messages containing exclamation marks, use heredoc syntax:

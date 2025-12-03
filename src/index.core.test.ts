@@ -145,6 +145,25 @@ describe("config and templating", () => {
     expect(result?.text).toBe("Reply: test");
   });
 
+  it("getReplyFromConfig allows group chats even when not in allowFrom", async () => {
+    const cfg = {
+      inbound: {
+        allowFrom: ["+9999"],
+        reply: {
+          mode: "text" as const,
+          text: "Group: {{From}}",
+        },
+      },
+    };
+
+    const result = await index.getReplyFromConfig(
+      { Body: "hello", From: "[redacted-email]", To: "+4475" },
+      undefined,
+      cfg,
+    );
+    expect(result?.text).toBe("Group: [redacted-email]");
+  });
+
   it("getReplyFromConfig rejects non-same-phone when not in allowFrom", async () => {
     const cfg = {
       inbound: {
