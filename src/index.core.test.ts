@@ -744,7 +744,7 @@ describe("config and templating", () => {
     expect(rpcSpy).toHaveBeenCalled();
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
     expect(payloads.length).toBeGreaterThanOrEqual(2);
-    expect(payloads[0]?.text).toBe("[🛠️ bash ls]");
+    expect(payloads[0]?.text).toBe("[🛠️ bash] ls");
     expect(payloads[1]?.text).toContain("summary");
   });
 

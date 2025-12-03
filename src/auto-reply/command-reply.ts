@@ -53,6 +53,9 @@ export type CommandReplyResult = {
   meta: CommandReplyMeta;
 };
 
+// Debounce window for coalescing successive tool_result messages (ms)
+const TOOL_RESULT_DEBOUNCE_MS = 250;
+
 type ToolMessageLike = {
   name?: string;
   toolName?: string;
@@ -118,6 +121,12 @@ function formatToolPrefix(toolName?: string, meta?: string) {
   const label = toolName?.trim() || "tool";
   const extra = meta?.trim();
   return extra ? `[🛠️ ${label} ${extra}]` : `[🛠️ ${label}]`;
+}
+
+function formatToolAggregate(toolName?: string, metas?: string[]) {
+  const filtered = (metas ?? []).filter(Boolean);
+  if (!filtered.length) return formatToolPrefix(toolName);
+  return `${formatToolPrefix(toolName)} ${filtered.join(", ")}`;
 }
 
 export function summarizeClaudeMetadata(payload: unknown): string | undefined {
@@ -321,6 +330,27 @@ export async function runCommandReply(
   let queuedMs: number | undefined;
   let queuedAhead: number | undefined;
   try {
+    let pendingToolName: string | undefined;
+    let pendingMetas: string[] = [];
+    let pendingTimer: NodeJS.Timeout | null = null;
+    const flushPendingTool = () => {
+      if (!onPartialReply) return;
+      if (!pendingToolName && pendingMetas.length === 0) return;
+      const text = formatToolAggregate(pendingToolName, pendingMetas);
+      const { text: cleanedText, mediaUrls: mediaFound } =
+        splitMediaFromOutput(text);
+      void onPartialReply({
+        text: cleanedText,
+        mediaUrls: mediaFound?.length ? mediaFound : undefined,
+      } as ReplyPayload);
+      pendingToolName = undefined;
+      pendingMetas = [];
+      if (pendingTimer) {
+        clearTimeout(pendingTimer);
+        pendingTimer = null;
+      }
+    };
+
     const run = async () => {
       // Prefer long-lived tau RPC for pi agent to avoid cold starts.
       if (agentKind === "pi") {
@@ -338,7 +368,7 @@ export async function runCommandReply(
           }
           return copy;
         })();
-        return await runPiRpc({
+        const rpcResult = await runPiRpc({
           argv: rpcArgv,
           cwd: reply.cwd,
           prompt: body,
@@ -363,13 +393,20 @@ export async function runCommandReply(
                     ) {
                       const toolName = inferToolName(ev.message);
                       const meta = inferToolMeta(ev.message);
-                      const prefix = formatToolPrefix(toolName, meta);
-                      const { text: cleanedText, mediaUrls: mediaFound } =
-                        splitMediaFromOutput(prefix);
-                      void onPartialReply({
-                        text: cleanedText,
-                        mediaUrls: mediaFound?.length ? mediaFound : undefined,
-                      } as ReplyPayload);
+                      if (
+                        pendingToolName &&
+                        toolName &&
+                        toolName !== pendingToolName
+                      ) {
+                        flushPendingTool();
+                      }
+                      if (!pendingToolName) pendingToolName = toolName;
+                      if (meta) pendingMetas.push(meta);
+                      if (pendingTimer) clearTimeout(pendingTimer);
+                      pendingTimer = setTimeout(
+                        flushPendingTool,
+                        TOOL_RESULT_DEBOUNCE_MS,
+                      );
                     }
                   } catch {
                     // ignore malformed lines
@@ -377,6 +414,8 @@ export async function runCommandReply(
                 }
               : undefined,
         });
+        flushPendingTool();
+        return rpcResult;
       }
       return await commandRunner(finalArgv, { timeoutMs, cwd: reply.cwd });
     };
@@ -414,8 +453,20 @@ export async function runCommandReply(
       verboseLevel === "on" && !onPartialReply && parsedToolResults.length > 0;
 
     if (includeToolResultsInline) {
-      for (const tr of parsedToolResults) {
-        const prefixed = formatToolPrefix(tr.toolName, tr.meta);
+      const aggregated = parsedToolResults.reduce<
+        { toolName?: string; metas: string[] }[]
+      >((acc, tr) => {
+        const last = acc.at(-1);
+        if (last && last.toolName === tr.toolName) {
+          if (tr.meta) last.metas.push(tr.meta);
+        } else {
+          acc.push({ toolName: tr.toolName, metas: tr.meta ? [tr.meta] : [] });
+        }
+        return acc;
+      }, []);
+
+      for (const tr of aggregated) {
+        const prefixed = formatToolAggregate(tr.toolName, tr.metas);
         const { text: cleanedText, mediaUrls: mediaFound } =
           splitMediaFromOutput(prefixed);
         replyItems.push({
