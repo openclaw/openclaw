@@ -401,7 +401,7 @@ export async function runCommandReply(
     }
 
     verboseLog(`Command auto-reply meta: ${JSON.stringify(meta)}`);
-    return { payloads, payload: payloads[0], meta };
+    return { payloads, meta };
   } catch (err) {
     const elapsed = Date.now() - started;
     logger.info(
@@ -430,7 +430,7 @@ export async function runCommandReply(
         ? `${baseMsg}\n\nPartial output before timeout:\n${partialSnippet}`
         : baseMsg;
       return {
-        payload: { text },
+        payloads: [{ text }],
         meta: {
           durationMs: elapsed,
           queuedMs,

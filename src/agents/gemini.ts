@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { AgentMeta, AgentSpec } from "./types.js";
+import type { AgentParseResult, AgentSpec } from "./types.js";
 
 const GEMINI_BIN = "gemini";
 export const GEMINI_IDENTITY_PREFIX =
@@ -8,10 +8,13 @@ export const GEMINI_IDENTITY_PREFIX =
 
 // Gemini CLI currently prints plain text; --output json is flaky across versions, so we
 // keep parsing minimal and let MEDIA token stripping happen later in the pipeline.
-function parseGeminiOutput(raw: string): { text?: string; meta?: AgentMeta } {
+function parseGeminiOutput(raw: string): AgentParseResult {
   const trimmed = raw.trim();
   const text = trimmed || undefined;
-  return { texts: text ? [text] : undefined, meta: undefined };
+  return {
+    texts: text ? [text] : undefined,
+    meta: undefined,
+  } satisfies AgentParseResult;
 }
 
 export const geminiSpec: AgentSpec = {
