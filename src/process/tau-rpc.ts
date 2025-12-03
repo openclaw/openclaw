@@ -67,6 +67,25 @@ class TauRpcClient {
     if (!this.pending) return;
     this.buffer.push(line);
     this.pending?.onEvent?.(line);
+
+    // If Tau signals the full prompt/response cycle is finished, resolve immediately.
+    try {
+      const evt = JSON.parse(line) as { type?: string };
+      if (evt?.type === "agent_end") {
+        if (this.idleTimer) clearTimeout(this.idleTimer);
+        const pending = this.pending;
+        this.pending = undefined;
+        const out = this.buffer.join("\n");
+        this.buffer = [];
+        this.seenAssistantEnd = false;
+        clearTimeout(pending.timer);
+        pending.resolve({ stdout: out, stderr: this.stderr, code: 0 });
+        return;
+      }
+    } catch {
+      // ignore malformed/non-JSON lines
+    }
+
     // Streamed JSON arrives line-by-line; mark when an assistant message finishes
     // and resolve after a short idle to capture any follow-up events (e.g. tools)
     // that belong to the same turn.
