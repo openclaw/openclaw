@@ -413,6 +413,25 @@ export async function getReplyFromConfig(
     isFirstTurnInSession && sessionCfg?.sessionIntro
       ? applyTemplate(sessionCfg.sessionIntro, sessionCtx)
       : "";
+  const groupIntro =
+    isFirstTurnInSession && sessionCtx.ChatType === "group"
+      ? (() => {
+          const subject = sessionCtx.GroupSubject?.trim();
+          const members = sessionCtx.GroupMembers?.trim();
+          const subjectLine = subject
+            ? `You are replying inside the WhatsApp group "${subject}".`
+            : "You are replying inside a WhatsApp group chat.";
+          const membersLine = members
+            ? `Group members: ${members}.`
+            : undefined;
+          return [subjectLine, membersLine]
+            .filter(Boolean)
+            .join(" ")
+            .concat(
+              " Address the specific sender noted in the message context.",
+            );
+        })()
+      : "";
   const bodyPrefix = reply?.bodyPrefix
     ? applyTemplate(reply.bodyPrefix, sessionCtx)
     : "";
@@ -429,6 +448,9 @@ export async function getReplyFromConfig(
   }
   if (sessionIntro) {
     prefixedBodyBase = `${sessionIntro}\n\n${prefixedBodyBase}`;
+  }
+  if (groupIntro) {
+    prefixedBodyBase = `${groupIntro}\n\n${prefixedBodyBase}`;
   }
   if (abortedHint) {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;

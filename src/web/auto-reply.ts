@@ -766,6 +766,11 @@ export async function monitorWebProvider(
           MediaPath: latest.mediaPath,
           MediaUrl: latest.mediaUrl,
           MediaType: latest.mediaType,
+          ChatType: latest.chatType,
+          GroupSubject: latest.groupSubject,
+          GroupMembers: latest.groupParticipants?.join(", "),
+          SenderName: latest.senderName,
+          SenderE164: latest.senderE164,
         },
         {
           onReplyStart: latest.sendComposing,

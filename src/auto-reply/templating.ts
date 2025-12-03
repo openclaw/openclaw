@@ -7,6 +7,11 @@ export type MsgContext = {
   MediaUrl?: string;
   MediaType?: string;
   Transcript?: string;
+  ChatType?: string;
+  GroupSubject?: string;
+  GroupMembers?: string;
+  SenderName?: string;
+  SenderE164?: string;
 };
 
 export type TemplateContext = MsgContext & {

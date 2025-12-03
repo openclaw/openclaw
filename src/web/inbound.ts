@@ -39,6 +39,8 @@ export type WebInboundMessage = {
   senderJid?: string;
   senderE164?: string;
   senderName?: string;
+  groupSubject?: string;
+  groupParticipants?: string[];
   mentionedJids?: string[];
   selfJid?: string | null;
   selfE164?: string | null;
@@ -73,6 +75,33 @@ export async function monitorWebInbox(options: {
   const selfJid = sock.user?.id;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
   const seen = new Set<string>();
+  const groupMetaCache = new Map<
+    string,
+    { subject?: string; participants?: string[]; expires: number }
+  >();
+  const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  const getGroupMeta = async (jid: string) => {
+    const cached = groupMetaCache.get(jid);
+    if (cached && cached.expires > Date.now()) return cached;
+    try {
+      const meta = await sock.groupMetadata(jid);
+      const participants =
+        meta.participants
+          ?.map((p) => jidToE164(p.id) ?? p.id)
+          .filter(Boolean) ?? [];
+      const entry = {
+        subject: meta.subject,
+        participants,
+        expires: Date.now() + GROUP_META_TTL_MS,
+      };
+      groupMetaCache.set(jid, entry);
+      return entry;
+    } catch (err) {
+      logVerbose(`Failed to fetch group metadata for ${jid}: ${String(err)}`);
+      return { expires: Date.now() + GROUP_META_TTL_MS };
+    }
+  };
 
   sock.ev.on("messages.upsert", async (upsert) => {
     if (upsert.type !== "notify") return;
@@ -109,6 +138,13 @@ export async function monitorWebInbox(options: {
       const from = group ? remoteJid : jidToE164(remoteJid);
       // Skip if we still can't resolve an id to key conversation
       if (!from) continue;
+      let groupSubject: string | undefined;
+      let groupParticipants: string[] | undefined;
+      if (group) {
+        const meta = await getGroupMeta(remoteJid);
+        groupSubject = meta.subject;
+        groupParticipants = meta.participants;
+      }
 
       // Filter unauthorized senders early to prevent wasted processing
       // and potential session corruption from Bad MAC errors
@@ -197,6 +233,8 @@ export async function monitorWebInbox(options: {
           senderJid: participantJid,
           senderE164: senderE164 ?? undefined,
           senderName,
+          groupSubject,
+          groupParticipants,
           mentionedJids: mentionedJids ?? undefined,
           selfJid,
           selfE164,

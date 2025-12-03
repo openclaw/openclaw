@@ -9,6 +9,7 @@ Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that 
 - Context injection: last N (default 50) group messages are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`.
 - Sender surfacing: every group batch now ends with `[from: Sender Name (+E164)]` so Tau/Claude know who is speaking.
 - Ephemeral/view-once: we unwrap those before extracting text/mentions, so pings inside them still trigger.
+- New session primer: on the first turn of a group session we now prepend a short blurb to the model like `You are replying inside the WhatsApp group "<subject>". Group members: +44..., +43..., … Address the specific sender noted in the message context.` If metadata isn’t available we still tell the agent it’s a group chat.
 
 ## Config for Clawd UK (+447511247203)
 Add a `groupChat` block to `~/.warelay/warelay.json` so display-name pings work even when WhatsApp strips the visual `@` in the text body:
