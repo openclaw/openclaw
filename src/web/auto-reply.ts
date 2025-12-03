@@ -72,7 +72,7 @@ const formatDuration = (ms: number) =>
 
 const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
-export const HEARTBEAT_PROMPT = "HEARTBEAT ultrathink";
+export const HEARTBEAT_PROMPT = "HEARTBEAT /think:high";
 
 export function resolveReplyHeartbeatMinutes(
   cfg: ReturnType<typeof loadConfig>,

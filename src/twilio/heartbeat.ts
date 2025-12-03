@@ -49,29 +49,33 @@ export async function runTwilioHeartbeatOnce(opts: {
         To: to,
         MessageSid: undefined,
       },
-      undefined,
+      { isHeartbeat: true },
     );
 
+    const replyPayload = Array.isArray(replyResult)
+      ? replyResult[0]
+      : replyResult;
+
     if (
-      !replyResult ||
-      (!replyResult.text &&
-        !replyResult.mediaUrl &&
-        !replyResult.mediaUrls?.length)
+      !replyPayload ||
+      (!replyPayload.text &&
+        !replyPayload.mediaUrl &&
+        !replyPayload.mediaUrls?.length)
     ) {
       logInfo("heartbeat skipped: empty reply", runtime);
       return;
     }
 
     const hasMedia = Boolean(
-      replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+      replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
     );
-    const stripped = stripHeartbeatToken(replyResult.text);
+    const stripped = stripHeartbeatToken(replyPayload.text);
     if (stripped.shouldSkip && !hasMedia) {
       logInfo(success("heartbeat: ok (HEARTBEAT_OK)"), runtime);
       return;
     }
 
-    const finalText = stripped.text || replyResult.text || "";
+    const finalText = stripped.text || replyPayload.text || "";
     if (dryRun) {
       logInfo(
         `[dry-run] heartbeat -> ${to}: ${finalText.slice(0, 200)}`,
