@@ -529,6 +529,7 @@ export async function getReplyFromConfig(
         commandRunner,
         thinkLevel: resolvedThinkLevel,
         verboseLevel: resolvedVerboseLevel,
+        onPartialReply: opts?.onPartialReply,
       });
       const payloadArray = runResult.payloads ?? [];
       const meta = runResult.meta;
@@ -611,6 +612,16 @@ export async function autoReplyIfConfigured(
     To: message.to ?? undefined,
     MessageSid: message.sid,
   };
+  const replyFrom = message.to;
+  const replyTo = message.from;
+  if (!replyFrom || !replyTo) {
+    if (isVerbose())
+      console.error(
+        "Skipping auto-reply: missing to/from on inbound message",
+        ctx,
+      );
+    return;
+  }
   const cfg = configOverride ?? loadConfig();
   // Attach media hints for transcription/templates if present on Twilio payloads.
   const mediaUrl = (message as { mediaUrl?: string }).mediaUrl;
@@ -632,10 +643,72 @@ export async function autoReplyIfConfigured(
     }
   }
 
+  const sendTwilio = async (body: string, media?: string) => {
+    let resolvedMedia = media;
+    if (resolvedMedia && !/^https?:\/\//i.test(resolvedMedia)) {
+      const hosted = await ensureMediaHosted(resolvedMedia);
+      resolvedMedia = hosted.url;
+    }
+    await client.messages.create({
+      from: replyFrom,
+      to: replyTo,
+      body,
+      ...(resolvedMedia ? { mediaUrl: [resolvedMedia] } : {}),
+    });
+  };
+
+  const sendPayload = async (replyPayload: ReplyPayload) => {
+    const mediaList = replyPayload.mediaUrls?.length
+      ? replyPayload.mediaUrls
+      : replyPayload.mediaUrl
+        ? [replyPayload.mediaUrl]
+        : [];
+
+    const text = replyPayload.text ?? "";
+    const chunks = chunkText(text, TWILIO_TEXT_LIMIT);
+    if (chunks.length === 0) chunks.push("");
+
+    for (let i = 0; i < chunks.length; i++) {
+      const body = chunks[i];
+      const attachMedia = i === 0 ? mediaList[0] : undefined;
+
+      if (body) {
+        logVerbose(
+          `Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${body.length}`,
+        );
+      } else if (attachMedia) {
+        logVerbose(
+          `Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media only)`,
+        );
+      }
+
+      await sendTwilio(body, attachMedia);
+
+      if (i === 0 && mediaList.length > 1) {
+        for (const extra of mediaList.slice(1)) {
+          await sendTwilio("", extra);
+        }
+      }
+
+      if (isVerbose()) {
+        console.log(
+          info(
+            `↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${attachMedia ? ", media" : ""})`,
+          ),
+        );
+      }
+    }
+  };
+
+  const partialSender = async (payload: ReplyPayload) => {
+    await sendPayload(payload);
+  };
+
   const replyResult = await getReplyFromConfig(
     ctx,
     {
       onReplyStart: () => sendTypingIndicator(client, runtime, message.sid),
+      onPartialReply: partialSender,
     },
     cfg,
   );
@@ -646,73 +719,9 @@ export async function autoReplyIfConfigured(
     : [];
   if (replies.length === 0) return;
 
-  const replyFrom = message.to;
-  const replyTo = message.from;
-  if (!replyFrom || !replyTo) {
-    if (isVerbose())
-      console.error(
-        "Skipping auto-reply: missing to/from on inbound message",
-        ctx,
-      );
-    return;
-  }
-
   try {
-    const sendTwilio = async (body: string, media?: string) => {
-      let resolvedMedia = media;
-      if (resolvedMedia && !/^https?:\/\//i.test(resolvedMedia)) {
-        const hosted = await ensureMediaHosted(resolvedMedia);
-        resolvedMedia = hosted.url;
-      }
-      await client.messages.create({
-        from: replyFrom,
-        to: replyTo,
-        body,
-        ...(resolvedMedia ? { mediaUrl: [resolvedMedia] } : {}),
-      });
-    };
-
     for (const replyPayload of replies) {
-      const mediaList = replyPayload.mediaUrls?.length
-        ? replyPayload.mediaUrls
-        : replyPayload.mediaUrl
-          ? [replyPayload.mediaUrl]
-          : [];
-
-      const text = replyPayload.text ?? "";
-      const chunks = chunkText(text, TWILIO_TEXT_LIMIT);
-      if (chunks.length === 0) chunks.push("");
-
-      for (let i = 0; i < chunks.length; i++) {
-        const body = chunks[i];
-        const attachMedia = i === 0 ? mediaList[0] : undefined;
-
-        if (body) {
-          logVerbose(
-            `Auto-replying via Twilio: from ${replyFrom} to ${replyTo}, body length ${body.length}`,
-          );
-        } else if (attachMedia) {
-          logVerbose(
-            `Auto-replying via Twilio: from ${replyFrom} to ${replyTo} (media only)`,
-          );
-        }
-
-        await sendTwilio(body, attachMedia);
-
-        if (i === 0 && mediaList.length > 1) {
-          for (const extra of mediaList.slice(1)) {
-            await sendTwilio("", extra);
-          }
-        }
-
-        if (isVerbose()) {
-          console.log(
-            info(
-              `↩️  Auto-replied to ${replyTo} (sid ${message.sid ?? "no-sid"}${attachMedia ? ", media" : ""})`,
-            ),
-          );
-        }
-      }
+      await sendPayload(replyPayload);
     }
   } catch (err) {
     const anyErr = err as {

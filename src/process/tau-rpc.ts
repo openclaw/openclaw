@@ -7,6 +7,7 @@ type TauRpcOptions = {
   argv: string[];
   cwd?: string;
   timeoutMs: number;
+  onEvent?: (line: string) => void;
 };
 
 type TauRpcResult = {
@@ -30,6 +31,7 @@ class TauRpcClient {
         resolve: (r: TauRpcResult) => void;
         reject: (err: unknown) => void;
         timer: NodeJS.Timeout;
+        onEvent?: (line: string) => void;
       }
     | undefined;
 
@@ -64,6 +66,7 @@ class TauRpcClient {
   private handleLine(line: string) {
     if (!this.pending) return;
     this.buffer.push(line);
+    this.pending?.onEvent?.(line);
     // Streamed JSON arrives line-by-line; mark when an assistant message finishes
     // and resolve after a short idle to capture any follow-up events (e.g. tools)
     // that belong to the same turn.
@@ -95,7 +98,11 @@ class TauRpcClient {
     }
   }
 
-  async prompt(prompt: string, timeoutMs: number): Promise<TauRpcResult> {
+  async prompt(
+    prompt: string,
+    timeoutMs: number,
+    onEvent?: (line: string) => void,
+  ): Promise<TauRpcResult> {
     this.ensureChild();
     if (this.pending) {
       throw new Error("tau rpc already handling a request");
@@ -118,7 +125,7 @@ class TauRpcClient {
         reject(new Error(`tau rpc timed out after ${timeoutMs}ms`));
         child.kill("SIGKILL");
       }, timeoutMs);
-      this.pending = { resolve, reject, timer };
+      this.pending = { resolve, reject, timer, onEvent };
     });
   }
 
@@ -144,7 +151,7 @@ export async function runPiRpc(
     singleton?.client.dispose();
     singleton = { key, client: new TauRpcClient(opts.argv, opts.cwd) };
   }
-  return singleton.client.prompt(opts.prompt, opts.timeoutMs);
+  return singleton.client.prompt(opts.prompt, opts.timeoutMs, opts.onEvent);
 }
 
 export function resetPiRpc() {

@@ -35,6 +35,7 @@ type CommandReplyParams = {
   enqueue?: EnqueueRunner;
   thinkLevel?: ThinkLevel;
   verboseLevel?: "off" | "on";
+  onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
 };
 
 export type CommandReplyMeta = {
@@ -143,6 +144,7 @@ export async function runCommandReply(
     enqueue = enqueueCommand,
     thinkLevel,
     verboseLevel,
+    onPartialReply,
   } = params;
 
   if (!reply.command?.length) {
@@ -274,6 +276,42 @@ export async function runCommandReply(
           cwd: reply.cwd,
           prompt: body,
           timeoutMs,
+          onEvent:
+            verboseLevel === "on" && onPartialReply
+              ? (line: string) => {
+                  try {
+                    const ev = JSON.parse(line) as {
+                      type?: string;
+                      message?: { role?: string; content?: unknown[] };
+                    };
+                    if (
+                      (ev.type === "message" || ev.type === "message_end") &&
+                      ev.message?.role === "tool_result" &&
+                      Array.isArray(ev.message.content)
+                    ) {
+                      const text = (
+                        ev.message.content as Array<{ text?: string }>
+                      )
+                        .map((c) => c.text)
+                        .filter((t): t is string => !!t)
+                        .join("\n")
+                        .trim();
+                      if (text) {
+                        const { text: cleanedText, mediaUrls: mediaFound } =
+                          splitMediaFromOutput(`🛠️ ${text}`);
+                        void onPartialReply({
+                          text: cleanedText,
+                          mediaUrls: mediaFound?.length
+                            ? mediaFound
+                            : undefined,
+                        } as ReplyPayload);
+                      }
+                    }
+                  } catch {
+                    // ignore malformed lines
+                  }
+                }
+              : undefined,
         });
       }
       return await commandRunner(finalArgv, { timeoutMs, cwd: reply.cwd });
@@ -309,8 +347,10 @@ export async function runCommandReply(
     type ReplyItem = { text: string; media?: string[] };
     const replyItems: ReplyItem[] = [];
 
-    // When verbose is on, surface tool results first (before assistant summary) to mirror chat ordering.
-    if (verboseLevel === "on") {
+    const includeToolResultsInline =
+      verboseLevel === "on" && !onPartialReply && parsedToolResults.length > 0;
+
+    if (includeToolResultsInline) {
       for (const tr of parsedToolResults) {
         const prefixed = `🛠️ ${tr}`;
         const { text: cleanedText, mediaUrls: mediaFound } =
