@@ -163,11 +163,7 @@ export async function logoutWeb(runtime: RuntimeEnv = defaultRuntime) {
   await fs.rm(WA_WEB_AUTH_DIR, { recursive: true, force: true });
   // Also drop session store to clear lingering per-sender state after logout.
   await fs.rm(SESSION_STORE_DEFAULT, { force: true });
-  runtime.log(
-    success(
-      "Cleared WhatsApp Web credentials. Run `warelay login --provider web` to relink.",
-    ),
-  );
+  runtime.log(success("Cleared WhatsApp Web credentials."));
   return true;
 }
 
