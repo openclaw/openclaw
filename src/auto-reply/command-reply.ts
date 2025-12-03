@@ -20,6 +20,8 @@ type CommandReplyConfig = NonNullable<WarelayConfig["inbound"]>["reply"] & {
 
 type EnqueueRunner = typeof enqueueCommand;
 
+type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
+
 type CommandReplyParams = {
   reply: CommandReplyConfig;
   templatingCtx: TemplateContext;
@@ -31,6 +33,7 @@ type CommandReplyParams = {
   timeoutSeconds: number;
   commandRunner: typeof runCommandWithTimeout;
   enqueue?: EnqueueRunner;
+  thinkLevel?: ThinkLevel;
 };
 
 export type CommandReplyMeta = {
@@ -98,6 +101,25 @@ export function summarizeClaudeMetadata(payload: unknown): string | undefined {
   return parts.length ? parts.join(", ") : undefined;
 }
 
+function appendThinkingCue(body: string, level?: ThinkLevel): string {
+  if (!level || level === "off") return body;
+  const cue = (() => {
+    switch (level) {
+      case "high":
+        return "ultrathink";
+      case "medium":
+        return "think harder";
+      case "low":
+        return "think hard";
+      case "minimal":
+        return "think";
+      default:
+        return "";
+    }
+  })();
+  return [body.trim(), cue].filter(Boolean).join(" ");
+}
+
 export async function runCommandReply(
   params: CommandReplyParams,
 ): Promise<CommandReplyResult> {
@@ -118,6 +140,7 @@ export async function runCommandReply(
     timeoutSeconds,
     commandRunner,
     enqueue = enqueueCommand,
+    thinkLevel,
   } = params;
 
   if (!reply.command?.length) {
@@ -178,6 +201,23 @@ export async function runCommandReply(
     }
   }
 
+  if (thinkLevel && thinkLevel !== "off") {
+    if (agentKind === "pi") {
+      const hasThinkingFlag = argv.some(
+        (p, i) =>
+          p === "--thinking" ||
+          (i > 0 && argv[i - 1] === "--thinking") ||
+          p.startsWith("--thinking="),
+      );
+      if (!hasThinkingFlag) {
+        argv.splice(bodyIndex, 0, "--thinking", thinkLevel);
+        bodyIndex += 2;
+      }
+    } else if (argv[bodyIndex]) {
+      argv[bodyIndex] = appendThinkingCue(argv[bodyIndex] ?? "", thinkLevel);
+    }
+  }
+
   const shouldApplyAgent = agent.isInvocation(argv);
   const finalArgv = shouldApplyAgent
     ? agent.buildArgs({
@@ -213,11 +253,12 @@ export async function runCommandReply(
     const run = async () => {
       // Prefer long-lived tau RPC for pi agent to avoid cold starts.
       if (agentKind === "pi") {
-        const body = finalArgv[bodyIndex] ?? "";
+        const promptIndex = finalArgv.length - 1;
+        const body = finalArgv[promptIndex] ?? "";
         // Build rpc args without the prompt body; force --mode rpc.
         const rpcArgv = (() => {
           const copy = [...finalArgv];
-          copy.splice(bodyIndex, 1);
+          copy.splice(promptIndex, 1);
           const modeIdx = copy.indexOf("--mode");
           if (modeIdx >= 0 && copy[modeIdx + 1]) {
             copy.splice(modeIdx, 2, "--mode", "rpc");

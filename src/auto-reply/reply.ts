@@ -40,10 +40,13 @@ function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
   const key = raw.toLowerCase();
   if (["off"].includes(key)) return "off";
   if (["min", "minimal"].includes(key)) return "minimal";
-  if (["low"].includes(key)) return "low";
-  if (["med", "medium", "thinkhard", "think-harder", "thinkharder"].includes(key))
+  if (["low", "thinkhard", "think-hard", "think_hard"].includes(key))
+    return "low";
+  if (["med", "medium", "thinkharder", "think-harder", "harder"].includes(key))
     return "medium";
-  if (["high", "ultra", "ultrathink", "think-hard", "thinkhardest"].includes(key))
+  if (
+    ["high", "ultra", "ultrathink", "think-hard", "thinkhardest"].includes(key)
+  )
     return "high";
   if (["think"].includes(key)) return "minimal";
   return undefined;
@@ -59,17 +62,6 @@ function extractThinkDirective(body?: string): {
   const thinkLevel = normalizeThinkLevel(match?.[1]);
   const cleaned = match ? body.replace(match[0], "").trim() : body;
   return { cleaned, thinkLevel };
-}
-
-function appendThinkingCue(body: string, level?: ThinkLevel): string {
-  if (!level || level === "off") return body;
-  const cue =
-    level === "high"
-      ? "ultrathink"
-      : level === "medium"
-        ? "think harder"
-        : "think";
-  return [body.trim(), cue].filter(Boolean).join(" ");
 }
 
 function isAbortTrigger(text?: string): boolean {
