@@ -166,9 +166,10 @@ export async function monitorWebInbox(options: {
       const timestamp = msg.messageTimestamp
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
+      const unwrapped = unwrapMessage(msg.message as proto.IMessage | undefined);
       const mentionedJids =
-        msg.message?.extendedTextMessage?.contextInfo?.mentionedJid ??
-        msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+        unwrapped?.extendedTextMessage?.contextInfo?.mentionedJid ??
+        unwrapped?.extendedTextMessage?.contextInfo?.quotedMessage
           ?.extendedTextMessage?.contextInfo?.mentionedJid;
       const senderName = msg.pushName ?? undefined;
       inboundLogger.info(
@@ -302,9 +303,24 @@ export async function monitorWebInbox(options: {
   } as const;
 }
 
+function unwrapMessage(message: proto.IMessage | undefined): proto.IMessage | undefined {
+  if (!message) return undefined;
+  if (message.ephemeralMessage?.message) {
+    return unwrapMessage(message.ephemeralMessage.message as proto.IMessage);
+  }
+  if (message.viewOnceMessage?.message) {
+    return unwrapMessage(message.viewOnceMessage.message as proto.IMessage);
+  }
+  if (message.viewOnceMessageV2?.message) {
+    return unwrapMessage(message.viewOnceMessageV2.message as proto.IMessage);
+  }
+  return message;
+}
+
 export function extractText(
-  message: proto.IMessage | undefined,
+  rawMessage: proto.IMessage | undefined,
 ): string | undefined {
+  const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
   if (typeof message.conversation === "string" && message.conversation.trim()) {
     return message.conversation.trim();
@@ -318,8 +334,9 @@ export function extractText(
 }
 
 export function extractMediaPlaceholder(
-  message: proto.IMessage | undefined,
+  rawMessage: proto.IMessage | undefined,
 ): string | undefined {
+  const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
   if (message.imageMessage) return "<media:image>";
   if (message.videoMessage) return "<media:video>";
@@ -333,7 +350,7 @@ async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
 ): Promise<{ buffer: Buffer; mimetype?: string } | undefined> {
-  const message = msg.message;
+  const message = unwrapMessage(msg.message as proto.IMessage | undefined);
   if (!message) return undefined;
   const mimetype =
     message.imageMessage?.mimetype ??
