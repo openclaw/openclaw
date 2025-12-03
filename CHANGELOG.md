@@ -22,6 +22,7 @@
 - Early `allowFrom` filtering prevents decryption errors; same-phone mode supported with echo suppression.
 - All console output is now mirrored into pino logs (still printed to stdout/stderr), so verbose runs keep full traces.
 - `--verbose` now forces log level `trace` (was `debug`) to capture every event.
+- Verbose tool messages now include emoji + args + a short result preview for bash/read/edit/write/attach (derived from RPC tool start/end events).
 
 ### Security / Hardening
 - IPC socket hardened (0700 dir / 0600 socket, no symlinks/foreign owners); `warelay logout` also prunes session store.
