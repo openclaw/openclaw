@@ -230,6 +230,46 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("passes through group messages with participant metadata", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp2",
+            fromMe: false,
+            remoteJid: "[redacted-email]",
+            participant: "[redacted-email]",
+          },
+          pushName: "Alice",
+          message: {
+            extendedTextMessage: {
+              text: "@bot ping",
+              contextInfo: { mentionedJid: ["[redacted-email]"] },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatType: "group",
+        conversationId: "[redacted-email]",
+        senderE164: "+777",
+        mentionedJids: ["[redacted-email]"],
+      }),
+    );
+    await listener.close();
+  });
+
   it("blocks messages from unauthorized senders not in allowFrom", async () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
@@ -269,6 +309,52 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
 
     // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    await listener.close();
+  });
+
+  it("applies allowFrom to group participants", async () => {
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["+1234"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp3",
+            fromMe: false,
+            remoteJid: "[redacted-email]",
+            participant: "[redacted-email]",
+          },
+          message: { conversation: "unauthorized group message" },
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).not.toHaveBeenCalled();
+
     mockLoadConfig.mockReturnValue({
       inbound: {
         allowFrom: ["*"],

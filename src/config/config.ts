@@ -43,6 +43,12 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
+export type GroupChatConfig = {
+  requireMention?: boolean;
+  mentionPatterns?: string[];
+  historyLimit?: number;
+};
+
 export type WarelayConfig = {
   logging?: LoggingConfig;
   inbound?: {
@@ -55,6 +61,7 @@ export type WarelayConfig = {
       command: string[];
       timeoutSeconds?: number;
     };
+    groupChat?: GroupChatConfig;
     reply?: {
       mode: ReplyMode;
       text?: string;
@@ -172,6 +179,13 @@ const WarelaySchema = z.object({
       messagePrefix: z.string().optional(),
       responsePrefix: z.string().optional(),
       timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
+      groupChat: z
+        .object({
+          requireMention: z.boolean().optional(),
+          mentionPatterns: z.array(z.string()).optional(),
+          historyLimit: z.number().int().positive().optional(),
+        })
+        .optional(),
       transcribeAudio: z
         .object({
           command: z.array(z.string()),

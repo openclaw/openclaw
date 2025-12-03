@@ -15,7 +15,7 @@ import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeE164 } from "../utils.js";
+import { jidToE164, normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
 import { sendViaIpc, startIpcServer, stopIpcServer } from "./ipc.js";
 import { loadWebMedia } from "./media.js";
@@ -31,6 +31,7 @@ import {
 import { getWebAuthAgeMs } from "./session.js";
 
 const WEB_TEXT_LIMIT = 4000;
+const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
 /**
  * Send a message via IPC if relay is running, otherwise fall back to direct.
@@ -73,6 +74,43 @@ const formatDuration = (ms: number) =>
 const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const HEARTBEAT_PROMPT = "HEARTBEAT /think:high";
+
+type MentionConfig = {
+  requireMention: boolean;
+  mentionRegexes: RegExp[];
+};
+
+function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
+  const gc = cfg.inbound?.groupChat;
+  const requireMention = gc?.requireMention !== false; // default true
+  const mentionRegexes =
+    gc?.mentionPatterns?.map((p) => {
+      try {
+        return new RegExp(p, "i");
+      } catch {
+        return null;
+      }
+    }).filter((r): r is RegExp => Boolean(r)) ?? [];
+  return { requireMention, mentionRegexes };
+}
+
+function isBotMentioned(
+  msg: WebInboundMsg,
+  mentionCfg: MentionConfig,
+): boolean {
+  if (msg.mentionedJids?.length) {
+    const normalizedMentions = msg.mentionedJids
+      .map((jid) => jidToE164(jid) ?? jid)
+      .filter(Boolean);
+    if (msg.selfE164 && normalizedMentions.includes(msg.selfE164)) return true;
+    if (msg.selfJid && msg.selfE164) {
+      // Some mentions use the bare JID; match on E.164 to be safe.
+      const bareSelf = msg.selfJid.replace(/:\\d+/, "");
+      if (normalizedMentions.includes(bareSelf)) return true;
+    }
+  }
+  return mentionCfg.mentionRegexes.some((re) => re.test(msg.body));
+}
 
 export function resolveReplyHeartbeatMinutes(
   cfg: ReturnType<typeof loadConfig>,
@@ -525,6 +563,13 @@ export async function monitorWebProvider(
     tuning.replyHeartbeatMinutes,
   );
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const mentionConfig = buildMentionConfig(cfg);
+  const groupHistoryLimit =
+    cfg.inbound?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+  const groupHistories = new Map<
+    string,
+    Array<{ sender: string; body: string; timestamp?: number }>
+  >();
   const sleep =
     tuning.sleep ??
     ((ms: number, signal?: AbortSignal) =>
@@ -574,8 +619,7 @@ export async function monitorWebProvider(
     const MESSAGE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes without any messages
     const WATCHDOG_CHECK_MS = 60 * 1000; // Check every minute
 
-    // Batch inbound messages while command queue is busy, then send one
-    // combined prompt with per-message timestamps (inbound-only behavior).
+    // Batch inbound messages per conversation while command queue is busy.
     type PendingBatch = { messages: WebInboundMsg[]; timer?: NodeJS.Timeout };
     const pendingBatches = new Map<string, PendingBatch>();
 
@@ -600,22 +644,43 @@ export async function monitorWebProvider(
         messagePrefix = hasAllowFrom ? "" : "[warelay]";
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
-      return `${formatTimestamp(msg.timestamp)}${prefixStr}${msg.body}`;
+      const senderLabel =
+        msg.chatType === "group"
+          ? `${msg.senderName ?? msg.senderE164 ?? "Someone"}: `
+          : "";
+      return `${formatTimestamp(msg.timestamp)}${prefixStr}${senderLabel}${msg.body}`;
     };
 
-    const processBatch = async (from: string) => {
-      const batch = pendingBatches.get(from);
+    const processBatch = async (conversationId: string) => {
+      const batch = pendingBatches.get(conversationId);
       if (!batch || batch.messages.length === 0) return;
       if (getQueueSize() > 0) {
         // Wait until command queue is free to run the combined prompt.
-        batch.timer = setTimeout(() => void processBatch(from), 150);
+        batch.timer = setTimeout(() => void processBatch(conversationId), 150);
         return;
       }
-      pendingBatches.delete(from);
+      pendingBatches.delete(conversationId);
 
       const messages = batch.messages;
       const latest = messages[messages.length - 1];
-      const combinedBody = messages.map(buildLine).join("\n");
+      let combinedBody = messages.map(buildLine).join("\n");
+
+      if (latest.chatType === "group") {
+        const history = groupHistories.get(conversationId) ?? [];
+        const historyWithoutCurrent =
+          history.length > 0 ? history.slice(0, -1) : [];
+        if (historyWithoutCurrent.length > 0) {
+          const historyText = historyWithoutCurrent
+            .map(
+              (m) =>
+                `${m.sender}: ${m.body}${m.timestamp ? ` [${new Date(m.timestamp).toISOString()}]` : ""}`,
+            )
+            .join("\\n");
+          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(latest)}`;
+        }
+        // Clear stored history after using it
+        groupHistories.set(conversationId, []);
+      }
 
       // Echo detection uses combined body so we don't respond twice.
       if (recentlySent.has(combinedBody)) {
@@ -629,7 +694,7 @@ export async function monitorWebProvider(
         {
           connectionId,
           correlationId,
-          from,
+          from: latest.chatType === "group" ? conversationId : latest.from,
           to: latest.to,
           body: combinedBody,
           mediaType: latest.mediaType ?? null,
@@ -642,7 +707,11 @@ export async function monitorWebProvider(
       const tsDisplay = latest.timestamp
         ? new Date(latest.timestamp).toISOString()
         : new Date().toISOString();
-      console.log(`\n[${tsDisplay}] ${from} -> ${latest.to}: ${combinedBody}`);
+      const fromDisplay =
+        latest.chatType === "group" ? conversationId : latest.from;
+      console.log(
+        `\n[${tsDisplay}] ${fromDisplay} -> ${latest.to}: ${combinedBody}`,
+      );
 
       const replyResult = await (replyResolver ?? getReplyFromConfig)(
         {
@@ -724,21 +793,22 @@ export async function monitorWebProvider(
           );
         }
       }
-    };
+      };
 
-    const enqueueBatch = async (msg: WebInboundMsg) => {
-      const bucket = pendingBatches.get(msg.from) ?? { messages: [] };
-      bucket.messages.push(msg);
-      pendingBatches.set(msg.from, bucket);
+      const enqueueBatch = async (msg: WebInboundMsg) => {
+        const key = msg.conversationId ?? msg.from;
+        const bucket = pendingBatches.get(key) ?? { messages: [] };
+        bucket.messages.push(msg);
+        pendingBatches.set(key, bucket);
 
-      // Process immediately when queue is free; otherwise wait until it drains.
-      if (getQueueSize() === 0) {
-        await processBatch(msg.from);
-      } else {
-        bucket.timer =
-          bucket.timer ?? setTimeout(() => void processBatch(msg.from), 150);
-      }
-    };
+        // Process immediately when queue is free; otherwise wait until it drains.
+        if (getQueueSize() === 0) {
+          await processBatch(key);
+        } else {
+          bucket.timer =
+            bucket.timer ?? setTimeout(() => void processBatch(key), 150);
+        }
+      };
 
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
@@ -746,6 +816,7 @@ export async function monitorWebProvider(
         handledMessages += 1;
         lastMessageAt = Date.now();
         lastInboundMsg = msg;
+        const conversationId = msg.conversationId ?? msg.from;
 
         // Same-phone mode logging retained
         if (msg.from === msg.to) {
@@ -760,6 +831,27 @@ export async function monitorWebProvider(
           );
           recentlySent.delete(msg.body);
           return;
+        }
+
+        if (msg.chatType === "group") {
+          const history =
+            groupHistories.get(conversationId) ??
+            ([] as Array<{ sender: string; body: string; timestamp?: number }>);
+          history.push({
+            sender: msg.senderName ?? msg.senderE164 ?? "Unknown",
+            body: msg.body,
+            timestamp: msg.timestamp,
+          });
+          while (history.length > groupHistoryLimit) history.shift();
+          groupHistories.set(conversationId, history);
+
+          const wasMentioned = isBotMentioned(msg, mentionConfig);
+          if (mentionConfig.requireMention && !wasMentioned) {
+            logVerbose(
+              `Group message stored for context (no mention detected) in ${conversationId}`,
+            );
+            return;
+          }
         }
 
         return enqueueBatch(msg);
@@ -884,6 +976,14 @@ export async function monitorWebProvider(
         return;
       }
       if (!replyHeartbeatMinutes) return;
+      if (lastInboundMsg?.chatType === "group") {
+        heartbeatLogger.info(
+          { connectionId, reason: "last-inbound-group" },
+          "reply heartbeat skipped",
+        );
+        console.log(success("heartbeat: skipped (group chat)"));
+        return;
+      }
       const tickStart = Date.now();
       if (!lastInboundMsg) {
         const fallbackTo = getFallbackRecipient(cfg);

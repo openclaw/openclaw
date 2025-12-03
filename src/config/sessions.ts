@@ -59,5 +59,12 @@ export async function saveSessionStore(
 export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
   if (scope === "global") return "global";
   const from = ctx.From ? normalizeE164(ctx.From) : "";
+  // Preserve group conversations as distinct buckets
+  if (typeof ctx.From === "string" && ctx.From.includes("@g.us")) {
+    return `group:${ctx.From}`;
+  }
+  if (typeof ctx.From === "string" && ctx.From.startsWith("group:")) {
+    return ctx.From;
+  }
   return from || "unknown";
 }

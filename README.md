@@ -195,6 +195,9 @@ warelay supports running on the same phone number you message from—you chat wi
 | `inbound.messagePrefix` | `string` (default: `"[warelay]"` if no allowFrom, else `""`) | Prefix added to all inbound messages before passing to command. |
 | `inbound.responsePrefix` | `string` (default: —) | Prefix auto-added to all outbound replies (e.g., `"🦞"`). |
 | `inbound.timestampPrefix` | `boolean \| string` (default: `true`) | Timestamp prefix: `true` (UTC), `false` (disabled), or IANA timezone like `"Europe/Vienna"`. |
+| `inbound.groupChat.requireMention` | `boolean` (default: `true`) | When `true`, group chats only trigger replies if the bot is mentioned. |
+| `inbound.groupChat.mentionPatterns` | `string[]` (default: `[]`) | Extra regex patterns to detect mentions (e.g., `"@mybot"`). |
+| `inbound.groupChat.historyLimit` | `number` (default: `50`) | Max recent group messages kept for context before the next reply. |
 | `inbound.reply.mode` | `"text"` \| `"command"` (default: —) | Reply style. |
 | `inbound.reply.text` | `string` (default: —) | Used when `mode=text`; templating supported. |
 | `inbound.reply.command` | `string[]` (default: —) | Argv for `mode=command`; each element templated. Stdout (trimmed) is sent. |

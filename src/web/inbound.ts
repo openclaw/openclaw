@@ -6,6 +6,7 @@ import type {
 import {
   DisconnectReason,
   downloadMediaMessage,
+  isJidGroup,
 } from "@whiskeysockets/baileys";
 
 import { loadConfig } from "../config/config.js";
@@ -27,11 +28,20 @@ export type WebListenerCloseReason = {
 
 export type WebInboundMessage = {
   id?: string;
-  from: string;
+  from: string; // conversation id: E.164 for direct chats, group JID for groups
+  conversationId: string; // alias for clarity (same as from)
   to: string;
   body: string;
   pushName?: string;
   timestamp?: number;
+  chatType: "direct" | "group";
+  chatId: string;
+  senderJid?: string;
+  senderE164?: string;
+  senderName?: string;
+  mentionedJids?: string[];
+  selfJid?: string | null;
+  selfE164?: string | null;
   sendComposing: () => Promise<void>;
   reply: (text: string) => Promise<void>;
   sendMedia: (payload: AnyMessageContent) => Promise<void>;
@@ -93,7 +103,11 @@ export async function monitorWebInbox(options: {
           logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
         }
       }
-      const from = jidToE164(remoteJid);
+      const group = isJidGroup(remoteJid);
+      const participantJid = msg.key?.participant ?? undefined;
+      const senderE164 = participantJid ? jidToE164(participantJid) : null;
+      const from = group ? remoteJid : jidToE164(remoteJid);
+      // Skip if we still can't resolve an id to key conversation
       if (!from) continue;
 
       // Filter unauthorized senders early to prevent wasted processing
@@ -103,12 +117,12 @@ export async function monitorWebInbox(options: {
       const isSamePhone = from === selfE164;
 
       if (!isSamePhone && Array.isArray(allowFrom) && allowFrom.length > 0) {
-        if (
-          !allowFrom.includes("*") &&
-          !allowFrom.map(normalizeE164).includes(from)
-        ) {
+        const candidate =
+          group && senderE164 ? normalizeE164(senderE164) : from;
+        const allowedList = allowFrom.map(normalizeE164);
+        if (!allowFrom.includes("*") && !allowedList.includes(candidate)) {
           logVerbose(
-            `Blocked unauthorized sender ${from} (not in allowFrom list)`,
+            `Blocked unauthorized sender ${candidate} (not in allowFrom list)`,
           );
           continue; // Skip processing entirely
         }
@@ -151,6 +165,11 @@ export async function monitorWebInbox(options: {
       const timestamp = msg.messageTimestamp
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
+      const mentionedJids =
+        msg.message?.extendedTextMessage?.contextInfo?.mentionedJid ??
+        msg.message?.extendedTextMessage?.contextInfo?.quotedMessage
+          ?.extendedTextMessage?.contextInfo?.mentionedJid;
+      const senderName = msg.pushName ?? undefined;
       inboundLogger.info(
         {
           from,
@@ -166,10 +185,19 @@ export async function monitorWebInbox(options: {
         await options.onMessage({
           id,
           from,
+          conversationId: from,
           to: selfE164 ?? "me",
           body,
-          pushName: msg.pushName ?? undefined,
+          pushName: senderName,
           timestamp,
+          chatType: group ? "group" : "direct",
+          chatId: remoteJid,
+          senderJid: participantJid,
+          senderE164: senderE164 ?? undefined,
+          senderName,
+          mentionedJids: mentionedJids ?? undefined,
+          selfJid,
+          selfE164,
           sendComposing,
           reply,
           sendMedia,
