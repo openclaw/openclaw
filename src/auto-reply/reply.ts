@@ -310,11 +310,23 @@ export async function getReplyFromConfig(
     return result;
   }
 
-  if (reply && reply.mode === "command" && reply.command?.length) {
+  const isHeartbeat = opts?.isHeartbeat === true;
+
+  if (reply && reply.mode === "command") {
+    const commandArgs =
+      isHeartbeat && reply.heartbeatCommand?.length
+        ? reply.heartbeatCommand
+        : reply.command;
+
+    if (!commandArgs?.length) {
+      cleanupTyping();
+      return undefined;
+    }
+
     await onReplyStart();
     const commandReply = {
       ...reply,
-      command: reply.command,
+      command: commandArgs,
       mode: "command" as const,
     };
     try {

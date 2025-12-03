@@ -191,14 +191,18 @@ export async function runWebHeartbeatOnce(opts: {
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
       },
-      undefined,
+      { isHeartbeat: true },
       cfg,
     );
+    const replyPayload = Array.isArray(replyResult)
+      ? replyResult[0]
+      : replyResult;
+
     if (
-      !replyResult ||
-      (!replyResult.text &&
-        !replyResult.mediaUrl &&
-        !replyResult.mediaUrls?.length)
+      !replyPayload ||
+      (!replyPayload.text &&
+        !replyPayload.mediaUrl &&
+        !replyPayload.mediaUrls?.length)
     ) {
       heartbeatLogger.info(
         {
@@ -213,9 +217,9 @@ export async function runWebHeartbeatOnce(opts: {
     }
 
     const hasMedia = Boolean(
-      replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+      replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
     );
-    const stripped = stripHeartbeatToken(replyResult.text);
+    const stripped = stripHeartbeatToken(replyPayload.text);
     if (stripped.shouldSkip && !hasMedia) {
       // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.
       const sessionCfg = cfg.inbound?.reply?.session;
@@ -227,7 +231,7 @@ export async function runWebHeartbeatOnce(opts: {
       }
 
       heartbeatLogger.info(
-        { to, reason: "heartbeat-token", rawLength: replyResult.text?.length },
+        { to, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
         "heartbeat skipped",
       );
       console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
@@ -241,7 +245,7 @@ export async function runWebHeartbeatOnce(opts: {
       );
     }
 
-    const finalText = stripped.text || replyResult.text || "";
+    const finalText = stripped.text || replyPayload.text || "";
     if (dryRun) {
       heartbeatLogger.info(
         { to, reason: "dry-run", chars: finalText.length },
@@ -963,14 +967,19 @@ export async function monitorWebProvider(
           },
           {
             onReplyStart: lastInboundMsg.sendComposing,
+            isHeartbeat: true,
           },
         );
 
+        const replyPayload = Array.isArray(replyResult)
+          ? replyResult[0]
+          : replyResult;
+
         if (
-          !replyResult ||
-          (!replyResult.text &&
-            !replyResult.mediaUrl &&
-            !replyResult.mediaUrls?.length)
+          !replyPayload ||
+          (!replyPayload.text &&
+            !replyPayload.mediaUrl &&
+            !replyPayload.mediaUrls?.length)
         ) {
           heartbeatLogger.info(
             {
@@ -984,9 +993,9 @@ export async function monitorWebProvider(
           return;
         }
 
-        const stripped = stripHeartbeatToken(replyResult.text);
+        const stripped = stripHeartbeatToken(replyPayload.text);
         const hasMedia = Boolean(
-          replyResult.mediaUrl || (replyResult.mediaUrls?.length ?? 0) > 0,
+          replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
         );
         if (stripped.shouldSkip && !hasMedia) {
           heartbeatLogger.info(
@@ -994,7 +1003,7 @@ export async function monitorWebProvider(
               connectionId,
               durationMs: Date.now() - tickStart,
               reason: "heartbeat-token",
-              rawLength: replyResult.text?.length ?? 0,
+              rawLength: replyPayload.text?.length ?? 0,
             },
             "reply heartbeat skipped",
           );
@@ -1014,7 +1023,7 @@ export async function monitorWebProvider(
         }
 
         const cleanedReply: ReplyPayload = {
-          ...replyResult,
+          ...replyPayload,
           text: finalText,
         };
 
