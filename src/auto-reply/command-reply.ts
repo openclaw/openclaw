@@ -300,7 +300,7 @@ export async function runCommandReply(
     const parsed = trimmed ? agent.parseOutput(trimmed) : undefined;
     const parserProvided = !!parsed;
 
-    // Collect one message per assistant text from parseOutput (tau RPC can emit many).
+    // Collect assistant texts and tool results from parseOutput (tau RPC can emit many).
     const parsedTexts =
       parsed?.texts?.map((t) => t.trim()).filter(Boolean) ?? [];
     const parsedToolResults =
@@ -309,15 +309,7 @@ export async function runCommandReply(
     type ReplyItem = { text: string; media?: string[] };
     const replyItems: ReplyItem[] = [];
 
-    for (const t of parsedTexts) {
-      const { text: cleanedText, mediaUrls: mediaFound } =
-        splitMediaFromOutput(t);
-      replyItems.push({
-        text: cleanedText,
-        media: mediaFound?.length ? mediaFound : undefined,
-      });
-    }
-
+    // When verbose is on, surface tool results first (before assistant summary) to mirror chat ordering.
     if (verboseLevel === "on") {
       for (const tr of parsedToolResults) {
         const prefixed = `🛠️ ${tr}`;
@@ -328,6 +320,15 @@ export async function runCommandReply(
           media: mediaFound?.length ? mediaFound : undefined,
         });
       }
+    }
+
+    for (const t of parsedTexts) {
+      const { text: cleanedText, mediaUrls: mediaFound } =
+        splitMediaFromOutput(t);
+      replyItems.push({
+        text: cleanedText,
+        media: mediaFound?.length ? mediaFound : undefined,
+      });
     }
 
     // If parser gave nothing, fall back to raw stdout as a single message.
