@@ -612,6 +612,82 @@ describe("config and templating", () => {
     expect(args.join(" ")).toContain("hi there think harder");
   });
 
+  it("confirms directive-only think level and skips command", async () => {
+    const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "ok",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["echo", "{{Body}}"],
+          agent: { kind: "claude" },
+        },
+      },
+    };
+
+    const ack = await index.getReplyFromConfig(
+      { Body: "/thinking high", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(ack?.text).toBe("Thinking level set to high.");
+  });
+
+  it("rejects invalid directive-only think level without changing state", async () => {
+    const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "ok",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    const storeDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "warelay-session-"),
+    );
+    const storePath = path.join(storeDir, "sessions.json");
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["echo", "{{Body}}"],
+          agent: { kind: "claude" },
+          session: { store: storePath },
+        },
+      },
+    };
+
+    const ack = await index.getReplyFromConfig(
+      { Body: "/thinking big", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(ack?.text).toContain("Unrecognized thinking level \"big\"");
+
+    // Send another message; state should not carry any level.
+    const second = await index.getReplyFromConfig(
+      { Body: "hi", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    const args = runSpy.mock.calls[0][0] as string[];
+    const bodyArg = args[args.length - 1];
+    expect(bodyArg).toBe("hi");
+    expect(second?.text).toBe("ok");
+  });
+
   it("uses global thinkingDefault when no directive or session override", async () => {
     const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
       stdout: "ok",

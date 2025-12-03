@@ -53,8 +53,10 @@ function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined {
 function extractThinkDirective(body?: string): {
 	cleaned: string;
 	thinkLevel?: ThinkLevel;
+	rawLevel?: string;
+	hasDirective: boolean;
 } {
-	if (!body) return { cleaned: "" };
+	if (!body) return { cleaned: "", hasDirective: false };
 	// Match the longest keyword first to avoid partial captures (e.g. "/think:high")
 	const match = body.match(
 		/\/(?:thinking|think|t)\s*:?\s*([a-zA-Z-]+)\b/i,
@@ -63,7 +65,12 @@ function extractThinkDirective(body?: string): {
 	const cleaned = match
 		? body.replace(match[0], "").replace(/\s+/g, " ").trim()
 		: body.trim();
-	return { cleaned, thinkLevel };
+	return {
+		cleaned,
+		thinkLevel,
+		rawLevel: match?.[1],
+		hasDirective: !!match,
+	};
 }
 
 function isAbortTrigger(text?: string): boolean {
@@ -203,9 +210,12 @@ export async function getReplyFromConfig(
     IsNewSession: isNewSession ? "true" : "false",
   };
 
-	const { cleaned: thinkCleaned, thinkLevel: inlineThink } = extractThinkDirective(
-		sessionCtx.BodyStripped ?? sessionCtx.Body ?? "",
-	);
+	const {
+		cleaned: thinkCleaned,
+		thinkLevel: inlineThink,
+		rawLevel: rawThinkLevel,
+		hasDirective: hasThinkDirective,
+	} = extractThinkDirective(sessionCtx.BodyStripped ?? sessionCtx.Body ?? "");
 	sessionCtx.Body = thinkCleaned;
 	sessionCtx.BodyStripped = thinkCleaned;
 
@@ -215,7 +225,13 @@ export async function getReplyFromConfig(
 		(reply?.thinkingDefault as ThinkLevel | undefined);
 
 	// Directive-only message => persist session thinking level and return ack
-	if (inlineThink && !thinkCleaned) {
+	if (hasThinkDirective && !thinkCleaned) {
+		if (!inlineThink) {
+			cleanupTyping();
+			return {
+				text: `Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
+			};
+		}
 		if (sessionEntry && sessionStore && sessionKey) {
 			if (inlineThink === "off") {
 				delete sessionEntry.thinkingLevel;
@@ -226,8 +242,12 @@ export async function getReplyFromConfig(
 			sessionStore[sessionKey] = sessionEntry;
 			await saveSessionStore(storePath, sessionStore);
 		}
+		const ack =
+			inlineThink === "off"
+				? "Thinking disabled."
+				: `Thinking level set to ${inlineThink}.`;
 		cleanupTyping();
-		return { text: `Thinking level set to ${inlineThink}` };
+		return { text: ack };
 	}
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)

@@ -18,6 +18,7 @@
 ## Setting a session default
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/think:medium` or `/t high`.
 - That sticks for the current session (per-sender by default); cleared by `/think:off` or session idle reset.
+- Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 
 ## Application by agent
 - **Pi/Tau**: injects `--thinking <level>` (skipped for `off`).
