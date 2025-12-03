@@ -7,6 +7,7 @@
 - Command auto-replies return the parsed assistant texts array only (no deprecated `text` field), while preserving single-payload callers and keeping multi-message replies intact.
 - WhatsApp Web auto-replies now fall back to sending the caption text if media delivery fails, so users still see a reply instead of silence.
 - Outbound chunking now prefers newlines and word boundaries and only splits when exceeding platform limits, keeping multi-paragraph replies in a single message unless necessary.
+- Heartbeat replies now normalize array payloads for both web and Twilio paths and safely handle optional `heartbeatCommand`, preventing TS build failures and runtime crashes when agents return multiple messages.
 
 ### Testing
 - Updated agent and auto-reply parsers plus web media send fallbacks; test suite adjusted and now passing after the RPC/message handling refactors.
