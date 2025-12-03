@@ -853,6 +853,59 @@ describe("config and templating", () => {
     expect(bodyArg).toBe("hello ultrathink");
   });
 
+  it("treats verbose directive-only inside group batch context", async () => {
+    const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "ok",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+    const storeDir = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), "warelay-session-"),
+    );
+    const storePath = path.join(storeDir, "sessions.json");
+    const cfg = {
+      inbound: {
+        reply: {
+          mode: "command" as const,
+          command: ["echo", "{{Body}}"],
+          agent: { kind: "claude" },
+          session: { store: storePath },
+        },
+      },
+    };
+
+    const batchBody =
+      "[Chat messages since your last reply - for context]\nAlice: hi\n\n[Current message - respond to this]\nBob: /v on\n[from: Bob (+222)]";
+
+    const ack = await index.getReplyFromConfig(
+      {
+        Body: batchBody,
+        From: "group:[redacted-email]",
+        To: "+2",
+      },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    expect(runSpy).not.toHaveBeenCalled();
+    expect(ack?.text).toBe("Verbose logging enabled.");
+
+    await index.getReplyFromConfig(
+      { Body: "hello", From: "+1", To: "+2" },
+      undefined,
+      cfg,
+      runSpy,
+    );
+
+    expect(runSpy).toHaveBeenCalledTimes(1);
+    const args = runSpy.mock.calls[0][0] as string[];
+    const bodyArg = args[args.length - 1];
+    expect(bodyArg).toBe("hello");
+  });
+
   it("rejects invalid directive-only think level without changing state", async () => {
     const runSpy = vi.spyOn(index, "runCommandWithTimeout").mockResolvedValue({
       stdout: "ok",
