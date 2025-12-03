@@ -255,11 +255,11 @@ export async function runCommandReply(
     }
 
     const parsed = trimmed ? agent.parseOutput(trimmed) : undefined;
+    const parserProvided = !!parsed;
 
     // Collect one message per assistant text from parseOutput (tau RPC can emit many).
     const parsedTexts =
-      parsed?.texts?.map((t) => t.trim()).filter(Boolean) ??
-      (parsed?.text ? [parsed.text.trim()] : []);
+      parsed?.texts?.map((t) => t.trim()).filter(Boolean) ?? [];
 
     type ReplyItem = { text: string; media?: string[] };
     const replyItems: ReplyItem[] = [];
@@ -274,7 +274,7 @@ export async function runCommandReply(
     }
 
     // If parser gave nothing, fall back to raw stdout as a single message.
-    if (replyItems.length === 0 && trimmed) {
+    if (replyItems.length === 0 && trimmed && !parserProvided) {
       const { text: cleanedText, mediaUrls: mediaFound } =
         splitMediaFromOutput(trimmed);
       if (cleanedText || mediaFound?.length) {
@@ -401,7 +401,7 @@ export async function runCommandReply(
     }
 
     verboseLog(`Command auto-reply meta: ${JSON.stringify(meta)}`);
-    return { payloads, meta };
+    return { payloads, payload: payloads[0], meta };
   } catch (err) {
     const elapsed = Date.now() - started;
     logger.info(

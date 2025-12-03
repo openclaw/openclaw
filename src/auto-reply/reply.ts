@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-
 import type { MessageInstance } from "twilio/lib/rest/api/v2010/account/message.js";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
 import {
@@ -18,6 +17,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { TwilioRequester } from "../twilio/types.js";
 import { sendTypingIndicator } from "../twilio/typing.js";
 import { runCommandReply } from "./command-reply.js";
+import { chunkText } from "./chunk.js";
 import {
   applyTemplate,
   type MsgContext,
@@ -307,7 +307,7 @@ export async function getReplyFromConfig(
       mediaUrl: reply.mediaUrl,
     };
     cleanupTyping();
-    return [result];
+    return result;
   }
 
   if (reply && reply.mode === "command" && reply.command?.length) {
@@ -318,7 +318,7 @@ export async function getReplyFromConfig(
       mode: "command" as const,
     };
     try {
-      const { payloads, meta } = await runCommandReply({
+      const runResult = await runCommandReply({
         reply: commandReply,
         templatingCtx,
         sendSystemOnce,
@@ -329,6 +329,17 @@ export async function getReplyFromConfig(
         timeoutSeconds,
         commandRunner,
       });
+      const payloadArray =
+        runResult.payloads ?? (runResult.payload ? [runResult.payload] : []);
+      const meta = runResult.meta;
+      const normalizedPayloads =
+        payloadArray.length === 1 ? payloadArray[0] : payloadArray;
+      if (
+        !normalizedPayloads ||
+        (Array.isArray(normalizedPayloads) && normalizedPayloads.length === 0)
+      ) {
+        return undefined;
+      }
       if (sessionCfg && sessionStore && sessionKey) {
         const returnedSessionId = meta.agentMeta?.sessionId;
         if (returnedSessionId && returnedSessionId !== sessionId) {
@@ -357,7 +368,7 @@ export async function getReplyFromConfig(
       if (meta.agentMeta && isVerbose()) {
         logVerbose(`Agent meta: ${JSON.stringify(meta.agentMeta)}`);
       }
-      return payloads;
+      return normalizedPayloads;
     } finally {
       cleanupTyping();
     }
@@ -459,10 +470,8 @@ export async function autoReplyIfConfigured(
           : [];
 
       const text = replyPayload.text ?? "";
-      const chunks =
-        text.length > 0
-          ? (text.match(new RegExp(`.{1,${TWILIO_TEXT_LIMIT}}`, "g")) ?? [])
-          : [""];
+      const chunks = chunkText(text, TWILIO_TEXT_LIMIT);
+      if (chunks.length === 0) chunks.push("");
 
       for (let i = 0; i < chunks.length; i++) {
         const body = chunks[i];

@@ -62,7 +62,7 @@ describe("agent buildArgs + parseOutput helpers", () => {
       '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}],"usage":{"input":10,"output":5},"model":"pi-1","provider":"inflection","stopReason":"end"}}',
     ].join("\n");
     const parsed = piSpec.parseOutput(stdout);
-    expect(parsed.text).toBe("hello world");
+    expect(parsed.texts?.[0]).toBe("hello world");
     expect(parsed.meta?.provider).toBe("inflection");
     expect((parsed.meta?.usage as { output?: number })?.output).toBe(5);
   });
@@ -73,7 +73,7 @@ describe("agent buildArgs + parseOutput helpers", () => {
       '{"type":"turn.completed","usage":{"input_tokens":50,"output_tokens":10,"cached_input_tokens":5}}',
     ].join("\n");
     const parsed = codexSpec.parseOutput(stdout);
-    expect(parsed.text).toBe("hi there");
+    expect(parsed.texts?.[0]).toBe("hi there");
     const usage = parsed.meta?.usage as {
       input?: number;
       output?: number;
@@ -93,7 +93,7 @@ describe("agent buildArgs + parseOutput helpers", () => {
       '{"type":"step_finish","timestamp":1200,"part":{"cost":0.002,"tokens":{"input":100,"output":20}}}',
     ].join("\n");
     const parsed = opencodeSpec.parseOutput(stdout);
-    expect(parsed.text).toBe("hi");
+    expect(parsed.texts?.[0]).toBe("hi");
     expect(parsed.meta?.extra?.summary).toContain("duration=1200ms");
     expect(parsed.meta?.extra?.summary).toContain("cost=$0.0020");
     expect(parsed.meta?.extra?.summary).toContain("tokens=100+20");

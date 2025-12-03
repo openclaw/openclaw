@@ -1,6 +1,8 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import readline from "node:readline";
 
+import { piSpec } from "../agents/pi.js";
+
 type TauRpcOptions = {
   argv: string[];
   cwd?: string;
@@ -20,6 +22,9 @@ class TauRpcClient {
   private rl: readline.Interface | null = null;
   private stderr = "";
   private buffer: string[] = [];
+  private idleTimer: NodeJS.Timeout | null = null;
+  private seenAssistantEnd = false;
+  private readonly idleMs = 120;
   private pending:
     | {
         resolve: (r: TauRpcResult) => void;
@@ -59,17 +64,34 @@ class TauRpcClient {
   private handleLine(line: string) {
     if (!this.pending) return;
     this.buffer.push(line);
-    // Finish on assistant message_end event to mirror parse logic in piSpec
+    // Streamed JSON arrives line-by-line; mark when an assistant message finishes
+    // and resolve after a short idle to capture any follow-up events (e.g. tools)
+    // that belong to the same turn.
     if (
       line.includes('"type":"message_end"') &&
       line.includes('"role":"assistant"')
     ) {
-      const out = this.buffer.join("\n");
-      clearTimeout(this.pending.timer);
-      const pending = this.pending;
-      this.pending = undefined;
-      this.buffer = [];
-      pending.resolve({ stdout: out, stderr: this.stderr, code: 0 });
+      this.seenAssistantEnd = true;
+    }
+
+    if (this.seenAssistantEnd) {
+      if (this.idleTimer) clearTimeout(this.idleTimer);
+      this.idleTimer = setTimeout(() => {
+        if (!this.pending) return;
+        const out = this.buffer.join("\n");
+        // Only resolve once we have at least one assistant text payload; otherwise keep waiting.
+        const parsed = piSpec.parseOutput(out);
+        if (parsed.texts && parsed.texts.length > 0) {
+          const pending = this.pending;
+          this.pending = undefined;
+          this.buffer = [];
+          this.seenAssistantEnd = false;
+          clearTimeout(pending.timer);
+          pending.resolve({ stdout: out, stderr: this.stderr, code: 0 });
+          return;
+        }
+        // No assistant text yet; wait for more lines.
+      }, this.idleMs); // small idle window to group streaming blocks
     }
   }
 

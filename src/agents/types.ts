@@ -16,6 +16,7 @@ export type AgentMeta = {
 };
 
 export type AgentParseResult = {
+  // Plural to support agents that emit multiple assistant turns per prompt.
   texts?: string[];
   mediaUrls?: string[];
   meta?: AgentMeta;

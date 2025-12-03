@@ -1,3 +1,4 @@
+import { chunkText } from "../auto-reply/chunk.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
@@ -373,12 +374,7 @@ async function deliverWebReply(params: {
     skipLog,
   } = params;
   const replyStarted = Date.now();
-  const textChunks =
-    (replyResult.text || "").length > 0
-      ? ((replyResult.text || "").match(
-          new RegExp(`.{1,${WEB_TEXT_LIMIT}}`, "g"),
-        ) ?? [])
-      : [];
+  const textChunks = chunkText(replyResult.text || "", WEB_TEXT_LIMIT);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl
@@ -417,6 +413,8 @@ async function deliverWebReply(params: {
 
   // Media (with optional caption on first item)
   for (const [index, mediaUrl] of mediaList.entries()) {
+    const caption =
+      index === 0 ? remainingText.shift() || undefined : undefined;
     try {
       const media = await loadWebMedia(mediaUrl, maxMediaBytes);
       if (isVerbose()) {
@@ -427,8 +425,6 @@ async function deliverWebReply(params: {
           `Web auto-reply media source: ${mediaUrl} (kind ${media.kind})`,
         );
       }
-      const caption =
-        index === 0 ? remainingText.shift() || undefined : undefined;
       if (media.kind === "image") {
         await msg.sendMedia({
           image: media.buffer,
@@ -481,9 +477,12 @@ async function deliverWebReply(params: {
         danger(`Failed sending web media to ${msg.from}: ${String(err)}`),
       );
       replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
-      if (index === 0 && remainingText.length) {
-        console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
-        await msg.reply(remainingText.shift() || "");
+      if (index === 0) {
+        const fallbackText = remainingText.shift() ?? caption ?? "";
+        if (fallbackText) {
+          console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
+          await msg.reply(fallbackText);
+        }
       }
     }
   }

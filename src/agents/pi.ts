@@ -14,11 +14,10 @@ type PiAssistantMessage = {
 function parsePiJson(raw: string): AgentParseResult {
   const lines = raw.split(/\n+/).filter((l) => l.trim().startsWith("{"));
 
-  // Collect every assistant message we see; Tau in RPC mode can emit multiple
-  // assistant payloads in one run (e.g., queued turns, heartbeats). We concatenate
-  // all text blocks so users see everything instead of only the last message_end.
+  // Collect only completed assistant messages (skip streaming updates/toolcalls).
   const texts: string[] = [];
   let lastAssistant: PiAssistantMessage | undefined;
+  let lastPushed: string | undefined;
 
   for (const line of lines) {
     try {
@@ -26,15 +25,24 @@ function parsePiJson(raw: string): AgentParseResult {
         type?: string;
         message?: PiAssistantMessage;
       };
-      const msg = ev.message;
-      if (msg?.role === "assistant" && Array.isArray(msg.content)) {
-        const msgText = msg.content
-          .filter((c) => c?.type === "text" && typeof c.text === "string")
-          .map((c) => c.text)
-          .join("\n")
-          .trim();
-        if (msgText) texts.push(msgText);
-        // keep meta from the most recent assistant message
+
+      const isAssistantMessage =
+        (ev.type === "message" || ev.type === "message_end") &&
+        ev.message?.role === "assistant" &&
+        Array.isArray(ev.message.content);
+
+      if (!isAssistantMessage) continue;
+
+      const msg = ev.message as PiAssistantMessage;
+      const msgText = msg.content
+        ?.filter((c) => c?.type === "text" && typeof c.text === "string")
+        .map((c) => c.text)
+        .join("\n")
+        .trim();
+
+      if (msgText && msgText !== lastPushed) {
+        texts.push(msgText);
+        lastPushed = msgText;
         lastAssistant = msg;
       }
     } catch {
@@ -42,12 +50,8 @@ function parsePiJson(raw: string): AgentParseResult {
     }
   }
 
-  // Combine all assistant text messages (ignore tool calls/partials). This keeps
-  // multi-message replies intact while dropping non-text events.
-  const text = texts.length ? texts.join("\n\n").trim() : undefined;
-
   const meta: AgentMeta | undefined =
-    text && lastAssistant
+    lastAssistant && texts.length
       ? {
           model: lastAssistant.model,
           provider: lastAssistant.provider,
