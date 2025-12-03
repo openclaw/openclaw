@@ -18,6 +18,8 @@ type PiAssistantMessage = {
   toolName?: string;
   tool_call_id?: string;
   toolCallId?: string;
+  details?: Record<string, unknown>;
+  arguments?: Record<string, unknown>;
 };
 
 function inferToolName(msg: PiAssistantMessage): string | undefined {
@@ -36,6 +38,23 @@ function inferToolName(msg: PiAssistantMessage): string | undefined {
     if (suffix) return suffix;
   }
 
+  return undefined;
+}
+
+function deriveToolMeta(msg: PiAssistantMessage): string | undefined {
+  const details = msg.details ?? msg.arguments;
+  const pathVal = details && typeof details.path === "string" ? details.path : undefined;
+  const offset = details && typeof details.offset === "number" ? details.offset : undefined;
+  const limit = details && typeof details.limit === "number" ? details.limit : undefined;
+  const command = details && typeof details.command === "string" ? details.command : undefined;
+
+  if (pathVal) {
+    if (offset !== undefined && limit !== undefined) {
+      return `${pathVal}:${offset}-${offset + limit}`;
+    }
+    return pathVal;
+  }
+  if (command) return command;
   return undefined;
 }
 
@@ -87,7 +106,11 @@ function parsePiJson(raw: string): AgentParseResult {
           .join("\n")
           .trim();
         if (toolText) {
-          toolResults.push({ text: toolText, toolName: inferToolName(msg) });
+          toolResults.push({
+            text: toolText,
+            toolName: inferToolName(msg),
+            meta: deriveToolMeta(msg),
+          });
         }
       }
     } catch {

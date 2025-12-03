@@ -18,6 +18,7 @@ export type AgentMeta = {
 export type AgentToolResult = {
   text: string;
   toolName?: string;
+  meta?: string;
 };
 
 export type AgentParseResult = {

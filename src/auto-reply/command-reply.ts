@@ -59,6 +59,8 @@ type ToolMessageLike = {
   tool_call_id?: string;
   toolCallId?: string;
   role?: string;
+  details?: Record<string, unknown>;
+  arguments?: Record<string, unknown>;
 };
 
 function inferToolName(message?: ToolMessageLike): string | undefined {
@@ -80,6 +82,24 @@ function inferToolName(message?: ToolMessageLike): string | undefined {
   return undefined;
 }
 
+function inferToolMeta(message?: ToolMessageLike): string | undefined {
+  if (!message) return undefined;
+  const details = message.details ?? message.arguments;
+  const pathVal = details && typeof details.path === "string" ? details.path : undefined;
+  const offset = details && typeof details.offset === "number" ? details.offset : undefined;
+  const limit = details && typeof details.limit === "number" ? details.limit : undefined;
+  const command = details && typeof details.command === "string" ? details.command : undefined;
+
+  if (pathVal) {
+    if (offset !== undefined && limit !== undefined) {
+      return `${pathVal}:${offset}-${offset + limit}`;
+    }
+    return pathVal;
+  }
+  if (command) return command;
+  return undefined;
+}
+
 function normalizeToolResults(
   toolResults?: Array<string | AgentToolResult>,
 ): AgentToolResult[] {
@@ -89,13 +109,15 @@ function normalizeToolResults(
     .map((tr) => ({
       text: (tr.text ?? "").trim(),
       toolName: tr.toolName?.trim() || undefined,
+      meta: tr.meta?.trim() || undefined,
     }))
     .filter((tr) => tr.text.length > 0);
 }
 
-function formatToolPrefix(toolName?: string) {
+function formatToolPrefix(toolName?: string, meta?: string) {
   const label = toolName?.trim() || "tool";
-  return `[🛠️ ${label}]`;
+  const extra = meta?.trim();
+  return extra ? `[🛠️ ${label} ${extra}]` : `[🛠️ ${label}]`;
 }
 
 export function summarizeClaudeMetadata(payload: unknown): string | undefined {
@@ -327,7 +349,12 @@ export async function runCommandReply(
                   try {
                     const ev = JSON.parse(line) as {
                       type?: string;
-                      message?: { role?: string; content?: unknown[] };
+                      message?: {
+                        role?: string;
+                        content?: unknown[];
+                        details?: Record<string, unknown>;
+                        arguments?: Record<string, unknown>;
+                      };
                     };
                     if (
                       (ev.type === "message" || ev.type === "message_end") &&
@@ -335,7 +362,8 @@ export async function runCommandReply(
                       Array.isArray(ev.message.content)
                     ) {
                       const toolName = inferToolName(ev.message);
-                      const prefix = formatToolPrefix(toolName);
+                      const meta = inferToolMeta(ev.message);
+                      const prefix = formatToolPrefix(toolName, meta);
                       const { text: cleanedText, mediaUrls: mediaFound } =
                         splitMediaFromOutput(prefix);
                       void onPartialReply({
@@ -387,7 +415,7 @@ export async function runCommandReply(
 
     if (includeToolResultsInline) {
       for (const tr of parsedToolResults) {
-        const prefixed = formatToolPrefix(tr.toolName);
+        const prefixed = formatToolPrefix(tr.toolName, tr.meta);
         const { text: cleanedText, mediaUrls: mediaFound } =
           splitMediaFromOutput(prefixed);
         replyItems.push({

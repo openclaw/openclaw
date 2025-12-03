@@ -166,7 +166,7 @@ warelay supports running on the same phone number you message from—you chat wi
 - Levels: `on|full` (same) or `off` (default). Use `/v on`, `/verbose:full`, `/v off`, etc.; colon optional.
 - Directive-only message sets a session-level verbose flag (`Verbose logging enabled./disabled.`); invalid levels reply with a hint and don’t change state.
 - Inline directive applies only to that message; resolution: inline > session default > `inbound.reply.verboseDefault` (config) > off.
-- When verbose is on **and the agent emits structured tool results (Pi/Tau and other JSON-emitting agents)**, only tool metadata is forwarded: each tool result becomes `[🛠️ <tool-name>]` (output/body is not inlined).
+- When verbose is on **and the agent emits structured tool results (Pi/Tau and other JSON-emitting agents)**, only tool metadata is forwarded: each tool result becomes `[🛠️ <tool-name> <arg>]` when available (e.g., read path or bash command); output/body is not inlined.
 - Starting a new session while verbose is on adds a first reply like `🧭 New session: <id>` so you can correlate runs.
 
 ### Logging (optional)

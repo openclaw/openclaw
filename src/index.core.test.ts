@@ -719,7 +719,7 @@ describe("config and templating", () => {
     const rpcSpy = vi.spyOn(tauRpc, "runPiRpc").mockResolvedValue({
       stdout:
         '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"summary"}]}}\n' +
-        '{"type":"message_end","message":{"role":"tool_result","name":"bash","content":[{"type":"text","text":"ls output"}]}}',
+        '{"type":"message_end","message":{"role":"tool_result","name":"bash","details":{"command":"ls"},"content":[{"type":"text","text":"ls output"}]}}',
       stderr: "",
       code: 0,
       signal: null,
@@ -744,7 +744,7 @@ describe("config and templating", () => {
     expect(rpcSpy).toHaveBeenCalled();
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
     expect(payloads.length).toBeGreaterThanOrEqual(2);
-    expect(payloads[0]?.text).toBe("[🛠️ bash]");
+    expect(payloads[0]?.text).toBe("[🛠️ bash ls]");
     expect(payloads[1]?.text).toContain("summary");
   });
 

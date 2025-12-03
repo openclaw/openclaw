@@ -69,11 +69,16 @@ describe("agent buildArgs + parseOutput helpers", () => {
 
   it("piSpec carries tool names when present", () => {
     const stdout =
-      '{"type":"message_end","message":{"role":"tool_result","name":"bash","content":[{"type":"text","text":"ls output"}]}}';
+      '{"type":"message_end","message":{"role":"tool_result","name":"bash","details":{"command":"ls -la"},"content":[{"type":"text","text":"ls output"}]}}';
     const parsed = piSpec.parseOutput(stdout);
-    const tool = parsed.toolResults?.[0] as { text?: string; toolName?: string };
+    const tool = parsed.toolResults?.[0] as {
+      text?: string;
+      toolName?: string;
+      meta?: string;
+    };
     expect(tool?.text).toBe("ls output");
     expect(tool?.toolName).toBe("bash");
+    expect(tool?.meta).toBe("ls -la");
   });
 
   it("codexSpec parses agent_message and aggregates usage", () => {
