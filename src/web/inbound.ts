@@ -361,7 +361,7 @@ function extractMentionedJids(
   const message = unwrapMessage(rawMessage);
   if (!message) return undefined;
 
-  const candidates: (string[] | null | undefined)[] = [
+  const candidates: Array<string[] | null | undefined> = [
     message.extendedTextMessage?.contextInfo?.mentionedJid,
     message.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage
       ?.contextInfo?.mentionedJid,
@@ -374,7 +374,7 @@ function extractMentionedJids(
     message.listResponseMessage?.contextInfo?.mentionedJid,
   ];
 
-  const flattened = candidates.flat().filter((j): j is string => !!j);
+  const flattened = candidates.flatMap((arr) => arr ?? []).filter(Boolean);
   if (flattened.length === 0) return undefined;
   // De-dupe
   return Array.from(new Set(flattened));
