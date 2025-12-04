@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 import { isVerbose, logVerbose } from "./globals.js";
 
 export async function ensureDir(dir: string) {
@@ -70,4 +71,10 @@ export function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-export const CONFIG_DIR = `${os.homedir()}/.warelay`;
+// Prefer new branding directory; fall back to legacy for compatibility.
+export const CONFIG_DIR = (() => {
+  const clawdis = path.join(os.homedir(), ".clawdis");
+  const legacy = path.join(os.homedir(), ".warelay");
+  if (fs.existsSync(clawdis)) return clawdis;
+  return legacy;
+})();

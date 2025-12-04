@@ -7,8 +7,9 @@ const realOs = await vi.importActual<typeof import("node:os")>("node:os");
 const HOME = path.join(realOs.tmpdir(), "warelay-home-test");
 
 vi.mock("node:os", () => ({
-  default: { homedir: () => HOME },
+  default: { homedir: () => HOME, tmpdir: () => realOs.tmpdir() },
   homedir: () => HOME,
+  tmpdir: () => realOs.tmpdir(),
 }));
 
 const store = await import("./store.js");

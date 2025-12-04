@@ -445,7 +445,7 @@ export async function getReplyFromConfig(
     triggerWarelayRestart();
     cleanupTyping();
     return {
-      text: "Restarting warelay via launchctl; give me a few seconds to come back online.",
+      text: "Restarting clawdis via launchctl; give me a few seconds to come back online.",
     };
   }
 

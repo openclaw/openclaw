@@ -9,8 +9,9 @@ const HOME = path.join(realOs.tmpdir(), "warelay-home-redirect");
 const mockRequest = vi.fn();
 
 vi.doMock("node:os", () => ({
-  default: { homedir: () => HOME },
+  default: { homedir: () => HOME, tmpdir: () => realOs.tmpdir() },
   homedir: () => HOME,
+  tmpdir: () => realOs.tmpdir(),
 }));
 
 vi.doMock("node:https", () => ({

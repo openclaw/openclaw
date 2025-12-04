@@ -30,11 +30,11 @@
 
 ## Security & Configuration Tips
 - Environment: copy `.env.example`; set Twilio creds and WhatsApp sender (`TWILIO_WHATSAPP_FROM`).
-- Web provider stores creds at `~/.warelay/credentials/`; rerun `warelay login` if logged out.
+- Web provider stores creds at `~/.clawdis/credentials/` (legacy fallback: `~/.warelay/credentials/`); rerun `warelay login` if logged out.
 - Media hosting relies on Tailscale Funnel when using Twilio; use `warelay webhook --ingress tailscale` or `--serve-media` for local hosting.
 
 ## Agent-Specific Notes
-- Relay is managed by launchctl (label `com.steipete.warelay`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.warelay` and verify via `launchctl list | grep warelay`. Use tmux only if you spin up a temporary relay yourself and clean it up afterward.
+- Relay is managed by launchctl (new label `com.steipete.clawdis`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.clawdis` and verify via `launchctl list | grep clawdis`. Legacy label `com.steipete.warelay` still exists for rollback; prefer the new one. Use tmux only if you spin up a temporary relay yourself and clean it up afterward.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
 - When asked to open a “session” file, open the Pi/Tau session logs under `~/.pi/agent/sessions/warelay/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`.
 

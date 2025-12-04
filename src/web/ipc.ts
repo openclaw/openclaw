@@ -10,12 +10,12 @@
 
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 
 import { getChildLogger } from "../logging.js";
+import { CONFIG_DIR } from "../utils.js";
 
-const SOCKET_DIR = path.join(os.homedir(), ".warelay", "ipc");
+const SOCKET_DIR = path.join(CONFIG_DIR, "ipc");
 const SOCKET_PATH = path.join(SOCKET_DIR, "relay.sock");
 
 export interface IpcSendRequest {

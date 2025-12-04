@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   DisconnectReason,
@@ -17,14 +16,10 @@ import { danger, info, success } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { Provider } from "../utils.js";
-import { ensureDir, jidToE164 } from "../utils.js";
+import { CONFIG_DIR, ensureDir, jidToE164 } from "../utils.js";
 import { VERSION } from "../version.js";
 
-export const WA_WEB_AUTH_DIR = path.join(
-  os.homedir(),
-  ".warelay",
-  "credentials",
-);
+export const WA_WEB_AUTH_DIR = path.join(CONFIG_DIR, "credentials");
 
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.

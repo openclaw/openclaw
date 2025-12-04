@@ -5,7 +5,7 @@
 - **Logged out:** Console prints “session logged out”; re-link with `warelay login --provider web`.
 - **Repeated retries then exit:** Reconnects are capped (default 12 attempts). Tune with `--web-retries`, `--web-retry-initial`, `--web-retry-max`, or config `web.reconnect`.
 - **No inbound messages:** Ensure the QR-linked account is online in WhatsApp, and check logs for `web-heartbeat` to confirm auth age/connection.
-- **Fast nuke:** From an allowed WhatsApp sender you can send `/restart` to kick `com.steipete.warelay` via launchd; wait a few seconds for it to relink.
+- **Fast nuke:** From an allowed WhatsApp sender you can send `/restart` to kick `com.steipete.clawdis` via launchd (legacy: `com.steipete.warelay`); wait a few seconds for it to relink.
 
 ## Helpful commands
 - Start relay web-only: `pnpm warelay relay --provider web --verbose`

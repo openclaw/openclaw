@@ -22,7 +22,9 @@ afterEach(() => {
 
 describe("ipc hardening", () => {
   it("creates private socket dir and socket with tight perms", async () => {
-    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "warelay-home-"));
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-home-"));
+    const clawdisDir = path.join(tmpHome, ".clawdis");
+    fs.mkdirSync(clawdisDir, { recursive: true });
     process.env.HOME = tmpHome;
     vi.resetModules();
 
@@ -31,7 +33,7 @@ describe("ipc hardening", () => {
     const sendHandler = vi.fn().mockResolvedValue({ messageId: "msg1" });
     ipc.startIpcServer(sendHandler);
 
-    const dirStat = fs.lstatSync(path.join(tmpHome, ".warelay", "ipc"));
+    const dirStat = fs.lstatSync(path.join(tmpHome, ".clawdis", "ipc"));
     expect(dirStat.mode & 0o777).toBe(0o700);
 
     expect(ipc.isRelayRunning()).toBe(true);
@@ -47,10 +49,10 @@ describe("ipc hardening", () => {
   });
 
   it("refuses to start when IPC dir is a symlink", async () => {
-    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "warelay-home-"));
-    const warelayDir = path.join(tmpHome, ".warelay");
-    fs.mkdirSync(warelayDir, { recursive: true });
-    fs.symlinkSync("/tmp", path.join(warelayDir, "ipc"));
+    const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-home-"));
+    const clawdisDir = path.join(tmpHome, ".clawdis");
+    fs.mkdirSync(clawdisDir, { recursive: true });
+    fs.symlinkSync("/tmp", path.join(clawdisDir, "ipc"));
 
     process.env.HOME = tmpHome;
     vi.resetModules();
