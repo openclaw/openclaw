@@ -4,9 +4,8 @@ import fs from "node:fs/promises";
 import { request } from "node:https";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-
-import { detectMime, extensionForMime } from "./mime.js";
 import { CONFIG_DIR } from "../utils.js";
+import { detectMime, extensionForMime } from "./mime.js";
 
 const MEDIA_DIR = path.join(CONFIG_DIR, "media");
 const MAX_BYTES = 5 * 1024 * 1024; // 5MB

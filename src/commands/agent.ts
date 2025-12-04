@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-
+import { chunkText } from "../auto-reply/chunk.js";
 import { runCommandReply } from "../auto-reply/command-reply.js";
 import {
   applyTemplate,
@@ -12,8 +12,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
-import { chunkText } from "../auto-reply/chunk.js";
-import { createDefaultDeps, type CliDeps } from "../cli/deps.js";
+import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
@@ -24,8 +23,8 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { ensureTwilioEnv } from "../env.js";
-import { pickProvider } from "../provider-web.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { pickProvider } from "../provider-web.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { Provider } from "../utils.js";
 import { sendViaIpc } from "../web/ipc.js";

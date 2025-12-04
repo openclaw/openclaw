@@ -24,14 +24,14 @@ import {
   type MsgContext,
   type TemplateContext,
 } from "./templating.js";
-import { isAudio, transcribeInboundAudio } from "./transcription.js";
-import type { GetReplyOptions, ReplyPayload } from "./types.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
+import { isAudio, transcribeInboundAudio } from "./transcription.js";
+import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
