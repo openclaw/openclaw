@@ -208,18 +208,26 @@ export async function getReplyFromConfig(
   let persistedVerbose: string | undefined;
 
   if (sessionCfg) {
-    const trimmedBody = (ctx.Body ?? "").trim();
+    const rawBody = ctx.Body ?? "";
+    const trimmedBody = rawBody.trim();
+    // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
+    // web inbox before we get here. They prevented reset triggers like "/new"
+    // from matching, so strip structural wrappers when checking for resets.
+    const strippedForReset = stripStructuralPrefixes(rawBody).trim();
     for (const trigger of resetTriggers) {
       if (!trigger) continue;
-      if (trimmedBody === trigger) {
+      if (trimmedBody === trigger || strippedForReset === trigger) {
         isNewSession = true;
         bodyStripped = "";
         break;
       }
       const triggerPrefix = `${trigger} `;
-      if (trimmedBody.startsWith(triggerPrefix)) {
+      if (
+        trimmedBody.startsWith(triggerPrefix) ||
+        strippedForReset.startsWith(triggerPrefix)
+      ) {
         isNewSession = true;
-        bodyStripped = trimmedBody.slice(trigger.length).trimStart();
+        bodyStripped = strippedForReset.slice(trigger.length).trimStart();
         break;
       }
     }
