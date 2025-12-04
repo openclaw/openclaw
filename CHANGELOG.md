@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.1 — 2025-12-04
+
+### Changes
+- Added `warelay agent` CLI command to talk directly to the configured agent using existing session handling (no WhatsApp send), with JSON output and delivery option.
+- `/new` reset trigger now works even when inbound messages have timestamp prefixes (e.g., `[Dec 4 17:35]`).
+- WhatsApp mention parsing accepts nullable arrays and flattens safely to avoid missed mentions.
+
 ## 1.4.0 — 2025-12-03
 
 ### Highlights
