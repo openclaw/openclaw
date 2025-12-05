@@ -111,6 +111,43 @@ describe("runCommandReply (pi)", () => {
     ).toBe(false);
   });
 
+  it("does not echo the user's prompt when the agent returns no assistant text", async () => {
+    const rpcMock = mockPiRpc({
+      stdout: [
+        '{"type":"agent_start"}',
+        '{"type":"turn_start"}',
+        '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}',
+        '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"hello"}]}}',
+        // assistant emits nothing useful
+        '{"type":"agent_end"}',
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+    });
+
+    const { payloads } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "{{Body}}"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: { ...noopTemplateCtx, Body: "hello", BodyStripped: "hello" },
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+    });
+
+    expect(rpcMock).toHaveBeenCalledOnce();
+    expect(payloads?.length).toBe(1);
+    expect(payloads?.[0]?.text).toMatch(/no output/i);
+    expect(payloads?.[0]?.text).not.toContain("hello");
+  });
+
   it("adds session args and --continue when resuming", async () => {
     const rpcMock = mockPiRpc({
       stdout:

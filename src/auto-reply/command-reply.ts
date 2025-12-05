@@ -32,6 +32,7 @@ function stripRpcNoise(raw: string): string {
       const type = evt?.type;
       const msg = evt?.message ?? evt?.assistantMessageEvent;
       const msgType = msg?.type;
+      const role = msg?.role;
 
       // RPC streaming emits one message_update per delta; skip them to avoid flooding fallbacks.
       if (type === "message_update") continue;
@@ -39,6 +40,11 @@ function stripRpcNoise(raw: string): string {
       // Ignore toolcall delta chatter and input buffer append events.
       if (type === "message_update" && msgType === "toolcall_delta") continue;
       if (type === "input_audio_buffer.append") continue;
+
+      // Keep only assistant/tool messages; drop agent_start/turn_start/user/etc.
+      const isAssistant = role === "assistant";
+      const isToolRole = typeof role === "string" && role.toLowerCase().includes("tool");
+      if (!isAssistant && !isToolRole) continue;
 
       // Ignore assistant messages that have no text content (pure toolcall scaffolding).
       if (msg?.role === "assistant" && Array.isArray(msg?.content)) {
@@ -770,9 +776,15 @@ export async function runCommandReply(
       extractRpcAssistantText(trimmed) ??
       extractAssistantTextLoosely(trimmed) ??
       trimmed;
-    if (replyItems.length === 0 && fallbackText && !hasParsedContent) {
+    const promptEcho =
+      fallbackText &&
+      (fallbackText === (templatingCtx.Body ?? "") ||
+        fallbackText === (templatingCtx.BodyStripped ?? ""));
+    const safeFallbackText = promptEcho ? undefined : fallbackText;
+
+    if (replyItems.length === 0 && safeFallbackText && !hasParsedContent) {
       const { text: cleanedText, mediaUrls: mediaFound } =
-        splitMediaFromOutput(fallbackText);
+        splitMediaFromOutput(safeFallbackText);
       if (cleanedText || mediaFound?.length) {
         replyItems.push({
           text: cleanedText,

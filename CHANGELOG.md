@@ -14,6 +14,7 @@
 - Tau RPC timeout is now inactivity-based (5m without events) and error messages show seconds only.
 - Directive triggers (`/think`, `/verbose`, `/stop` et al.) now reply immediately using normalized bodies (timestamps/group prefixes stripped) without waiting for the agent.
 - Batched history blocks no longer trip directive parsing; `/think` in prior messages won't emit stray acknowledgements.
+- RPC fallbacks no longer echo the user's prompt (e.g., pasting a link) when the agent returns no assistant text.
 
 ## 1.4.1 — 2025-12-04
 
