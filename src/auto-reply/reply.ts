@@ -451,8 +451,8 @@ export async function getReplyFromConfig(
     return { text: ack };
   }
 
-  // If any directive (think/verbose) is present anywhere, acknowledge immediately and skip agent execution.
-  if (!isHeartbeat && (hasThinkDirective || hasVerboseDirective)) {
+  // If directives are inline with other text: persist levels, then continue to agent (no early ack).
+  if (hasThinkDirective || hasVerboseDirective) {
     if (sessionEntry && sessionStore && sessionKey) {
       if (hasThinkDirective && inlineThink) {
         if (inlineThink === "off") {
@@ -475,36 +475,6 @@ export async function getReplyFromConfig(
         await saveSessionStore(storePath, sessionStore);
       }
     }
-    const parts: string[] = [];
-    if (hasThinkDirective) {
-      if (!inlineThink) {
-        parts.push(
-          `⚙️ Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
-        );
-      } else {
-        parts.push(
-          inlineThink === "off"
-            ? "⚙️ Thinking disabled."
-            : `⚙️ Thinking level set to ${inlineThink}.`,
-        );
-      }
-    }
-    if (hasVerboseDirective) {
-      if (!inlineVerbose) {
-        parts.push(
-          `⚙️ Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
-        );
-      } else {
-        parts.push(
-          inlineVerbose === "off"
-            ? "⚙️ Verbose logging disabled."
-            : "⚙️ Verbose logging enabled.",
-        );
-      }
-    }
-    const ack = parts.join(" ");
-    cleanupTyping();
-    return { text: ack };
   }
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)

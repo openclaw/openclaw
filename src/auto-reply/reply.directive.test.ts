@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
-import { extractVerboseDirective, extractThinkDirective } from "./reply.js";
+import { describe, expect, it, vi } from "vitest";
+import * as tauRpc from "../process/tau-rpc.js";
+import { getReplyFromConfig, extractVerboseDirective, extractThinkDirective } from "./reply.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -25,5 +26,39 @@ describe("directive parsing", () => {
     const res = extractThinkDirective("/think:high run slow");
     expect(res.hasDirective).toBe(true);
     expect(res.thinkLevel).toBe("high");
+  });
+
+  it("applies inline think and still runs agent content", async () => {
+    const rpcMock = vi.spyOn(tauRpc, "runPiRpc").mockResolvedValue({
+      stdout:
+        '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}',
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+
+    const res = await getReplyFromConfig(
+      {
+        Body: "please sync /think:high now",
+        From: "+1004",
+        To: "+2000",
+      },
+      {},
+      {
+        inbound: {
+          reply: {
+            mode: "command",
+            command: ["pi", "{{Body}}"],
+            agent: { kind: "pi" },
+            session: {},
+          },
+        },
+      },
+    );
+
+    const text = Array.isArray(res) ? res[0]?.text : res?.text;
+    expect(text).toBe("done");
+    expect(rpcMock).toHaveBeenCalledOnce();
   });
 });
