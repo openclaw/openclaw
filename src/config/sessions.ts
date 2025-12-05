@@ -27,7 +27,8 @@ export const DEFAULT_IDLE_MINUTES = 60;
 
 export function resolveStorePath(store?: string) {
   if (!store) return SESSION_STORE_DEFAULT;
-  if (store.startsWith("~")) return path.resolve(store.replace("~", os.homedir()));
+  if (store.startsWith("~"))
+    return path.resolve(store.replace("~", os.homedir()));
   return path.resolve(store);
 }
 

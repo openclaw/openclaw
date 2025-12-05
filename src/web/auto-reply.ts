@@ -75,6 +75,12 @@ const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const HEARTBEAT_PROMPT = "HEARTBEAT /think:high";
 
+function elide(text?: string, limit = 400) {
+  if (!text) return text;
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}… (truncated ${text.length - limit} chars)`;
+}
+
 type MentionConfig = {
   requireMention: boolean;
   mentionRegexes: RegExp[];
@@ -337,7 +343,12 @@ export async function runWebHeartbeatOnce(opts: {
 
     const sendResult = await sender(to, finalText, { verbose });
     heartbeatLogger.info(
-      { to, messageId: sendResult.messageId, chars: finalText.length },
+      {
+        to,
+        messageId: sendResult.messageId,
+        chars: finalText.length,
+        preview: elide(finalText, 140),
+      },
       "heartbeat sent",
     );
     console.log(success(`heartbeat: alert sent to ${to}`));
@@ -479,7 +490,7 @@ async function deliverWebReply(params: {
         connectionId: connectionId ?? null,
         to: msg.from,
         from: msg.to,
-        text: replyResult.text,
+        text: elide(replyResult.text, 240),
         mediaUrl: null,
         mediaSizeBytes: null,
         mediaKind: null,
@@ -748,7 +759,7 @@ export async function monitorWebProvider(
           correlationId,
           from: latest.chatType === "group" ? conversationId : latest.from,
           to: latest.to,
-          body: combinedBody,
+          body: elide(combinedBody, 240),
           mediaType: latest.mediaType ?? null,
           mediaPath: latest.mediaPath ?? null,
           batchSize: messages.length,
