@@ -120,7 +120,7 @@ export async function startWebhook(
 
   app.use((_req, res) => {
     if (verbose) runtime.log(chalk.yellow(`404 ${_req.method} ${_req.url}`));
-    res.status(404).send("warelay webhook: not found");
+    res.status(404).send("clawdis webhook: not found");
   });
 
   // Start server and resolve once listening; reject on bind error.

@@ -1,9 +1,9 @@
 import { spawn } from "node:child_process";
 
-const SESSION = "warelay-relay";
+const SESSION = "clawdis-relay";
 
 export async function spawnRelayTmux(
-  cmd = "pnpm warelay relay --verbose",
+  cmd = "pnpm clawdis relay --verbose",
   attach = true,
   restart = true,
 ) {

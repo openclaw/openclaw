@@ -32,7 +32,7 @@ export async function transcribeInboundAudio(
       const buffer = Buffer.from(arrayBuf);
       tmpPath = path.join(
         os.tmpdir(),
-        `warelay-audio-${crypto.randomUUID()}.ogg`,
+        `clawdis-audio-${crypto.randomUUID()}.ogg`,
       );
       await fs.writeFile(tmpPath, buffer);
       mediaPath = tmpPath;

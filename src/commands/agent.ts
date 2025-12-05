@@ -57,7 +57,7 @@ function assertCommandConfig(cfg: WarelayConfig) {
   const reply = cfg.inbound?.reply;
   if (!reply || reply.mode !== "command" || !reply.command?.length) {
     throw new Error(
-      "Configure inbound.reply.mode=command with reply.command before using `warelay agent`.",
+      "Configure inbound.reply.mode=command with reply.command before using `clawdis agent`.",
     );
   }
   return reply as NonNullable<

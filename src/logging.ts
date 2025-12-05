@@ -7,10 +7,10 @@ import pino, { type Bindings, type LevelWithSilent, type Logger } from "pino";
 import { loadConfig, type WarelayConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
 
-export const DEFAULT_LOG_DIR = path.join(os.tmpdir(), "warelay");
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "warelay.log"); // legacy single-file path
+export const DEFAULT_LOG_DIR = path.join(os.tmpdir(), "clawdis");
+export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "clawdis.log"); // legacy single-file path
 
-const LOG_PREFIX = "warelay";
+const LOG_PREFIX = "clawdis";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
