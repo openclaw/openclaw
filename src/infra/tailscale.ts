@@ -148,11 +148,6 @@ export async function ensureFunnel(
     runtime.error(
       "Failed to enable Tailscale Funnel. Is it allowed on your tailnet?",
     );
-    runtime.error(
-      info(
-        "Tip: you can fall back to polling (no webhooks needed): `pnpm clawdis relay --provider twilio --interval 5 --lookback 10`",
-      ),
-    );
     if (isVerbose()) {
       if (stdout.trim()) runtime.error(chalk.gray(`stdout: ${stdout.trim()}`));
       if (stderr.trim()) runtime.error(chalk.gray(`stderr: ${stderr.trim()}`));

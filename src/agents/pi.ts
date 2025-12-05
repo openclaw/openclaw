@@ -141,7 +141,20 @@ export const piSpec: AgentSpec = {
   isInvocation: (argv) => {
     if (argv.length === 0) return false;
     const base = path.basename(argv[0]).replace(/\.(m?js)$/i, "");
-    return base === "pi" || base === "tau";
+    if (base === "pi" || base === "tau") return true;
+
+    // Also handle node entrypoints like `node /.../pi-mono/packages/coding-agent/dist/cli.js`
+    if (base === "node" && argv.length > 1) {
+      const second = argv[1]?.toString().toLowerCase();
+      return (
+        second.includes("pi-mono") &&
+        second.includes("packages") &&
+        second.includes("coding-agent") &&
+        (second.endsWith("cli.js") || second.includes("/dist/cli"))
+      );
+    }
+
+    return false;
   },
   buildArgs: (ctx) => {
     const argv = [...ctx.argv];

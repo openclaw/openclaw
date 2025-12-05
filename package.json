@@ -44,7 +44,6 @@
     "pino": "^10.1.0",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.33.5",
-    "twilio": "^5.10.6",
     "zod": "^4.1.13"
   },
   "devDependencies": {

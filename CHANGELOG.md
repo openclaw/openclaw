@@ -11,6 +11,7 @@
 - Documentation updated to reflect Pi-only support and to mark legacy Claude paths as historical.
 - Status command reports web session health + session recipients; config paths are locked to `~/.clawdis` with session metadata stored under `~/.clawdis/sessions/`.
 - Simplified send/agent/relay/heartbeat to web-only delivery; removed Twilio mocks/tests and dead code.
+- Tau RPC timeout is now inactivity-based (5m without events) and error messages show seconds only.
 
 ## 1.4.1 — 2025-12-04
 
@@ -31,12 +32,12 @@
 - **Directive confirmations:** Directive-only messages now reply with an acknowledgement (`Thinking level set to high.` / `Thinking disabled.`) and reject unknown levels with a helpful hint (state is unchanged).
 - **Pi/Tau stability:** RPC replies buffered until the assistant turn finishes; parsers return consistent `texts[]`; web auto-replies keep a warm Tau RPC process to avoid cold starts.
 - **Claude prompt flow:** One-time `sessionIntro` with per-message `/think:high` bodyPrefix; system prompt always sent on first turn even with `sendSystemOnce`.
-- **Heartbeat UX:** Backpressure skips reply heartbeats while other commands run; skips don’t refresh session `updatedAt`; web/Twilio heartbeats normalize array payloads and optional `heartbeatCommand`.
+- **Heartbeat UX:** Backpressure skips reply heartbeats while other commands run; skips don’t refresh session `updatedAt`; web heartbeats normalize array payloads and optional `heartbeatCommand`.
 - **Control via WhatsApp:** Send `/restart` to restart the launchd service (`com.steipete.clawdis`; legacy `com.steipete.warelay`) from your allowed numbers.
 - **Tau completion signal:** RPC now resolves on Tau’s `agent_end` (or process exit) so late assistant messages aren’t truncated; 5-minute hard cap only as a failsafe.
 
 ### Reliability & UX
-- Outbound chunking prefers newlines/word boundaries and enforces caps (1600 WhatsApp/Twilio, 4000 web).
+- Outbound chunking prefers newlines/word boundaries and enforces caps (~4000 chars for web/WhatsApp).
 - Web auto-replies fall back to caption-only if media send fails; hosted media MIME-sniffed and cleaned up immediately.
 - IPC relay send shows typing indicator; batched inbound messages keep timestamps; watchdog restarts WhatsApp after long inactivity.
 - Early `allowFrom` filtering prevents decryption errors; same-phone mode supported with echo suppression.
@@ -86,7 +87,7 @@
 ## 1.2.2 — 2025-11-28
 
 ### Changes
-- Manual heartbeat sends: `warelay heartbeat --message/--body --provider web|twilio`; `--dry-run` previews payloads.
+- Manual heartbeat sends: `warelay heartbeat --message/--body` (web provider only); `--dry-run` previews payloads.
 
 ## 1.2.1 — 2025-11-28
 
@@ -105,7 +106,7 @@
 - Heartbeat tooling: `--session-id`, `--heartbeat-now`, relay helpers `relay:heartbeat` and `relay:heartbeat:tmux`.
 - Prompt structure: `sessionIntro` plus per-message `/think:high`; session idle up to 7 days.
 - Thinking directives: `/think:<level>`; Pi uses `--thinking`; others append cue; `/think:off` no-op.
-- Robustness: Baileys/WebSocket guards; global unhandled error handlers; WhatsApp LID mapping; Twilio media hosting via shared host module.
+- Robustness: Baileys/WebSocket guards; global unhandled error handlers; WhatsApp LID mapping; hosted media MIME-sniffing and cleanup.
 - Docs: README Clawd setup; `docs/claude-config.md` for live config.
 
 ## 1.1.0 — 2025-11-26
