@@ -21,7 +21,8 @@ export type TemplateContext = MsgContext & {
 };
 
 // Simple {{Placeholder}} interpolation using inbound message context.
-export function applyTemplate(str: string, ctx: TemplateContext) {
+export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
+  if (!str) return "";
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = (ctx as Record<string, unknown>)[key];
     return value == null ? "" : String(value);

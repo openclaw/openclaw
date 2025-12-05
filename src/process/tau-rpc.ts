@@ -102,7 +102,9 @@ class TauRpcClient {
     this.pending.timer = setTimeout(() => {
       const pending = this.pending;
       this.pending = undefined;
-      pending?.reject(new Error(`tau rpc timed out after ${Math.round(capMs / 1000)}s`));
+      pending?.reject(
+        new Error(`tau rpc timed out after ${Math.round(capMs / 1000)}s`),
+      );
       this.child?.kill("SIGKILL");
     }, capMs);
   }
@@ -133,7 +135,9 @@ class TauRpcClient {
       const capMs = Math.min(timeoutMs, 5 * 60 * 1000);
       const timer = setTimeout(() => {
         this.pending = undefined;
-        reject(new Error(`tau rpc timed out after ${Math.round(capMs / 1000)}s`));
+        reject(
+          new Error(`tau rpc timed out after ${Math.round(capMs / 1000)}s`),
+        );
         child.kill("SIGKILL");
       }, capMs);
       this.pending = { resolve, reject, timer, onEvent, capMs };

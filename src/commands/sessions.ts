@@ -83,20 +83,19 @@ export async function sessionsCommand(
   );
   const store = loadSessionStore(storePath);
 
-  const activeMinutes = opts.active
-    ? Number.parseInt(String(opts.active), 10)
-    : undefined;
-  if (
-    opts.active !== undefined &&
-    (Number.isNaN(activeMinutes) || activeMinutes <= 0)
-  ) {
-    runtime.error("--active must be a positive integer (minutes)");
-    runtime.exit(1);
-    return;
+  let activeMinutes: number | undefined;
+  if (opts.active !== undefined) {
+    const parsed = Number.parseInt(String(opts.active), 10);
+    if (Number.isNaN(parsed) || parsed <= 0) {
+      runtime.error("--active must be a positive integer (minutes)");
+      runtime.exit(1);
+      return;
+    }
+    activeMinutes = parsed;
   }
 
   const rows = toRows(store).filter((row) => {
-    if (!activeMinutes) return true;
+    if (activeMinutes === undefined) return true;
     if (!row.updatedAt) return false;
     return Date.now() - row.updatedAt <= activeMinutes * 60_000;
   });

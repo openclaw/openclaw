@@ -51,7 +51,8 @@ function stripRpcNoise(raw: string): string {
 
       // Keep only assistant/tool messages; drop agent_start/turn_start/user/etc.
       const isAssistant = role === "assistant";
-      const isToolRole = typeof role === "string" && role.toLowerCase().includes("tool");
+      const isToolRole =
+        typeof role === "string" && role.toLowerCase().includes("tool");
       if (!isAssistant && !isToolRole) continue;
 
       // Ignore assistant messages that have no text content (pure toolcall scaffolding).
@@ -77,8 +78,15 @@ function extractRpcAssistantText(raw: string): string | undefined {
     try {
       const evt = JSON.parse(line) as {
         type?: string;
-        message?: { role?: string; content?: Array<{ type?: string; text?: string }> };
-        assistantMessageEvent?: { type?: string; delta?: string; content?: string };
+        message?: {
+          role?: string;
+          content?: Array<{ type?: string; text?: string }>;
+        };
+        assistantMessageEvent?: {
+          type?: string;
+          delta?: string;
+          content?: string;
+        };
       };
       if (
         evt.type === "message_end" &&
@@ -329,7 +337,7 @@ export async function runCommandReply(
     systemSent,
     timeoutMs,
     timeoutSeconds,
-    commandRunner,
+    commandRunner: _commandRunner,
     enqueue = enqueueCommand,
     thinkLevel,
     verboseLevel,
@@ -466,9 +474,7 @@ export async function runCommandReply(
   });
 
   // Drive pi via RPC stdin so auto-compaction and streaming run server-side.
-  let rpcInput: string | undefined;
   let rpcArgv = finalArgv;
-  rpcInput = `${JSON.stringify({ type: "prompt", message: promptArg })}\n`;
   const bodyIdx =
     promptIndex >= 0 ? promptIndex : Math.max(finalArgv.length - 1, 0);
   rpcArgv = finalArgv.filter((_, idx) => idx !== bodyIdx);
@@ -522,7 +528,10 @@ export async function runCommandReply(
       }
     };
     let lastStreamedAssistant: string | undefined;
-    const streamAssistantFinal = (msg?: { role?: string; content?: unknown[] }) => {
+    const streamAssistantFinal = (msg?: {
+      role?: string;
+      content?: unknown[];
+    }) => {
       if (!onPartialReply || msg?.role !== "assistant") return;
       const textBlocks = Array.isArray(msg.content)
         ? (msg.content as Array<{ type?: string; text?: string }>)
@@ -677,18 +686,18 @@ export async function runCommandReply(
         }
       },
     });
-  const rawStdout = stdout.trim();
-  const rpcAssistantText = extractRpcAssistantText(stdout);
-  let mediaFromCommand: string[] | undefined;
-  const trimmed = stripRpcNoise(rawStdout);
-  if (stderr?.trim()) {
-    logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
-  }
+    const rawStdout = stdout.trim();
+    const rpcAssistantText = extractRpcAssistantText(stdout);
+    let mediaFromCommand: string[] | undefined;
+    const trimmed = stripRpcNoise(rawStdout);
+    if (stderr?.trim()) {
+      logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
+    }
 
-  const logFailure = () => {
-    const truncate = (s?: string) =>
-      s ? (s.length > 4000 ? `${s.slice(0, 4000)}…` : s) : undefined;
-    logger.warn(
+    const logFailure = () => {
+      const truncate = (s?: string) =>
+        s ? (s.length > 4000 ? `${s.slice(0, 4000)}…` : s) : undefined;
+      logger.warn(
         {
           code,
           signal,
@@ -779,23 +788,25 @@ export async function runCommandReply(
     }
 
     // If parser gave nothing, fall back to best-effort assistant text (prefers RPC deltas).
-  const fallbackText =
-    rpcAssistantText ??
-    extractRpcAssistantText(trimmed) ??
-    extractAssistantTextLoosely(trimmed) ??
-    trimmed;
-  const normalize = (s?: string) =>
-    stripStructuralPrefixes((s ?? "").trim()).toLowerCase();
-  const bodyNorm = normalize(templatingCtx.Body ?? templatingCtx.BodyStripped);
-  const fallbackNorm = normalize(fallbackText);
-  const promptEcho =
-    fallbackText &&
-    (fallbackText === (templatingCtx.Body ?? "") ||
-      fallbackText === (templatingCtx.BodyStripped ?? "") ||
-      (bodyNorm.length > 0 && bodyNorm === fallbackNorm));
-  const safeFallbackText = promptEcho ? undefined : fallbackText;
+    const fallbackText =
+      rpcAssistantText ??
+      extractRpcAssistantText(trimmed) ??
+      extractAssistantTextLoosely(trimmed) ??
+      trimmed;
+    const normalize = (s?: string) =>
+      stripStructuralPrefixes((s ?? "").trim()).toLowerCase();
+    const bodyNorm = normalize(
+      templatingCtx.Body ?? templatingCtx.BodyStripped,
+    );
+    const fallbackNorm = normalize(fallbackText);
+    const promptEcho =
+      fallbackText &&
+      (fallbackText === (templatingCtx.Body ?? "") ||
+        fallbackText === (templatingCtx.BodyStripped ?? "") ||
+        (bodyNorm.length > 0 && bodyNorm === fallbackNorm));
+    const safeFallbackText = promptEcho ? undefined : fallbackText;
 
-  if (replyItems.length === 0 && safeFallbackText && !hasParsedContent) {
+    if (replyItems.length === 0 && safeFallbackText && !hasParsedContent) {
       const { text: cleanedText, mediaUrls: mediaFound } =
         splitMediaFromOutput(safeFallbackText);
       if (cleanedText || mediaFound?.length) {

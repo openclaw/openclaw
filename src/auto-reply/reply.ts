@@ -37,6 +37,8 @@ const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
 
+type ReplyConfig = NonNullable<WarelayConfig["inbound"]>["reply"];
+
 export function extractThinkDirective(body?: string): {
   cleaned: string;
   thinkLevel?: ThinkLevel;
@@ -44,8 +46,7 @@ export function extractThinkDirective(body?: string): {
   hasDirective: boolean;
 } {
   if (!body) return { cleaned: "", hasDirective: false };
-  // Match the longest keyword first to avoid partial captures (e.g. "/think:high").
-  // Require start of string or whitespace before "/" to avoid catching URLs.
+  // Match the longest keyword first to avoid partial captures (e.g. "/think:high")
   const match = body.match(
     /(?:^|\s)\/(?:thinking|think|t)\s*:?\s*([a-zA-Z-]+)\b/i,
   );
@@ -68,8 +69,9 @@ export function extractVerboseDirective(body?: string): {
   hasDirective: boolean;
 } {
   if (!body) return { cleaned: "", hasDirective: false };
-  // Require start or whitespace before "/verbose" and reject "/ver*" typos.
-  const match = body.match(/(?:^|\s)\/v(?:erbose)?\b\s*:?\s*([a-zA-Z-]+)\b/i);
+  const match = body.match(
+    /(?:^|\s)\/(?:verbose|v)(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i,
+  );
   const verboseLevel = normalizeVerboseLevel(match?.[1]);
   const cleaned = match
     ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
@@ -129,7 +131,7 @@ function stripMentions(
   return result.replace(/\s+/g, " ").trim();
 }
 
-function makeDefaultPiReply() {
+function makeDefaultPiReply(): ReplyConfig {
   const piBin = resolveBundledPiBinary() ?? "pi";
   const defaultContext =
     lookupContextTokens(DEFAULT_MODEL) ?? DEFAULT_CONTEXT_TOKENS;
@@ -159,7 +161,7 @@ export async function getReplyFromConfig(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   // Choose reply from config: static text or external command stdout.
   const cfg = configOverride ?? loadConfig();
-  const reply = cfg.inbound?.reply ?? makeDefaultPiReply();
+  const reply: ReplyConfig = cfg.inbound?.reply ?? makeDefaultPiReply();
   const timeoutSeconds = Math.max(reply?.timeoutSeconds ?? 600, 1);
   const timeoutMs = timeoutSeconds * 1000;
   let started = false;
@@ -216,7 +218,7 @@ export async function getReplyFromConfig(
     1,
   );
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const storePath = sessionCfg ? resolveStorePath(sessionCfg.store) : undefined;
+  const storePath = resolveStorePath(sessionCfg?.store);
   let sessionStore: ReturnType<typeof loadSessionStore> | undefined;
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry | undefined;
@@ -230,9 +232,7 @@ export async function getReplyFromConfig(
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
 
-  const triggerBodyNormalized = stripStructuralPrefixes(
-    ctx.Body ?? "",
-  )
+  const triggerBodyNormalized = stripStructuralPrefixes(ctx.Body ?? "")
     .trim()
     .toLowerCase();
 
@@ -299,38 +299,24 @@ export async function getReplyFromConfig(
     IsNewSession: isNewSession ? "true" : "false",
   };
 
-  const directiveSource = stripStructuralPrefixes(
-    sessionCtx.BodyStripped ?? sessionCtx.Body ?? "",
-  );
   const {
-    cleaned: thinkCleanedDirective,
+    cleaned: thinkCleaned,
     thinkLevel: inlineThink,
     rawLevel: rawThinkLevel,
     hasDirective: hasThinkDirective,
-  } = extractThinkDirective(directiveSource);
+  } = extractThinkDirective(sessionCtx.BodyStripped ?? sessionCtx.Body ?? "");
   const {
-    cleaned: verboseCleanedDirective,
+    cleaned: verboseCleaned,
     verboseLevel: inlineVerbose,
     rawLevel: rawVerboseLevel,
     hasDirective: hasVerboseDirective,
-  } = extractVerboseDirective(thinkCleanedDirective);
-
-  // Keep the full body (including context wrapper) for the agent, but strip
-  // directives from it separately so history remains intact.
-  const { cleaned: thinkCleanedFull } = extractThinkDirective(
-    sessionCtx.Body ?? "",
-  );
-  const { cleaned: verboseCleanedFull } = extractVerboseDirective(
-    thinkCleanedFull,
-  );
-
-  sessionCtx.Body = verboseCleanedFull;
-  sessionCtx.BodyStripped = verboseCleanedFull;
+  } = extractVerboseDirective(thinkCleaned);
+  sessionCtx.Body = verboseCleaned;
+  sessionCtx.BodyStripped = verboseCleaned;
 
   const isGroup =
     typeof ctx.From === "string" &&
     (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
-  const isHeartbeat = opts?.isHeartbeat === true;
 
   let resolvedThinkLevel =
     inlineThink ??
@@ -346,26 +332,26 @@ export async function getReplyFromConfig(
     hasThinkDirective &&
     hasVerboseDirective &&
     (() => {
-      const stripped = stripStructuralPrefixes(verboseCleanedDirective ?? "");
+      const stripped = stripStructuralPrefixes(verboseCleaned ?? "");
       const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
       return noMentions.length === 0;
     })();
 
   const directiveOnly = (() => {
     if (!hasThinkDirective) return false;
-    if (!thinkCleanedDirective) return true;
+    if (!thinkCleaned) return true;
     // Check after stripping both think and verbose so combined directives count.
-    const stripped = stripStructuralPrefixes(verboseCleanedDirective);
+    const stripped = stripStructuralPrefixes(verboseCleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
     return noMentions.length === 0;
   })();
 
   // Directive-only message => persist session thinking level and return ack
-  if (!isHeartbeat && (directiveOnly || combinedDirectiveOnly)) {
+  if (directiveOnly || combinedDirectiveOnly) {
     if (!inlineThink) {
       cleanupTyping();
       return {
-        text: `${SYSTEM_MARK} Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
+        text: `Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
       };
     }
     if (sessionEntry && sessionStore && sessionKey) {
@@ -414,24 +400,24 @@ export async function getReplyFromConfig(
         );
       }
     }
-    const ack = `${SYSTEM_MARK} ${parts.join(" ")}`;
+    const ack = parts.join(" ");
     cleanupTyping();
     return { text: ack };
   }
 
   const verboseDirectiveOnly = (() => {
     if (!hasVerboseDirective) return false;
-    if (!verboseCleanedDirective) return true;
-    const stripped = stripStructuralPrefixes(verboseCleanedDirective);
+    if (!verboseCleaned) return true;
+    const stripped = stripStructuralPrefixes(verboseCleaned);
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
     return noMentions.length === 0;
   })();
 
-  if (!isHeartbeat && verboseDirectiveOnly) {
+  if (verboseDirectiveOnly) {
     if (!inlineVerbose) {
       cleanupTyping();
       return {
-        text: `${SYSTEM_MARK} Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
+        text: `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
       };
     }
     if (sessionEntry && sessionStore && sessionKey) {
@@ -452,29 +438,29 @@ export async function getReplyFromConfig(
     return { text: ack };
   }
 
-  // If directives are inline with other text: persist levels, then continue to agent (no early ack).
-  if (hasThinkDirective || hasVerboseDirective) {
-    if (sessionEntry && sessionStore && sessionKey) {
-      if (hasThinkDirective && inlineThink) {
-        if (inlineThink === "off") {
-          delete sessionEntry.thinkingLevel;
-        } else {
-          sessionEntry.thinkingLevel = inlineThink;
-        }
-        sessionEntry.updatedAt = Date.now();
+  // Persist inline think/verbose settings even when additional content follows.
+  if (sessionEntry && sessionStore && sessionKey) {
+    let updated = false;
+    if (hasThinkDirective && inlineThink) {
+      if (inlineThink === "off") {
+        delete sessionEntry.thinkingLevel;
+      } else {
+        sessionEntry.thinkingLevel = inlineThink;
       }
-      if (hasVerboseDirective && inlineVerbose) {
-        if (inlineVerbose === "off") {
-          delete sessionEntry.verboseLevel;
-        } else {
-          sessionEntry.verboseLevel = inlineVerbose;
-        }
-        sessionEntry.updatedAt = Date.now();
+      updated = true;
+    }
+    if (hasVerboseDirective && inlineVerbose) {
+      if (inlineVerbose === "off") {
+        delete sessionEntry.verboseLevel;
+      } else {
+        sessionEntry.verboseLevel = inlineVerbose;
       }
-      if (sessionEntry.updatedAt) {
-        sessionStore[sessionKey] = sessionEntry;
-        await saveSessionStore(storePath, sessionStore);
-      }
+      updated = true;
+    }
+    if (updated) {
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
     }
   }
 
@@ -539,7 +525,7 @@ export async function getReplyFromConfig(
   const isFirstTurnInSession = isNewSession || !systemSent;
   const sessionIntro =
     isFirstTurnInSession && sessionCfg?.sessionIntro
-      ? applyTemplate(sessionCfg.sessionIntro, sessionCtx)
+      ? applyTemplate(sessionCfg.sessionIntro ?? "", sessionCtx)
       : "";
   const groupIntro =
     isFirstTurnInSession && sessionCtx.ChatType === "group"
@@ -561,7 +547,7 @@ export async function getReplyFromConfig(
         })()
       : "";
   const bodyPrefix = reply?.bodyPrefix
-    ? applyTemplate(reply.bodyPrefix, sessionCtx)
+    ? applyTemplate(reply.bodyPrefix ?? "", sessionCtx)
     : "";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const abortedHint =
@@ -659,12 +645,14 @@ export async function getReplyFromConfig(
     await onReplyStart();
     logVerbose("Using text auto-reply from config");
     const result = {
-      text: applyTemplate(reply.text, templatingCtx),
+      text: applyTemplate(reply.text ?? "", templatingCtx),
       mediaUrl: reply.mediaUrl,
     };
     cleanupTyping();
     return result;
   }
+
+  const isHeartbeat = opts?.isHeartbeat === true;
 
   if (reply && reply.mode === "command") {
     const heartbeatCommand = isHeartbeat

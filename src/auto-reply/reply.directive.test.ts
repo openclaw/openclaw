@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as tauRpc from "../process/tau-rpc.js";
-import { getReplyFromConfig, extractVerboseDirective, extractThinkDirective } from "./reply.js";
+import {
+  extractThinkDirective,
+  extractVerboseDirective,
+  getReplyFromConfig,
+} from "./reply.js";
 
 describe("directive parsing", () => {
   afterEach(() => {

@@ -131,7 +131,11 @@ describe("runCommandReply (pi)", () => {
         command: ["pi", "{{Body}}"],
         agent: { kind: "pi" },
       },
-      templatingCtx: { ...noopTemplateCtx, Body: "hello", BodyStripped: "hello" },
+      templatingCtx: {
+        ...noopTemplateCtx,
+        Body: "hello",
+        BodyStripped: "hello",
+      },
       sendSystemOnce: false,
       isNewSession: true,
       isFirstTurnInSession: true,
