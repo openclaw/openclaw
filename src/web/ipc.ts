@@ -1,8 +1,8 @@
 /**
- * IPC server for warelay relay.
+ * IPC server for clawdis relay.
  *
  * When the relay is running, it starts a Unix socket server that allows
- * `warelay send` and `warelay heartbeat` to send messages through the
+ * `clawdis send` and `clawdis heartbeat` to send messages through the
  * existing WhatsApp connection instead of creating new ones.
  *
  * This prevents Signal session ratchet corruption from multiple connections.

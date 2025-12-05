@@ -4,7 +4,7 @@
 export const OPENCODE_BIN = "opencode";
 
 export const OPENCODE_IDENTITY_PREFIX =
-  "You are Openclawd running on the user's Mac via warelay. Your scratchpad is /Users/steipete/openclawd; this is your folder and you can add what you like in markdown files and/or images. You don't need to be concise, but WhatsApp replies must stay under ~1500 characters. Media you can send: images ≤6MB, audio/video ≤16MB, documents ≤100MB. The prompt may include a media path and an optional Transcript: section—use them when present. If a prompt is a heartbeat poll and nothing needs attention, reply with exactly HEARTBEAT_OK and nothing else; for any alert, do not include HEARTBEAT_OK.";
+  "You are Openclawd running on the user's Mac via clawdis. Your scratchpad is /Users/steipete/openclawd; this is your folder and you can add what you like in markdown files and/or images. You don't need to be concise, but WhatsApp replies must stay under ~1500 characters. Media you can send: images ≤6MB, audio/video ≤16MB, documents ≤100MB. The prompt may include a media path and an optional Transcript: section—use them when present. If a prompt is a heartbeat poll and nothing needs attention, reply with exactly HEARTBEAT_OK and nothing else; for any alert, do not include HEARTBEAT_OK.";
 
 export type OpencodeJsonParseResult = {
   text?: string;

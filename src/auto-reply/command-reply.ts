@@ -384,7 +384,7 @@ export async function runCommandReply(
   }
 
   const shouldApplyAgent = agent.isInvocation(argv);
-  const finalArgv = shouldApplyAgent
+  let finalArgv = shouldApplyAgent
     ? agent.buildArgs({
         argv,
         bodyIndex,
@@ -396,6 +396,22 @@ export async function runCommandReply(
         format: agentCfg.format,
       })
     : argv;
+
+  // For pi/tau: prefer RPC mode so auto-compaction and streaming events run server-side.
+  let rpcInput: string | undefined;
+  if (agentKind === "pi") {
+    const bodyArg = finalArgv[bodyIndex] ?? templatingCtx.Body ?? "";
+    rpcInput = JSON.stringify({ type: "prompt", message: bodyArg }) + "\n";
+    // Remove body argument (RPC expects stdin JSON instead of positional message)
+    finalArgv = finalArgv.filter((_, idx) => idx !== bodyIndex);
+    // Force --mode rpc
+    const modeIdx = finalArgv.findIndex((v) => v === "--mode");
+    if (modeIdx >= 0 && finalArgv[modeIdx + 1]) {
+      finalArgv[modeIdx + 1] = "rpc";
+    } else {
+      finalArgv.push("--mode", "rpc");
+    }
+  }
 
   logVerbose(
     `Running command auto-reply: ${finalArgv.join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
@@ -582,7 +598,11 @@ export async function runCommandReply(
         flushPendingTool();
         return rpcResult;
       }
-      return await commandRunner(finalArgv, { timeoutMs, cwd: reply.cwd });
+      return await commandRunner(finalArgv, {
+        timeoutMs,
+        cwd: reply.cwd,
+        input: rpcInput,
+      });
     };
 
     const { stdout, stderr, code, signal, killed } = await enqueue(run, {
@@ -602,6 +622,23 @@ export async function runCommandReply(
     if (stderr?.trim()) {
       logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
     }
+
+    const logFailure = () => {
+      const truncate = (s?: string) =>
+        s ? (s.length > 4000 ? `${s.slice(0, 4000)}…` : s) : undefined;
+      logger.warn(
+        {
+          code,
+          signal,
+          killed,
+          argv: finalArgv,
+          cwd: reply.cwd,
+          stdout: truncate(rawStdout),
+          stderr: truncate(stderr),
+        },
+        "command auto-reply failed",
+      );
+    };
 
     const parsed = trimmed ? agent.parseOutput(trimmed) : undefined;
     const parserProvided = !!parsed;
@@ -697,6 +734,7 @@ export async function runCommandReply(
         text: `(command produced no output${meta ? `; ${meta}` : ""})`,
       });
       verboseLog("No text/media produced; injecting fallback notice to user");
+      logFailure();
     }
 
     verboseLog(
@@ -709,6 +747,7 @@ export async function runCommandReply(
       "command auto-reply finished",
     );
     if ((code ?? 0) !== 0) {
+      logFailure();
       console.error(
         `Command auto-reply exited with code ${code ?? "unknown"} (signal: ${signal ?? "none"})`,
       );

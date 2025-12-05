@@ -4,7 +4,7 @@ import type { MockBaileysSocket } from "../../test/mocks/baileys.js";
 import { createMockBaileys } from "../../test/mocks/baileys.js";
 
 // Use globalThis to store the mock config so it survives vi.mock hoisting
-const CONFIG_KEY = Symbol.for("warelay:testConfigMock");
+const CONFIG_KEY = Symbol.for("clawdis:testConfigMock");
 const DEFAULT_CONFIG = {
   inbound: {
     allowFrom: ["*"], // Allow all in tests by default
@@ -50,7 +50,7 @@ vi.mock("../media/store.js", () => ({
 vi.mock("@whiskeysockets/baileys", () => {
   const created = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("warelay:lastSocket")
+    Symbol.for("clawdis:lastSocket")
   ] = created.lastSocket;
   return created.mod;
 });
@@ -72,7 +72,7 @@ export const baileys = (await import(
 export function resetBaileysMocks() {
   const recreated = createMockBaileys();
   (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("warelay:lastSocket")
+    Symbol.for("clawdis:lastSocket")
   ] = recreated.lastSocket;
   baileys.makeWASocket.mockImplementation(recreated.mod.makeWASocket);
   baileys.useMultiFileAuthState.mockImplementation(
@@ -88,7 +88,7 @@ export function resetBaileysMocks() {
 
 export function getLastSocket(): MockBaileysSocket {
   const getter = (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("warelay:lastSocket")
+    Symbol.for("clawdis:lastSocket")
   ];
   if (typeof getter === "function")
     return (getter as () => MockBaileysSocket)();

@@ -150,7 +150,7 @@ export async function ensureFunnel(
     );
     runtime.error(
       info(
-        "Tip: you can fall back to polling (no webhooks needed): `pnpm warelay relay --provider twilio --interval 5 --lookback 10`",
+        "Tip: you can fall back to polling (no webhooks needed): `pnpm clawdis relay --provider twilio --interval 5 --lookback 10`",
       ),
     );
     if (isVerbose()) {

@@ -53,7 +53,7 @@ export type WarelayConfig = {
   logging?: LoggingConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
-    messagePrefix?: string; // Prefix added to all inbound messages (default: "[warelay]" if no allowFrom, else "")
+    messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
     responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
     timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
     transcribeAudio?: {
@@ -118,7 +118,7 @@ const ReplySchema = z
   .object({
     mode: z.union([z.literal("text"), z.literal("command")]),
     text: z.string().optional(),
-    command: z.array(z.string()).optional(),
+      command: z.array(z.string()).optional(),
     heartbeatCommand: z.array(z.string()).optional(),
     thinkingDefault: z
       .union([
@@ -147,8 +147,8 @@ const ReplySchema = z
         heartbeatIdleMinutes: z.number().int().positive().optional(),
         store: z.string().optional(),
         sessionArgNew: z.array(z.string()).optional(),
-        sessionArgResume: z.array(z.string()).optional(),
-        sessionArgBeforeBody: z.boolean().optional(),
+      sessionArgResume: z.array(z.string()).optional(),
+      sessionArgBeforeBody: z.boolean().optional(),
         sendSystemOnce: z.boolean().optional(),
         sessionIntro: z.string().optional(),
         typingIntervalSeconds: z.number().int().positive().optional(),

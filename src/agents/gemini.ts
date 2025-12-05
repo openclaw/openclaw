@@ -4,7 +4,7 @@ import type { AgentParseResult, AgentSpec } from "./types.js";
 
 const GEMINI_BIN = "gemini";
 export const GEMINI_IDENTITY_PREFIX =
-  "You are Gemini responding for warelay. Keep WhatsApp replies concise (<1500 chars). If the prompt contains media paths or a Transcript block, use them. If this was a heartbeat probe and nothing needs attention, reply with exactly HEARTBEAT_OK.";
+  "You are Gemini responding for clawdis. Keep WhatsApp replies concise (<1500 chars). If the prompt contains media paths or a Transcript block, use them. If this was a heartbeat probe and nothing needs attention, reply with exactly HEARTBEAT_OK.";
 
 // Gemini CLI currently prints plain text; --output json is flaky across versions, so we
 // keep parsing minimal and let MEDIA token stripping happen later in the pipeline.

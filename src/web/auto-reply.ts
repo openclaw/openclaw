@@ -690,7 +690,7 @@ export async function monitorWebProvider(
       let messagePrefix = cfg.inbound?.messagePrefix;
       if (messagePrefix === undefined) {
         const hasAllowFrom = (cfg.inbound?.allowFrom?.length ?? 0) > 0;
-        messagePrefix = hasAllowFrom ? "" : "[warelay]";
+        messagePrefix = hasAllowFrom ? "" : "[clawdis]";
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
       const senderLabel =
@@ -930,7 +930,7 @@ export async function monitorWebProvider(
       },
     });
 
-    // Start IPC server so `warelay send` can use this connection
+    // Start IPC server so `clawdis send` can use this connection
     // instead of creating a new one (which would corrupt Signal session)
     if ("sendMessage" in listener && "sendComposingTo" in listener) {
       startIpcServer(async (to, message, mediaUrl) => {
@@ -1300,7 +1300,7 @@ export async function monitorWebProvider(
     if (loggedOut) {
       runtime.error(
         danger(
-          "WhatsApp session logged out. Run `warelay login --provider web` to relink.",
+          "WhatsApp session logged out. Run `clawdis login --provider web` to relink.",
         ),
       );
       await closeListener();

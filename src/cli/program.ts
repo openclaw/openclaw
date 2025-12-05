@@ -40,14 +40,14 @@ export function buildProgram() {
     "Send, receive, and auto-reply on WhatsApp—Twilio-backed or QR-linked.";
 
   program
-    .name("warelay")
+    .name("clawdis")
     .description("WhatsApp relay CLI (Twilio or WhatsApp Web session)")
     .version(PROGRAM_VERSION);
 
   const formatIntroLine = (version: string, rich = true) => {
-    const base = `📡 warelay ${version} — ${TAGLINE}`;
+    const base = `📡 clawdis ${version} — ${TAGLINE}`;
     return rich && chalk.level > 0
-      ? `${chalk.bold.cyan("📡 warelay")} ${chalk.white(version)} ${chalk.gray("—")} ${chalk.green(TAGLINE)}`
+      ? `${chalk.bold.cyan("📡 clawdis")} ${chalk.white(version)} ${chalk.gray("—")} ${chalk.green(TAGLINE)}`
       : base;
   };
 
@@ -76,27 +76,27 @@ export function buildProgram() {
   program.addHelpText("beforeAll", `\n${formatIntroLine(PROGRAM_VERSION)}\n`);
   const examples = [
     [
-      "warelay login --verbose",
+      "clawdis login --verbose",
       "Link personal WhatsApp Web and show QR + connection logs.",
     ],
     [
-      'warelay send --to +15551234567 --message "Hi" --provider web --json',
+      'clawdis send --to +15551234567 --message "Hi" --provider web --json',
       "Send via your web session and print JSON result.",
     ],
     [
-      "warelay relay --provider auto --interval 5 --lookback 15 --verbose",
+      "clawdis relay --provider auto --interval 5 --lookback 15 --verbose",
       "Auto-reply loop: prefer Web when logged in, otherwise Twilio polling.",
     ],
     [
-      "warelay webhook --ingress tailscale --port 42873 --path /webhook/whatsapp --verbose",
+      "clawdis webhook --ingress tailscale --port 42873 --path /webhook/whatsapp --verbose",
       "Start webhook + Tailscale Funnel and update Twilio callbacks.",
     ],
     [
-      "warelay status --limit 10 --lookback 60 --json",
+      "clawdis status --limit 10 --lookback 60 --json",
       "Show last 10 messages from the past hour as JSON.",
     ],
     [
-      'warelay agent --to +15551234567 --message "Run summary" --thinking high',
+      'clawdis agent --to +15551234567 --message "Run summary" --thinking high',
       "Talk directly to the agent using the same session handling, no WhatsApp send.",
     ],
   ] as const;
@@ -167,10 +167,10 @@ export function buildProgram() {
       "after",
       `
 Examples:
-  warelay send --to +15551234567 --message "Hi"                # wait 20s for delivery (default)
-  warelay send --to +15551234567 --message "Hi" --wait 0       # fire-and-forget
-  warelay send --to +15551234567 --message "Hi" --dry-run      # print payload only
-  warelay send --to +15551234567 --message "Hi" --wait 60 --poll 3`,
+  clawdis send --to +15551234567 --message "Hi"                # wait 20s for delivery (default)
+  clawdis send --to +15551234567 --message "Hi" --wait 0       # fire-and-forget
+  clawdis send --to +15551234567 --message "Hi" --dry-run      # print payload only
+  clawdis send --to +15551234567 --message "Hi" --wait 60 --poll 3`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -218,10 +218,10 @@ Examples:
       "after",
       `
 Examples:
-  warelay agent --to +15551234567 --message "status update"
-  warelay agent --session-id 1234 --message "Summarize inbox" --thinking medium
-  warelay agent --to +15551234567 --message "Trace logs" --verbose on --json
-  warelay agent --to +15551234567 --message "Summon reply" --deliver --provider web
+  clawdis agent --to +15551234567 --message "status update"
+  clawdis agent --session-id 1234 --message "Summarize inbox" --thinking medium
+  clawdis agent --to +15551234567 --message "Trace logs" --verbose on --json
+  clawdis agent --to +15551234567 --message "Summon reply" --deliver --provider web
 `,
     )
     .action(async (opts) => {
@@ -265,12 +265,12 @@ Examples:
       "after",
       `
 Examples:
-  warelay heartbeat                 # uses web session + first allowFrom contact
-  warelay heartbeat --verbose       # prints detailed heartbeat logs
-  warelay heartbeat --to +1555123   # override destination
-  warelay heartbeat --session-id <uuid> --to +1555123   # resume a specific session
-  warelay heartbeat --message "Ping" --provider twilio
-  warelay heartbeat --all           # send to every active session recipient or allowFrom entry`,
+  clawdis heartbeat                 # uses web session + first allowFrom contact
+  clawdis heartbeat --verbose       # prints detailed heartbeat logs
+  clawdis heartbeat --to +1555123   # override destination
+  clawdis heartbeat --session-id <uuid> --to +1555123   # resume a specific session
+  clawdis heartbeat --message "Ping" --provider twilio
+  clawdis heartbeat --all           # send to every active session recipient or allowFrom entry`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -379,10 +379,10 @@ Examples:
       "after",
       `
 Examples:
-  warelay relay                     # auto: web if logged-in, else twilio poll
-  warelay relay --provider web      # force personal web session
-  warelay relay --provider twilio   # force twilio poll
-  warelay relay --provider twilio --interval 2 --lookback 30
+  clawdis relay                     # auto: web if logged-in, else twilio poll
+  clawdis relay --provider web      # force personal web session
+  clawdis relay --provider twilio   # force twilio poll
+  clawdis relay --provider twilio --interval 2 --lookback 30
   # Troubleshooting: docs/refactor/web-relay-troubleshooting.md
 `,
     )
@@ -502,7 +502,7 @@ Examples:
         } catch (err) {
           defaultRuntime.error(
             danger(
-              `Web relay failed: ${String(err)}. Not falling back; re-link with 'warelay login --provider web'.`,
+              `Web relay failed: ${String(err)}. Not falling back; re-link with 'clawdis login --provider web'.`,
             ),
           );
           defaultRuntime.exit(1);
@@ -535,7 +535,7 @@ Examples:
       if (provider !== "web") {
         defaultRuntime.error(
           danger(
-            "Heartbeat relay is only supported for the web provider. Link with `warelay login --verbose`.",
+            "Heartbeat relay is only supported for the web provider. Link with `clawdis login --verbose`.",
           ),
         );
         defaultRuntime.exit(1);
@@ -565,7 +565,7 @@ Examples:
       } catch (err) {
         defaultRuntime.error(
           danger(
-            `Web relay failed: ${String(err)}. Re-link with 'warelay login --provider web'.`,
+            `Web relay failed: ${String(err)}. Re-link with 'clawdis login --provider web'.`,
           ),
         );
         defaultRuntime.exit(1);
@@ -583,9 +583,9 @@ Examples:
       "after",
       `
 Examples:
-  warelay status                            # last 20 msgs in past 4h
-  warelay status --limit 5 --lookback 30    # last 5 msgs in past 30m
-  warelay status --json --limit 50          # machine-readable output`,
+  clawdis status                            # last 20 msgs in past 4h
+  clawdis status --limit 5 --lookback 30    # last 5 msgs in past 30m
+  clawdis status --json --limit 50          # machine-readable output`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -618,10 +618,10 @@ Examples:
       "after",
       `
 Examples:
-  warelay webhook                       # ingress=tailscale (funnel + Twilio update)
-  warelay webhook --ingress none        # local-only server (no funnel / no Twilio update)
-  warelay webhook --port 45000          # pick a high, less-colliding port
-  warelay webhook --reply "Got it!"     # static auto-reply; otherwise use config file`,
+  clawdis webhook                       # ingress=tailscale (funnel + Twilio update)
+  clawdis webhook --ingress none        # local-only server (no funnel / no Twilio update)
+  clawdis webhook --port 45000          # pick a high, less-colliding port
+  clawdis webhook --reply "Got it!"     # static auto-reply; otherwise use config file`,
     )
     // istanbul ignore next
     .action(async (opts) => {
@@ -652,20 +652,20 @@ Examples:
   program
     .command("relay:tmux")
     .description(
-      "Run relay --verbose inside tmux (session warelay-relay), restarting if already running, then attach",
+      "Run relay --verbose inside tmux (session clawdis-relay), restarting if already running, then attach",
     )
     .action(async () => {
       try {
         const shouldAttach = Boolean(process.stdout.isTTY);
         const session = await spawnRelayTmux(
-          "pnpm warelay relay --verbose",
+          "pnpm clawdis relay --verbose",
           shouldAttach,
         );
         defaultRuntime.log(
           info(
             shouldAttach
-              ? `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose")`
-              : `tmux session started: ${session} (pane running "pnpm warelay relay --verbose"); attach manually with "tmux attach -t ${session}"`,
+              ? `tmux session started and attached: ${session} (pane running "pnpm clawdis relay --verbose")`
+              : `tmux session started: ${session} (pane running "pnpm clawdis relay --verbose"); attach manually with "tmux attach -t ${session}"`,
           ),
         );
       } catch (err) {
@@ -679,24 +679,24 @@ Examples:
   program
     .command("relay:tmux:attach")
     .description(
-      "Attach to the existing warelay-relay tmux session (no restart)",
+      "Attach to the existing clawdis-relay tmux session (no restart)",
     )
     .action(async () => {
       try {
         if (!process.stdout.isTTY) {
           defaultRuntime.error(
             danger(
-              "Cannot attach: stdout is not a TTY. Run this in a terminal or use 'tmux attach -t warelay-relay' manually.",
+              "Cannot attach: stdout is not a TTY. Run this in a terminal or use 'tmux attach -t clawdis-relay' manually.",
             ),
           );
           defaultRuntime.exit(1);
           return;
         }
-        await spawnRelayTmux("pnpm warelay relay --verbose", true, false);
-        defaultRuntime.log(info("Attached to warelay-relay session."));
+        await spawnRelayTmux("pnpm clawdis relay --verbose", true, false);
+        defaultRuntime.log(info("Attached to clawdis-relay session."));
       } catch (err) {
         defaultRuntime.error(
-          danger(`Failed to attach to warelay-relay: ${String(err)}`),
+          danger(`Failed to attach to clawdis-relay: ${String(err)}`),
         );
         defaultRuntime.exit(1);
       }
@@ -705,20 +705,20 @@ Examples:
   program
     .command("relay:heartbeat:tmux")
     .description(
-      "Run relay --verbose with an immediate heartbeat inside tmux (session warelay-relay), then attach",
+      "Run relay --verbose with an immediate heartbeat inside tmux (session clawdis-relay), then attach",
     )
     .action(async () => {
       try {
         const shouldAttach = Boolean(process.stdout.isTTY);
         const session = await spawnRelayTmux(
-          "pnpm warelay relay --verbose --heartbeat-now",
+          "pnpm clawdis relay --verbose --heartbeat-now",
           shouldAttach,
         );
         defaultRuntime.log(
           info(
             shouldAttach
-              ? `tmux session started and attached: ${session} (pane running "pnpm warelay relay --verbose --heartbeat-now")`
-              : `tmux session started: ${session} (pane running "pnpm warelay relay --verbose --heartbeat-now"); attach manually with "tmux attach -t ${session}"`,
+              ? `tmux session started and attached: ${session} (pane running "pnpm clawdis relay --verbose --heartbeat-now")`
+              : `tmux session started: ${session} (pane running "pnpm clawdis relay --verbose --heartbeat-now"); attach manually with "tmux attach -t ${session}"`,
           ),
         );
       } catch (err) {

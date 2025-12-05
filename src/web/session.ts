@@ -48,7 +48,7 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["warelay", "cli", VERSION],
+    browser: ["clawdis", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
   });
@@ -69,7 +69,7 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
           const status = getStatusCode(lastDisconnect?.error);
           if (status === DisconnectReason.loggedOut) {
             console.error(
-              danger("WhatsApp session logged out. Run: warelay login"),
+              danger("WhatsApp session logged out. Run: clawdis login"),
             );
           }
         }
