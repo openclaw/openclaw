@@ -402,6 +402,62 @@ export async function getReplyFromConfig(
     return { text: ack };
   }
 
+  // If any directive (think/verbose) is present anywhere, acknowledge immediately and skip agent execution.
+  if (hasThinkDirective || hasVerboseDirective) {
+    if (sessionEntry && sessionStore && sessionKey) {
+      if (hasThinkDirective && inlineThink) {
+        if (inlineThink === "off") {
+          delete sessionEntry.thinkingLevel;
+        } else {
+          sessionEntry.thinkingLevel = inlineThink;
+        }
+        sessionEntry.updatedAt = Date.now();
+      }
+      if (hasVerboseDirective && inlineVerbose) {
+        if (inlineVerbose === "off") {
+          delete sessionEntry.verboseLevel;
+        } else {
+          sessionEntry.verboseLevel = inlineVerbose;
+        }
+        sessionEntry.updatedAt = Date.now();
+      }
+      if (sessionEntry.updatedAt) {
+        sessionStore[sessionKey] = sessionEntry;
+        await saveSessionStore(storePath, sessionStore);
+      }
+    }
+    const parts: string[] = [];
+    if (hasThinkDirective) {
+      if (!inlineThink) {
+        parts.push(
+          `Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
+        );
+      } else {
+        parts.push(
+          inlineThink === "off"
+            ? "Thinking disabled."
+            : `Thinking level set to ${inlineThink}.`,
+        );
+      }
+    }
+    if (hasVerboseDirective) {
+      if (!inlineVerbose) {
+        parts.push(
+          `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
+        );
+      } else {
+        parts.push(
+          inlineVerbose === "off"
+            ? "Verbose logging disabled."
+            : "Verbose logging enabled.",
+        );
+      }
+    }
+    const ack = parts.join(" ");
+    cleanupTyping();
+    return { text: ack };
+  }
+
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)
   const allowFrom = cfg.inbound?.allowFrom;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");

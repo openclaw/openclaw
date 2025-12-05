@@ -793,6 +793,31 @@ export async function monitorWebProvider(
         },
         {
           onReplyStart: latest.sendComposing,
+          onPartialReply: async (partial) => {
+            try {
+              await deliverWebReply({
+                replyResult: partial,
+                msg: latest,
+                maxMediaBytes,
+                replyLogger,
+                runtime,
+                connectionId,
+              });
+              if (partial.text) {
+                recentlySent.add(partial.text);
+                if (recentlySent.size > MAX_RECENT_MESSAGES) {
+                  const firstKey = recentlySent.values().next().value;
+                  if (firstKey) recentlySent.delete(firstKey);
+                }
+              }
+            } catch (err) {
+              console.error(
+                danger(
+                  `Failed sending partial web auto-reply to ${latest.from ?? conversationId}: ${String(err)}`,
+                ),
+              );
+            }
+          },
         },
       );
 

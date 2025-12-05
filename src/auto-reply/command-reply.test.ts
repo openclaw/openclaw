@@ -173,6 +173,105 @@ describe("runCommandReply (pi)", () => {
     expect(meta.killed).toBe(true);
   });
 
+  it("collapses rpc deltas instead of emitting raw JSON spam", async () => {
+    mockPiRpc({
+      stdout: [
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":"Hello"}}',
+        '{"type":"message_update","assistantMessageEvent":{"type":"text_delta","delta":" world"}}',
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+    });
+
+    const { payloads } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "{{Body}}"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+    });
+
+    expect(payloads?.[0]?.text).toBe("Hello world");
+  });
+
+  it("falls back to assistant text when parseOutput yields nothing", async () => {
+    mockPiRpc({
+      stdout: [
+        '{"type":"agent_start"}',
+        '{"type":"turn_start"}',
+        '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Acknowledged."}]}}',
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+    });
+    // Force parser to return nothing so we exercise fallback.
+    const parseSpy = vi
+      .spyOn((await import("../agents/pi.js")).piSpec, "parseOutput")
+      .mockReturnValue({ texts: [], toolResults: [], meta: undefined });
+
+    const { payloads } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "{{Body}}"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+    });
+
+    parseSpy.mockRestore();
+    expect(payloads?.[0]?.text).toBe("Acknowledged.");
+  });
+
+  it("does not stream tool results when verbose is off", async () => {
+    const onPartial = vi.fn();
+    mockPiRpc({
+      stdout: [
+        '{"type":"tool_execution_start","toolName":"bash","args":{"command":"ls"}}',
+        '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}',
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+    });
+
+    await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "{{Body}}"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+      onPartialReply: onPartial,
+      verboseLevel: "off",
+    });
+
+    expect(onPartial).not.toHaveBeenCalled();
+  });
+
   it("parses MEDIA tokens and respects mediaMaxMb for local files", async () => {
     const tmp = path.join(os.tmpdir(), `warelay-test-${Date.now()}.bin`);
     const bigBuffer = Buffer.alloc(2 * 1024 * 1024, 1);

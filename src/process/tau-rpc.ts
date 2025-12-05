@@ -28,6 +28,7 @@ class TauRpcClient {
         reject: (err: unknown) => void;
         timer: NodeJS.Timeout;
         onEvent?: (line: string) => void;
+        capMs: number;
       }
     | undefined;
 
@@ -67,6 +68,10 @@ class TauRpcClient {
   }
 
   private handleLine(line: string) {
+    // Any line = activity; refresh timeout watchdog.
+    if (this.pending) {
+      this.resetTimeout();
+    }
     if (!this.pending) return;
     this.buffer.push(line);
     this.pending?.onEvent?.(line);
@@ -88,6 +93,18 @@ class TauRpcClient {
     } catch {
       // ignore malformed/non-JSON lines
     }
+  }
+
+  private resetTimeout() {
+    if (!this.pending) return;
+    const capMs = this.pending.capMs;
+    if (this.pending.timer) clearTimeout(this.pending.timer);
+    this.pending.timer = setTimeout(() => {
+      const pending = this.pending;
+      this.pending = undefined;
+      pending?.reject(new Error(`tau rpc timed out after ${Math.round(capMs / 1000)}s`));
+      this.child?.kill("SIGKILL");
+    }, capMs);
   }
 
   async prompt(
@@ -112,14 +129,14 @@ class TauRpcClient {
       if (!ok) child.stdin.once("drain", () => resolve());
     });
     return await new Promise<TauRpcResult>((resolve, reject) => {
-      // Hard cap to avoid stuck relays; agent_end or process exit should usually resolve first.
+      // Hard cap to avoid stuck relays; resets on every line received.
       const capMs = Math.min(timeoutMs, 5 * 60 * 1000);
       const timer = setTimeout(() => {
         this.pending = undefined;
-        reject(new Error(`tau rpc timed out after ${capMs}ms`));
+        reject(new Error(`tau rpc timed out after ${Math.round(capMs / 1000)}s`));
         child.kill("SIGKILL");
       }, capMs);
-      this.pending = { resolve, reject, timer, onEvent };
+      this.pending = { resolve, reject, timer, onEvent, capMs };
     });
   }
 
