@@ -353,7 +353,7 @@ struct ClawdisApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra { menuContent } label: { LobsterStatusLabel(isPaused: state.isPaused) }
+        MenuBarExtra { menuContent } label: { CritterStatusLabel(isPaused: state.isPaused) }
             .menuBarExtraStyle(.menu)
 
         Settings {
@@ -377,54 +377,139 @@ struct ClawdisApp: App {
     }
 }
 
-private struct LobsterStatusLabel: View {
+private struct CritterStatusLabel: View {
     var isPaused: Bool
 
+    @State private var blinkAmount: CGFloat = 0
+    @State private var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5 ... 8.5))
+    @State private var wiggleAngle: Double = 0
+    @State private var wiggleOffset: CGFloat = 0
+    @State private var nextWiggle = Date().addingTimeInterval(Double.random(in: 6.5 ... 14))
+    private let ticker = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
+
     var body: some View {
-        LobsterGlyph()
+        CritterGlyph(blinkAmount: blinkAmount)
             .frame(width: 16, height: 16)
+            .rotationEffect(.degrees(wiggleAngle), anchor: .center)
+            .offset(x: wiggleOffset)
             .foregroundStyle(isPaused ? .secondary : .primary)
+            .onReceive(ticker) { now in
+                guard !isPaused else {
+                    resetMotion()
+                    return
+                }
+
+                if now >= nextBlink {
+                    blink()
+                    nextBlink = now.addingTimeInterval(Double.random(in: 3.5 ... 8.5))
+                }
+
+                if now >= nextWiggle {
+                    wiggle()
+                    nextWiggle = now.addingTimeInterval(Double.random(in: 6.5 ... 14))
+                }
+            }
+            .onChange(of: isPaused) { _, paused in
+                if paused {
+                    resetMotion()
+                } else {
+                    nextBlink = Date().addingTimeInterval(Double.random(in: 1.5 ... 3.5))
+                    nextWiggle = Date().addingTimeInterval(Double.random(in: 4.5 ... 9.5))
+                }
+            }
+    }
+
+    private func resetMotion() {
+        blinkAmount = 0
+        wiggleAngle = 0
+        wiggleOffset = 0
+    }
+
+    private func blink() {
+        withAnimation(.easeInOut(duration: 0.08)) { blinkAmount = 1 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+            withAnimation(.easeOut(duration: 0.12)) { blinkAmount = 0 }
+        }
+    }
+
+    private func wiggle() {
+        let targetAngle = Double.random(in: -4.5 ... 4.5)
+        let targetOffset = CGFloat.random(in: -0.5 ... 0.5)
+        withAnimation(.interpolatingSpring(stiffness: 220, damping: 18)) {
+            wiggleAngle = targetAngle
+            wiggleOffset = targetOffset
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
+            withAnimation(.interpolatingSpring(stiffness: 220, damping: 18)) {
+                wiggleAngle = 0
+                wiggleOffset = 0
+            }
+        }
     }
 }
 
-struct LobsterGlyph: View {
+struct CritterGlyph: View {
+    var blinkAmount: CGFloat
+
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let midX = w / 2
-            let midY = h / 2
 
-            ZStack {
-                // Body
-                Capsule()
-                    .frame(width: w * 0.4, height: h * 0.55)
-                    .offset(y: h * 0.05)
-                // Claws
-                Capsule(style: .continuous)
-                    .frame(width: w * 0.22, height: h * 0.28)
-                    .rotationEffect(.degrees(-25))
-                    .offset(x: -w * 0.32, y: -h * 0.05)
-                Capsule(style: .continuous)
-                    .frame(width: w * 0.22, height: h * 0.28)
-                    .rotationEffect(.degrees(25))
-                    .offset(x: w * 0.32, y: -h * 0.05)
-                // Antennae
-                Path { p in
-                    p.move(to: CGPoint(x: midX - w * 0.08, y: midY - h * 0.35))
-                    p.addQuadCurve(to: CGPoint(x: midX - w * 0.18, y: midY - h * 0.6), control: CGPoint(x: midX - w * 0.2, y: midY - h * 0.45))
-                    p.move(to: CGPoint(x: midX + w * 0.08, y: midY - h * 0.35))
-                    p.addQuadCurve(to: CGPoint(x: midX + w * 0.18, y: midY - h * 0.6), control: CGPoint(x: midX + w * 0.2, y: midY - h * 0.45))
+            let bodyWidth = w * 0.78
+            let bodyHeight = h * 0.58
+            let bodyRect = CGRect(x: (w - bodyWidth) / 2, y: h * 0.18, width: bodyWidth, height: bodyHeight)
+
+            let armWidth = w * 0.2
+            let armHeight = bodyHeight * 0.6
+            let armCorner = armWidth * 0.24
+
+            let legWidth = w * 0.11
+            let legHeight = h * 0.26
+            let legSpacing = w * 0.08
+            let legStartX = bodyRect.minX + w * 0.05
+            let legY = bodyRect.maxY - legHeight * 0.2
+
+            let eyeOpen = max(0.02, 1 - blinkAmount)
+            let eyeWidth = bodyWidth * 0.18
+            let eyeHeight = bodyHeight * 0.22 * eyeOpen
+            let eyeY = bodyRect.midY - bodyHeight * 0.08
+            let eyeOffset = bodyWidth * 0.2
+
+            Path { path in
+                path.addRoundedRect(in: bodyRect, cornerSize: CGSize(width: w * 0.08, height: w * 0.08))
+
+                path.addRoundedRect(
+                    in: CGRect(x: bodyRect.minX - armWidth * 0.65, y: bodyRect.midY - armHeight / 2, width: armWidth, height: armHeight),
+                    cornerSize: CGSize(width: armCorner, height: armCorner)
+                )
+
+                path.addRoundedRect(
+                    in: CGRect(x: bodyRect.maxX - armWidth * 0.35, y: bodyRect.midY - armHeight / 2, width: armWidth, height: armHeight),
+                    cornerSize: CGSize(width: armCorner, height: armCorner)
+                )
+
+                for i in 0 ..< 4 {
+                    let x = legStartX + CGFloat(i) * (legWidth + legSpacing)
+                    path.addRoundedRect(
+                        in: CGRect(x: x, y: legY, width: legWidth, height: legHeight),
+                        cornerSize: CGSize(width: legWidth * 0.35, height: legWidth * 0.35)
+                    )
                 }
-                .stroke(lineWidth: 1.2)
-                // Tail segments
-                VStack(spacing: h * 0.04) {
-                    Capsule().frame(width: w * 0.26, height: h * 0.12)
-                    Capsule().frame(width: w * 0.22, height: h * 0.11)
-                    Capsule().frame(width: w * 0.18, height: h * 0.1)
-                }
-                .offset(y: h * 0.18)
+
+                let leftEyeX = bodyRect.midX - eyeOffset
+                path.move(to: CGPoint(x: leftEyeX - eyeWidth / 2, y: eyeY - eyeHeight))
+                path.addLine(to: CGPoint(x: leftEyeX + eyeWidth / 2, y: eyeY))
+                path.addLine(to: CGPoint(x: leftEyeX - eyeWidth / 2, y: eyeY + eyeHeight))
+                path.closeSubpath()
+
+                let rightEyeX = bodyRect.midX + eyeOffset
+                path.move(to: CGPoint(x: rightEyeX + eyeWidth / 2, y: eyeY - eyeHeight))
+                path.addLine(to: CGPoint(x: rightEyeX - eyeWidth / 2, y: eyeY))
+                path.addLine(to: CGPoint(x: rightEyeX + eyeWidth / 2, y: eyeY + eyeHeight))
+                path.closeSubpath()
             }
+            .fill(style: FillStyle(eoFill: true, antialiased: true))
         }
     }
 }
