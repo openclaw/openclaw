@@ -2,6 +2,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 import { agentCommand } from "../commands/agent.js";
 import { sendCommand } from "../commands/send.js";
+import { sessionsCommand } from "../commands/sessions.js";
 import { statusCommand } from "../commands/status.js";
 import { loadConfig } from "../config/config.js";
 import { danger, info, setVerbose } from "../globals.js";
@@ -488,6 +489,42 @@ Examples:
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
       }
+    });
+
+  program
+    .command("sessions")
+    .description("List stored conversation sessions")
+    .option("--json", "Output as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .option(
+      "--store <path>",
+      "Path to session store (default: resolved from config)",
+    )
+    .option(
+      "--active <minutes>",
+      "Only show sessions updated within the past N minutes",
+    )
+    .addHelpText(
+      "after",
+      `
+Examples:
+  clawdis sessions                 # list all sessions
+  clawdis sessions --active 120    # only last 2 hours
+  clawdis sessions --json          # machine-readable output
+  clawdis sessions --store ./tmp/sessions.json
+
+Shows token usage per session when the agent reports it; set inbound.reply.agent.contextTokens to see % of your model window.`,
+    )
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      await sessionsCommand(
+        {
+          json: Boolean(opts.json),
+          store: opts.store as string | undefined,
+          active: opts.active as string | undefined,
+        },
+        defaultRuntime,
+      );
     });
 
   program

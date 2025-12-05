@@ -148,6 +148,11 @@ export async function ensureFunnel(
     runtime.error(
       "Failed to enable Tailscale Funnel. Is it allowed on your tailnet?",
     );
+    runtime.error(
+      info(
+        "Tip: Funnel is optional for CLAWDIS. You can keep running the web relay without it: `pnpm clawdis relay`",
+      ),
+    );
     if (isVerbose()) {
       if (stdout.trim()) runtime.error(chalk.gray(`stdout: ${stdout.trim()}`));
       if (stderr.trim()) runtime.error(chalk.gray(`stderr: ${stderr.trim()}`));

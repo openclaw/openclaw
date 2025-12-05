@@ -43,7 +43,9 @@ CLAWDIS uses a JSON configuration file at `~/.clawdis/clawdis.json`.
       "mode": "command",
       "agent": {
         "kind": "pi",
-        "format": "json"
+        "format": "json",
+        "model": "claude-opus-4-5",
+        "contextTokens": 200000
       },
       "cwd": "/Users/you/clawd",
       "command": [
@@ -99,6 +101,11 @@ Array of E.164 phone numbers allowed to trigger the AI. Use `["*"]` to allow eve
 | `timeoutSeconds` | number | Max time for agent to respond |
 | `heartbeatMinutes` | number | Interval for heartbeat pings |
 | `heartbeatBody` | string | Message sent on heartbeat |
+| `agent.kind` | string | Only `"pi"` is supported |
+| `agent.model` | string | Optional model name to annotate sessions (defaults to `claude-opus-4-5`) |
+| `agent.contextTokens` | number | Optional context window size; used for session token % reporting (defaults to ~200,000 for Opus 4.5) |
+
+> Quick start: If you omit `inbound.reply`, CLAWDIS falls back to the bundled `@mariozechner/pi-coding-agent` with `--mode rpc`, per-sender sessions, and a 200k-token window. No extra install or config needed to get a reply.
 
 ### Template Variables
 

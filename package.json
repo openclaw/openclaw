@@ -35,6 +35,7 @@
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
     "@whiskeysockets/baileys": "7.0.0-rc.9",
+    "@mariozechner/pi-coding-agent": "^0.12.4",
     "body-parser": "^2.2.1",
     "chalk": "^5.6.2",
     "commander": "^14.0.2",

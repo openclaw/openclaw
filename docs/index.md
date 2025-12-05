@@ -62,6 +62,7 @@ clawdis status
 - [Direct Agent CLI](./agent-send.md) — Use `warelay agent` without sending WhatsApp messages
 - [Group Chats](./groups.md) — Mention patterns and filtering
 - [Media Handling](./media.md) — Images, voice, documents
+- [Session Management](./session.md) — How conversations are keyed and reset
 - [Security](./security.md) — Keeping your lobster safe
 - [Troubleshooting](./troubleshooting.md) — When the CLAWDIS misbehaves
 

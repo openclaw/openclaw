@@ -1,6 +1,7 @@
 # Agent Integration 🤖
 
 CLAWDIS now ships with a single coding agent: Pi (the Tau CLI). Legacy Claude/Codex/Gemini/Opencode paths have been removed.
+Pi is bundled as a dependency of `clawdis`, so a fresh `pnpm install` gives you the `pi`/`tau` binaries automatically.
 
 ## Pi / Tau
 
@@ -10,10 +11,11 @@ The recommended (and only) agent for CLAWDIS. Built by Mario Zechner, forked wit
 {
   "reply": {
     "mode": "command",
-    "agent": {
-      "kind": "pi",
-      "format": "json"
-    },
+  "agent": {
+    "kind": "pi",
+    "format": "json",
+    "model": "claude-opus-4-5" // default if omitted
+  },
     "command": [
       "node",
       "/path/to/pi-mono/packages/coding-agent/dist/cli.js",
@@ -43,6 +45,8 @@ RPC mode is enforced by CLAWDIS (we rewrite `--mode` to `rpc` for Pi invocations
 - 💻 Real-time tool execution display
 - 📊 Token usage tracking
 - 🔄 Streaming responses
+
+If the agent does not report a model, CLAWDIS assumes `claude-opus-4-5` with ~200k context tokens (pi-ai defaults) for usage summaries.
 
 ## Session Management
 

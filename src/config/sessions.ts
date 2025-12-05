@@ -15,6 +15,11 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  model?: string;
+  contextTokens?: number;
 };
 
 export const SESSION_STORE_DEFAULT = path.join(

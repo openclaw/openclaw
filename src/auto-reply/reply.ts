@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import { lookupContextTokens } from "../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
+import { resolveBundledPiBinary } from "../agents/pi-path.js";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
@@ -121,6 +124,28 @@ function stripMentions(
   return result.replace(/\s+/g, " ").trim();
 }
 
+function makeDefaultPiReply() {
+  const piBin = resolveBundledPiBinary() ?? "pi";
+  const defaultContext =
+    lookupContextTokens(DEFAULT_MODEL) ?? DEFAULT_CONTEXT_TOKENS;
+  return {
+    mode: "command" as const,
+    command: [piBin, "--mode", "rpc", "{{BodyStripped}}"],
+    agent: {
+      kind: "pi" as const,
+      model: DEFAULT_MODEL,
+      contextTokens: defaultContext,
+      format: "json" as const,
+    },
+    session: {
+      scope: "per-sender" as const,
+      resetTriggers: [DEFAULT_RESET_TRIGGER],
+      idleMinutes: DEFAULT_IDLE_MINUTES,
+    },
+    timeoutSeconds: 600,
+  };
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -129,7 +154,7 @@ export async function getReplyFromConfig(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   // Choose reply from config: static text or external command stdout.
   const cfg = configOverride ?? loadConfig();
-  const reply = cfg.inbound?.reply;
+  const reply = cfg.inbound?.reply ?? makeDefaultPiReply();
   const timeoutSeconds = Math.max(reply?.timeoutSeconds ?? 600, 1);
   const timeoutMs = timeoutSeconds * 1000;
   let started = false;
@@ -716,6 +741,49 @@ export async function getReplyFromConfig(
             logVerbose(
               `Session id updated from agent meta: ${returnedSessionId} (store: ${storePath})`,
             );
+          }
+        }
+
+        const usage = meta.agentMeta?.usage;
+        const model =
+          meta.agentMeta?.model ||
+          reply?.agent?.model ||
+          sessionEntry?.model ||
+          DEFAULT_MODEL;
+        const contextTokens =
+          reply?.agent?.contextTokens ??
+          lookupContextTokens(model) ??
+          sessionEntry?.contextTokens ??
+          DEFAULT_CONTEXT_TOKENS;
+
+        if (usage) {
+          const entry = sessionEntry ?? sessionStore[sessionKey];
+          if (entry) {
+            const input = usage.input ?? 0;
+            const output = usage.output ?? 0;
+            const total = usage.total ?? input + output;
+            sessionEntry = {
+              ...entry,
+              inputTokens: (entry.inputTokens ?? 0) + input,
+              outputTokens: (entry.outputTokens ?? 0) + output,
+              totalTokens: (entry.totalTokens ?? 0) + total,
+              model,
+              contextTokens: contextTokens ?? entry.contextTokens,
+              updatedAt: Date.now(),
+            };
+            sessionStore[sessionKey] = sessionEntry;
+            await saveSessionStore(storePath, sessionStore);
+          }
+        } else if (model || contextTokens) {
+          const entry = sessionEntry ?? sessionStore[sessionKey];
+          if (entry) {
+            sessionEntry = {
+              ...entry,
+              model: model ?? entry.model,
+              contextTokens: contextTokens ?? entry.contextTokens,
+            };
+            sessionStore[sessionKey] = sessionEntry;
+            await saveSessionStore(storePath, sessionStore);
           }
         }
       }

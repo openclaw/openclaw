@@ -82,6 +82,8 @@ export type WarelayConfig = {
         kind: AgentKind;
         format?: "text" | "json";
         identityPrefix?: string;
+        model?: string;
+        contextTokens?: number;
       };
     };
   };
@@ -141,6 +143,8 @@ const ReplySchema = z
         kind: z.literal("pi"),
         format: z.union([z.literal("text"), z.literal("json")]).optional(),
         identityPrefix: z.string().optional(),
+        model: z.string().optional(),
+        contextTokens: z.number().int().positive().optional(),
       })
       .optional(),
   })

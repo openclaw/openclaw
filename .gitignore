@@ -4,3 +4,5 @@ dist
 pnpm-lock.yaml
 coverage
 .pnpm-store
+.DS_Store
+src/.DS_Store
