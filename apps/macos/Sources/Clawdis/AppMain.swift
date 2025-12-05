@@ -3,6 +3,7 @@ import ApplicationServices
 import AsyncXPCConnection
 import ClawdisIPC
 import Foundation
+import class Foundation.Bundle
 import OSLog
 import CoreGraphics
 @preconcurrency import ScreenCaptureKit
@@ -380,15 +381,51 @@ private struct LobsterStatusLabel: View {
     var isPaused: Bool
 
     var body: some View {
-        let imageView: Image = {
-            if let img = NSImage(named: "LobsterTemplate") {
-                img.isTemplate = true
-                return Image(nsImage: img).renderingMode(.template)
-            }
-            return Image(systemName: "antenna.radiowaves.left.and.right")
-        }()
+        LobsterGlyph()
+            .frame(width: 16, height: 16)
+            .foregroundStyle(isPaused ? .secondary : .primary)
+    }
+}
 
-        return imageView.foregroundStyle(isPaused ? .secondary : .primary)
+struct LobsterGlyph: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let midX = w / 2
+            let midY = h / 2
+
+            ZStack {
+                // Body
+                Capsule()
+                    .frame(width: w * 0.4, height: h * 0.55)
+                    .offset(y: h * 0.05)
+                // Claws
+                Capsule(style: .continuous)
+                    .frame(width: w * 0.22, height: h * 0.28)
+                    .rotationEffect(.degrees(-25))
+                    .offset(x: -w * 0.32, y: -h * 0.05)
+                Capsule(style: .continuous)
+                    .frame(width: w * 0.22, height: h * 0.28)
+                    .rotationEffect(.degrees(25))
+                    .offset(x: w * 0.32, y: -h * 0.05)
+                // Antennae
+                Path { p in
+                    p.move(to: CGPoint(x: midX - w * 0.08, y: midY - h * 0.35))
+                    p.addQuadCurve(to: CGPoint(x: midX - w * 0.18, y: midY - h * 0.6), control: CGPoint(x: midX - w * 0.2, y: midY - h * 0.45))
+                    p.move(to: CGPoint(x: midX + w * 0.08, y: midY - h * 0.35))
+                    p.addQuadCurve(to: CGPoint(x: midX + w * 0.18, y: midY - h * 0.6), control: CGPoint(x: midX + w * 0.2, y: midY - h * 0.45))
+                }
+                .stroke(lineWidth: 1.2)
+                // Tail segments
+                VStack(spacing: h * 0.04) {
+                    Capsule().frame(width: w * 0.26, height: h * 0.12)
+                    Capsule().frame(width: w * 0.22, height: h * 0.11)
+                    Capsule().frame(width: w * 0.18, height: h * 0.1)
+                }
+                .offset(y: h * 0.18)
+            }
+        }
     }
 }
 
