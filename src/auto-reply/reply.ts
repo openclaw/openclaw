@@ -436,26 +436,26 @@ export async function getReplyFromConfig(
     if (hasThinkDirective) {
       if (!inlineThink) {
         parts.push(
-          `Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
+          `⚙️ Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
         );
       } else {
         parts.push(
           inlineThink === "off"
-            ? "Thinking disabled."
-            : `Thinking level set to ${inlineThink}.`,
+            ? "⚙️ Thinking disabled."
+            : `⚙️ Thinking level set to ${inlineThink}.`,
         );
       }
     }
     if (hasVerboseDirective) {
       if (!inlineVerbose) {
         parts.push(
-          `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
+          `⚙️ Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
         );
       } else {
         parts.push(
           inlineVerbose === "off"
-            ? "Verbose logging disabled."
-            : "Verbose logging enabled.",
+            ? "⚙️ Verbose logging disabled."
+            : "⚙️ Verbose logging enabled.",
         );
       }
     }
@@ -498,7 +498,7 @@ export async function getReplyFromConfig(
     triggerWarelayRestart();
     cleanupTyping();
     return {
-      text: "Restarting clawdis via launchctl; give me a few seconds to come back online.",
+      text: "⚙️ Restarting clawdis via launchctl; give me a few seconds to come back online.",
     };
   }
 
@@ -515,7 +515,7 @@ export async function getReplyFromConfig(
       ABORT_MEMORY.set(abortKey, true);
     }
     cleanupTyping();
-    return { text: "Agent was aborted." };
+    return { text: "⚙️ Agent was aborted." };
   }
 
   await startTypingLoop();
