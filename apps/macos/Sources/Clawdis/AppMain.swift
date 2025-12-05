@@ -374,8 +374,6 @@ struct ClawdisApp: App {
         Button("Test Notification") {
             Task { _ = await NotificationManager().send(title: "Clawdis", body: "Test notification", sound: nil) }
         }
-        Divider()
-        Button("Permissions…") { PermissionsSheetController.shared.show(state: state) }
         Button("Quit") { NSApplication.shared.terminate(nil) }
     }
 }
@@ -391,11 +389,11 @@ private struct CritterStatusLabel: View {
     private let ticker = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        CritterGlyph(blinkAmount: blinkAmount)
-            .frame(width: 16, height: 16)
+        Image(nsImage: CritterIconRenderer.makeIcon(blink: blinkAmount))
+            .renderingMode(.template)
+            .frame(width: 18, height: 16)
             .rotationEffect(.degrees(wiggleAngle), anchor: .center)
             .offset(x: wiggleOffset)
-            .foregroundStyle(isPaused ? .secondary : .primary)
             .onReceive(ticker) { now in
                 guard !isPaused else {
                     resetMotion()
@@ -451,80 +449,83 @@ private struct CritterStatusLabel: View {
     }
 }
 
-struct CritterGlyph: View {
-    var blinkAmount: CGFloat
+enum CritterIconRenderer {
+    private static let size = NSSize(width: 18, height: 16)
 
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width
-            let h = geo.size.height
+    static func makeIcon(blink: CGFloat) -> NSImage {
+        let image = NSImage(size: size)
+        image.lockFocus()
+        defer { image.unlockFocus() }
 
-            let bodyWidth = w * 0.8
-            let bodyHeight = h * 0.56
-            let bodyCorner = w * 0.08
-            let bodyY = h * 0.18
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return image }
 
-            let earWidth = w * 0.22
-            let earHeight = bodyHeight * 0.7
-            let earCorner = earWidth * 0.22
+        let w = size.width
+        let h = size.height
 
-            let legWidth = w * 0.12
-            let legHeight = h * 0.28
-            let legSpacing = w * 0.08
-            let legStartX = (w - (4 * legWidth + 3 * legSpacing)) / 2
-            let legY = bodyY + bodyHeight - legHeight * 0.18
+        let bodyW = w * 0.78
+        let bodyH = h * 0.56
+        let bodyX = (w - bodyW) / 2
+        let bodyY = h * 0.22
+        let bodyCorner = w * 0.09
 
-            let eyeOpen = max(0.08, 1 - blinkAmount)
-            let eyeWidth = bodyWidth * 0.18
-            let eyeHeight = bodyHeight * 0.24 * eyeOpen
-            let eyeY = bodyY + bodyHeight * 0.45
-            let eyeOffset = bodyWidth * 0.22
+        let earW = w * 0.22
+        let earH = bodyH * 0.74
+        let earCorner = earW * 0.24
 
-            ZStack {
-                RoundedRectangle(cornerRadius: bodyCorner, style: .continuous)
-                    .frame(width: bodyWidth, height: bodyHeight)
-                    .offset(y: bodyY)
+        let legW = w * 0.12
+        let legH = h * 0.24
+        let legSpacing = w * 0.08
+        let legsWidth = 4 * legW + 3 * legSpacing
+        let legStartX = (w - legsWidth) / 2
+        let legY = bodyY + bodyH - legH * 0.05
 
-                RoundedRectangle(cornerRadius: earCorner, style: .continuous)
-                    .frame(width: earWidth, height: earHeight)
-                    .offset(x: -bodyWidth * 0.5 + earWidth * 0.35, y: bodyY + bodyHeight * 0.02)
+        let eyeOpen = max(0.05, 1 - blink)
+        let eyeW = bodyW * 0.2
+        let eyeH = bodyH * 0.26 * eyeOpen
+        let eyeY = bodyY + bodyH * 0.55
+        let eyeOffset = bodyW * 0.24
 
-                RoundedRectangle(cornerRadius: earCorner, style: .continuous)
-                    .frame(width: earWidth, height: earHeight)
-                    .offset(x: bodyWidth * 0.5 - earWidth * 0.35, y: bodyY + bodyHeight * 0.02)
+        ctx.setFillColor(NSColor.labelColor.cgColor)
 
-                Path { path in
-                    for i in 0 ..< 4 {
-                        let x = legStartX + CGFloat(i) * (legWidth + legSpacing)
-                        path.addRoundedRect(
-                            in: CGRect(x: x, y: legY, width: legWidth, height: legHeight),
-                            cornerSize: CGSize(width: legWidth * 0.36, height: legWidth * 0.36)
-                        )
-                    }
-                }
-                .fill()
-
-                ZStack {
-                    Path { path in
-                        let centerX = w / 2 - eyeOffset
-                        path.move(to: CGPoint(x: centerX - eyeWidth / 2, y: eyeY - eyeHeight))
-                        path.addLine(to: CGPoint(x: centerX + eyeWidth / 2, y: eyeY))
-                        path.addLine(to: CGPoint(x: centerX - eyeWidth / 2, y: eyeY + eyeHeight))
-                        path.closeSubpath()
-                    }
-                    Path { path in
-                        let centerX = w / 2 + eyeOffset
-                        path.move(to: CGPoint(x: centerX + eyeWidth / 2, y: eyeY - eyeHeight))
-                        path.addLine(to: CGPoint(x: centerX - eyeWidth / 2, y: eyeY))
-                        path.addLine(to: CGPoint(x: centerX + eyeWidth / 2, y: eyeY + eyeHeight))
-                        path.closeSubpath()
-                    }
-                }
-                .compositingGroup()
-                .blendMode(.destinationOut)
-            }
-            .compositingGroup()
+        // Body
+        ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH), cornerWidth: bodyCorner, cornerHeight: bodyCorner, transform: nil))
+        // Ears
+        ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX - earW * 0.55, y: bodyY + bodyH * 0.08, width: earW, height: earH), cornerWidth: earCorner, cornerHeight: earCorner, transform: nil))
+        ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX + bodyW - earW * 0.45, y: bodyY + bodyH * 0.08, width: earW, height: earH), cornerWidth: earCorner, cornerHeight: earCorner, transform: nil))
+        // Legs
+        for i in 0 ..< 4 {
+            let x = legStartX + CGFloat(i) * (legW + legSpacing)
+            let rect = CGRect(x: x, y: legY, width: legW, height: legH)
+            ctx.addPath(CGPath(roundedRect: rect, cornerWidth: legW * 0.34, cornerHeight: legW * 0.34, transform: nil))
         }
+        ctx.fillPath()
+
+        // Eyes punched out
+        ctx.saveGState()
+        ctx.setBlendMode(.clear)
+
+        let leftCenter = CGPoint(x: w / 2 - eyeOffset, y: eyeY)
+        let rightCenter = CGPoint(x: w / 2 + eyeOffset, y: eyeY)
+
+        let left = CGMutablePath()
+        left.move(to: CGPoint(x: leftCenter.x - eyeW / 2, y: leftCenter.y - eyeH))
+        left.addLine(to: CGPoint(x: leftCenter.x + eyeW / 2, y: leftCenter.y))
+        left.addLine(to: CGPoint(x: leftCenter.x - eyeW / 2, y: leftCenter.y + eyeH))
+        left.closeSubpath()
+
+        let right = CGMutablePath()
+        right.move(to: CGPoint(x: rightCenter.x + eyeW / 2, y: rightCenter.y - eyeH))
+        right.addLine(to: CGPoint(x: rightCenter.x - eyeW / 2, y: rightCenter.y))
+        right.addLine(to: CGPoint(x: rightCenter.x + eyeW / 2, y: rightCenter.y + eyeH))
+        right.closeSubpath()
+
+        ctx.addPath(left)
+        ctx.addPath(right)
+        ctx.fillPath()
+        ctx.restoreGState()
+
+        image.isTemplate = true
+        return image
     }
 }
 
