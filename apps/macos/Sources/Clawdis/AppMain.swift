@@ -365,7 +365,7 @@ struct ClawdisApp: App {
 
         Settings {
             SettingsRootView(state: state)
-                .frame(minWidth: 520, minHeight: 460)
+                .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         }
     }
 }
@@ -660,6 +660,8 @@ struct SettingsRootView: View {
 
 enum SettingsTab: CaseIterable {
     case general, permissions, debug, about
+    static let windowWidth: CGFloat = 460
+    static let windowHeight: CGFloat = 500
     var title: String {
         switch self {
         case .general: return "General"
