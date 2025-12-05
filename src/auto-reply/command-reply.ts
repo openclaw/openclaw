@@ -382,8 +382,24 @@ export async function runCommandReply(
     return typeof arg === "string" ? arg.replace(bodyMarker, "") : arg;
   });
 
+  // For pi/tau agents: drive the agent via RPC stdin so auto-compaction and streaming run server-side.
+  let rpcInput: string | undefined;
+  let rpcArgv = finalArgv;
+  if (agentKind === "pi") {
+    rpcInput = JSON.stringify({ type: "prompt", message: promptArg }) + "\n";
+    const bodyIdx =
+      promptIndex >= 0 ? promptIndex : Math.max(finalArgv.length - 1, 0);
+    rpcArgv = finalArgv.filter((_, idx) => idx !== bodyIdx);
+    const modeIdx = rpcArgv.findIndex((v) => v === "--mode");
+    if (modeIdx >= 0 && rpcArgv[modeIdx + 1]) {
+      rpcArgv[modeIdx + 1] = "rpc";
+    } else {
+      rpcArgv.push("--mode", "rpc");
+    }
+  }
+
   logVerbose(
-    `Running command auto-reply: ${finalArgv.join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
+    `Running command auto-reply: ${(agentKind === "pi" ? rpcArgv : finalArgv).join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
   );
   logger.info(
     {
@@ -391,7 +407,7 @@ export async function runCommandReply(
       sessionId: templatingCtx.SessionId,
       newSession: isNewSession,
       cwd: reply.cwd,
-      command: finalArgv.slice(0, -1), // omit body to reduce noise
+      command: (agentKind === "pi" ? rpcArgv : finalArgv).slice(0, -1), // omit body to reduce noise
     },
     "command auto-reply start",
   );
@@ -568,9 +584,10 @@ export async function runCommandReply(
         flushPendingTool();
         return rpcResult;
       }
-      return await commandRunner(finalArgv, {
+      return await commandRunner(agentKind === "pi" ? rpcArgv : finalArgv, {
         timeoutMs,
         cwd: reply.cwd,
+        input: rpcInput,
       });
     };
 
