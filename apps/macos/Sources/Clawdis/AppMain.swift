@@ -367,6 +367,9 @@ struct ClawdisApp: App {
         Toggle(isOn: $state.isPaused) {
             Text(state.isPaused ? "Clawdis Paused" : "Pause Clawdis")
         }
+        Button("Settings…") {
+            NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
+        }
         Divider()
         Button("Test Notification") {
             Task { _ = await NotificationManager().send(title: "Clawdis", body: "Test notification", sound: nil) }

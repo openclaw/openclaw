@@ -53,6 +53,9 @@ if [ -f "$CLI_BIN" ]; then
   chmod +x "$APP_ROOT/Contents/MacOS/ClawdisCLI"
 fi
 
+echo "⏹  Stopping any running Clawdis"
+killall -q Clawdis 2>/dev/null || true
+
 echo "✅ Bundle ready at $APP_ROOT"
 
 echo "🚀 Launching app"
