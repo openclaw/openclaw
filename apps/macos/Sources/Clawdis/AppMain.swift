@@ -367,6 +367,8 @@ struct ClawdisApp: App {
             SettingsRootView(state: state)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         }
+        .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+        .windowResizability(.contentSize)
     }
 }
 
