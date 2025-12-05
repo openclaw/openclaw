@@ -6,3 +6,6 @@ coverage
 .pnpm-store
 .DS_Store
 src/.DS_Store
+apps/macos/.build/
+apps/macos/Assets.xcassets/LobsterTemplate.imageset/lobster-template.pdf
+bin/clawdis-mac
