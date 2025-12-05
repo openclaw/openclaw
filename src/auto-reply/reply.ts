@@ -200,13 +200,19 @@ export async function getReplyFromConfig(
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
 
+  const triggerBodyNormalized = stripStructuralPrefixes(
+    ctx.Body ?? "",
+  )
+    .trim()
+    .toLowerCase();
+
   if (sessionCfg) {
     const rawBody = ctx.Body ?? "";
     const trimmedBody = rawBody.trim();
     // Timestamp/message prefixes (e.g. "[Dec 4 17:35] ") are added by the
     // web inbox before we get here. They prevented reset triggers like "/new"
     // from matching, so strip structural wrappers when checking for resets.
-    const strippedForReset = stripStructuralPrefixes(rawBody).trim();
+    const strippedForReset = triggerBodyNormalized;
     for (const trigger of resetTriggers) {
       if (!trigger) continue;
       if (trimmedBody === trigger || strippedForReset === trigger) {
@@ -464,9 +470,7 @@ export async function getReplyFromConfig(
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const isSamePhone = from && to && from === to;
   const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
-  const rawBodyNormalized = (sessionCtx.BodyStripped ?? sessionCtx.Body ?? "")
-    .trim()
-    .toLowerCase();
+  const rawBodyNormalized = triggerBodyNormalized;
 
   if (!sessionEntry && abortKey) {
     abortedLastRun = ABORT_MEMORY.get(abortKey) ?? false;
@@ -499,8 +503,7 @@ export async function getReplyFromConfig(
   }
 
   const abortRequested =
-    reply?.mode === "command" &&
-    isAbortTrigger((sessionCtx.BodyStripped ?? sessionCtx.Body ?? "").trim());
+    reply?.mode === "command" && isAbortTrigger(rawBodyNormalized);
 
   if (abortRequested) {
     if (sessionEntry && sessionStore && sessionKey) {
