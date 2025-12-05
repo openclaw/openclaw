@@ -235,18 +235,58 @@ export async function runCommandReply(
   const agentCfg = reply.agent ?? { kind: "pi" };
   const agentKind: AgentKind = agentCfg.kind ?? "pi";
   const agent = getAgentSpec(agentKind);
-  let argv = reply.command.map((part) => applyTemplate(part, templatingCtx));
-  const isAgentInvocation = agent.isInvocation(argv);
+  const rawCommand = reply.command;
+  const hasBodyTemplate = rawCommand.some((part) =>
+    /\{\{Body(Stripped)?\}\}/.test(part),
+  );
+  let argv = rawCommand.map((part) => applyTemplate(part, templatingCtx));
+  // Pi is the only supported agent; treat commands as Pi when the binary path looks like pi/tau or the path contains pi.
+  const isAgentInvocation =
+    agentKind === "pi" &&
+    (agent.isInvocation(argv) ||
+      argv.some((part) => {
+        if (typeof part !== "string") return false;
+        const lower = part.toLowerCase();
+        const base = path.basename(part).toLowerCase();
+        return (
+          base === "pi" ||
+          base === "tau" ||
+          lower.includes("pi-coding-agent") ||
+          lower.includes("/pi/")
+        );
+      }));
   const templatePrefix =
     reply.template && (!sendSystemOnce || isFirstTurnInSession || !systemSent)
       ? applyTemplate(reply.template, templatingCtx)
       : "";
+  let prefixOffset = 0;
   if (templatePrefix && argv.length > 0) {
     argv = [argv[0], templatePrefix, ...argv.slice(1)];
+    prefixOffset = 1;
   }
 
-  // Default body index is last arg
-  let bodyIndex = Math.max(argv.length - 1, 0);
+  // Extract (or synthesize) the prompt body so RPC mode works even when the
+  // command array omits {{Body}} (common for tau --mode rpc configs).
+  let bodyArg: string | undefined;
+  if (hasBodyTemplate) {
+    const idx = rawCommand.findIndex((part) =>
+      /\{\{Body(Stripped)?\}\}/.test(part),
+    );
+    const templatedIdx = idx >= 0 ? idx + prefixOffset : -1;
+    if (templatedIdx >= 0 && templatedIdx < argv.length) {
+      bodyArg = argv.splice(templatedIdx, 1)[0];
+    }
+  }
+  if (!bodyArg) {
+    bodyArg = templatingCtx.Body ?? templatingCtx.BodyStripped ?? "";
+  }
+
+  // Default body index is last arg after we append it below.
+  let bodyIndex = Math.max(argv.length, 0);
+
+  const bodyMarker = `__clawdis_body__${Math.random().toString(36).slice(2)}`;
+  let sessionArgList: string[] = [];
+  let insertSessionBeforeBody = true;
 
   // Session args prepared (templated) and injected generically
   if (reply.session) {
@@ -258,7 +298,7 @@ export async function runCommandReply(
     };
     const defaultNew = defaultSessionArgs.newArgs;
     const defaultResume = defaultSessionArgs.resumeArgs;
-    const sessionArgList = (
+    sessionArgList = (
       isNewSession
         ? (reply.session.sessionArgNew ?? defaultNew)
         : (reply.session.sessionArgResume ?? defaultResume)
@@ -288,17 +328,18 @@ export async function runCommandReply(
       sessionArgList.push("--continue");
     }
 
-    if (sessionArgList.length) {
-      const insertBeforeBody = reply.session.sessionArgBeforeBody ?? true;
-      const insertAt =
-        insertBeforeBody && argv.length > 1 ? argv.length - 1 : argv.length;
-      argv = [
-        ...argv.slice(0, insertAt),
-        ...sessionArgList,
-        ...argv.slice(insertAt),
-      ];
-      bodyIndex = Math.max(argv.length - 1, 0);
-    }
+    insertSessionBeforeBody = reply.session.sessionArgBeforeBody ?? true;
+  }
+
+  if (insertSessionBeforeBody && sessionArgList.length) {
+    argv = [...argv, ...sessionArgList];
+  }
+
+  argv = [...argv, `${bodyMarker}${bodyArg}`];
+  bodyIndex = argv.length - 1;
+
+  if (!insertSessionBeforeBody && sessionArgList.length) {
+    argv = [...argv, ...sessionArgList];
   }
 
   const shouldApplyAgent = isAgentInvocation;
@@ -315,7 +356,7 @@ export async function runCommandReply(
       bodyIndex += 2;
     }
   }
-  const finalArgv = shouldApplyAgent
+  const builtArgv = shouldApplyAgent
     ? agent.buildArgs({
         argv,
         bodyIndex,
@@ -327,6 +368,19 @@ export async function runCommandReply(
         format: agentCfg.format,
       })
     : argv;
+
+  const promptIndex = builtArgv.findIndex(
+    (arg) => typeof arg === "string" && arg.includes(bodyMarker),
+  );
+  const promptArg: string =
+    promptIndex >= 0
+      ? (builtArgv[promptIndex] as string).replace(bodyMarker, "")
+      : ((builtArgv[builtArgv.length - 1] as string | undefined) ?? "");
+
+  const finalArgv = builtArgv.map((arg, idx) => {
+    if (idx === promptIndex && typeof arg === "string") return promptArg;
+    return typeof arg === "string" ? arg.replace(bodyMarker, "") : arg;
+  });
 
   logVerbose(
     `Running command auto-reply: ${finalArgv.join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
@@ -391,12 +445,13 @@ export async function runCommandReply(
     const run = async () => {
       // Prefer long-lived tau RPC for pi agent to avoid cold starts.
       if (agentKind === "pi" && shouldApplyAgent) {
-        const promptIndex = finalArgv.length - 1;
-        const body = finalArgv[promptIndex] ?? "";
+        const rpcPromptIndex =
+          promptIndex >= 0 ? promptIndex : finalArgv.length - 1;
+        const body = promptArg ?? "";
         // Build rpc args without the prompt body; force --mode rpc.
         const rpcArgv = (() => {
           const copy = [...finalArgv];
-          copy.splice(promptIndex, 1);
+          copy.splice(rpcPromptIndex, 1);
           const modeIdx = copy.indexOf("--mode");
           if (modeIdx >= 0 && copy[modeIdx + 1]) {
             copy.splice(modeIdx, 2, "--mode", "rpc");

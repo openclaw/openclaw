@@ -79,6 +79,38 @@ describe("runCommandReply (pi)", () => {
     expect(call?.argv).toContain("medium");
   });
 
+  it("sends the body via RPC even when the command omits {{Body}}", async () => {
+    const rpcMock = mockPiRpc({
+      stdout:
+        '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}',
+      stderr: "",
+      code: 0,
+    });
+
+    await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "--mode", "rpc", "--session", "/tmp/demo.jsonl"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+    });
+
+    const call = rpcMock.mock.calls[0]?.[0];
+    expect(call?.prompt).toBe("hello");
+    expect(
+      (call?.argv ?? []).some((arg: string) => arg.includes("hello")),
+    ).toBe(false);
+  });
+
   it("adds session args and --continue when resuming", async () => {
     const rpcMock = mockPiRpc({
       stdout:
