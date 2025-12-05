@@ -684,7 +684,6 @@ export async function runCommandReply(
   if (stderr?.trim()) {
     logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
   }
-  const promptTooLong = rawStdout.includes("prompt is too long");
 
   const logFailure = () => {
     const truncate = (s?: string) =>
@@ -702,21 +701,6 @@ export async function runCommandReply(
         "command auto-reply failed",
       );
     };
-
-    if (promptTooLong) {
-      const text =
-        "⚠️ Session history is too long. Starting a fresh session — please resend your last message.";
-      const meta: CommandReplyMeta = {
-        durationMs: Date.now() - started,
-        queuedMs,
-        queuedAhead,
-        exitCode: code,
-        signal,
-        killed,
-        agentMeta: { extra: { promptTooLong: true } },
-      };
-      return { payloads: [{ text }], meta };
-    }
 
     const parsed = trimmed ? agent.parseOutput(trimmed) : undefined;
 

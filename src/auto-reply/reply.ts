@@ -701,26 +701,6 @@ export async function getReplyFromConfig(
       });
       const payloadArray = runResult.payloads ?? [];
       const meta = runResult.meta;
-      const promptTooLong =
-        meta.agentMeta &&
-        typeof meta.agentMeta.extra === "object" &&
-        (meta.agentMeta.extra as { promptTooLong?: boolean }).promptTooLong;
-
-      if (promptTooLong && sessionCfg && sessionStore && sessionKey) {
-        // Rotate to a new session to avoid hitting context limits again.
-        const newId = crypto.randomUUID();
-        sessionEntry = {
-          sessionId: newId,
-          updatedAt: Date.now(),
-          systemSent,
-          abortedLastRun: false,
-        };
-        sessionStore[sessionKey] = sessionEntry;
-        await saveSessionStore(storePath, sessionStore);
-        sessionId = newId;
-        isNewSession = true;
-      }
-
       let finalPayloads = payloadArray;
       if (!finalPayloads || finalPayloads.length === 0) {
         return undefined;

@@ -251,35 +251,6 @@ describe("runCommandReply (pi)", () => {
     expect(meta.killed).toBe(true);
   });
 
-  it("surfaces prompt-too-long and flags meta for session reset", async () => {
-    mockPiRpc({
-      stdout:
-        '{"type":"agent_end","message":{"role":"assistant","content":[],"errorMessage":"400 {\\"type\\":\\"error\\",\\"error\\":{\\"type\\":\\"invalid_request_error\\",\\"message\\":\\"prompt is too long: 200333 tokens > 200000 maximum\\"}}"}}',
-      stderr: "",
-      code: 0,
-    });
-
-    const { payloads, meta } = await runCommandReply({
-      reply: {
-        mode: "command",
-        command: ["pi", "{{Body}}"],
-        agent: { kind: "pi" },
-      },
-      templatingCtx: noopTemplateCtx,
-      sendSystemOnce: false,
-      isNewSession: false,
-      isFirstTurnInSession: false,
-      systemSent: false,
-      timeoutMs: 1000,
-      timeoutSeconds: 1,
-      commandRunner: vi.fn(),
-      enqueue: enqueueImmediate,
-    });
-
-    expect(payloads?.[0]?.text).toMatch(/history is too long/i);
-    expect(meta.agentMeta?.extra?.promptTooLong).toBe(true);
-  });
-
   it("collapses rpc deltas instead of emitting raw JSON spam", async () => {
     mockPiRpc({
       stdout: [
