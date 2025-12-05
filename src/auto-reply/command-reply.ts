@@ -22,6 +22,14 @@ import {
 } from "./tool-meta.js";
 import type { ReplyPayload } from "./types.js";
 
+function stripStructuralPrefixes(text: string): string {
+  return text
+    .replace(/\[[^\]]+\]\s*/g, "")
+    .replace(/^[ \t]*[A-Za-z0-9+()\-_. ]+:\s*/gm, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function stripRpcNoise(raw: string): string {
   // Drop rpc streaming scaffolding (toolcall deltas, audio buffer events) before parsing.
   const lines = raw.split(/\n+/);
@@ -771,18 +779,23 @@ export async function runCommandReply(
     }
 
     // If parser gave nothing, fall back to best-effort assistant text (prefers RPC deltas).
-    const fallbackText =
-      rpcAssistantText ??
-      extractRpcAssistantText(trimmed) ??
-      extractAssistantTextLoosely(trimmed) ??
-      trimmed;
-    const promptEcho =
-      fallbackText &&
-      (fallbackText === (templatingCtx.Body ?? "") ||
-        fallbackText === (templatingCtx.BodyStripped ?? ""));
-    const safeFallbackText = promptEcho ? undefined : fallbackText;
+  const fallbackText =
+    rpcAssistantText ??
+    extractRpcAssistantText(trimmed) ??
+    extractAssistantTextLoosely(trimmed) ??
+    trimmed;
+  const normalize = (s?: string) =>
+    stripStructuralPrefixes((s ?? "").trim()).toLowerCase();
+  const bodyNorm = normalize(templatingCtx.Body ?? templatingCtx.BodyStripped);
+  const fallbackNorm = normalize(fallbackText);
+  const promptEcho =
+    fallbackText &&
+    (fallbackText === (templatingCtx.Body ?? "") ||
+      fallbackText === (templatingCtx.BodyStripped ?? "") ||
+      (bodyNorm.length > 0 && bodyNorm === fallbackNorm));
+  const safeFallbackText = promptEcho ? undefined : fallbackText;
 
-    if (replyItems.length === 0 && safeFallbackText && !hasParsedContent) {
+  if (replyItems.length === 0 && safeFallbackText && !hasParsedContent) {
       const { text: cleanedText, mediaUrls: mediaFound } =
         splitMediaFromOutput(safeFallbackText);
       if (cleanedText || mediaFound?.length) {

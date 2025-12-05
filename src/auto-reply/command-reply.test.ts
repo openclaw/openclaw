@@ -148,6 +148,47 @@ describe("runCommandReply (pi)", () => {
     expect(payloads?.[0]?.text).not.toContain("hello");
   });
 
+  it("does not echo the prompt even when the fallback text matches after stripping prefixes", async () => {
+    const rpcMock = mockPiRpc({
+      stdout: [
+        '{"type":"agent_start"}',
+        '{"type":"turn_start"}',
+        '{"type":"message_start","message":{"role":"user","content":[{"type":"text","text":"[Dec 5 22:52] https://example.com"}]}}',
+        '{"type":"message_end","message":{"role":"user","content":[{"type":"text","text":"[Dec 5 22:52] https://example.com"}]}}',
+        // No assistant content
+        '{"type":"agent_end"}',
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+    });
+
+    const { payloads } = await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "{{Body}}"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: {
+        ...noopTemplateCtx,
+        Body: "[Dec 5 22:52] https://example.com",
+        BodyStripped: "[Dec 5 22:52] https://example.com",
+      },
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+    });
+
+    expect(rpcMock).toHaveBeenCalledOnce();
+    expect(payloads?.length).toBe(1);
+    expect(payloads?.[0]?.text).toMatch(/no output/i);
+    expect(payloads?.[0]?.text).not.toContain("example.com");
+  });
+
   it("adds session args and --continue when resuming", async () => {
     const rpcMock = mockPiRpc({
       stdout:
