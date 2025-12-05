@@ -12,6 +12,7 @@
 - Status command reports web session health + session recipients; config paths are locked to `~/.clawdis` with session metadata stored under `~/.clawdis/sessions/`.
 - Simplified send/agent/relay/heartbeat to web-only delivery; removed Twilio mocks/tests and dead code.
 - Tau RPC timeout is now inactivity-based (5m without events) and error messages show seconds only.
+- Directive triggers (`/think`, `/verbose`, `/stop` et al.) now reply immediately using normalized bodies (timestamps/group prefixes stripped) without waiting for the agent.
 
 ## 1.4.1 — 2025-12-04
 
