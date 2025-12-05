@@ -15,6 +15,7 @@ echo "🔨 Building $PRODUCT (debug)"
 swift build -c debug --product "$PRODUCT" --build-path "$BUILD_PATH"
 
 BIN="$BUILD_PATH/debug/$PRODUCT"
+CLI_BIN="$BUILD_PATH/debug/ClawdisCLI"
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
 mkdir -p "$APP_ROOT/Contents/MacOS"
@@ -45,6 +46,12 @@ PLIST
 echo "🚚 Copying binary"
 cp "$BIN" "$APP_ROOT/Contents/MacOS/Clawdis"
 chmod +x "$APP_ROOT/Contents/MacOS/Clawdis"
+
+if [ -f "$CLI_BIN" ]; then
+  echo "🔧 Copying CLI helper"
+  cp "$CLI_BIN" "$APP_ROOT/Contents/MacOS/ClawdisCLI"
+  chmod +x "$APP_ROOT/Contents/MacOS/ClawdisCLI"
+fi
 
 echo "✅ Bundle ready at $APP_ROOT"
 
