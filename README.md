@@ -39,6 +39,7 @@ Because every space lobster needs a time-and-space machine. The Doctor has a TAR
 - 📎 **Media Support** — Images, audio, documents, voice notes
 - 🎤 **Voice Transcription** — Whisper integration
 - 🔧 **Tool Streaming** — Real-time display (💻📄✍️📝)
+- 🖥️ **macOS Companion (Clawdis.app)** — Menu bar controls, on-device Voice Wake, model/config editor
 
 Only the Pi/Tau CLI is supported now; legacy Claude/Codex/Gemini paths have been removed.
 
@@ -60,6 +61,15 @@ clawdis agent --to +1234567890 --message "Ship checklist" --thinking high
 # Start the relay
 clawdis relay --verbose
 ```
+
+## macOS Companion App (Clawdis.app)
+
+- **On-device Voice Wake:** listens for wake words (e.g. “Claude”) using Apple’s on-device speech recognizer (macOS 26+). macOS still shows the standard Speech/Mic permissions prompt, but audio stays on device.
+- **Config tab:** pick the model from your local Pi model catalog (`pi-mono/packages/ai/src/models.generated.ts`), or enter a custom model ID; edit session store path and context tokens.
+- **Voice settings:** language + additional languages, mic picker, live level meter, trigger-word table, and a built-in test harness.
+- **Menu bar toggle:** enable/disable Voice Wake from the menu bar; respects Dock-icon preference.
+
+Build/run the mac app with `./scripts/restart-mac.sh` (packages, installs, and launches), or `swift build --package-path apps/macos && open dist/Clawdis.app`.
 
 ## Configuration
 
