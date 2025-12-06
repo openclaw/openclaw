@@ -383,7 +383,6 @@ struct ClawdisApp: App {
 
     private func applyStatusItemAppearance(paused: Bool) {
         statusItem?.button?.appearsDisabled = paused
-        statusItem?.button?.alphaValue = paused ? 0.45 : 1.0
     }
 }
 
@@ -433,14 +432,11 @@ private struct CritterStatusLabel: View {
         Image(nsImage: CritterIconRenderer.makeIcon(
             blink: blinkAmount,
             legWiggle: legWiggle,
-            earWiggle: earWiggle,
-            isPaused: isPaused
+            earWiggle: earWiggle
         ))
             .frame(width: 18, height: 16)
             .rotationEffect(.degrees(wiggleAngle), anchor: .center)
             .offset(x: wiggleOffset)
-            .foregroundStyle(isPaused ? .secondary : .primary)
-            .opacity(isPaused ? 0.45 : 1.0)
             .onReceive(ticker) { now in
                 guard !isPaused else {
                     resetMotion()
@@ -533,7 +529,7 @@ private struct CritterStatusLabel: View {
 enum CritterIconRenderer {
     private static let size = NSSize(width: 18, height: 16)
 
-    static func makeIcon(blink: CGFloat, legWiggle: CGFloat = 0, earWiggle: CGFloat = 0, isPaused: Bool = false) -> NSImage {
+    static func makeIcon(blink: CGFloat, legWiggle: CGFloat = 0, earWiggle: CGFloat = 0) -> NSImage {
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
@@ -567,8 +563,7 @@ enum CritterIconRenderer {
         let eyeY = bodyY + bodyH * 0.56
         let eyeOffset = bodyW * 0.24
 
-        let baseAlpha: CGFloat = isPaused ? 0.38 : 1.0
-        ctx.setFillColor(NSColor.labelColor.withAlphaComponent(baseAlpha).cgColor)
+        ctx.setFillColor(NSColor.labelColor.cgColor)
 
         // Body
         ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH), cornerWidth: bodyCorner, cornerHeight: bodyCorner, transform: nil))
@@ -622,7 +617,7 @@ enum CritterIconRenderer {
         ctx.fillPath()
         ctx.restoreGState()
 
-        image.isTemplate = false
+        image.isTemplate = true
         return image
     }
 }
@@ -834,13 +829,12 @@ struct GeneralSettings: View {
                     .frame(width: 140)
                 }
             }
-            .padding(14)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color(NSColor.controlBackgroundColor)))
 
-            GroupBox("CLI helper") {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("CLI helper")
+                    .font(.callout.weight(.semibold))
                 cliInstaller
             }
-            .groupBoxStyle(.automatic)
 
             Spacer()
             HStack {
@@ -1201,7 +1195,7 @@ private struct PermissionRow: View {
     }
 }
 
-// MARK: - Onboarding (VibeTunnel-aligned)
+// MARK: - Onboarding
 
 @MainActor
 final class OnboardingController {
@@ -1217,7 +1211,7 @@ final class OnboardingController {
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
         window.title = "Welcome to Clawdis"
-        window.setContentSize(NSSize(width: 640, height: 600))
+        window.setContentSize(NSSize(width: 640, height: 560))
         window.styleMask = [.titled, .closable]
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -1235,50 +1229,47 @@ struct OnboardingView: View {
     @State private var currentPage = 0
     @State private var permStatus: [Capability: Bool] = [:]
     @State private var isRequesting = false
-    @State private var installingCLI = false
-    @State private var cliStatus: String?
-    @State private var copied = false
-    @ObservedObject private var state = AppStateStore.shared
+@State private var installingCLI = false
+@State private var cliStatus: String?
+@State private var copied = false
+@ObservedObject private var state = AppStateStore.shared
 
-    private let pageWidth: CGFloat = 640
-    private let contentHeight: CGFloat = 260
-    private var pageCount: Int { 6 }
-    private var buttonTitle: String { currentPage == pageCount - 1 ? "Finish" : "Next" }
-    private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
+private let pageWidth: CGFloat = 640
+private let contentHeight: CGFloat = 260
+private var pageCount: Int { 6 }
+private var buttonTitle: String { currentPage == pageCount - 1 ? "Finish" : "Next" }
+private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
 
-    var body: some View {
-        VStack(spacing: 0) {
-            GlowingClawdisIcon(size: 148)
-                .padding(.top, 22)
-                .padding(.bottom, 12)
-                .frame(height: 200)
+var body: some View {
+    VStack(spacing: 0) {
+        GlowingClawdisIcon(size: 148)
+            .padding(.top, 22)
+            .padding(.bottom, 12)
+            .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 220)
 
-            GeometryReader { _ in
-                HStack(spacing: 0) {
-                    welcomePage
-                    focusPage
-                    permissionsPage
-                    cliPage
-                    launchPage
-                    readyPage
-                }
-                .frame(height: contentHeight)
-                .offset(x: CGFloat(-currentPage) * pageWidth)
-                .animation(
-                    .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
-                    value: currentPage
-                )
-            }
-            .frame(height: contentHeight)
-            .clipped()
-
-            navigationBar
+        HStack(spacing: 0) {
+            welcomePage
+            focusPage
+            permissionsPage
+            cliPage
+            launchPage
+            readyPage
         }
-        .frame(width: pageWidth)
-        .background(Color(NSColor.windowBackgroundColor))
-        .onAppear { currentPage = 0 }
-        .task { await refreshPerms() }
+        .frame(width: pageWidth, height: contentHeight)
+        .offset(x: CGFloat(-currentPage) * pageWidth)
+        .animation(
+            .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+            value: currentPage
+        )
+        .clipped()
+
+        navigationBar
     }
+    .frame(width: pageWidth, height: 560, alignment: .top)
+    .background(Color(NSColor.windowBackgroundColor))
+    .onAppear { currentPage = 0 }
+    .task { await refreshPerms() }
+}
 
     private var welcomePage: some View {
         onboardingPage {
@@ -1289,11 +1280,13 @@ struct OnboardingView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
-            Text("We'll guide you through the same flow as VibeTunnel: quick steps, live permission checks, and the helper CLI.")
+                .fixedSize(horizontal: false, vertical: true)
+            Text("Quick steps with live permission checks and the helper CLI so you can finish setup in minutes.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -1325,11 +1318,12 @@ struct OnboardingView: View {
         onboardingPage {
             Text("Grant permissions")
                 .font(.largeTitle.weight(.semibold))
-            Text("Match VibeTunnel's checklist: approve these once and the CLI reuses the same grants.")
+            Text("Approve these once and the helper CLI reuses the same grants.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
 
             onboardingCard {
                 ForEach(Capability.allCases, id: \.self) { cap in
@@ -1355,11 +1349,12 @@ struct OnboardingView: View {
         onboardingPage {
             Text("Install the helper CLI")
                 .font(.largeTitle.weight(.semibold))
-            Text("Link `clawdis-mac` like VibeTunnel's `vt` so scripts and the agent can talk to this app.")
+            Text("Link `clawdis-mac` so scripts and the agent can talk to this app.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
 
             onboardingCard {
                 HStack(spacing: 12) {
@@ -1398,11 +1393,12 @@ struct OnboardingView: View {
         onboardingPage {
             Text("Keep it running")
                 .font(.largeTitle.weight(.semibold))
-            Text("Match VibeTunnel's stay-on guidance: let Clawdis launch with macOS so permissions and notifications are ready.")
+            Text("Let Clawdis launch with macOS so permissions and notifications are ready when automations start.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
 
             onboardingCard {
                 Toggle("Launch at login", isOn: $state.launchAtLogin)
