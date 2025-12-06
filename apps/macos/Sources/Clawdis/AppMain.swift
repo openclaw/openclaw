@@ -571,6 +571,7 @@ struct ClawdisApp: App {
     @StateObject private var state: AppState
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
+    private let relayManager = RelayProcessManager.shared
 
     init() {
         _state = StateObject(wrappedValue: AppStateStore.shared)
@@ -585,6 +586,7 @@ struct ClawdisApp: App {
             }
             .onChange(of: self.state.isPaused) { _, paused in
                 self.applyStatusItemAppearance(paused: paused)
+                self.relayManager.setActive(!paused)
             }
 
         Settings {
@@ -862,13 +864,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     func applicationDidFinishLaunching(_ notification: Notification) {
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
-        LaunchdManager.startClawdis()
+        if let state {
+            RelayProcessManager.shared.setActive(!state.isPaused)
+        }
         self.startListener()
         self.scheduleFirstRunOnboardingIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        LaunchdManager.stopClawdis()
+        RelayProcessManager.shared.stop()
     }
 
     @MainActor
@@ -2683,6 +2687,7 @@ struct DebugSettings: View {
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
     @State private var modelsError: String?
+    @ObservedObject private var relayManager = RelayProcessManager.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2691,6 +2696,26 @@ struct DebugSettings: View {
                 Button("Open /tmp/clawdis.log") { NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/clawdis.log")) }
             }
             LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
+            LabeledContent("Relay status") {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.relayManager.status.label)
+                    Text("Restarts: \(self.relayManager.restartCount)")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Relay stdout/stderr")
+                    .font(.caption.weight(.semibold))
+                ScrollView {
+                    Text(self.relayManager.log.isEmpty ? "—" : self.relayManager.log)
+                        .font(.caption.monospaced())
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(height: 180)
+                .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+            }
             LabeledContent("Model catalog") {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(self.modelCatalogPath)
