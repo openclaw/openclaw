@@ -9,6 +9,10 @@ import Darwin
 final class RelayProcessManager: ObservableObject {
     static let shared = RelayProcessManager()
 
+    private enum Defaults {
+        static let projectRootPath = "clawdis.relayProjectRootPath"
+    }
+
     enum Status: Equatable {
         case stopped
         case starting
@@ -246,11 +250,34 @@ final class RelayProcessManager: ObservableObject {
     }
 
     private func defaultProjectRoot() -> URL {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let candidate = home.appendingPathComponent("Projects/clawdis")
-        if FileManager.default.fileExists(atPath: candidate.path) {
-            return candidate
+        if let stored = UserDefaults.standard.string(forKey: Defaults.projectRootPath),
+           let url = self.expandPath(stored) {
+            return url
         }
-        return home
+        let fallback = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Projects/clawdis")
+        if FileManager.default.fileExists(atPath: fallback.path) {
+            return fallback
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    func setProjectRoot(path: String) {
+        UserDefaults.standard.set(path, forKey: Defaults.projectRootPath)
+    }
+
+    func projectRootPath() -> String {
+        UserDefaults.standard.string(forKey: Defaults.projectRootPath)
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Projects/clawdis").path
+    }
+
+    private func expandPath(_ path: String) -> URL? {
+        var expanded = path
+        if expanded.hasPrefix("~") {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
+        }
+        return URL(fileURLWithPath: expanded)
     }
 }

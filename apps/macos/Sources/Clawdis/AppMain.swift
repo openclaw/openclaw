@@ -2765,6 +2765,7 @@ struct DebugSettings: View {
     @State private var modelsLoading = false
     @State private var modelsError: String?
     @ObservedObject private var relayManager = RelayProcessManager.shared
+    @State private var relayRootInput: String = RelayProcessManager.shared.projectRootPath()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -2792,6 +2793,28 @@ struct DebugSettings: View {
                 }
                 .frame(height: 180)
                 .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Relay project root")
+                    .font(.caption.weight(.semibold))
+                HStack(spacing: 8) {
+                    TextField("Path to clawdis repo", text: self.$relayRootInput)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        .onSubmit { self.saveRelayRoot() }
+                    Button("Save") { self.saveRelayRoot() }
+                        .buttonStyle(.borderedProminent)
+                    Button("Reset") {
+                        let def = FileManager.default.homeDirectoryForCurrentUser
+                            .appendingPathComponent("Projects/clawdis").path
+                        self.relayRootInput = def
+                        self.saveRelayRoot()
+                    }
+                    .buttonStyle(.bordered)
+                }
+                Text("Used for pnpm/node fallback and PATH population when launching the relay.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             LabeledContent("Model catalog") {
                 VStack(alignment: .leading, spacing: 6) {
@@ -2889,6 +2912,10 @@ struct DebugSettings: View {
     private func revealApp() {
         let url = Bundle.main.bundleURL
         NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    private func saveRelayRoot() {
+        RelayProcessManager.shared.setProjectRoot(path: self.relayRootInput)
     }
 }
 
