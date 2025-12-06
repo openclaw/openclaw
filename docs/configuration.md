@@ -131,6 +131,34 @@ Use these in your command:
 | `idleMinutes` | number | Session timeout |
 | `sessionIntro` | string | System prompt for new sessions |
 
+### Session Isolation and Identity Mapping
+
+By default, sessions are isolated per provider to prevent cross-platform conversation mixing:
+
+**Default behavior (isolated sessions):**
+- WhatsApp from `+41791234567` → session key: `+41791234567`
+- Telegram from `+41791234567` → session key: `telegram:+41791234567`
+- **Separate conversations** - prevents context confusion
+
+**Why isolation matters:**
+Without provider prefixes, the same phone number used on both platforms would share conversation history, causing the agent to mix contexts inappropriately (e.g., continuing a Telegram topic when you message from WhatsApp).
+
+**Identity Mapping (optional):**
+To intentionally share sessions across providers, create `~/.clawdis/identity-map.json`:
+
+```json
+{
+  "telegram:+41791234567": "+41791234567",
+  "telegram:@username": "+41447511247203"
+}
+```
+
+This maps Telegram identifiers to their WhatsApp counterparts, allowing the agent to maintain conversation continuity across platforms when desired.
+
+**Provider identifier formats:**
+- WhatsApp: `+41791234567` (E.164 phone number)
+- Telegram: `telegram:+41791234567` (phone) or `telegram:@username` (username) or `telegram:123456789` (numeric ID)
+
 ## Environment Variables
 
 Some settings can also be set via environment:
