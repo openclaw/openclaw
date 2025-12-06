@@ -198,7 +198,8 @@ final class RelayProcessManager: ObservableObject {
             return [clawdisPath, "relay"]
         }
         if let pnpm = self.findExecutable(named: "pnpm") {
-            return [pnpm, "clawdis", "relay"]
+            // Run pnpm from the project root so package.json is present.
+            return [pnpm, "clawdis", "relay", "--dir", self.defaultProjectRoot().path]
         }
         if let node = self.findExecutable(named: "node") {
             let warelay = self.defaultProjectRoot().appendingPathComponent("bin/warelay.js").path
@@ -211,7 +212,12 @@ final class RelayProcessManager: ObservableObject {
 
     private func makeEnvironment() -> Environment {
         let merged = self.preferredPaths().joined(separator: ":")
-        return .inherit.updating(["PATH": merged])
+        return .inherit.updating([
+            "PATH": merged,
+            "PNPM_HOME": FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/pnpm").path,
+            "CLAWDIS_PROJECT_ROOT": self.defaultProjectRoot().path,
+        ])
     }
 
     private func preferredPaths() -> [String] {
