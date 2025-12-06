@@ -429,50 +429,43 @@ private struct CritterStatusLabel: View {
     private let ticker = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Image(nsImage: CritterIconRenderer.makeIcon(
-            blink: blinkAmount,
-            legWiggle: legWiggle,
-            earWiggle: earWiggle
-        ))
-            .frame(width: 18, height: 16)
-            .rotationEffect(.degrees(wiggleAngle), anchor: .center)
-            .offset(x: wiggleOffset)
-            .onReceive(ticker) { now in
-                guard !isPaused else {
-                    resetMotion()
-                    return
-                }
+        Group {
+            if isPaused {
+                Image(nsImage: CritterIconRenderer.makeIcon(blink: 0))
+                    .frame(width: 18, height: 16)
+            } else {
+                Image(nsImage: CritterIconRenderer.makeIcon(
+                    blink: blinkAmount,
+                    legWiggle: legWiggle,
+                    earWiggle: earWiggle
+                ))
+                    .frame(width: 18, height: 16)
+                    .rotationEffect(.degrees(wiggleAngle), anchor: .center)
+                    .offset(x: wiggleOffset)
+                    .onReceive(ticker) { now in
+                        if now >= nextBlink {
+                            blink()
+                            nextBlink = now.addingTimeInterval(Double.random(in: 3.5 ... 8.5))
+                        }
 
-                if now >= nextBlink {
-                    blink()
-                    nextBlink = now.addingTimeInterval(Double.random(in: 3.5 ... 8.5))
-                }
+                        if now >= nextWiggle {
+                            wiggle()
+                            nextWiggle = now.addingTimeInterval(Double.random(in: 6.5 ... 14))
+                        }
 
-                if now >= nextWiggle {
-                    wiggle()
-                    nextWiggle = now.addingTimeInterval(Double.random(in: 6.5 ... 14))
-                }
+                        if now >= nextLegWiggle {
+                            wiggleLegs()
+                            nextLegWiggle = now.addingTimeInterval(Double.random(in: 5.0 ... 11.0))
+                        }
 
-                if now >= nextLegWiggle {
-                    wiggleLegs()
-                    nextLegWiggle = now.addingTimeInterval(Double.random(in: 5.0 ... 11.0))
-                }
-
-                if now >= nextEarWiggle {
-                    wiggleEars()
-                    nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0 ... 14.0))
-                }
+                        if now >= nextEarWiggle {
+                            wiggleEars()
+                            nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0 ... 14.0))
+                        }
+                    }
+                    .onChange(of: isPaused) { _, _ in resetMotion() }
             }
-            .onChange(of: isPaused) { _, paused in
-                if paused {
-                    resetMotion()
-                } else {
-                    nextBlink = Date().addingTimeInterval(Double.random(in: 1.5 ... 3.5))
-                    nextWiggle = Date().addingTimeInterval(Double.random(in: 4.5 ... 9.5))
-                    nextLegWiggle = Date().addingTimeInterval(Double.random(in: 4.0 ... 8.0))
-                    nextEarWiggle = Date().addingTimeInterval(Double.random(in: 5.5 ... 10.5))
-                }
-            }
+        }
     }
 
     private func resetMotion() {
