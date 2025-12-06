@@ -90,6 +90,11 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(self.voiceWakeAdditionalLocaleIDs, forKey: voiceWakeAdditionalLocalesKey) }
     }
 
+    @Published var isWorking: Bool = false
+    @Published var earBoostActive: Bool = false
+
+    private var earBoostTask: Task<Void, Never>? = nil
+
     init() {
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.defaultSound = UserDefaults.standard.string(forKey: "clawdis.defaultSound") ?? ""
@@ -105,6 +110,19 @@ final class AppState: ObservableObject {
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
         self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
+    }
+
+    func triggerVoiceEars(ttl: TimeInterval = 5) {
+        self.earBoostTask?.cancel()
+        self.earBoostActive = true
+        self.earBoostTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
+            await MainActor.run { [weak self] in self?.earBoostActive = false }
+        }
+    }
+
+    func setWorking(_ working: Bool) {
+        self.isWorking = working
     }
 }
 
@@ -578,7 +596,12 @@ struct ClawdisApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra { MenuContent(state: self.state) } label: { CritterStatusLabel(isPaused: self.state.isPaused) }
+        MenuBarExtra { MenuContent(state: self.state) } label: {
+            CritterStatusLabel(
+                isPaused: self.state.isPaused,
+                isWorking: self.state.isWorking,
+                earBoostActive: self.state.earBoostActive)
+        }
             .menuBarExtraStyle(.menu)
             .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
                 self.statusItem = item
@@ -632,19 +655,19 @@ private struct MenuContent: View {
     }
 
     private func primarySessionKey() -> String {
-        // Prefer the most recently updated session from the store; fall back to default
+        // Prefer canonical main session; fall back to most recent.
         let storePath = SessionLoader.defaultStorePath
         if let data = try? Data(contentsOf: URL(fileURLWithPath: storePath)),
            let decoded = try? JSONDecoder().decode([String: SessionEntryRecord].self, from: data)
         {
+            if decoded.keys.contains("main") { return "main" }
+
             let sorted = decoded.sorted { a, b -> Bool in
                 let lhs = a.value.updatedAt ?? 0
                 let rhs = b.value.updatedAt ?? 0
                 return lhs > rhs
             }
-            if let first = sorted.first {
-                return first.key
-            }
+            if let first = sorted.first { return first.key }
         }
         return "+1003"
     }
@@ -652,6 +675,8 @@ private struct MenuContent: View {
 
 private struct CritterStatusLabel: View {
     var isPaused: Bool
+    var isWorking: Bool
+    var earBoostActive: Bool
 
     @State private var blinkAmount: CGFloat = 0
     @State private var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
@@ -672,8 +697,9 @@ private struct CritterStatusLabel: View {
             } else {
                 Image(nsImage: CritterIconRenderer.makeIcon(
                     blink: self.blinkAmount,
-                    legWiggle: self.legWiggle,
-                    earWiggle: self.earWiggle))
+                    legWiggle: max(self.legWiggle, self.isWorking ? 0.6 : 0),
+                    earWiggle: self.earWiggle,
+                    earScale: self.earBoostActive ? 1.9 : 1.0))
                     .frame(width: 18, height: 16)
                     .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
                     .offset(x: self.wiggleOffset)
@@ -696,6 +722,10 @@ private struct CritterStatusLabel: View {
                         if now >= self.nextEarWiggle {
                             self.wiggleEars()
                             self.nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0...14.0))
+                        }
+
+                        if self.isWorking {
+                            self.scurry()
                         }
                     }
                     .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
@@ -743,6 +773,20 @@ private struct CritterStatusLabel: View {
         }
     }
 
+    private func scurry() {
+        let target = CGFloat.random(in: 0.7...1.0)
+        withAnimation(.easeInOut(duration: 0.12)) {
+            self.legWiggle = target
+            self.wiggleOffset = CGFloat.random(in: -0.6...0.6)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) {
+            withAnimation(.easeOut(duration: 0.16)) {
+                self.legWiggle = 0.25
+                self.wiggleOffset = 0
+            }
+        }
+    }
+
     private func wiggleEars() {
         let target = CGFloat.random(in: -1.2...1.2)
         withAnimation(.interpolatingSpring(stiffness: 260, damping: 19)) {
@@ -757,7 +801,12 @@ private struct CritterStatusLabel: View {
 enum CritterIconRenderer {
     private static let size = NSSize(width: 18, height: 16)
 
-    static func makeIcon(blink: CGFloat, legWiggle: CGFloat = 0, earWiggle: CGFloat = 0) -> NSImage {
+    static func makeIcon(
+        blink: CGFloat,
+        legWiggle: CGFloat = 0,
+        earWiggle: CGFloat = 0,
+        earScale: CGFloat = 1
+    ) -> NSImage {
         let image = NSImage(size: size)
         image.lockFocus()
         defer { image.unlockFocus() }
@@ -774,7 +823,7 @@ enum CritterIconRenderer {
         let bodyCorner = w * 0.09
 
         let earW = w * 0.22
-        let earH = bodyH * 0.66 * (1 - 0.08 * abs(earWiggle))
+        let earH = bodyH * 0.66 * earScale * (1 - 0.08 * abs(earWiggle))
         let earCorner = earW * 0.24
 
         let legW = w * 0.11
@@ -2009,6 +2058,7 @@ final class VoiceWakeTester {
     {
         if matched, !text.isEmpty {
             self.stop()
+            AppStateStore.shared.triggerVoiceEars()
             onUpdate(.detected(text))
             return
         }

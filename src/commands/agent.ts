@@ -15,8 +15,8 @@ import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
-  deriveSessionKey,
   loadSessionStore,
+  resolveSessionKey,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -67,6 +67,7 @@ function resolveSession(opts: {
 }): SessionResolution {
   const sessionCfg = opts.replyCfg?.session;
   const scope = sessionCfg?.scope ?? "per-sender";
+  const mainKey = sessionCfg?.mainKey ?? "main";
   const idleMinutes = Math.max(
     sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
     1,
@@ -78,7 +79,7 @@ function resolveSession(opts: {
 
   let sessionKey: string | undefined =
     sessionStore && opts.to
-      ? deriveSessionKey(scope, { From: opts.to } as MsgContext)
+      ? resolveSessionKey(scope, { From: opts.to } as MsgContext, mainKey)
       : undefined;
   let sessionEntry =
     sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;

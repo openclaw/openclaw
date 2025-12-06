@@ -1,13 +1,18 @@
 import AppKit
 import Foundation
+import OSLog
 import WebKit
 
-final class WebChatWindowController: NSWindowController, WKScriptMessageHandler {
+private let webChatLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
+
+final class WebChatWindowController: NSWindowController, WKScriptMessageHandler, WKNavigationDelegate {
     private let webView: WKWebView
     private let sessionKey: String
+    private let initialMessagesJSON: String
 
     init(sessionKey: String) {
         self.sessionKey = sessionKey
+        self.initialMessagesJSON = WebChatWindowController.loadInitialMessagesJSON(for: sessionKey)
 
         let config = WKWebViewConfiguration()
         let contentController = WKUserContentController()
@@ -40,6 +45,11 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
             window.webkit?.messageHandlers?.clawdis?.postMessage({ id: 'log', log: String(msg) });
           } catch (_) {}
         };
+        const __origConsoleLog = console.log;
+        console.log = function(...args) {
+          try { window.__clawdisLog(args.join(' ')); } catch (_) {}
+          __origConsoleLog.apply(console, args);
+        };
         """
         let userScript = WKUserScript(source: callbackScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         contentController.addUserScript(userScript)
@@ -53,6 +63,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
         window.title = "Clawd Web Chat"
         window.contentView = self.webView
         super.init(window: window)
+        self.webView.navigationDelegate = self
         contentController.add(self, name: "clawdis")
         self.loadPage()
     }
@@ -61,6 +72,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
     required init?(coder: NSCoder) { fatalError() }
 
     private func loadPage() {
+        let messagesJSON = self.initialMessagesJSON.replacingOccurrences(of: "</script>", with: "<\\/script>")
         guard let webChatURL = Bundle.main.url(forResource: "WebChat", withExtension: nil) else {
             NSLog("WebChat resources missing")
             return
@@ -119,6 +131,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
         <body>
           <div id="app"></div>
           <script type="module">
+            const initialMessages = \(messagesJSON);
             const status = (msg) => {
               console.log(msg);
               window.__clawdisLog(msg);
@@ -169,7 +182,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
                     systemPrompt: 'You are Clawd (primary session).',
                     model: getModel('anthropic', 'claude-opus-4-5'),
                     thinkingLevel: 'off',
-                    messages: []
+                    messages: initialMessages
                   },
                   transport: new NativeTransport()
                 });
@@ -212,6 +225,16 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
         self.webView.loadHTMLString(html, baseURL: webChatURL)
     }
 
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webView.evaluateJavaScript("document.body.innerText") { result, error in
+            if let error {
+                webChatLogger.error("eval error: \(error.localizedDescription, privacy: .public)")
+            } else if let text = result as? String {
+                webChatLogger.debug("body text snapshot: \(String(text.prefix(200)), privacy: .public)")
+            }
+        }
+    }
+
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any],
               let id = body["id"] as? String,
@@ -219,7 +242,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
         else { return }
 
         if id == "log", let log = body["log"] as? String {
-            NSLog("WebChat JS: %@", log)
+            webChatLogger.debug("JS: \(log, privacy: .public)")
             return
         }
 
@@ -245,6 +268,8 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
     }
 
     private func runAgent(text: String, sessionKey: String) async -> (text: String?, error: String?) {
+        await MainActor.run { AppStateStore.shared.setWorking(true) }
+        defer { Task { await MainActor.run { AppStateStore.shared.setWorking(false) } } }
         let data: Data
         do {
             data = try await Task.detached(priority: .utility) { () -> Data in
@@ -279,6 +304,48 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
             return (text, nil)
         }
         return (String(data: data, encoding: .utf8), nil)
+    }
+
+    private static func loadInitialMessagesJSON(for sessionKey: String) -> String {
+        guard let sessionId = self.sessionId(for: sessionKey) else { return "[]" }
+        let path = self.expand("~/.clawdis/sessions/\(sessionId).jsonl")
+        guard FileManager.default.fileExists(atPath: path) else { return "[]" }
+        guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return "[]" }
+
+        var messages: [[String: Any]] = []
+        for line in content.split(whereSeparator: { $0.isNewline }) {
+            guard let data = String(line).data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { continue }
+            let message = (obj["message"] as? [String: Any]) ?? obj
+            guard let role = message["role"] as? String,
+                  ["user", "assistant", "system"].contains(role)
+            else { continue }
+
+            var contentPayload = message["content"] as? [[String: Any]]
+            if contentPayload == nil, let text = message["text"] as? String {
+                contentPayload = [["type": "text", "text": text]]
+            }
+            guard let finalContent = contentPayload else { continue }
+            messages.append(["role": role, "content": finalContent])
+        }
+
+        guard let data = try? JSONSerialization.data(withJSONObject: messages, options: []) else {
+            return "[]"
+        }
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    private static func sessionId(for key: String) -> String? {
+        let storePath = self.expand("~/.clawdis/sessions/sessions.json")
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: storePath)) else { return nil }
+        guard let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        guard let entry = decoded[key] as? [String: Any] else { return nil }
+        return entry["sessionId"] as? String
+    }
+
+    private static func expand(_ path: String) -> String {
+        (path as NSString).expandingTildeInPath
     }
 }
 

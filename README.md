@@ -129,6 +129,12 @@ clawdis relay      # Start listening
 | `clawdis status` | Show recent messages |
 | `clawdis heartbeat` | Trigger a heartbeat |
 
+### Sessions, surfaces, and WebChat
+
+- Direct chats now share a canonical session key `main` by default (configurable via `inbound.reply.session.mainKey`). Groups stay isolated as `group:<jid>`.
+- WebChat always attaches to the `main` session and hydrates the full Tau history from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view mirrors WhatsApp/Telegram turns.
+- Inbound contexts carry a `Surface` hint (e.g., `whatsapp`, `webchat`, `telegram`) for logging; replies still go back to the originating surface deterministically.
+
 ## Credits
 
 - **Peter Steinberger** ([@steipete](https://twitter.com/steipete)) — Creator

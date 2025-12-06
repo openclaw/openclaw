@@ -12,6 +12,7 @@ import { loadConfig } from "./config/config.js";
 import {
   deriveSessionKey,
   loadSessionStore,
+  resolveSessionKey,
   resolveStorePath,
   saveSessionStore,
 } from "./config/sessions.js";
@@ -52,6 +53,7 @@ export {
   normalizeE164,
   PortInUseError,
   promptYesNo,
+  resolveSessionKey,
   resolveStorePath,
   runCommandWithTimeout,
   runExec,

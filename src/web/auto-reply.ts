@@ -5,8 +5,8 @@ import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
-  deriveSessionKey,
   loadSessionStore,
+  resolveSessionKey,
   resolveStorePath,
   saveSessionStore,
 } from "../config/sessions.js";
@@ -213,11 +213,15 @@ export async function runWebHeartbeatOnce(opts: {
   });
 
   const cfg = cfgOverride ?? loadConfig();
+  const sessionCfg = cfg.inbound?.reply?.session;
+  const mainKey = sessionCfg?.mainKey ?? "main";
+  const sessionScope = sessionCfg?.scope ?? "per-sender";
+  const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
   if (sessionId) {
     const storePath = resolveStorePath(cfg.inbound?.reply?.session?.store);
     const store = loadSessionStore(storePath);
-    store[to] = {
-      ...(store[to] ?? {}),
+    store[sessionKey] = {
+      ...(store[sessionKey] ?? {}),
       sessionId,
       updatedAt: Date.now(),
     };
@@ -432,7 +436,11 @@ function getSessionSnapshot(
 ) {
   const sessionCfg = cfg.inbound?.reply?.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const key = deriveSessionKey(scope, { From: from, To: "", Body: "" });
+  const key = resolveSessionKey(
+    scope,
+    { From: from, To: "", Body: "" },
+    sessionCfg?.mainKey ?? "main",
+  );
   const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
   const entry = store[key];
   const idleMinutes = Math.max(
@@ -790,6 +798,7 @@ export async function monitorWebProvider(
           GroupMembers: latest.groupParticipants?.join(", "),
           SenderName: latest.senderName,
           SenderE164: latest.senderE164,
+          Surface: "whatsapp",
         },
         {
           onReplyStart: latest.sendComposing,

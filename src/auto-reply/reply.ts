@@ -6,8 +6,8 @@ import { loadConfig, type WarelayConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGER,
-  deriveSessionKey,
   loadSessionStore,
+  resolveSessionKey,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -210,6 +210,7 @@ export async function getReplyFromConfig(
 
   // Optional session handling (conversation reuse + /new resets)
   const sessionCfg = reply?.session;
+  const mainKey = sessionCfg?.mainKey ?? "main";
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : [DEFAULT_RESET_TRIGGER];
@@ -261,7 +262,7 @@ export async function getReplyFromConfig(
       }
     }
 
-    sessionKey = deriveSessionKey(sessionScope, ctx);
+    sessionKey = resolveSessionKey(sessionScope, ctx, mainKey);
     sessionStore = loadSessionStore(storePath);
     const entry = sessionStore[sessionKey];
     const idleMs = idleMinutes * 60_000;

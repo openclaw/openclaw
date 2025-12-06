@@ -23,6 +23,7 @@ export type SessionConfig = {
   sessionIntro?: string;
   typingIntervalSeconds?: number;
   heartbeatMinutes?: number;
+  mainKey?: string;
 };
 
 export type LoggingConfig = {
@@ -135,6 +136,7 @@ const ReplySchema = z
         sendSystemOnce: z.boolean().optional(),
         sessionIntro: z.string().optional(),
         typingIntervalSeconds: z.number().int().positive().optional(),
+        mainKey: z.string().optional(),
       })
       .optional(),
     heartbeatMinutes: z.number().int().nonnegative().optional(),

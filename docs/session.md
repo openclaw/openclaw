@@ -10,10 +10,12 @@ CLAWDIS keeps lightweight session state so your agent can remember context betwe
 
 ## How session keys are chosen
 
-- Direct chats: normalized E.164 sender number (e.g., `+15551234567`).
+- Direct chats: by default collapse to the canonical key `main` so all 1:1 channels (WhatsApp, WebChat, Telegram) share a single session.
 - Group chats: `group:<whatsapp-jid>` so group history stays isolated from DMs.
 - Global mode: set `inbound.reply.session.scope = "global"` to force a single shared session for all chats.
 - Unknown senders fall back to `unknown`.
+
+To change the canonical key (or disable collapsing), set `inbound.reply.session.mainKey` to another string or leave it empty.
 
 ## When sessions reset
 
@@ -32,11 +34,20 @@ CLAWDIS keeps lightweight session state so your agent can remember context betwe
         scope: "per-sender",      // or "global"
         resetTriggers: ["/new"],   // additional triggers allowed
         idleMinutes: 120,           // extend or shrink timeout (min 1)
-        store: "~/state/clawdis-sessions.json" // optional custom path
+        store: "~/state/clawdis-sessions.json", // optional custom path
+        mainKey: "main"             // canonical direct-chat bucket
       }
     }
   }
 }
+
+## Surfaces (channel labels)
+
+Each inbound message can carry a `Surface` hint in the templating context (e.g., `whatsapp`, `webchat`, `telegram`, `voice`). Routing stays deterministic: replies are sent back to the origin surface, but the shared `main` session keeps context unified across direct channels. Groups retain their `group:<jid>` buckets.
+
+## WebChat history
+
+WebChat always attaches to the `main` session and hydrates the full Tau JSONL transcript from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view reflects all turns, even those that arrived via WhatsApp/Telegram.
 ```
 
 Other session-related behaviors:

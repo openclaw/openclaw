@@ -6,7 +6,7 @@ The macOS Clawdis app ships a built-in web chat window that reuses your primary 
 
 - UI: `pi-mono/packages/web-ui` bundle loaded in a `WKWebView`.
 - Bridge: `WKScriptMessageHandler` named `clawdis` (see `apps/macos/Sources/Clawdis/WebChatWindow.swift`). The page posts `sessionKey` + message; Swift shells `pnpm clawdis agent --to <sessionKey> --message <text> --json` and returns the first payload text to the page. No sockets are opened.
-- Session selection: picks the most recently updated entry in `~/.clawdis/sessions/sessions.json`; falls back to `+1003` if none exist. This keeps the web chat on the same primary conversation as the relay/CLI.
+- Session selection: always uses the canonical `main` session key (or `inbound.reply.session.mainKey`), hydrating from the Tau JSONL session file so you see the full history even when messages arrived via WhatsApp/Telegram.
 - Assets: the entire `pi-web-ui` dist plus dependencies (pi-ai, mini-lit, lit, lucide, pdfjs-dist, docx-preview, jszip) is bundled into `apps/macos/Sources/Clawdis/Resources/WebChat/` and shipped with the app. No external checkout is required at runtime.
 
 ## Requirements

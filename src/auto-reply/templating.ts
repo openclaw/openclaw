@@ -12,6 +12,7 @@ export type MsgContext = {
   GroupMembers?: string;
   SenderName?: string;
   SenderE164?: string;
+  Surface?: string;
 };
 
 export type TemplateContext = MsgContext & {

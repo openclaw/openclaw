@@ -77,3 +77,20 @@ export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
   }
   return from || "unknown";
 }
+
+/**
+ * Resolve the session key with an optional canonical direct-chat key (e.g., "main").
+ * All non-group direct chats collapse to `mainKey` when provided, keeping group isolation.
+ */
+export function resolveSessionKey(
+  scope: SessionScope,
+  ctx: MsgContext,
+  mainKey?: string,
+) {
+  const raw = deriveSessionKey(scope, ctx);
+  if (scope === "global") return raw;
+  const canonical = (mainKey ?? "").trim();
+  const isGroup = raw.startsWith("group:") || raw.includes("@g.us");
+  if (!isGroup && canonical) return canonical;
+  return raw;
+}
