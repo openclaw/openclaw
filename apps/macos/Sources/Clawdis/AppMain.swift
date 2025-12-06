@@ -11,11 +11,12 @@ import VideoToolbox
 import ServiceManagement
 import SwiftUI
 import UserNotifications
+import MenuBarExtraAccess
 
 private let serviceName = "com.steipete.clawdis.xpc"
 private let launchdLabel = "com.steipete.clawdis"
 private let onboardingVersionKey = "clawdis.onboardingVersion"
-private let currentOnboardingVersion = 1
+private let currentOnboardingVersion = 2
 private let pauseDefaultsKey = "clawdis.pauseEnabled"
 
 // MARK: - App model
@@ -354,6 +355,8 @@ enum ShellRunner {
 struct ClawdisApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state: AppState
+    @State private var statusItem: NSStatusItem?
+    @State private var isMenuPresented = false
 
     init() {
         _state = StateObject(wrappedValue: AppStateStore.shared)
@@ -362,6 +365,13 @@ struct ClawdisApp: App {
     var body: some Scene {
         MenuBarExtra { MenuContent(state: state) } label: { CritterStatusLabel(isPaused: state.isPaused) }
             .menuBarExtraStyle(.menu)
+            .menuBarExtraAccess(isPresented: $isMenuPresented) { item in
+                statusItem = item
+                applyStatusItemAppearance(paused: state.isPaused)
+            }
+            .onChange(of: state.isPaused) { _, paused in
+                applyStatusItemAppearance(paused: paused)
+            }
 
         Settings {
             SettingsRootView(state: state)
@@ -370,6 +380,11 @@ struct ClawdisApp: App {
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
     }
+
+    private func applyStatusItemAppearance(paused: Bool) {
+        statusItem?.button?.appearsDisabled = paused
+        statusItem?.button?.alphaValue = paused ? 0.45 : 1.0
+    }
 }
 
 private struct MenuContent: View {
@@ -377,8 +392,8 @@ private struct MenuContent: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Toggle(isOn: $state.isPaused) {
-            Text(state.isPaused ? "Clawdis Paused" : "Pause Clawdis")
+        Toggle(isOn: activeBinding) {
+            Text(activeBinding.wrappedValue ? "Clawdis Active" : "Clawdis Paused")
         }
         Button("Settings…") { open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
@@ -395,6 +410,10 @@ private struct MenuContent: View {
         NSApp.activate(ignoringOtherApps: true)
         openSettings()
         NotificationCenter.default.post(name: .clawdisSelectSettingsTab, object: tab)
+    }
+
+    private var activeBinding: Binding<Bool> {
+        Binding(get: { !state.isPaused }, set: { state.isPaused = !$0 })
     }
 }
 
@@ -419,7 +438,6 @@ private struct CritterStatusLabel: View {
             earWiggle: earWiggle,
             isPaused: isPaused
         ))
-            .renderingMode(.template)
             .frame(width: 18, height: 16)
             .rotationEffect(.degrees(wiggleAngle), anchor: .center)
             .offset(x: wiggleOffset)
@@ -606,7 +624,7 @@ enum CritterIconRenderer {
         ctx.fillPath()
         ctx.restoreGState()
 
-        image.isTemplate = true
+        image.isTemplate = false
         return image
     }
 }
@@ -684,8 +702,9 @@ struct SettingsRootView: View {
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(SettingsTab.about)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 12)
+        .padding(12)
+        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .clawdisSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
@@ -723,7 +742,7 @@ struct SettingsRootView: View {
 enum SettingsTab: CaseIterable {
     case general, permissions, debug, about
     static let windowWidth: CGFloat = 410
-    static let windowHeight: CGFloat = 480
+    static let windowHeight: CGFloat = 484
     var title: String {
         switch self {
         case .general: return "General"
@@ -752,13 +771,37 @@ extension Notification.Name {
     static let clawdisSelectSettingsTab = Notification.Name("clawdisSelectSettingsTab")
 }
 
+@MainActor
+struct SettingsToggleRow: View {
+    let title: String
+    let subtitle: String?
+    @Binding var binding: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: $binding) {
+                Text(title)
+                    .font(.body)
+            }
+            .toggleStyle(.checkbox)
+
+            if let subtitle, !subtitle.isEmpty {
+                Text(subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct GeneralSettings: View {
     @ObservedObject var state: AppState
     @State private var isInstallingCLI = false
     @State private var cliStatus: String?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 18) {
             if !state.onboardingSeen {
                 Text("Complete onboarding to finish setup")
                     .font(.callout.weight(.semibold))
@@ -766,12 +809,21 @@ struct GeneralSettings: View {
                     .padding(.bottom, 2)
             }
 
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle(isOn: activeBinding) { Text(activeBinding.wrappedValue ? "Clawdis Active" : "Clawdis Paused") }
-                    .help("Disable to stop Clawdis background helpers and notifications")
-                Toggle(isOn: $state.launchAtLogin) { Text("Launch at login") }
-                Toggle(isOn: $state.debugPaneEnabled) { Text("Enable debug tools") }
-                    .help("Show the Debug tab with development utilities")
+            VStack(alignment: .leading, spacing: 12) {
+                SettingsToggleRow(
+                    title: activeBinding.wrappedValue ? "Clawdis active" : "Clawdis paused",
+                    subtitle: "Pause to stop Clawdis background helpers and notifications.",
+                    binding: activeBinding)
+
+                SettingsToggleRow(
+                    title: "Launch at login",
+                    subtitle: "Automatically start Clawdis after you sign in.",
+                    binding: $state.launchAtLogin)
+
+                SettingsToggleRow(
+                    title: "Enable debug tools",
+                    subtitle: "Show the Debug tab with development utilities.",
+                    binding: $state.debugPaneEnabled)
 
                 LabeledContent("Default sound") {
                     Picker("Sound", selection: $state.defaultSound) {
@@ -800,6 +852,7 @@ struct GeneralSettings: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
     }
 
     private var activeBinding: Binding<Bool> {
@@ -865,6 +918,8 @@ struct PermissionsSettings: View {
                 .buttonStyle(.bordered)
             Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
     }
 }
 
@@ -883,6 +938,8 @@ struct DebugSettings: View {
             .buttonStyle(.bordered)
             Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12)
     }
 
     private func relaunch() {
@@ -905,17 +962,17 @@ struct AboutSettings: View {
     @State private var iconHover = false
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 8) {
             let appIcon = NSApplication.shared.applicationIconImage ?? CritterIconRenderer.makeIcon(blink: 0)
             Button {
-                if let url = URL(string: "https://github.com/steipete/warelay") {
+                if let url = URL(string: "https://github.com/steipete/clawdis") {
                     NSWorkspace.shared.open(url)
                 }
             } label: {
                 Image(nsImage: appIcon)
                     .resizable()
                     .frame(width: 88, height: 88)
-                    .cornerRadius(18)
+                    .cornerRadius(16)
                     .shadow(color: iconHover ? .accentColor.opacity(0.25) : .clear, radius: 8)
                     .scaleEffect(iconHover ? 1.06 : 1.0)
             }
@@ -924,42 +981,63 @@ struct AboutSettings: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { iconHover = hover }
             }
 
-            VStack(spacing: 4) {
+            VStack(spacing: 3) {
                 Text("Clawdis")
                     .font(.title3.bold())
                 Text("Version \(versionString)")
                     .foregroundStyle(.secondary)
+                if let buildTimestamp {
+                    Text("Built \(buildTimestamp)")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Text("Menu bar companion for notifications, screenshots, and privileged agent actions.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 18)
             }
 
-            VStack(alignment: .center, spacing: 8) {
-                AboutLinkRow(icon: "chevron.left.slash.chevron.right", title: "GitHub", url: "https://github.com/steipete/warelay")
+            VStack(alignment: .center, spacing: 6) {
+                AboutLinkRow(icon: "chevron.left.slash.chevron.right", title: "GitHub", url: "https://github.com/steipete/clawdis")
                 AboutLinkRow(icon: "globe", title: "Website", url: "https://steipete.me")
                 AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
                 AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:[redacted-email]")
             }
+            .frame(maxWidth: .infinity)
+            .multilineTextAlignment(.center)
             .padding(.vertical, 10)
 
             Text("© 2025 Peter Steinberger — MIT License.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+                .padding(.top, 4)
 
             Spacer()
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .padding(.top, 18)
-        .padding(.horizontal, 18)
-        .padding(.bottom, 22)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.top, 4)
+        .padding(.horizontal, 24)
+        .padding(.bottom, 24)
     }
 
     private var versionString: String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
         return build.map { "\(version) (\($0))" } ?? version
+    }
+
+    private var buildTimestamp: String? {
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ClawdisBuildTimestamp") as? String else { return nil }
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        guard let date = parser.date(from: raw) else { return raw }
+
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        formatter.locale = .current
+        return formatter.string(from: date)
     }
 }
 

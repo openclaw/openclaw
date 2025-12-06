@@ -15,6 +15,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/ChimeHQ/AsyncXPCConnection", from: "1.3.0"),
+        .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
     ],
     targets: [
         .target(
@@ -29,6 +30,7 @@ let package = Package(
             dependencies: [
                 "ClawdisIPC",
                 .product(name: "AsyncXPCConnection", package: "AsyncXPCConnection"),
+                .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
