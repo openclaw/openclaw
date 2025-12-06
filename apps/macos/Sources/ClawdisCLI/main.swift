@@ -14,7 +14,10 @@ struct ClawdisCLI {
         do {
             let request = try parseCommandLine()
             let response = try await send(request: request)
-            let payloadString: String? = if let payload = response.payload, let text = String(data: payload, encoding: .utf8) {
+            let payloadString: String? = if let payload = response.payload, let text = String(
+                data: payload,
+                encoding: .utf8)
+            {
                 text
             } else {
                 nil
@@ -22,7 +25,7 @@ struct ClawdisCLI {
             let output: [String: Any] = [
                 "ok": response.ok,
                 "message": response.message ?? "",
-                "payload": payloadString ?? ""
+                "payload": payloadString ?? "",
             ]
             let json = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted])
             FileHandle.standardOutput.write(json)
@@ -99,14 +102,21 @@ struct ClawdisCLI {
                     if let pair = args.popFirst(), let eq = pair.firstIndex(of: "=") {
                         let k = String(pair[..<eq]); let v = String(pair[pair.index(after: eq)...]); env[k] = v
                     }
+
                 case "--timeout": if let val = args.popFirst(), let dbl = Double(val) { timeout = dbl }
+
                 case "--needs-screen-recording": needsSR = true
 
                 default:
                     cmd.append(arg)
                 }
             }
-            return .runShell(command: cmd, cwd: cwd, env: env.isEmpty ? nil : env, timeoutSec: timeout, needsScreenRecording: needsSR)
+            return .runShell(
+                command: cmd,
+                cwd: cwd,
+                env: env.isEmpty ? nil : env,
+                timeoutSec: timeout,
+                needsScreenRecording: needsSR)
 
         case "status":
             return .status

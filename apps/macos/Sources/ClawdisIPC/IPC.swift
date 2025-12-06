@@ -16,7 +16,12 @@ public enum Request: Sendable {
     case notify(title: String, body: String, sound: String?)
     case ensurePermissions([Capability], interactive: Bool)
     case screenshot(displayID: UInt32?, windowID: UInt32?, format: String)
-    case runShell(command: [String], cwd: String?, env: [String: String]?, timeoutSec: Double?, needsScreenRecording: Bool)
+    case runShell(
+        command: [String],
+        cwd: String?,
+        env: [String: String]?,
+        timeoutSec: Double?,
+        needsScreenRecording: Bool)
     case status
 }
 

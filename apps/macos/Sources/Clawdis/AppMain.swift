@@ -33,57 +33,57 @@ private let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVe
 @MainActor
 final class AppState: ObservableObject {
     @Published var isPaused: Bool {
-        didSet { UserDefaults.standard.set(isPaused, forKey: pauseDefaultsKey) }
+        didSet { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) }
     }
 
     @Published var defaultSound: String {
-        didSet { UserDefaults.standard.set(defaultSound, forKey: "clawdis.defaultSound") }
+        didSet { UserDefaults.standard.set(self.defaultSound, forKey: "clawdis.defaultSound") }
     }
 
     @Published var launchAtLogin: Bool {
-        didSet { Task { AppStateStore.updateLaunchAtLogin(enabled: launchAtLogin) } }
+        didSet { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
     }
 
     @Published var onboardingSeen: Bool {
-        didSet { UserDefaults.standard.set(onboardingSeen, forKey: "clawdis.onboardingSeen") }
+        didSet { UserDefaults.standard.set(self.onboardingSeen, forKey: "clawdis.onboardingSeen") }
     }
 
     @Published var debugPaneEnabled: Bool {
-        didSet { UserDefaults.standard.set(debugPaneEnabled, forKey: "clawdis.debugPaneEnabled") }
+        didSet { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "clawdis.debugPaneEnabled") }
     }
 
     @Published var swabbleEnabled: Bool {
-        didSet { UserDefaults.standard.set(swabbleEnabled, forKey: swabbleEnabledKey) }
+        didSet { UserDefaults.standard.set(self.swabbleEnabled, forKey: swabbleEnabledKey) }
     }
 
     @Published var swabbleTriggerWords: [String] {
         didSet {
-            let cleaned = swabbleTriggerWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            let cleaned = self.swabbleTriggerWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { !$0.isEmpty }
             UserDefaults.standard.set(cleaned, forKey: swabbleTriggersKey)
-            if cleaned.count != swabbleTriggerWords.count {
-                swabbleTriggerWords = cleaned
+            if cleaned.count != self.swabbleTriggerWords.count {
+                self.swabbleTriggerWords = cleaned
             }
         }
     }
 
     @Published var showDockIcon: Bool {
         didSet {
-            UserDefaults.standard.set(showDockIcon, forKey: showDockIconKey)
-            AppActivationPolicy.apply(showDockIcon: showDockIcon)
+            UserDefaults.standard.set(self.showDockIcon, forKey: showDockIconKey)
+            AppActivationPolicy.apply(showDockIcon: self.showDockIcon)
         }
     }
 
     @Published var voiceWakeMicID: String {
-        didSet { UserDefaults.standard.set(voiceWakeMicID, forKey: voiceWakeMicKey) }
+        didSet { UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey) }
     }
 
     @Published var voiceWakeLocaleID: String {
-        didSet { UserDefaults.standard.set(voiceWakeLocaleID, forKey: voiceWakeLocaleKey) }
+        didSet { UserDefaults.standard.set(self.voiceWakeLocaleID, forKey: voiceWakeLocaleKey) }
     }
 
     @Published var voiceWakeAdditionalLocaleIDs: [String] {
-        didSet { UserDefaults.standard.set(voiceWakeAdditionalLocaleIDs, forKey: voiceWakeAdditionalLocalesKey) }
+        didSet { UserDefaults.standard.set(self.voiceWakeAdditionalLocaleIDs, forKey: voiceWakeAdditionalLocalesKey) }
     }
 
     init() {
@@ -94,11 +94,13 @@ final class AppState: ObservableObject {
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: "clawdis.debugPaneEnabled")
         let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
-        self.swabbleTriggerWords = UserDefaults.standard.stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
+        self.swabbleTriggerWords = UserDefaults.standard
+            .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.showDockIcon = UserDefaults.standard.bool(forKey: showDockIconKey)
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
-        self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard.stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
+        self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
+            .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
     }
 }
 
@@ -151,7 +153,11 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
         }
     }
 
-    private static func process(request: Request, notifier: NotificationManager, logger: Logger) async throws -> Response {
+    private static func process(
+        request: Request,
+        notifier: NotificationManager,
+        logger: Logger) async throws -> Response
+    {
         let paused = await MainActor.run { AppStateStore.isPausedFlag }
         if paused {
             return Response(ok: false, message: "clawdis paused")
@@ -174,7 +180,8 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
             return Response(ok: true, message: "ready")
 
         case let .screenshot(displayID, windowID, _):
-            let authorized = await PermissionManager.ensure([.screenRecording], interactive: false)[.screenRecording] ?? false
+            let authorized = await PermissionManager
+                .ensure([.screenRecording], interactive: false)[.screenRecording] ?? false
             guard authorized else { return Response(ok: false, message: "screen recording permission missing") }
             if let data = await Screenshotter.capture(displayID: displayID, windowID: windowID) {
                 return Response(ok: true, payload: data)
@@ -183,7 +190,8 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
 
         case let .runShell(command, cwd, env, timeoutSec, needsSR):
             if needsSR {
-                let authorized = await PermissionManager.ensure([.screenRecording], interactive: false)[.screenRecording] ?? false
+                let authorized = await PermissionManager
+                    .ensure([.screenRecording], interactive: false)[.screenRecording] ?? false
                 guard authorized else { return Response(ok: false, message: "screen recording permission missing") }
             }
             return await ShellRunner.run(command: command, cwd: cwd, env: env, timeout: timeoutSec)
@@ -288,7 +296,8 @@ enum PermissionManager {
             case .notifications:
                 let center = UNUserNotificationCenter.current()
                 let settings = await center.notificationSettings()
-                results[cap] = settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional
+                results[cap] = settings.authorizationStatus == .authorized || settings
+                    .authorizationStatus == .provisional
 
             case .accessibility:
                 results[cap] = AXIsProcessTrusted()
@@ -359,7 +368,10 @@ enum Screenshotter {
 
         let stream = SCStream(filter: filter, configuration: config, delegate: nil)
         let grabber = FrameGrabber()
-        try? stream.addStreamOutput(grabber, type: .screen, sampleHandlerQueue: DispatchQueue(label: "com.steipete.clawdis.sshot"))
+        try? stream.addStreamOutput(
+            grabber,
+            type: .screen,
+            sampleHandlerQueue: DispatchQueue(label: "com.steipete.clawdis.sshot"))
         do {
             try await stream.startCapture()
             let data = await grabber.awaitPNG()
@@ -381,9 +393,13 @@ final class FrameGrabber: NSObject, SCStreamOutput {
         }
     }
 
-    nonisolated func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+    nonisolated func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of outputType: SCStreamOutputType)
+    {
         guard outputType == .screen else { return }
-        if delivered { return }
+        if self.delivered { return }
         guard let imageBuffer = sampleBuffer.imageBuffer else { return }
         var cgImage: CGImage?
         let result = VTCreateCGImageFromCVPixelBuffer(imageBuffer, options: nil, imageOut: &cgImage)
@@ -391,9 +407,9 @@ final class FrameGrabber: NSObject, SCStreamOutput {
         let rep = NSBitmapImageRep(cgImage: cgImage)
         guard let data = rep.representation(using: .png, properties: [:]) else { return }
 
-        delivered = true
-        continuation?.resume(returning: data)
-        continuation = nil
+        self.delivered = true
+        self.continuation?.resume(returning: data)
+        self.continuation = nil
     }
 }
 
@@ -428,7 +444,7 @@ enum ShellRunner {
         }
 
         if let timeout, timeout > 0 {
-            let nanos = UInt64(timeout * 1000000000)
+            let nanos = UInt64(timeout * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)
             if process.isRunning {
                 process.terminate()
@@ -456,18 +472,18 @@ struct ClawdisApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra { MenuContent(state: state) } label: { CritterStatusLabel(isPaused: state.isPaused) }
+        MenuBarExtra { MenuContent(state: self.state) } label: { CritterStatusLabel(isPaused: self.state.isPaused) }
             .menuBarExtraStyle(.menu)
-            .menuBarExtraAccess(isPresented: $isMenuPresented) { item in
-                statusItem = item
-                applyStatusItemAppearance(paused: state.isPaused)
+            .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
+                self.statusItem = item
+                self.applyStatusItemAppearance(paused: self.state.isPaused)
             }
-            .onChange(of: state.isPaused) { _, paused in
-                applyStatusItemAppearance(paused: paused)
+            .onChange(of: self.state.isPaused) { _, paused in
+                self.applyStatusItemAppearance(paused: paused)
             }
 
         Settings {
-            SettingsRootView(state: state)
+            SettingsRootView(state: self.state)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         }
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
@@ -475,7 +491,7 @@ struct ClawdisApp: App {
     }
 
     private func applyStatusItemAppearance(paused: Bool) {
-        statusItem?.button?.appearsDisabled = paused
+        self.statusItem?.button?.appearsDisabled = paused
     }
 }
 
@@ -484,14 +500,14 @@ private struct MenuContent: View {
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Toggle(isOn: activeBinding) { Text("Clawdis Active") }
-        Toggle(isOn: $state.swabbleEnabled) { Text("Voice Wake") }
+        Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
+        Toggle(isOn: self.$state.swabbleEnabled) { Text("Voice Wake") }
             .disabled(!voiceWakeSupported)
             .opacity(voiceWakeSupported ? 1 : 0.5)
-        Button("Settings…") { open(tab: .general) }
+        Button("Settings…") { self.open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
-        Button("About Clawdis") { open(tab: .about) }
-        Button("Open Web Chat") { WebChatManager.shared.show(sessionKey: primarySessionKey()) }
+        Button("About Clawdis") { self.open(tab: .about) }
+        Button("Open Web Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
         Divider()
         Button("Test Notification") {
             Task { _ = await NotificationManager().send(title: "Clawdis", body: "Test notification", sound: nil) }
@@ -502,19 +518,20 @@ private struct MenuContent: View {
     private func open(tab: SettingsTab) {
         SettingsTabRouter.request(tab)
         NSApp.activate(ignoringOtherApps: true)
-        openSettings()
+        self.openSettings()
         NotificationCenter.default.post(name: .clawdisSelectSettingsTab, object: tab)
     }
 
     private var activeBinding: Binding<Bool> {
-        Binding(get: { !state.isPaused }, set: { state.isPaused = !$0 })
+        Binding(get: { !self.state.isPaused }, set: { self.state.isPaused = !$0 })
     }
 
     private func primarySessionKey() -> String {
         // Prefer the most recently updated session from the store; fall back to default
         let storePath = SessionLoader.defaultStorePath
         if let data = try? Data(contentsOf: URL(fileURLWithPath: storePath)),
-           let decoded = try? JSONDecoder().decode([String: SessionEntryRecord].self, from: data) {
+           let decoded = try? JSONDecoder().decode([String: SessionEntryRecord].self, from: data)
+        {
             let sorted = decoded.sorted { a, b -> Bool in
                 let lhs = a.value.updatedAt ?? 0
                 let rhs = b.value.updatedAt ?? 0
@@ -532,101 +549,102 @@ private struct CritterStatusLabel: View {
     var isPaused: Bool
 
     @State private var blinkAmount: CGFloat = 0
-    @State private var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5 ... 8.5))
+    @State private var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
     @State private var wiggleAngle: Double = 0
     @State private var wiggleOffset: CGFloat = 0
-    @State private var nextWiggle = Date().addingTimeInterval(Double.random(in: 6.5 ... 14))
+    @State private var nextWiggle = Date().addingTimeInterval(Double.random(in: 6.5...14))
     @State private var legWiggle: CGFloat = 0
-    @State private var nextLegWiggle = Date().addingTimeInterval(Double.random(in: 5.0 ... 11.0))
+    @State private var nextLegWiggle = Date().addingTimeInterval(Double.random(in: 5.0...11.0))
     @State private var earWiggle: CGFloat = 0
-    @State private var nextEarWiggle = Date().addingTimeInterval(Double.random(in: 7.0 ... 14.0))
+    @State private var nextEarWiggle = Date().addingTimeInterval(Double.random(in: 7.0...14.0))
     private let ticker = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Group {
-            if isPaused {
+            if self.isPaused {
                 Image(nsImage: CritterIconRenderer.makeIcon(blink: 0))
                     .frame(width: 18, height: 16)
             } else {
-                Image(nsImage: CritterIconRenderer.makeIcon(blink: blinkAmount,
-                                                            legWiggle: legWiggle,
-                                                            earWiggle: earWiggle))
+                Image(nsImage: CritterIconRenderer.makeIcon(
+                    blink: self.blinkAmount,
+                    legWiggle: self.legWiggle,
+                    earWiggle: self.earWiggle))
                     .frame(width: 18, height: 16)
-                    .rotationEffect(.degrees(wiggleAngle), anchor: .center)
-                    .offset(x: wiggleOffset)
-                    .onReceive(ticker) { now in
-                        if now >= nextBlink {
-                            blink()
-                            nextBlink = now.addingTimeInterval(Double.random(in: 3.5 ... 8.5))
+                    .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
+                    .offset(x: self.wiggleOffset)
+                    .onReceive(self.ticker) { now in
+                        if now >= self.nextBlink {
+                            self.blink()
+                            self.nextBlink = now.addingTimeInterval(Double.random(in: 3.5...8.5))
                         }
 
-                        if now >= nextWiggle {
-                            wiggle()
-                            nextWiggle = now.addingTimeInterval(Double.random(in: 6.5 ... 14))
+                        if now >= self.nextWiggle {
+                            self.wiggle()
+                            self.nextWiggle = now.addingTimeInterval(Double.random(in: 6.5...14))
                         }
 
-                        if now >= nextLegWiggle {
-                            wiggleLegs()
-                            nextLegWiggle = now.addingTimeInterval(Double.random(in: 5.0 ... 11.0))
+                        if now >= self.nextLegWiggle {
+                            self.wiggleLegs()
+                            self.nextLegWiggle = now.addingTimeInterval(Double.random(in: 5.0...11.0))
                         }
 
-                        if now >= nextEarWiggle {
-                            wiggleEars()
-                            nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0 ... 14.0))
+                        if now >= self.nextEarWiggle {
+                            self.wiggleEars()
+                            self.nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0...14.0))
                         }
                     }
-                    .onChange(of: isPaused) { _, _ in resetMotion() }
+                    .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
             }
         }
     }
 
     private func resetMotion() {
-        blinkAmount = 0
-        wiggleAngle = 0
-        wiggleOffset = 0
-        legWiggle = 0
-        earWiggle = 0
+        self.blinkAmount = 0
+        self.wiggleAngle = 0
+        self.wiggleOffset = 0
+        self.legWiggle = 0
+        self.earWiggle = 0
     }
 
     private func blink() {
-        withAnimation(.easeInOut(duration: 0.08)) { blinkAmount = 1 }
+        withAnimation(.easeInOut(duration: 0.08)) { self.blinkAmount = 1 }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
-            withAnimation(.easeOut(duration: 0.12)) { blinkAmount = 0 }
+            withAnimation(.easeOut(duration: 0.12)) { self.blinkAmount = 0 }
         }
     }
 
     private func wiggle() {
-        let targetAngle = Double.random(in: -4.5 ... 4.5)
-        let targetOffset = CGFloat.random(in: -0.5 ... 0.5)
+        let targetAngle = Double.random(in: -4.5...4.5)
+        let targetOffset = CGFloat.random(in: -0.5...0.5)
         withAnimation(.interpolatingSpring(stiffness: 220, damping: 18)) {
-            wiggleAngle = targetAngle
-            wiggleOffset = targetOffset
+            self.wiggleAngle = targetAngle
+            self.wiggleOffset = targetOffset
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
             withAnimation(.interpolatingSpring(stiffness: 220, damping: 18)) {
-                wiggleAngle = 0
-                wiggleOffset = 0
+                self.wiggleAngle = 0
+                self.wiggleOffset = 0
             }
         }
     }
 
     private func wiggleLegs() {
-        let target = CGFloat.random(in: 0.35 ... 0.9)
+        let target = CGFloat.random(in: 0.35...0.9)
         withAnimation(.easeInOut(duration: 0.14)) {
-            legWiggle = target
+            self.legWiggle = target
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-            withAnimation(.easeOut(duration: 0.18)) { legWiggle = 0 }
+            withAnimation(.easeOut(duration: 0.18)) { self.legWiggle = 0 }
         }
     }
 
     private func wiggleEars() {
-        let target = CGFloat.random(in: -1.2 ... 1.2)
+        let target = CGFloat.random(in: -1.2...1.2)
         withAnimation(.interpolatingSpring(stiffness: 260, damping: 19)) {
-            earWiggle = target
+            self.earWiggle = target
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
-            withAnimation(.interpolatingSpring(stiffness: 260, damping: 19)) { earWiggle = 0 }
+            withAnimation(.interpolatingSpring(stiffness: 260, damping: 19)) { self.earWiggle = 0 }
         }
     }
 }
@@ -641,8 +659,8 @@ enum CritterIconRenderer {
 
         guard let ctx = NSGraphicsContext.current?.cgContext else { return image }
 
-        let w = size.width
-        let h = size.height
+        let w = self.size.width
+        let h = self.size.height
 
         let bodyW = w * 0.78
         let bodyH = h * 0.58
@@ -671,24 +689,32 @@ enum CritterIconRenderer {
         ctx.setFillColor(NSColor.labelColor.cgColor)
 
         // Body
-        ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH), cornerWidth: bodyCorner, cornerHeight: bodyCorner, transform: nil))
+        ctx.addPath(CGPath(
+            roundedRect: CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH),
+            cornerWidth: bodyCorner,
+            cornerHeight: bodyCorner,
+            transform: nil))
         // Ears (tiny wiggle)
-        ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX - earW * 0.55 + earWiggle,
-                                               y: bodyY + bodyH * 0.08 + earWiggle * 0.4,
-                                               width: earW,
-                                               height: earH),
-                           cornerWidth: earCorner,
-                           cornerHeight: earCorner,
-                           transform: nil))
-        ctx.addPath(CGPath(roundedRect: CGRect(x: bodyX + bodyW - earW * 0.45 - earWiggle,
-                                               y: bodyY + bodyH * 0.08 - earWiggle * 0.4,
-                                               width: earW,
-                                               height: earH),
-                           cornerWidth: earCorner,
-                           cornerHeight: earCorner,
-                           transform: nil))
+        ctx.addPath(CGPath(
+            roundedRect: CGRect(
+                x: bodyX - earW * 0.55 + earWiggle,
+                y: bodyY + bodyH * 0.08 + earWiggle * 0.4,
+                width: earW,
+                height: earH),
+            cornerWidth: earCorner,
+            cornerHeight: earCorner,
+            transform: nil))
+        ctx.addPath(CGPath(
+            roundedRect: CGRect(
+                x: bodyX + bodyW - earW * 0.45 - earWiggle,
+                y: bodyY + bodyH * 0.08 - earWiggle * 0.4,
+                width: earW,
+                height: earH),
+            cornerWidth: earCorner,
+            cornerHeight: earCorner,
+            transform: nil))
         // Legs
-        for i in 0 ..< 4 {
+        for i in 0..<4 {
             let x = legStartX + CGFloat(i) * (legW + legSpacing)
             let lift = (i % 2 == 0 ? legLift : -legLift)
             let rect = CGRect(x: x, y: legYBase + lift, width: legW, height: legH * (1 - 0.12 * legWiggle))
@@ -731,11 +757,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
-        state = AppStateStore.shared
-        AppActivationPolicy.apply(showDockIcon: state?.showDockIcon ?? false)
+        self.state = AppStateStore.shared
+        AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         LaunchdManager.startClawdis()
-        startListener()
-        scheduleFirstRunOnboardingIfNeeded()
+        self.startListener()
+        self.scheduleFirstRunOnboardingIfNeeded()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -744,7 +770,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
 
     @MainActor
     private func startListener() {
-        guard state != nil else { return }
+        guard self.state != nil else { return }
         let listener = NSXPCListener(machServiceName: serviceName)
         listener.delegate = self
         listener.resume()
@@ -793,15 +819,15 @@ private struct SessionTokenStats {
     let contextTokens: Int
 
     var percentUsed: Int? {
-        guard contextTokens > 0, total > 0 else { return nil }
-        return min(100, Int(round((Double(total) / Double(contextTokens)) * 100)))
+        guard self.contextTokens > 0, self.total > 0 else { return nil }
+        return min(100, Int(round((Double(self.total) / Double(self.contextTokens)) * 100)))
     }
 
     var summary: String {
         let parts = ["in \(input)", "out \(output)", "total \(total)"]
         var text = parts.joined(separator: " | ")
         if let percentUsed {
-            text += " (\(percentUsed)% of \(contextTokens))"
+            text += " (\(percentUsed)% of \(self.contextTokens))"
         }
         return text
     }
@@ -820,14 +846,14 @@ private struct SessionRow: Identifiable {
     let tokens: SessionTokenStats
     let model: String?
 
-    var ageText: String { relativeAge(from: updatedAt) }
+    var ageText: String { relativeAge(from: self.updatedAt) }
 
     var flagLabels: [String] {
         var flags: [String] = []
         if let thinkingLevel { flags.append("think \(thinkingLevel)") }
         if let verboseLevel { flags.append("verbose \(verboseLevel)") }
-        if systemSent { flags.append("system sent") }
-        if abortedLastRun { flags.append("aborted") }
+        if self.systemSent { flags.append("system sent") }
+        if self.abortedLastRun { flags.append("aborted") }
         return flags
     }
 }
@@ -889,17 +915,19 @@ private enum SessionLoadError: LocalizedError {
 
 private enum SessionLoader {
     static let fallbackModel = "claude-opus-4-5"
-    static let fallbackContextTokens = 200000
+    static let fallbackContextTokens = 200_000
 
     static let defaultStorePath = standardize(
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".clawdis/sessions/sessions.json").path
-    )
+            .appendingPathComponent(".clawdis/sessions/sessions.json").path)
 
     private static let legacyStorePaths: [String] = [
-        standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clawdis/sessions.json").path),
-        standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".warelay/sessions/sessions.json").path),
-        standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".warelay/sessions.json").path)
+        standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clawdis/sessions.json")
+            .path),
+        standardize(FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".warelay/sessions/sessions.json").path),
+        standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".warelay/sessions.json")
+            .path),
     ]
 
     static func configHints() -> SessionConfigHints {
@@ -921,14 +949,15 @@ private enum SessionLoader {
         let model = agent?["model"] as? String
         let contextTokens = (agent?["contextTokens"] as? NSNumber)?.intValue
 
-        return SessionConfigHints(storePath: store.map { standardize($0) },
-                                  model: model,
-                                  contextTokens: contextTokens)
+        return SessionConfigHints(
+            storePath: store.map { self.standardize($0) },
+            model: model,
+            contextTokens: contextTokens)
     }
 
     static func resolveStorePath(override: String?) -> String {
-        let preferred = standardize(override ?? defaultStorePath)
-        let candidates = [preferred] + legacyStorePaths
+        let preferred = self.standardize(override ?? self.defaultStorePath)
+        let candidates = [preferred] + self.legacyStorePaths
         if let existing = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
             return existing
         }
@@ -957,20 +986,22 @@ private enum SessionLoader {
                 let context = entry.contextTokens ?? defaults.contextTokens
                 let model = entry.model ?? defaults.model
 
-                return SessionRow(id: key,
-                                  key: key,
-                                  kind: SessionKind.from(key: key),
-                                  updatedAt: updated,
-                                  sessionId: entry.sessionId,
-                                  thinkingLevel: entry.thinkingLevel,
-                                  verboseLevel: entry.verboseLevel,
-                                  systemSent: entry.systemSent ?? false,
-                                  abortedLastRun: entry.abortedLastRun ?? false,
-                                  tokens: SessionTokenStats(input: input,
-                                                            output: output,
-                                                            total: total,
-                                                            contextTokens: context),
-                                  model: model)
+                return SessionRow(
+                    id: key,
+                    key: key,
+                    kind: SessionKind.from(key: key),
+                    updatedAt: updated,
+                    sessionId: entry.sessionId,
+                    thinkingLevel: entry.thinkingLevel,
+                    verboseLevel: entry.verboseLevel,
+                    systemSent: entry.systemSent ?? false,
+                    abortedLastRun: entry.abortedLastRun ?? false,
+                    tokens: SessionTokenStats(
+                        input: input,
+                        output: output,
+                        total: total,
+                        contextTokens: context),
+                    model: model)
             }
             .sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
         }.value
@@ -1004,18 +1035,18 @@ struct SessionsSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            header
-            storeMetadata
+            self.header
+            self.storeMetadata
             Divider().padding(.vertical, 4)
-            content
+            self.content
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .task {
-            guard !hasLoaded else { return }
-            hasLoaded = true
-            await refresh()
+            guard !self.hasLoaded else { return }
+            self.hasLoaded = true
+            await self.refresh()
         }
     }
 
@@ -1043,7 +1074,7 @@ struct SessionsSettings: View {
                     }
                 }
                 Spacer()
-                Text(storePath)
+                Text(self.storePath)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.trailing)
@@ -1051,22 +1082,22 @@ struct SessionsSettings: View {
 
             HStack(spacing: 10) {
                 Button {
-                    Task { await refresh() }
+                    Task { await self.refresh() }
                 } label: {
-                    Label(loading ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
+                    Label(self.loading ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
                         .labelStyle(.titleAndIcon)
                 }
-                .disabled(loading)
+                .disabled(self.loading)
 
                 Button {
-                    revealStore()
+                    self.revealStore()
                 } label: {
                     Label("Reveal", systemImage: "folder")
                         .labelStyle(.titleAndIcon)
                 }
-                .disabled(!FileManager.default.fileExists(atPath: storePath))
+                .disabled(!FileManager.default.fileExists(atPath: self.storePath))
 
-                if loading {
+                if self.loading {
                     ProgressView().controlSize(.small)
                 }
             }
@@ -1081,13 +1112,13 @@ struct SessionsSettings: View {
 
     private var content: some View {
         Group {
-            if rows.isEmpty, errorMessage == nil {
+            if self.rows.isEmpty, self.errorMessage == nil {
                 Text("No sessions yet. They appear after the first inbound message or heartbeat.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
             } else {
-                Table(rows) {
+                Table(self.rows) {
                     TableColumn("Key") { row in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(row.key)
@@ -1136,32 +1167,33 @@ struct SessionsSettings: View {
     }
 
     private func refresh() async {
-        guard !loading else { return }
-        loading = true
-        errorMessage = nil
+        guard !self.loading else { return }
+        self.loading = true
+        self.errorMessage = nil
 
         let hints = SessionLoader.configHints()
         let resolvedStore = SessionLoader.resolveStorePath(override: hints.storePath)
-        let defaults = SessionDefaults(model: hints.model ?? SessionLoader.fallbackModel,
-                                       contextTokens: hints.contextTokens ?? SessionLoader.fallbackContextTokens)
+        let defaults = SessionDefaults(
+            model: hints.model ?? SessionLoader.fallbackModel,
+            contextTokens: hints.contextTokens ?? SessionLoader.fallbackContextTokens)
 
         do {
             let newRows = try await SessionLoader.loadRows(at: resolvedStore, defaults: defaults)
-            rows = newRows
-            storePath = resolvedStore
-            lastLoaded = Date()
+            self.rows = newRows
+            self.storePath = resolvedStore
+            self.lastLoaded = Date()
         } catch {
-            rows = []
-            storePath = resolvedStore
-            errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            self.rows = []
+            self.storePath = resolvedStore
+            self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
         }
 
-        loading = false
+        self.loading = false
     }
 
     private func revealStore() {
         let url = URL(fileURLWithPath: storePath)
-        if FileManager.default.fileExists(atPath: storePath) {
+        if FileManager.default.fileExists(atPath: self.storePath) {
             NSWorkspace.shared.activateFileViewerSelecting([url])
         } else {
             NSWorkspace.shared.open(url.deletingLastPathComponent())
@@ -1175,17 +1207,17 @@ private struct SessionRowView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Text(row.key)
+                Text(self.row.key)
                     .font(.body.weight(.semibold))
-                SessionKindBadge(kind: row.kind)
+                SessionKindBadge(kind: self.row.kind)
                 Spacer()
-                Text(row.ageText)
+                Text(self.row.ageText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             HStack(spacing: 12) {
-                Label(row.tokens.summary, systemImage: "chart.bar.doc.horizontal")
+                Label(self.row.tokens.summary, systemImage: "chart.bar.doc.horizontal")
                     .labelStyle(.titleAndIcon)
                     .foregroundStyle(.secondary)
 
@@ -1206,9 +1238,9 @@ private struct SessionRowView: View {
             .font(.caption)
             .lineLimit(1)
 
-            if !row.flagLabels.isEmpty {
+            if !self.row.flagLabels.isEmpty {
                 HStack(spacing: 6) {
-                    ForEach(row.flagLabels, id: \.self) { flag in
+                    ForEach(self.row.flagLabels, id: \.self) { flag in
                         Text(flag)
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
@@ -1223,12 +1255,10 @@ private struct SessionRowView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(NSColor.controlBackgroundColor))
-        )
+                .fill(Color(NSColor.controlBackgroundColor)))
         .overlay(
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-        )
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1))
     }
 }
 
@@ -1236,12 +1266,12 @@ private struct SessionKindBadge: View {
     let kind: SessionKind
 
     var body: some View {
-        Text(kind.label)
+        Text(self.kind.label)
             .font(.caption2.weight(.bold))
             .padding(.horizontal, 7)
             .padding(.vertical, 4)
-            .foregroundStyle(kind.tint)
-            .background(kind.tint.opacity(0.15))
+            .foregroundStyle(self.kind.tint)
+            .background(self.kind.tint.opacity(0.15))
             .clipShape(Capsule())
     }
 }
@@ -1250,7 +1280,7 @@ private struct Badge: View {
     let text: String
 
     var body: some View {
-        Text(text)
+        Text(self.text)
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 6)
             .padding(.vertical, 3)
@@ -1267,8 +1297,8 @@ struct SettingsRootView: View {
     @State private var selectedTab: SettingsTab = .general
 
     var body: some View {
-        TabView(selection: $selectedTab) {
-            GeneralSettings(state: state)
+        TabView(selection: self.$selectedTab) {
+            GeneralSettings(state: self.state)
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
 
@@ -1276,15 +1306,18 @@ struct SettingsRootView: View {
                 .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
                 .tag(SettingsTab.sessions)
 
-            VoiceWakeSettings(state: state)
+            VoiceWakeSettings(state: self.state)
                 .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
                 .tag(SettingsTab.voiceWake)
 
-            PermissionsSettings(status: permStatus, refresh: refreshPerms, showOnboarding: { OnboardingController.shared.show() })
+            PermissionsSettings(
+                status: self.permStatus,
+                refresh: self.refreshPerms,
+                showOnboarding: { OnboardingController.shared.show() })
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
                 .tag(SettingsTab.permissions)
 
-            if state.debugPaneEnabled {
+            if self.state.debugPaneEnabled {
                 DebugSettings()
                     .tabItem { Label("Debug", systemImage: "ant") }
                     .tag(SettingsTab.debug)
@@ -1301,34 +1334,34 @@ struct SettingsRootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .clawdisSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                    selectedTab = tab
+                    self.selectedTab = tab
                 }
             }
         }
         .onAppear {
             if let pending = SettingsTabRouter.consumePending() {
-                selectedTab = validTab(for: pending)
+                self.selectedTab = self.validTab(for: pending)
             }
         }
-        .onChange(of: state.debugPaneEnabled) { _, enabled in
-            if !enabled, selectedTab == .debug {
-                selectedTab = .general
+        .onChange(of: self.state.debugPaneEnabled) { _, enabled in
+            if !enabled, self.selectedTab == .debug {
+                self.selectedTab = .general
             }
         }
-        .task { await refreshPerms() }
+        .task { await self.refreshPerms() }
     }
 
     private func validTab(for requested: SettingsTab) -> SettingsTab {
-        if requested == .debug, !state.debugPaneEnabled { return .general }
+        if requested == .debug, !self.state.debugPaneEnabled { return .general }
         return requested
     }
 
     @MainActor
     private func refreshPerms() async {
-        guard !loadingPerms else { return }
-        loadingPerms = true
-        permStatus = await PermissionManager.status()
-        loadingPerms = false
+        guard !self.loadingPerms else { return }
+        self.loadingPerms = true
+        self.permStatus = await PermissionManager.status()
+        self.loadingPerms = false
     }
 }
 
@@ -1378,7 +1411,7 @@ enum VoiceWakeTestState: Equatable {
 private struct AudioInputDevice: Identifiable, Equatable {
     let uid: String
     let name: String
-    var id: String { uid }
+    var id: String { self.uid }
 }
 
 actor MicLevelMonitor {
@@ -1388,9 +1421,9 @@ actor MicLevelMonitor {
     private var smoothedLevel: Double = 0
 
     func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
-        update = onLevel
-        if running { return }
-        let input = engine.inputNode
+        self.update = onLevel
+        if self.running { return }
+        let input = self.engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 512, format: format) { [weak self] buffer, _ in
@@ -1398,22 +1431,22 @@ actor MicLevelMonitor {
             let level = Self.normalizedLevel(from: buffer)
             Task { await self.push(level: level) }
         }
-        engine.prepare()
-        try engine.start()
-        running = true
+        self.engine.prepare()
+        try self.engine.start()
+        self.running = true
     }
 
     func stop() {
-        guard running else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        running = false
+        guard self.running else { return }
+        self.engine.inputNode.removeTap(onBus: 0)
+        self.engine.stop()
+        self.running = false
     }
 
     private func push(level: Double) {
-        smoothedLevel = (smoothedLevel * 0.45) + (level * 0.55)
+        self.smoothedLevel = (self.smoothedLevel * 0.45) + (level * 0.55)
         guard let update else { return }
-        let value = smoothedLevel
+        let value = self.smoothedLevel
         Task { @MainActor in update(value) }
     }
 
@@ -1422,7 +1455,7 @@ actor MicLevelMonitor {
         let frameCount = Int(buffer.frameLength)
         guard frameCount > 0 else { return 0 }
         var sum: Float = 0
-        for i in 0 ..< frameCount {
+        for i in 0..<frameCount {
             let s = channel[i]
             sum += s * s
         }
@@ -1444,46 +1477,62 @@ final class VoiceWakeTester {
         self.recognizer = SFSpeechRecognizer(locale: locale)
     }
 
-    func start(triggers: [String], micID: String?, localeID: String?, onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
-        guard recognitionTask == nil else { return }
-        isStopping = false
+    func start(
+        triggers: [String],
+        micID: String?,
+        localeID: String?,
+        onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async throws
+    {
+        guard self.recognitionTask == nil else { return }
+        self.isStopping = false
         let chosenLocale = localeID.flatMap { Locale(identifier: $0) } ?? Locale.current
         let recognizer = SFSpeechRecognizer(locale: chosenLocale)
         guard let recognizer, recognizer.isAvailable else {
-            throw NSError(domain: "VoiceWakeTester", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
+            throw NSError(
+                domain: "VoiceWakeTester",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
         }
 
         guard Self.hasPrivacyStrings else {
-            throw NSError(domain: "VoiceWakeTester", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing mic/speech privacy strings. Rebuild the mac app (scripts/restart-mac.sh) to include usage descriptions."])
+            throw NSError(
+                domain: "VoiceWakeTester",
+                code: 3,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Missing mic/speech privacy strings. Rebuild the mac app (scripts/restart-mac.sh) to include usage descriptions.",
+                ])
         }
 
         let granted = try await Self.ensurePermissions()
         guard granted else {
-            throw NSError(domain: "VoiceWakeTester", code: 2, userInfo: [NSLocalizedDescriptionKey: "Microphone or speech permission denied"])
+            throw NSError(
+                domain: "VoiceWakeTester",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Microphone or speech permission denied"])
         }
 
-        configureSession(preferredMicID: micID)
+        self.configureSession(preferredMicID: micID)
 
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        recognitionRequest?.shouldReportPartialResults = true
-        let request = recognitionRequest
+        self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
+        self.recognitionRequest?.shouldReportPartialResults = true
+        let request = self.recognitionRequest
 
-        let inputNode = audioEngine.inputNode
+        let inputNode = self.audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
             request?.append(buffer)
         }
 
-        audioEngine.prepare()
-        try audioEngine.start()
+        self.audioEngine.prepare()
+        try self.audioEngine.start()
         DispatchQueue.main.async {
             onUpdate(.listening)
         }
 
         guard let request = recognitionRequest else { return }
 
-        recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+        self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self, !self.isStopping else { return }
             let text = result?.bestTranscription.formattedString ?? ""
             let matched = Self.matches(text: text, triggers: triggers)
@@ -1491,39 +1540,46 @@ final class VoiceWakeTester {
             let errorMessage = error?.localizedDescription
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.handleResult(matched: matched, text: text, isFinal: isFinal, errorMessage: errorMessage, onUpdate: onUpdate)
+                self.handleResult(
+                    matched: matched,
+                    text: text,
+                    isFinal: isFinal,
+                    errorMessage: errorMessage,
+                    onUpdate: onUpdate)
             }
         }
     }
 
     func stop() {
-        isStopping = true
-        audioEngine.stop()
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        recognitionRequest = nil
-        audioEngine.inputNode.removeTap(onBus: 0)
+        self.isStopping = true
+        self.audioEngine.stop()
+        self.recognitionRequest?.endAudio()
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest = nil
+        self.audioEngine.inputNode.removeTap(onBus: 0)
     }
 
     @MainActor
-    private func handleResult(matched: Bool,
-                              text: String,
-                              isFinal: Bool,
-                              errorMessage: String?,
-                              onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {
+    private func handleResult(
+        matched: Bool,
+        text: String,
+        isFinal: Bool,
+        errorMessage: String?,
+        onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void)
+    {
         if matched, !text.isEmpty {
-            stop()
+            self.stop()
             onUpdate(.detected(text))
             return
         }
         if let errorMessage {
-            stop()
+            self.stop()
             onUpdate(.failed(errorMessage))
             return
         }
         if isFinal {
-            stop()
+            self.stop()
             onUpdate(text.isEmpty ? .failed("No speech detected") : .failed("No trigger heard: “\(text)”"))
         } else {
             onUpdate(text.isEmpty ? .listening : .hearing(text))
@@ -1585,8 +1641,8 @@ struct SettingsToggleRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Toggle(isOn: $binding) {
-                Text(title)
+            Toggle(isOn: self.$binding) {
+                Text(self.title)
                     .font(.body)
             }
             .toggleStyle(.checkbox)
@@ -1608,7 +1664,7 @@ struct GeneralSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            if !state.onboardingSeen {
+            if !self.state.onboardingSeen {
                 Text("Complete onboarding to finish setup")
                     .font(.callout.weight(.semibold))
                     .foregroundColor(.accentColor)
@@ -1616,24 +1672,28 @@ struct GeneralSettings: View {
             }
 
             VStack(alignment: .leading, spacing: 12) {
-                SettingsToggleRow(title: "Clawdis active",
-                                  subtitle: "Pause to stop Clawdis background helpers and notifications.",
-                                  binding: activeBinding)
+                SettingsToggleRow(
+                    title: "Clawdis active",
+                    subtitle: "Pause to stop Clawdis background helpers and notifications.",
+                    binding: self.activeBinding)
 
-                SettingsToggleRow(title: "Launch at login",
-                                  subtitle: "Automatically start Clawdis after you sign in.",
-                                  binding: $state.launchAtLogin)
+                SettingsToggleRow(
+                    title: "Launch at login",
+                    subtitle: "Automatically start Clawdis after you sign in.",
+                    binding: self.$state.launchAtLogin)
 
-                SettingsToggleRow(title: "Show Dock icon",
-                                  subtitle: "Keep Clawdis visible in the Dock instead of menu-bar-only mode.",
-                                  binding: $state.showDockIcon)
+                SettingsToggleRow(
+                    title: "Show Dock icon",
+                    subtitle: "Keep Clawdis visible in the Dock instead of menu-bar-only mode.",
+                    binding: self.$state.showDockIcon)
 
-                SettingsToggleRow(title: "Enable debug tools",
-                                  subtitle: "Show the Debug tab with development utilities.",
-                                  binding: $state.debugPaneEnabled)
+                SettingsToggleRow(
+                    title: "Enable debug tools",
+                    subtitle: "Show the Debug tab with development utilities.",
+                    binding: self.$state.debugPaneEnabled)
 
                 LabeledContent("Default sound") {
-                    Picker("Sound", selection: $state.defaultSound) {
+                    Picker("Sound", selection: self.$state.defaultSound) {
                         Text("None").tag("")
                         Text("Glass").tag("Glass")
                         Text("Basso").tag("Basso")
@@ -1647,7 +1707,7 @@ struct GeneralSettings: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("CLI helper")
                     .font(.callout.weight(.semibold))
-                cliInstaller
+                self.cliInstaller
             }
 
             Spacer()
@@ -1662,23 +1722,24 @@ struct GeneralSettings: View {
     }
 
     private var activeBinding: Binding<Bool> {
-        Binding(get: { !state.isPaused },
-                set: { state.isPaused = !$0 })
+        Binding(
+            get: { !self.state.isPaused },
+            set: { self.state.isPaused = !$0 })
     }
 
     private var cliInstaller: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Button {
-                    Task { await installCLI() }
+                    Task { await self.installCLI() }
                 } label: {
-                    if isInstallingCLI {
+                    if self.isInstallingCLI {
                         ProgressView().controlSize(.small)
                     } else {
                         Text("Install CLI helper")
                     }
                 }
-                .disabled(isInstallingCLI)
+                .disabled(self.isInstallingCLI)
 
                 if let status = cliStatus {
                     Text(status)
@@ -1695,11 +1756,11 @@ struct GeneralSettings: View {
     }
 
     private func installCLI() async {
-        guard !isInstallingCLI else { return }
-        isInstallingCLI = true
+        guard !self.isInstallingCLI else { return }
+        self.isInstallingCLI = true
         defer { isInstallingCLI = false }
         await CLIInstaller.install { status in
-            await MainActor.run { cliStatus = status }
+            await MainActor.run { self.cliStatus = status }
         }
     }
 }
@@ -1723,9 +1784,10 @@ struct VoiceWakeSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            SettingsToggleRow(title: "Enable Voice Wake",
-                              subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands.",
-                              binding: $state.swabbleEnabled)
+            SettingsToggleRow(
+                title: "Enable Voice Wake",
+                subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands.",
+                binding: self.$state.swabbleEnabled)
                 .disabled(!voiceWakeSupported)
 
             if !voiceWakeSupported {
@@ -1737,11 +1799,11 @@ struct VoiceWakeSettings: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
-            localePicker
-            micPicker
-            levelMeter
+            self.localePicker
+            self.micPicker
+            self.levelMeter
 
-            testCard
+            self.testCard
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -1749,23 +1811,24 @@ struct VoiceWakeSettings: View {
                         .font(.callout.weight(.semibold))
                     Spacer()
                     Button {
-                        addWord()
+                        self.addWord()
                     } label: {
                         Label("Add word", systemImage: "plus")
                     }
-                    .disabled(state.swabbleTriggerWords.contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+                    .disabled(self.state.swabbleTriggerWords
+                        .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
-                    Button("Reset defaults") { state.swabbleTriggerWords = defaultVoiceWakeTriggers }
+                    Button("Reset defaults") { self.state.swabbleTriggerWords = defaultVoiceWakeTriggers }
                 }
 
-                Table(indexedWords) {
+                Table(self.indexedWords) {
                     TableColumn("Word") { row in
-                        TextField("Wake word", text: binding(for: row.id))
+                        TextField("Wake word", text: self.binding(for: row.id))
                             .textFieldStyle(.roundedBorder)
                     }
                     TableColumn("") { row in
                         Button {
-                            removeWord(at: row.id)
+                            self.removeWord(at: row.id)
                         } label: {
                             Image(systemName: "trash")
                         }
@@ -1778,10 +1841,10 @@ struct VoiceWakeSettings: View {
                 .clipShape(RoundedRectangle(cornerRadius: 6))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                )
+                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
 
-                Text("Clawdis reacts when any trigger appears in a transcription. Keep them short to avoid false positives.")
+                Text(
+                    "Clawdis reacts when any trigger appears in a transcription. Keep them short to avoid false positives.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1791,19 +1854,19 @@ struct VoiceWakeSettings: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
-        .task { await loadMicsIfNeeded() }
-        .task { await loadLocalesIfNeeded() }
-        .task { await restartMeter() }
-        .onChange(of: state.voiceWakeMicID) { _, _ in
-            Task { await restartMeter() }
+        .task { await self.loadMicsIfNeeded() }
+        .task { await self.loadLocalesIfNeeded() }
+        .task { await self.restartMeter() }
+        .onChange(of: self.state.voiceWakeMicID) { _, _ in
+            Task { await self.restartMeter() }
         }
         .onDisappear {
-            Task { await meter.stop() }
+            Task { await self.meter.stop() }
         }
     }
 
     private var indexedWords: [IndexedWord] {
-        state.swabbleTriggerWords.enumerated().map { IndexedWord(id: $0.offset, value: $0.element) }
+        self.state.swabbleTriggerWords.enumerated().map { IndexedWord(id: $0.offset, value: $0.element) }
     }
 
     private var testCard: some View {
@@ -1812,17 +1875,19 @@ struct VoiceWakeSettings: View {
                 Text("Test Voice Wake")
                     .font(.callout.weight(.semibold))
                 Spacer()
-                Button(action: toggleTest) {
-                    Label(isTesting ? "Stop" : "Start test", systemImage: isTesting ? "stop.circle.fill" : "play.circle")
+                Button(action: self.toggleTest) {
+                    Label(
+                        self.isTesting ? "Stop" : "Start test",
+                        systemImage: self.isTesting ? "stop.circle.fill" : "play.circle")
                 }
                 .buttonStyle(.borderedProminent)
-                .tint(isTesting ? .red : .accentColor)
+                .tint(self.isTesting ? .red : .accentColor)
             }
 
             HStack(spacing: 8) {
-                statusIcon
+                self.statusIcon
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(statusText)
+                    Text(self.statusText)
                         .font(.subheadline)
                     if case let .detected(text) = testState {
                         Text("Heard: \(text)")
@@ -1841,7 +1906,7 @@ struct VoiceWakeSettings: View {
     }
 
     private var statusIcon: some View {
-        switch testState {
+        switch self.testState {
         case .idle:
             AnyView(Image(systemName: "waveform").foregroundStyle(.secondary))
 
@@ -1852,8 +1917,7 @@ struct VoiceWakeSettings: View {
             AnyView(
                 Image(systemName: "ear.and.waveform")
                     .symbolEffect(.pulse)
-                    .foregroundStyle(Color.accentColor)
-            )
+                    .foregroundStyle(Color.accentColor))
 
         case .detected:
             AnyView(Image(systemName: "checkmark.circle.fill").foregroundStyle(.green))
@@ -1864,7 +1928,7 @@ struct VoiceWakeSettings: View {
     }
 
     private var statusText: String {
-        switch testState {
+        switch self.testState {
         case .idle:
             "Press start, say a trigger word, and wait for detection."
 
@@ -1886,69 +1950,71 @@ struct VoiceWakeSettings: View {
     }
 
     private func addWord() {
-        state.swabbleTriggerWords.append("")
+        self.state.swabbleTriggerWords.append("")
     }
 
     private func removeWord(at index: Int) {
-        guard state.swabbleTriggerWords.indices.contains(index) else { return }
-        state.swabbleTriggerWords.remove(at: index)
+        guard self.state.swabbleTriggerWords.indices.contains(index) else { return }
+        self.state.swabbleTriggerWords.remove(at: index)
     }
 
     private func binding(for index: Int) -> Binding<String> {
-        Binding(get: {
-                    guard state.swabbleTriggerWords.indices.contains(index) else { return "" }
-                    return state.swabbleTriggerWords[index]
-                },
-                set: { newValue in
-                    guard state.swabbleTriggerWords.indices.contains(index) else { return }
-                    state.swabbleTriggerWords[index] = newValue
-                })
+        Binding(
+            get: {
+                guard self.state.swabbleTriggerWords.indices.contains(index) else { return "" }
+                return self.state.swabbleTriggerWords[index]
+            },
+            set: { newValue in
+                guard self.state.swabbleTriggerWords.indices.contains(index) else { return }
+                self.state.swabbleTriggerWords[index] = newValue
+            })
     }
 
     private func toggleTest() {
         guard voiceWakeSupported else {
-            testState = .failed("Voice Wake requires macOS 26 or newer.")
+            self.testState = .failed("Voice Wake requires macOS 26 or newer.")
             return
         }
-        if isTesting {
-            tester.stop()
-            isTesting = false
-            testState = .idle
+        if self.isTesting {
+            self.tester.stop()
+            self.isTesting = false
+            self.testState = .idle
             return
         }
 
-        let triggers = sanitizedTriggers()
-        isTesting = true
-        testState = .requesting
+        let triggers = self.sanitizedTriggers()
+        self.isTesting = true
+        self.testState = .requesting
         Task { @MainActor in
             do {
-                try await tester.start(triggers: triggers,
-                                       micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
-                                       localeID: state.voiceWakeLocaleID,
-                                       onUpdate: { newState in
-                                           DispatchQueue.main.async { [self] in
-                                               testState = newState
-                                               if case .detected = newState { isTesting = false }
-                                               if case .failed = newState { isTesting = false }
-                                           }
-                                       })
+                try await self.tester.start(
+                    triggers: triggers,
+                    micID: self.state.voiceWakeMicID.isEmpty ? nil : self.state.voiceWakeMicID,
+                    localeID: self.state.voiceWakeLocaleID,
+                    onUpdate: { newState in
+                        DispatchQueue.main.async { [self] in
+                            self.testState = newState
+                            if case .detected = newState { self.isTesting = false }
+                            if case .failed = newState { self.isTesting = false }
+                        }
+                    })
                 // timeout after 10s
-                try await Task.sleep(nanoseconds: 10 * 1000000000)
-                if isTesting {
-                    tester.stop()
-                    testState = .failed("Timeout: no trigger heard")
-                    isTesting = false
+                try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
+                if self.isTesting {
+                    self.tester.stop()
+                    self.testState = .failed("Timeout: no trigger heard")
+                    self.isTesting = false
                 }
             } catch {
-                tester.stop()
-                testState = .failed(error.localizedDescription)
-                isTesting = false
+                self.tester.stop()
+                self.testState = .failed(error.localizedDescription)
+                self.isTesting = false
             }
         }
     }
 
     private func sanitizedTriggers() -> [String] {
-        let cleaned = state.swabbleTriggerWords
+        let cleaned = self.state.swabbleTriggerWords
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return cleaned.isEmpty ? defaultVoiceWakeTriggers : cleaned
@@ -1957,16 +2023,16 @@ struct VoiceWakeSettings: View {
     private var micPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             LabeledContent("Microphone") {
-                Picker("Microphone", selection: $state.voiceWakeMicID) {
+                Picker("Microphone", selection: self.$state.voiceWakeMicID) {
                     Text("System default").tag("")
-                    ForEach(availableMics) { mic in
+                    ForEach(self.availableMics) { mic in
                         Text(mic.name).tag(mic.uid)
                     }
                 }
                 .labelsHidden()
                 .frame(width: 260)
             }
-            if loadingMics {
+            if self.loadingMics {
                 ProgressView().controlSize(.small)
             }
         }
@@ -1975,12 +2041,12 @@ struct VoiceWakeSettings: View {
     private var localePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             LabeledContent("Recognition language") {
-                Picker("Language", selection: $state.voiceWakeLocaleID) {
+                Picker("Language", selection: self.$state.voiceWakeLocaleID) {
                     let current = Locale(identifier: Locale.current.identifier)
-                    Text("\(friendlyName(for: current)) (System)").tag(Locale.current.identifier)
-                    ForEach(availableLocales.map(\.identifier), id: \.self) { id in
+                    Text("\(self.friendlyName(for: current)) (System)").tag(Locale.current.identifier)
+                    ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
                         if id != Locale.current.identifier {
-                            Text(friendlyName(for: Locale(identifier: id))).tag(id)
+                            Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
                         }
                     }
                 }
@@ -1988,27 +2054,35 @@ struct VoiceWakeSettings: View {
                 .frame(width: 260)
             }
 
-            if !state.voiceWakeAdditionalLocaleIDs.isEmpty {
+            if !self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Additional languages")
                         .font(.footnote.weight(.semibold))
-                    ForEach(Array(state.voiceWakeAdditionalLocaleIDs.enumerated()), id: \.offset) { idx, localeID in
+                    ForEach(
+                        Array(self.state.voiceWakeAdditionalLocaleIDs.enumerated()),
+                        id: \.offset)
+                    { idx, localeID in
                         HStack(spacing: 8) {
-                            Picker("Extra \(idx + 1)", selection: Binding(get: { localeID },
-                                                                          set: { newValue in
-                                                                              guard state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
-                                                                              state.voiceWakeAdditionalLocaleIDs[idx] = newValue
-                                                                          })) {
-                                ForEach(availableLocales.map(\.identifier), id: \.self) { id in
-                                    Text(friendlyName(for: Locale(identifier: id))).tag(id)
+                            Picker("Extra \(idx + 1)", selection: Binding(
+                                get: { localeID },
+                                set: { newValue in
+                                    guard self.state
+                                        .voiceWakeAdditionalLocaleIDs.indices
+                                        .contains(idx) else { return }
+                                    self.state
+                                        .voiceWakeAdditionalLocaleIDs[idx] =
+                                        newValue
+                                })) {
+                                    ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
+                                        Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
+                                    }
                                 }
-                            }
-                            .labelsHidden()
-                            .frame(width: 220)
+                                .labelsHidden()
+                                    .frame(width: 220)
 
                             Button {
-                                guard state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
-                                state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
+                                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
+                                self.state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
                             } label: {
                                 Image(systemName: "trash")
                             }
@@ -2019,24 +2093,24 @@ struct VoiceWakeSettings: View {
 
                     Button {
                         if let first = availableLocales.first {
-                            state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
+                            self.state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
                         }
                     } label: {
                         Label("Add language", systemImage: "plus")
                     }
-                    .disabled(availableLocales.isEmpty)
+                    .disabled(self.availableLocales.isEmpty)
                 }
                 .padding(.top, 4)
             } else {
                 Button {
                     if let first = availableLocales.first {
-                        state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
+                        self.state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
                     }
                 } label: {
                     Label("Add additional language", systemImage: "plus")
                 }
                 .buttonStyle(.link)
-                .disabled(availableLocales.isEmpty)
+                .disabled(self.availableLocales.isEmpty)
                 .padding(.top, 4)
             }
 
@@ -2048,36 +2122,40 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func loadMicsIfNeeded() async {
-        guard availableMics.isEmpty, !loadingMics else { return }
-        loadingMics = true
-        let discovery = AVCaptureDevice.DiscoverySession(deviceTypes: [.external, .microphone],
-                                                         mediaType: .audio,
-                                                         position: .unspecified)
-        availableMics = discovery.devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
-        loadingMics = false
+        guard self.availableMics.isEmpty, !self.loadingMics else { return }
+        self.loadingMics = true
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.external, .microphone],
+            mediaType: .audio,
+            position: .unspecified)
+        self.availableMics = discovery.devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        self.loadingMics = false
     }
 
     @MainActor
     private func loadLocalesIfNeeded() async {
-        guard availableLocales.isEmpty else { return }
-        availableLocales = Array(SFSpeechRecognizer.supportedLocales()).sorted { lhs, rhs in
-            friendlyName(for: lhs).localizedCaseInsensitiveCompare(friendlyName(for: rhs)) == .orderedAscending
+        guard self.availableLocales.isEmpty else { return }
+        self.availableLocales = Array(SFSpeechRecognizer.supportedLocales()).sorted { lhs, rhs in
+            self.friendlyName(for: lhs)
+                .localizedCaseInsensitiveCompare(self.friendlyName(for: rhs)) == .orderedAscending
         }
     }
 
     /// Produce a human-friendly label without odd BCP-47 variants (rg=zzzz, calendar, collation, numbering).
     private func friendlyName(for locale: Locale) -> String {
-        let cleanedID = normalizedLocaleIdentifier(locale.identifier)
+        let cleanedID = self.normalizedLocaleIdentifier(locale.identifier)
         let cleanLocale = Locale(identifier: cleanedID)
 
         if let langCode = cleanLocale.languageCode,
            let lang = cleanLocale.localizedString(forLanguageCode: langCode),
            let regionCode = cleanLocale.regionCode,
-           let region = cleanLocale.localizedString(forRegionCode: regionCode) {
+           let region = cleanLocale.localizedString(forRegionCode: regionCode)
+        {
             return "\(lang) (\(region))"
         }
         if let langCode = cleanLocale.languageCode,
-           let lang = cleanLocale.localizedString(forLanguageCode: langCode) {
+           let lang = cleanLocale.localizedString(forLanguageCode: langCode)
+        {
             return lang
         }
         return cleanLocale.localizedString(forIdentifier: cleanedID) ?? cleanedID
@@ -2102,8 +2180,8 @@ struct VoiceWakeSettings: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
                 Text("Live level").font(.callout.weight(.semibold))
-                MicLevelBar(level: meterLevel)
-                Text(levelLabel)
+                MicLevelBar(level: self.meterLevel)
+                Text(self.levelLabel)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -2122,17 +2200,17 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func restartMeter() async {
-        meterError = nil
-        await meter.stop()
+        self.meterError = nil
+        await self.meter.stop()
         do {
-            try await meter.start { [weak state] level in
+            try await self.meter.start { [weak state] level in
                 Task { @MainActor in
                     guard state != nil else { return }
                     self.meterLevel = level
                 }
             }
         } catch {
-            meterError = error.localizedDescription
+            self.meterError = error.localizedDescription
         }
     }
 }
@@ -2147,11 +2225,11 @@ struct PermissionsSettings: View {
             Text("Allow these so Clawdis can notify and capture when needed.")
                 .padding(.top, 4)
 
-            PermissionStatusList(status: status, refresh: refresh)
+            PermissionStatusList(status: self.status, refresh: self.refresh)
                 .padding(.horizontal, 2)
                 .padding(.vertical, 6)
 
-            Button("Show onboarding") { showOnboarding() }
+            Button("Show onboarding") { self.showOnboarding() }
                 .buttonStyle(.bordered)
             Spacer()
         }
@@ -2169,8 +2247,8 @@ struct DebugSettings: View {
             }
             LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
             HStack {
-                Button("Restart app") { relaunch() }
-                Button("Reveal app in Finder") { revealApp() }
+                Button("Restart app") { self.relaunch() }
+                Button("Reveal app in Finder") { self.revealApp() }
             }
             .buttonStyle(.bordered)
             Spacer()
@@ -2210,18 +2288,18 @@ struct AboutSettings: View {
                     .resizable()
                     .frame(width: 88, height: 88)
                     .cornerRadius(16)
-                    .shadow(color: iconHover ? .accentColor.opacity(0.25) : .clear, radius: 8)
-                    .scaleEffect(iconHover ? 1.06 : 1.0)
+                    .shadow(color: self.iconHover ? .accentColor.opacity(0.25) : .clear, radius: 8)
+                    .scaleEffect(self.iconHover ? 1.06 : 1.0)
             }
             .buttonStyle(.plain)
             .onHover { hover in
-                withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { iconHover = hover }
+                withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { self.iconHover = hover }
             }
 
             VStack(spacing: 3) {
                 Text("Clawdis")
                     .font(.title3.bold())
-                Text("Version \(versionString)")
+                Text("Version \(self.versionString)")
                     .foregroundStyle(.secondary)
                 if let buildTimestamp {
                     Text("Built \(buildTimestamp)")
@@ -2236,7 +2314,10 @@ struct AboutSettings: View {
             }
 
             VStack(alignment: .center, spacing: 6) {
-                AboutLinkRow(icon: "chevron.left.slash.chevron.right", title: "GitHub", url: "https://github.com/steipete/clawdis")
+                AboutLinkRow(
+                    icon: "chevron.left.slash.chevron.right",
+                    title: "GitHub",
+                    url: "https://github.com/steipete/clawdis")
                 AboutLinkRow(icon: "globe", title: "Website", url: "https://steipete.me")
                 AboutLinkRow(icon: "bird", title: "Twitter", url: "https://twitter.com/steipete")
                 AboutLinkRow(icon: "envelope", title: "Email", url: "mailto:[redacted-email]")
@@ -2291,14 +2372,14 @@ private struct AboutLinkRow: View {
             if let url = URL(string: url) { NSWorkspace.shared.open(url) }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: icon)
-                Text(title)
-                    .underline(hovering, color: .accentColor)
+                Image(systemName: self.icon)
+                Text(self.title)
+                    .underline(self.hovering, color: .accentColor)
             }
             .foregroundColor(.accentColor)
         }
         .buttonStyle(.plain)
-        .onHover { hovering = $0 }
+        .onHover { self.hovering = $0 }
     }
 }
 
@@ -2309,11 +2390,11 @@ struct PermissionStatusList: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             ForEach(Capability.allCases, id: \.self) { cap in
-                PermissionRow(capability: cap, status: status[cap] ?? false) {
-                    Task { await handle(cap) }
+                PermissionRow(capability: cap, status: self.status[cap] ?? false) {
+                    Task { await self.handle(cap) }
                 }
             }
-            Button("Refresh status") { Task { await refresh() } }
+            Button("Refresh status") { Task { await self.refresh() } }
                 .font(.footnote)
                 .padding(.top, 2)
         }
@@ -2328,18 +2409,18 @@ struct PermissionStatusList: View {
                 _ = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
 
             case .accessibility:
-                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+                self.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
 
             case .screenRecording:
-                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenRecording")
+                self.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenRecording")
 
             case .microphone:
-                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+                self.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
 
             case .speechRecognition:
-                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
+                self.openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
             }
-            await refresh()
+            await self.refresh()
         }
     }
 
@@ -2360,12 +2441,12 @@ enum LaunchdManager {
 
     static func startClawdis() {
         let userTarget = "gui/\(getuid())/\(launchdLabel)"
-        runLaunchctl(["kickstart", "-k", userTarget])
+        self.runLaunchctl(["kickstart", "-k", userTarget])
     }
 
     static func stopClawdis() {
         let userTarget = "gui/\(getuid())/\(launchdLabel)"
-        runLaunchctl(["stop", userTarget])
+        self.runLaunchctl(["stop", userTarget])
     }
 }
 
@@ -2382,7 +2463,9 @@ enum CLIInstaller {
         var messages: [String] = []
         for target in targets {
             do {
-                try FileManager.default.createDirectory(atPath: (target as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
+                try FileManager.default.createDirectory(
+                    atPath: (target as NSString).deletingLastPathComponent,
+                    withIntermediateDirectories: true)
                 try? FileManager.default.removeItem(atPath: target)
                 try FileManager.default.createSymbolicLink(atPath: target, withDestinationPath: helper.path)
                 messages.append("Linked \(target)")
@@ -2402,21 +2485,21 @@ private struct PermissionRow: View {
     var body: some View {
         HStack(spacing: 12) {
             ZStack {
-                Circle().fill(status ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
+                Circle().fill(self.status ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
                     .frame(width: 32, height: 32)
-                Image(systemName: icon)
-                    .foregroundStyle(status ? Color.green : Color.secondary)
+                Image(systemName: self.icon)
+                    .foregroundStyle(self.status ? Color.green : Color.secondary)
             }
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.body.weight(.semibold))
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                Text(self.title).font(.body.weight(.semibold))
+                Text(self.subtitle).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            if status {
+            if self.status {
                 Label("Granted", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
             } else {
-                Button("Grant") { action() }
+                Button("Grant") { self.action() }
                     .buttonStyle(.bordered)
             }
         }
@@ -2424,7 +2507,7 @@ private struct PermissionRow: View {
     }
 
     private var title: String {
-        switch capability {
+        switch self.capability {
         case .notifications: "Notifications"
         case .accessibility: "Accessibility"
         case .screenRecording: "Screen Recording"
@@ -2434,7 +2517,7 @@ private struct PermissionRow: View {
     }
 
     private var subtitle: String {
-        switch capability {
+        switch self.capability {
         case .notifications: "Show desktop alerts for agent activity"
         case .accessibility: "Control UI elements when an action requires it"
         case .screenRecording: "Capture the screen for context or screenshots"
@@ -2444,7 +2527,7 @@ private struct PermissionRow: View {
     }
 
     private var icon: String {
-        switch capability {
+        switch self.capability {
         case .notifications: "bell"
         case .accessibility: "hand.raised"
         case .screenRecording: "display"
@@ -2460,22 +2543,21 @@ struct MicLevelBar: View {
 
     var body: some View {
         HStack(spacing: 3) {
-            ForEach(0 ..< segments, id: \.self) { idx in
-                let fill = level * Double(segments) > Double(idx)
+            ForEach(0..<self.segments, id: \.self) { idx in
+                let fill = self.level * Double(self.segments) > Double(idx)
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(fill ? segmentColor(for: idx) : Color.gray.opacity(0.35))
+                    .fill(fill ? self.segmentColor(for: idx) : Color.gray.opacity(0.35))
                     .frame(width: 14, height: 10)
             }
         }
         .padding(4)
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.gray.opacity(0.25), lineWidth: 1)
-        )
+                .stroke(Color.gray.opacity(0.25), lineWidth: 1))
     }
 
     private func segmentColor(for idx: Int) -> Color {
-        let fraction = Double(idx + 1) / Double(segments)
+        let fraction = Double(idx + 1) / Double(self.segments)
         if fraction < 0.65 { return .green }
         if fraction < 0.85 { return .yellow }
         return .red
@@ -2507,8 +2589,8 @@ final class OnboardingController {
     }
 
     func close() {
-        window?.close()
-        window = nil
+        self.window?.close()
+        self.window = nil
     }
 }
 
@@ -2524,7 +2606,7 @@ struct OnboardingView: View {
     private let pageWidth: CGFloat = 640
     private let contentHeight: CGFloat = 260
     private var pageCount: Int { 6 }
-    private var buttonTitle: String { currentPage == pageCount - 1 ? "Finish" : "Next" }
+    private var buttonTitle: String { self.currentPage == self.pageCount - 1 ? "Finish" : "Next" }
     private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
 
     var body: some View {
@@ -2536,31 +2618,32 @@ struct OnboardingView: View {
 
             GeometryReader { _ in
                 HStack(spacing: 0) {
-                    welcomePage().frame(width: pageWidth)
-                    focusPage().frame(width: pageWidth)
-                    permissionsPage().frame(width: pageWidth)
-                    cliPage().frame(width: pageWidth)
-                    launchPage().frame(width: pageWidth)
-                    readyPage().frame(width: pageWidth)
+                    self.welcomePage().frame(width: self.pageWidth)
+                    self.focusPage().frame(width: self.pageWidth)
+                    self.permissionsPage().frame(width: self.pageWidth)
+                    self.cliPage().frame(width: self.pageWidth)
+                    self.launchPage().frame(width: self.pageWidth)
+                    self.readyPage().frame(width: self.pageWidth)
                 }
-                .offset(x: CGFloat(-currentPage) * pageWidth)
-                .animation(.interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
-                           value: currentPage)
-                .frame(width: pageWidth, height: contentHeight, alignment: .top)
+                .offset(x: CGFloat(-self.currentPage) * self.pageWidth)
+                .animation(
+                    .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+                    value: self.currentPage)
+                .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
                 .clipped()
             }
             .frame(height: 260)
 
-            navigationBar
+            self.navigationBar
         }
-        .frame(width: pageWidth, height: 560)
+        .frame(width: self.pageWidth, height: 560)
         .background(Color(NSColor.windowBackgroundColor))
-        .onAppear { currentPage = 0 }
-        .task { await refreshPerms() }
+        .onAppear { self.currentPage = 0 }
+        .task { await self.refreshPerms() }
     }
 
     private func welcomePage() -> some View {
-        onboardingPage {
+        self.onboardingPage {
             Text("Welcome to Clawdis")
                 .font(.largeTitle.weight(.semibold))
             Text("Your macOS menu bar companion for notifications, screenshots, and privileged agent actions.")
@@ -2579,25 +2662,28 @@ struct OnboardingView: View {
     }
 
     private func focusPage() -> some View {
-        onboardingPage {
+        self.onboardingPage {
             Text("What Clawdis handles")
                 .font(.largeTitle.weight(.semibold))
-            onboardingCard {
-                featureRow(title: "Owns the TCC prompts",
-                           subtitle: "Requests Notifications, Accessibility, and Screen Recording so your agents stay unblocked.",
-                           systemImage: "lock.shield")
-                featureRow(title: "Native notifications",
-                           subtitle: "Shows desktop toasts for agent events with your preferred sound.",
-                           systemImage: "bell.and.waveform")
-                featureRow(title: "Privileged helpers",
-                           subtitle: "Runs screenshots or shell actions from the `clawdis-mac` CLI with the right permissions.",
-                           systemImage: "terminal")
+            self.onboardingCard {
+                self.featureRow(
+                    title: "Owns the TCC prompts",
+                    subtitle: "Requests Notifications, Accessibility, and Screen Recording so your agents stay unblocked.",
+                    systemImage: "lock.shield")
+                self.featureRow(
+                    title: "Native notifications",
+                    subtitle: "Shows desktop toasts for agent events with your preferred sound.",
+                    systemImage: "bell.and.waveform")
+                self.featureRow(
+                    title: "Privileged helpers",
+                    subtitle: "Runs screenshots or shell actions from the `clawdis-mac` CLI with the right permissions.",
+                    systemImage: "terminal")
             }
         }
     }
 
     private func permissionsPage() -> some View {
-        onboardingPage {
+        self.onboardingPage {
             Text("Grant permissions")
                 .font(.largeTitle.weight(.semibold))
             Text("Approve these once and the helper CLI reuses the same grants.")
@@ -2607,17 +2693,17 @@ struct OnboardingView: View {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            onboardingCard {
+            self.onboardingCard {
                 ForEach(Capability.allCases, id: \.self) { cap in
-                    PermissionRow(capability: cap, status: permStatus[cap] ?? false) {
-                        Task { await request(cap) }
+                    PermissionRow(capability: cap, status: self.permStatus[cap] ?? false) {
+                        Task { await self.request(cap) }
                     }
                 }
 
                 HStack(spacing: 12) {
-                    Button("Refresh status") { Task { await refreshPerms() } }
+                    Button("Refresh status") { Task { await self.refreshPerms() } }
                         .controlSize(.small)
-                    if isRequesting {
+                    if self.isRequesting {
                         ProgressView()
                             .controlSize(.small)
                     }
@@ -2628,7 +2714,7 @@ struct OnboardingView: View {
     }
 
     private func cliPage() -> some View {
-        onboardingPage {
+        self.onboardingPage {
             Text("Install the helper CLI")
                 .font(.largeTitle.weight(.semibold))
             Text("Link `clawdis-mac` so scripts and the agent can talk to this app.")
@@ -2638,24 +2724,24 @@ struct OnboardingView: View {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            onboardingCard {
+            self.onboardingCard {
                 HStack(spacing: 12) {
                     Button {
-                        Task { await installCLI() }
+                        Task { await self.installCLI() }
                     } label: {
-                        if installingCLI {
+                        if self.installingCLI {
                             ProgressView()
                         } else {
                             Text("Install helper")
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(installingCLI)
+                    .disabled(self.installingCLI)
 
-                    Button(copied ? "Copied" : "Copy dev link") {
-                        copyToPasteboard(devLinkCommand)
+                    Button(self.copied ? "Copied" : "Copy dev link") {
+                        self.copyToPasteboard(self.devLinkCommand)
                     }
-                    .disabled(installingCLI)
+                    .disabled(self.installingCLI)
                 }
 
                 if let cliStatus {
@@ -2664,7 +2750,8 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                 }
 
-                Text("We install into /usr/local/bin and /opt/homebrew/bin. Rerun anytime if you move the build output.")
+                Text(
+                    "We install into /usr/local/bin and /opt/homebrew/bin. Rerun anytime if you move the build output.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -2672,7 +2759,7 @@ struct OnboardingView: View {
     }
 
     private func launchPage() -> some View {
-        onboardingPage {
+        self.onboardingPage {
             Text("Keep it running")
                 .font(.largeTitle.weight(.semibold))
             Text("Let Clawdis launch with macOS so permissions and notifications are ready when automations start.")
@@ -2682,13 +2769,14 @@ struct OnboardingView: View {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            onboardingCard {
-                Toggle("Launch at login", isOn: $state.launchAtLogin)
+            self.onboardingCard {
+                Toggle("Launch at login", isOn: self.$state.launchAtLogin)
                     .toggleStyle(.switch)
-                    .onChange(of: state.launchAtLogin) { _, newValue in
+                    .onChange(of: self.state.launchAtLogin) { _, newValue in
                         AppStateStore.updateLaunchAtLogin(enabled: newValue)
                     }
-                Text("You can pause from the menu bar anytime. Settings keeps a \"Show onboarding\" button if you need to revisit.")
+                Text(
+                    "You can pause from the menu bar anytime. Settings keeps a \"Show onboarding\" button if you need to revisit.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -2696,16 +2784,18 @@ struct OnboardingView: View {
     }
 
     private func readyPage() -> some View {
-        onboardingPage {
+        self.onboardingPage {
             Text("All set")
                 .font(.largeTitle.weight(.semibold))
-            onboardingCard {
-                featureRow(title: "Run the dashboard",
-                           subtitle: "Use the CLI helper from your scripts, and reopen onboarding from Settings if you add a new user.",
-                           systemImage: "checkmark.seal")
-                featureRow(title: "Test a notification",
-                           subtitle: "Send a quick notify via the menu bar to confirm sounds and permissions.",
-                           systemImage: "bell.badge")
+            self.onboardingCard {
+                self.featureRow(
+                    title: "Run the dashboard",
+                    subtitle: "Use the CLI helper from your scripts, and reopen onboarding from Settings if you add a new user.",
+                    systemImage: "checkmark.seal")
+                self.featureRow(
+                    title: "Test a notification",
+                    subtitle: "Send a quick notify via the menu bar to confirm sounds and permissions.",
+                    systemImage: "bell.badge")
             }
             Text("Finish to save this version of onboarding. We'll reshow automatically when steps change.")
                 .font(.footnote)
@@ -2725,8 +2815,8 @@ struct OnboardingView: View {
                 .opacity(0)
                 .disabled(true)
 
-                if currentPage > 0 {
-                    Button(action: { handleBack() }) {
+                if self.currentPage > 0 {
+                    Button(action: { self.handleBack() }) {
                         Label("Back", systemImage: "chevron.left")
                             .labelStyle(.iconOnly)
                     }
@@ -2741,12 +2831,12 @@ struct OnboardingView: View {
             Spacer()
 
             HStack(spacing: 8) {
-                ForEach(0 ..< pageCount, id: \.self) { index in
+                ForEach(0..<self.pageCount, id: \.self) { index in
                     Button {
-                        withAnimation { currentPage = index }
+                        withAnimation { self.currentPage = index }
                     } label: {
                         Circle()
-                            .fill(index == currentPage ? Color.accentColor : Color.gray.opacity(0.3))
+                            .fill(index == self.currentPage ? Color.accentColor : Color.gray.opacity(0.3))
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
@@ -2755,8 +2845,8 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Button(action: handleNext) {
-                Text(buttonTitle)
+            Button(action: self.handleNext) {
+                Text(self.buttonTitle)
                     .frame(minWidth: 88)
             }
             .keyboardShortcut(.return)
@@ -2771,7 +2861,7 @@ struct OnboardingView: View {
             content()
             Spacer()
         }
-        .frame(width: pageWidth, alignment: .top)
+        .frame(width: self.pageWidth, alignment: .top)
     }
 
     private func onboardingCard(@ViewBuilder _ content: () -> some View) -> some View {
@@ -2783,8 +2873,7 @@ struct OnboardingView: View {
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(NSColor.controlBackgroundColor))
-                .shadow(color: .black.opacity(0.06), radius: 8, y: 3)
-        )
+                .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
     private func featureRow(title: String, subtitle: String, systemImage: String) -> some View {
@@ -2804,15 +2893,15 @@ struct OnboardingView: View {
 
     private func handleBack() {
         withAnimation {
-            currentPage = max(0, currentPage - 1)
+            self.currentPage = max(0, self.currentPage - 1)
         }
     }
 
     private func handleNext() {
-        if currentPage < pageCount - 1 {
-            withAnimation { currentPage += 1 }
+        if self.currentPage < self.pageCount - 1 {
+            withAnimation { self.currentPage += 1 }
         } else {
-            finish()
+            self.finish()
         }
     }
 
@@ -2824,24 +2913,24 @@ struct OnboardingView: View {
 
     @MainActor
     private func refreshPerms() async {
-        permStatus = await PermissionManager.status()
+        self.permStatus = await PermissionManager.status()
     }
 
     @MainActor
     private func request(_ cap: Capability) async {
-        guard !isRequesting else { return }
-        isRequesting = true
+        guard !self.isRequesting else { return }
+        self.isRequesting = true
         defer { isRequesting = false }
         _ = await PermissionManager.ensure([cap], interactive: true)
-        await refreshPerms()
+        await self.refreshPerms()
     }
 
     private func installCLI() async {
-        guard !installingCLI else { return }
-        installingCLI = true
+        guard !self.installingCLI else { return }
+        self.installingCLI = true
         defer { installingCLI = false }
         await CLIInstaller.install { message in
-            await MainActor.run { cliStatus = message }
+            await MainActor.run { self.cliStatus = message }
         }
     }
 
@@ -2849,8 +2938,8 @@ struct OnboardingView: View {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(text, forType: .string)
-        copied = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+        self.copied = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.copied = false }
     }
 }
 
@@ -2871,29 +2960,29 @@ private struct GlowingClawdisIcon: View {
         ZStack {
             Circle()
                 .fill(
-                    LinearGradient(colors: [
-                        Color.accentColor.opacity(glowIntensity),
-                        Color.blue.opacity(glowIntensity * 0.6)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing)
-                )
+                    LinearGradient(
+                        colors: [
+                            Color.accentColor.opacity(self.glowIntensity),
+                            Color.blue.opacity(self.glowIntensity * 0.6),
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing))
                 .blur(radius: 22)
-                .scaleEffect(breathe ? 1.12 : 0.95)
+                .scaleEffect(self.breathe ? 1.12 : 0.95)
                 .opacity(0.9)
 
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
-                .frame(width: size, height: size)
-                .clipShape(RoundedRectangle(cornerRadius: size * 0.22, style: .continuous))
+                .frame(width: self.size, height: self.size)
+                .clipShape(RoundedRectangle(cornerRadius: self.size * 0.22, style: .continuous))
                 .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
-                .scaleEffect(breathe ? 1.02 : 1.0)
+                .scaleEffect(self.breathe ? 1.02 : 1.0)
         }
-        .frame(width: size + 60, height: size + 60)
+        .frame(width: self.size + 60, height: self.size + 60)
         .onAppear {
-            guard enableFloating else { return }
+            guard self.enableFloating else { return }
             withAnimation(Animation.easeInOut(duration: 3.6).repeatForever(autoreverses: true)) {
-                breathe.toggle()
+                self.breathe.toggle()
             }
         }
     }
