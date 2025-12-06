@@ -24,6 +24,7 @@ private let swabbleEnabledKey = "clawdis.swabbleEnabled"
 private let swabbleTriggersKey = "clawdis.swabbleTriggers"
 private let defaultVoiceWakeTriggers = ["clawd", "claude"]
 private let voiceWakeMicKey = "clawdis.voiceWakeMicID"
+private let voiceWakeLocaleKey = "clawdis.voiceWakeLocaleID"
 private let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
 
 // MARK: - App model
@@ -61,6 +62,9 @@ final class AppState: ObservableObject {
     @Published var voiceWakeMicID: String {
         didSet { UserDefaults.standard.set(voiceWakeMicID, forKey: voiceWakeMicKey) }
     }
+    @Published var voiceWakeLocaleID: String {
+        didSet { UserDefaults.standard.set(voiceWakeLocaleID, forKey: voiceWakeLocaleKey) }
+    }
 
     init() {
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
@@ -72,6 +76,7 @@ final class AppState: ObservableObject {
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard.stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
+        self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
     }
 }
 
@@ -1393,8 +1398,10 @@ final class VoiceWakeTester {
         self.recognizer = SFSpeechRecognizer(locale: locale)
     }
 
-    func start(triggers: [String], micID: String?, onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
+    func start(triggers: [String], micID: String?, localeID: String?, onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
         guard recognitionTask == nil else { return }
+        let chosenLocale = localeID.flatMap { Locale(identifier: $0) } ?? Locale.current
+        let recognizer = SFSpeechRecognizer(locale: chosenLocale)
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(domain: "VoiceWakeTester", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
         }
@@ -1653,6 +1660,7 @@ struct VoiceWakeSettings: View {
     @State private var meterLevel: Double = 0
     @State private var meterError: String?
     private let meter = MicLevelMonitor()
+    @State private var availableLocales: [Locale] = []
 
     private struct IndexedWord: Identifiable {
         let id: Int
@@ -1677,6 +1685,7 @@ struct VoiceWakeSettings: View {
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
 
+            localePicker
             micPicker
             levelMeter
 
@@ -1726,15 +1735,16 @@ struct VoiceWakeSettings: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
-        .task { await loadMicsIfNeeded() }
-        .task { await restartMeter() }
-        .onChange(of: state.voiceWakeMicID) { _, _ in
-            Task { await restartMeter() }
-        }
+        Spacer()
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(.horizontal, 12)
+    .task { await loadMicsIfNeeded() }
+    .task { await loadLocalesIfNeeded() }
+    .task { await restartMeter() }
+    .onChange(of: state.voiceWakeMicID) { _, _ in
+        Task { await restartMeter() }
+    }
         .onDisappear {
             Task { await meter.stop() }
         }
@@ -1857,6 +1867,7 @@ struct VoiceWakeSettings: View {
                 try await tester.start(
                     triggers: triggers,
                     micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
+                    localeID: state.voiceWakeLocaleID,
                     onUpdate: { newState in
                         self.testState = newState
                         if case .detected = newState { self.isTesting = false }
@@ -1907,6 +1918,24 @@ struct VoiceWakeSettings: View {
         }
     }
 
+    private var localePicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            LabeledContent("Recognition language") {
+                Picker("Language", selection: $state.voiceWakeLocaleID) {
+                    let current = Locale(identifier: Locale.current.identifier)
+                    Text("\(displayName(for: current)) (System)").tag(Locale.current.identifier)
+                    ForEach(availableLocales.map { $0.identifier }, id: \.self) { id in
+                        if id != Locale.current.identifier {
+                            Text(displayName(for: Locale(identifier: id))).tag(id)
+                        }
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 260)
+            }
+        }
+    }
+
     @MainActor
     private func loadMicsIfNeeded() async {
         guard availableMics.isEmpty, !loadingMics else { return }
@@ -1918,6 +1947,19 @@ struct VoiceWakeSettings: View {
         )
         availableMics = discovery.devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
         loadingMics = false
+    }
+
+    @MainActor
+    private func loadLocalesIfNeeded() async {
+        guard availableLocales.isEmpty else { return }
+        availableLocales = Array(SFSpeechRecognizer.supportedLocales()).sorted { lhs, rhs in
+            displayName(for: lhs).localizedCaseInsensitiveCompare(displayName(for: rhs)) == .orderedAscending
+        }
+    }
+
+    private func displayName(for locale: Locale) -> String {
+        let name = locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
+        return name
     }
 
     private var levelMeter: some View {
