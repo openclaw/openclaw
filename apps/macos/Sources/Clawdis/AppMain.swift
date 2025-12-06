@@ -452,6 +452,7 @@ private struct MenuContent: View {
         Button("Settings…") { open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
         Button("About Clawdis") { open(tab: .about) }
+        Button("Open Web Chat") { WebChatManager.shared.show(sessionKey: primarySessionKey()) }
         Divider()
         Button("Test Notification") {
             Task { _ = await NotificationManager().send(title: "Clawdis", body: "Test notification", sound: nil) }
@@ -468,6 +469,23 @@ private struct MenuContent: View {
 
     private var activeBinding: Binding<Bool> {
         Binding(get: { !state.isPaused }, set: { state.isPaused = !$0 })
+    }
+
+    private func primarySessionKey() -> String {
+        // Prefer the most recently updated session from the store; fall back to default
+        let storePath = SessionLoader.defaultStorePath
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: storePath)),
+           let decoded = try? JSONDecoder().decode([String: SessionEntryRecord].self, from: data) {
+            let sorted = decoded.sorted { (a, b) -> Bool in
+                let lhs = a.value.updatedAt ?? 0
+                let rhs = b.value.updatedAt ?? 0
+                return lhs > rhs
+            }
+            if let first = sorted.first {
+                return first.key
+            }
+        }
+        return "+1003"
     }
 }
 
@@ -1392,6 +1410,7 @@ final class VoiceWakeTester {
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var isStopping = false
 
     init(locale: Locale = .current) {
         self.recognizer = SFSpeechRecognizer(locale: locale)
@@ -1399,6 +1418,7 @@ final class VoiceWakeTester {
 
     func start(triggers: [String], micID: String?, localeID: String?, onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
         guard recognitionTask == nil else { return }
+        isStopping = false
         let chosenLocale = localeID.flatMap { Locale(identifier: $0) } ?? Locale.current
         let recognizer = SFSpeechRecognizer(locale: chosenLocale)
         guard let recognizer, recognizer.isAvailable else {
@@ -1436,6 +1456,7 @@ final class VoiceWakeTester {
         guard let request = recognitionRequest else { return }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            guard let self, !self.isStopping else { return }
             let text = result?.bestTranscription.formattedString ?? ""
             let matched = Self.matches(text: text, triggers: triggers)
             let isFinal = result?.isFinal ?? false
@@ -1448,6 +1469,7 @@ final class VoiceWakeTester {
     }
 
     func stop() {
+        isStopping = true
         audioEngine.stop()
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
@@ -1868,7 +1890,6 @@ struct VoiceWakeSettings: View {
         testState = .requesting
         Task { @MainActor in
             do {
-                await meter.stop() // free the mic for speech recognizer
                 try await tester.start(
                     triggers: triggers,
                     micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
@@ -1878,8 +1899,6 @@ struct VoiceWakeSettings: View {
                             testState = newState
                             if case .detected = newState { isTesting = false }
                             if case .failed = newState { isTesting = false }
-                            if case .detected = newState { Task { await restartMeter() } }
-                            if case .failed = newState { Task { await restartMeter() } }
                         }
                     }
                 )
@@ -1889,13 +1908,11 @@ struct VoiceWakeSettings: View {
                     tester.stop()
                     testState = .failed("Timeout: no trigger heard")
                     isTesting = false
-                    await restartMeter()
                 }
             } catch {
                 tester.stop()
                 testState = .failed(error.localizedDescription)
                 isTesting = false
-                await restartMeter()
             }
         }
     }
