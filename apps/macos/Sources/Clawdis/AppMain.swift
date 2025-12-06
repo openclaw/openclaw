@@ -1466,6 +1466,7 @@ actor MicLevelMonitor {
     }
 }
 
+@MainActor
 final class VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -2146,14 +2147,14 @@ struct VoiceWakeSettings: View {
         let cleanedID = self.normalizedLocaleIdentifier(locale.identifier)
         let cleanLocale = Locale(identifier: cleanedID)
 
-        if let langCode = cleanLocale.languageCode,
+        if let langCode = cleanLocale.language.languageCode?.identifier,
            let lang = cleanLocale.localizedString(forLanguageCode: langCode),
-           let regionCode = cleanLocale.regionCode,
+           let regionCode = cleanLocale.region?.identifier,
            let region = cleanLocale.localizedString(forRegionCode: regionCode)
         {
             return "\(lang) (\(region))"
         }
-        if let langCode = cleanLocale.languageCode,
+        if let langCode = cleanLocale.language.languageCode?.identifier,
            let lang = cleanLocale.localizedString(forLanguageCode: langCode)
         {
             return lang
