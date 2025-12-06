@@ -1387,7 +1387,6 @@ actor MicLevelMonitor {
     }
 }
 
-@MainActor
 final class VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -1457,6 +1456,7 @@ final class VoiceWakeTester {
         audioEngine.inputNode.removeTap(onBus: 0)
     }
 
+    @MainActor
     private func handleResult(
         matched: Bool,
         text: String,
@@ -2779,3 +2779,5 @@ private struct GlowingClawdisIcon: View {
         }
     }
 }
+
+extension VoiceWakeTester: @unchecked Sendable {}
