@@ -6,6 +6,8 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
     case notifications
     case accessibility
     case screenRecording
+    case microphone
+    case speechRecognition
 }
 
 // MARK: - Requests
@@ -111,4 +113,3 @@ extension Request: Codable {
         }
     }
 }
-

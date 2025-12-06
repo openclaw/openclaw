@@ -209,6 +209,24 @@ enum PermissionManager {
                     await ScreenRecordingProbe.requestAuthorization()
                 }
                 results[cap] = ScreenRecordingProbe.isAuthorized()
+            case .microphone:
+                let granted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+                if interactive && !granted {
+                    let ok = await AVCaptureDevice.requestAccess(for: .audio)
+                    results[cap] = ok
+                } else {
+                    results[cap] = granted
+                }
+            case .speechRecognition:
+                let status = SFSpeechRecognizer.authorizationStatus()
+                if status == .notDetermined && interactive {
+                    let ok = await withCheckedContinuation { cont in
+                        SFSpeechRecognizer.requestAuthorization { auth in cont.resume(returning: auth == .authorized) }
+                    }
+                    results[cap] = ok
+                } else {
+                    results[cap] = status == .authorized
+                }
             }
         }
         return results
@@ -231,6 +249,10 @@ enum PermissionManager {
                 } else {
                     results[cap] = true
                 }
+            case .microphone:
+                results[cap] = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+            case .speechRecognition:
+                results[cap] = SFSpeechRecognizer.authorizationStatus() == .authorized
             }
         }
         return results
@@ -1877,6 +1899,10 @@ struct PermissionStatusList: View {
                 openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
             case .screenRecording:
                 openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenRecording")
+            case .microphone:
+                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+            case .speechRecognition:
+                openSettings("x-apple.systempreferences:com.apple.preference.security?Privacy_SpeechRecognition")
             }
             await refresh()
         }
@@ -1967,6 +1993,8 @@ private struct PermissionRow: View {
         case .notifications: return "Notifications"
         case .accessibility: return "Accessibility"
         case .screenRecording: return "Screen Recording"
+        case .microphone: return "Microphone"
+        case .speechRecognition: return "Speech Recognition"
         }
     }
 
@@ -1975,6 +2003,8 @@ private struct PermissionRow: View {
         case .notifications: return "Show desktop alerts for agent activity"
         case .accessibility: return "Control UI elements when an action requires it"
         case .screenRecording: return "Capture the screen for context or screenshots"
+        case .microphone: return "Allow Voice Wake and audio capture"
+        case .speechRecognition: return "Transcribe Voice Wake trigger phrases on-device"
         }
     }
 
@@ -1983,6 +2013,8 @@ private struct PermissionRow: View {
         case .notifications: return "bell" 
         case .accessibility: return "hand.raised" 
         case .screenRecording: return "display" 
+        case .microphone: return "mic" 
+        case .speechRecognition: return "waveform" 
         }
     }
 }
