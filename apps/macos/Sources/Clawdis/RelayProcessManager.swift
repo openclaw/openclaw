@@ -190,16 +190,21 @@ final class RelayProcessManager: ObservableObject {
         // Keep it simple: rely on system-installed clawdis/warelay.
         // Default to `clawdis relay`; users can provide an override via env if needed.
         if let override = ProcessInfo.processInfo.environment["CLAWDIS_RELAY_CMD"],
-           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
+           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return override.split(separator: " ").map(String.init)
         }
-        if let found = self.preferredPaths()
-            .lazy
-            .map({ ($0 as NSString).appendingPathComponent("clawdis") })
-            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
-        {
-            return [found, "relay"]
+
+        if let clawdisPath = self.findExecutable(named: "clawdis") {
+            return [clawdisPath, "relay"]
+        }
+        if let pnpm = self.findExecutable(named: "pnpm") {
+            return [pnpm, "clawdis", "relay"]
+        }
+        if let node = self.findExecutable(named: "node") {
+            let warelay = self.defaultProjectRoot().appendingPathComponent("bin/warelay.js").path
+            if FileManager.default.isReadableFile(atPath: warelay) {
+                return [node, warelay, "relay"]
+            }
         }
         return ["clawdis", "relay"]
     }
@@ -212,8 +217,34 @@ final class RelayProcessManager: ObservableObject {
     private func preferredPaths() -> [String] {
         let current = ProcessInfo.processInfo.environment["PATH"]?
             .split(separator: ":").map(String.init) ?? []
-        let extras = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+        let extras = [
+            self.defaultProjectRoot().appendingPathComponent("node_modules/.bin").path,
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm").path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ]
         var seen = Set<String>()
         return (extras + current).filter { seen.insert($0).inserted }
+    }
+
+    private func findExecutable(named name: String) -> String? {
+        for dir in self.preferredPaths() {
+            let candidate = (dir as NSString).appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    private func defaultProjectRoot() -> URL {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let candidate = home.appendingPathComponent("Projects/clawdis")
+        if FileManager.default.fileExists(atPath: candidate.path) {
+            return candidate
+        }
+        return home
     }
 }
