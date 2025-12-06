@@ -688,7 +688,8 @@ struct SettingsRootView: View {
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(SettingsTab.about)
         }
-        .padding(12)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 16)
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .clawdisSelectSettingsTab)) { note in
@@ -727,8 +728,8 @@ struct SettingsRootView: View {
 
 enum SettingsTab: CaseIterable {
     case general, permissions, debug, about
-    static let windowWidth: CGFloat = 410
-    static let windowHeight: CGFloat = 484
+    static let windowWidth: CGFloat = 520
+    static let windowHeight: CGFloat = 520
     var title: String {
         switch self {
         case .general: return "General"
@@ -1222,50 +1223,54 @@ struct OnboardingView: View {
     @State private var currentPage = 0
     @State private var permStatus: [Capability: Bool] = [:]
     @State private var isRequesting = false
-@State private var installingCLI = false
-@State private var cliStatus: String?
-@State private var copied = false
-@ObservedObject private var state = AppStateStore.shared
+    @State private var installingCLI = false
+    @State private var cliStatus: String?
+    @State private var copied = false
+    @ObservedObject private var state = AppStateStore.shared
 
-private let pageWidth: CGFloat = 640
-private let contentHeight: CGFloat = 260
-private var pageCount: Int { 6 }
-private var buttonTitle: String { currentPage == pageCount - 1 ? "Finish" : "Next" }
-private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
+    private var pageCount: Int { 6 }
+    private var buttonTitle: String { currentPage == pageCount - 1 ? "Finish" : "Next" }
+    private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
 
-var body: some View {
-    VStack(spacing: 0) {
-        GlowingClawdisIcon(size: 148)
-            .padding(.top, 22)
-            .padding(.bottom, 12)
-            .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 220)
+    var body: some View {
+        GeometryReader { proxy in
+            let width = proxy.size.width
+            let contentHeight = max(proxy.size.height - 300, 240) // leave room for header + nav
 
-        HStack(spacing: 0) {
-            welcomePage
-            focusPage
-            permissionsPage
-            cliPage
-            launchPage
-            readyPage
+            VStack(spacing: 0) {
+                GlowingClawdisIcon(size: 148)
+                    .padding(.top, 22)
+                    .padding(.bottom, 12)
+                    .frame(maxWidth: .infinity, minHeight: 200, maxHeight: 220)
+
+                HStack(spacing: 0) {
+                    welcomePage(width: width)
+                    focusPage(width: width)
+                    permissionsPage(width: width)
+                    cliPage(width: width)
+                    launchPage(width: width)
+                    readyPage(width: width)
+                }
+                .frame(width: width, height: contentHeight, alignment: .top)
+                .offset(x: CGFloat(-currentPage) * width)
+                .animation(
+                    .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
+                    value: currentPage
+                )
+                .clipped()
+
+                navigationBar(pageWidth: width)
+            }
+            .frame(width: width, height: proxy.size.height, alignment: .top)
+            .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(width: pageWidth, height: contentHeight)
-        .offset(x: CGFloat(-currentPage) * pageWidth)
-        .animation(
-            .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
-            value: currentPage
-        )
-        .clipped()
-
-        navigationBar
+        .frame(width: 640, height: 560)
+        .onAppear { currentPage = 0 }
+        .task { await refreshPerms() }
     }
-    .frame(width: pageWidth, height: 560, alignment: .top)
-    .background(Color(NSColor.windowBackgroundColor))
-    .onAppear { currentPage = 0 }
-    .task { await refreshPerms() }
-}
 
-    private var welcomePage: some View {
-        onboardingPage {
+    private func welcomePage(width: CGFloat) -> some View {
+        onboardingPage(width: width) {
             Text("Welcome to Clawdis")
                 .font(.largeTitle.weight(.semibold))
             Text("Your macOS menu bar companion for notifications, screenshots, and privileged agent actions.")
@@ -1283,8 +1288,8 @@ var body: some View {
         }
     }
 
-    private var focusPage: some View {
-        onboardingPage {
+    private func focusPage(width: CGFloat) -> some View {
+        onboardingPage(width: width) {
             Text("What Clawdis handles")
                 .font(.largeTitle.weight(.semibold))
             onboardingCard {
@@ -1307,8 +1312,8 @@ var body: some View {
         }
     }
 
-    private var permissionsPage: some View {
-        onboardingPage {
+    private func permissionsPage(width: CGFloat) -> some View {
+        onboardingPage(width: width) {
             Text("Grant permissions")
                 .font(.largeTitle.weight(.semibold))
             Text("Approve these once and the helper CLI reuses the same grants.")
@@ -1338,8 +1343,8 @@ var body: some View {
         }
     }
 
-    private var cliPage: some View {
-        onboardingPage {
+    private func cliPage(width: CGFloat) -> some View {
+        onboardingPage(width: width) {
             Text("Install the helper CLI")
                 .font(.largeTitle.weight(.semibold))
             Text("Link `clawdis-mac` so scripts and the agent can talk to this app.")
@@ -1382,8 +1387,8 @@ var body: some View {
         }
     }
 
-    private var launchPage: some View {
-        onboardingPage {
+    private func launchPage(width: CGFloat) -> some View {
+        onboardingPage(width: width) {
             Text("Keep it running")
                 .font(.largeTitle.weight(.semibold))
             Text("Let Clawdis launch with macOS so permissions and notifications are ready when automations start.")
@@ -1406,8 +1411,8 @@ var body: some View {
         }
     }
 
-    private var readyPage: some View {
-        onboardingPage {
+    private func readyPage(width: CGFloat) -> some View {
+        onboardingPage(width: width) {
             Text("All set")
                 .font(.largeTitle.weight(.semibold))
             onboardingCard {
@@ -1430,7 +1435,7 @@ var body: some View {
         }
     }
 
-    private var navigationBar: some View {
+    private func navigationBar(pageWidth: CGFloat) -> some View {
         HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -1481,12 +1486,12 @@ var body: some View {
         .frame(height: 60)
     }
 
-    private func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
+    private func onboardingPage(width: CGFloat, @ViewBuilder _ content: () -> some View) -> some View {
         VStack(spacing: 22) {
             content()
             Spacer()
         }
-        .frame(width: pageWidth, alignment: .top)
+        .frame(width: width, alignment: .top)
         .padding(.horizontal, 26)
     }
 
