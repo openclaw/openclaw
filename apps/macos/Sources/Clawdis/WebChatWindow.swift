@@ -80,11 +80,16 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
         let importMap = [
             "imports": [
                 "@mariozechner/pi-web-ui": "file://\(distPath)/index.js",
+                "@mariozechner/pi-web-ui/": "file://\(distPath)/",
                 "@mariozechner/pi-ai": "file://\(piAi)",
+                "@mariozechner/pi-ai/": "file://\(vendor.appendingPathComponent("pi-ai/").path(percentEncoded: false))",
                 "@mariozechner/mini-lit": "file://\(miniLit)",
+                "@mariozechner/mini-lit/": "file://\(vendor.appendingPathComponent("mini-lit/").path(percentEncoded: false))",
                 "lit": "file://\(lit)",
+                "lit/": "file://\(vendor.appendingPathComponent("lit/").path(percentEncoded: false))",
                 "lucide": "file://\(lucide)",
                 "pdfjs-dist": "file://\(pdfjs)",
+                "pdfjs-dist/": "file://\(vendor.appendingPathComponent("pdfjs-dist/").path(percentEncoded: false))",
                 "pdfjs-dist/build/pdf.worker.min.mjs": "file://\(pdfWorker)",
             ],
         ]
@@ -114,73 +119,92 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
         <body>
           <div id="app"></div>
           <script type="module">
-            try {
-              const { Agent, ChatPanel, AppStorage, setAppStorage } = await import('@mariozechner/pi-web-ui');
-              const { getModel } = await import('@mariozechner/pi-ai');
+            const status = (msg) => {
+              console.log(msg);
+              window.__clawdisLog(msg);
+              const el = document.getElementById('app');
+              if (el && !el.dataset.booted) {
+                el.textContent = msg;
+              }
+            };
 
-              class NativeTransport {
-                async *run(messages, userMessage, cfg, signal) {
-                  const result = await window.__clawdisSend({ type: 'chat', payload: { text: userMessage.content?.[0]?.text ?? '', sessionKey: '\(
-                      sessionKey)' } });
-                  const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
-                  const assistant = {
-                    role: 'assistant',
-                    content: [{ type: 'text', text: result.text ?? '' }],
-                    api: cfg.model.api,
-                    provider: cfg.model.provider,
-                    model: cfg.model.id,
-                    usage,
-                    stopReason: 'stop',
+            status('boot: starting imports');
+
+            (async () => {
+              try {
+                const { Agent, ChatPanel, AppStorage, setAppStorage } = await import('@mariozechner/pi-web-ui');
+                status('boot: pi-web-ui imported');
+                const { getModel } = await import('@mariozechner/pi-ai');
+                status('boot: pi-ai imported');
+
+                class NativeTransport {
+                  async *run(messages, userMessage, cfg, signal) {
+                    const result = await window.__clawdisSend({ type: 'chat', payload: { text: userMessage.content?.[0]?.text ?? '', sessionKey: '\(
+                        sessionKey)' } });
+                    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+                    const assistant = {
+                      role: 'assistant',
+                      content: [{ type: 'text', text: result.text ?? '' }],
+                      api: cfg.model.api,
+                      provider: cfg.model.provider,
+                      model: cfg.model.id,
+                      usage,
+                      stopReason: 'stop',
+                      timestamp: Date.now()
+                    };
+                    yield { type: 'turn_start' };
+                    yield { type: 'message_start', message: assistant };
+                    yield { type: 'message_end', message: assistant };
+                    yield { type: 'turn_end' };
+                    yield { type: 'agent_end' };
+                  }
+                }
+
+                // Minimal storage
+                const storage = new AppStorage();
+                setAppStorage(storage);
+
+                const agent = new Agent({
+                  initialState: {
+                    systemPrompt: 'You are Clawd (primary session).',
+                    model: getModel('anthropic', 'claude-opus-4-5'),
+                    thinkingLevel: 'off',
+                    messages: []
+                  },
+                  transport: new NativeTransport()
+                });
+
+                // Patch prompt to append user message into history first
+                const origPrompt = agent.prompt.bind(agent);
+                agent.prompt = async (input, attachments) => {
+                  const userMessage = {
+                    role: 'user',
+                    content: [{ type: 'text', text: input }],
+                    attachments: attachments?.length ? attachments : undefined,
                     timestamp: Date.now()
                   };
-                  yield { type: 'turn_start' };
-                  yield { type: 'message_start', message: assistant };
-                  yield { type: 'message_end', message: assistant };
-                  yield { type: 'turn_end' };
-                  yield { type: 'agent_end' };
-                }
-              }
-
-              // Minimal storage
-              const storage = new AppStorage();
-              setAppStorage(storage);
-
-              const agent = new Agent({
-                initialState: {
-                  systemPrompt: 'You are Clawd (primary session).',
-                  model: getModel('anthropic', 'claude-opus-4-5'),
-                  thinkingLevel: 'off',
-                  messages: []
-                },
-                transport: new NativeTransport()
-              });
-
-              // Patch prompt to append user message into history first
-              const origPrompt = agent.prompt.bind(agent);
-              agent.prompt = async (input, attachments) => {
-                const userMessage = {
-                  role: 'user',
-                  content: [{ type: 'text', text: input }],
-                  attachments: attachments?.length ? attachments : undefined,
-                  timestamp: Date.now()
+                  agent.appendMessage(userMessage);
+                  return origPrompt(input, attachments);
                 };
-                agent.appendMessage(userMessage);
-                return origPrompt(input, attachments);
-              };
 
-              const panel = new ChatPanel();
-              panel.style.height = '100%';
-              panel.style.display = 'block';
-              await panel.setAgent(agent);
-              document.getElementById('app').appendChild(panel);
-            } catch (err) {
-              const msg = err?.stack || err?.message || String(err);
-              window.__clawdisLog(msg);
-              document.body.style.color = '#e06666';
-              document.body.style.fontFamily = 'monospace';
-              document.body.style.padding = '16px';
-              document.body.innerText = 'Web chat failed to load:\\n' + msg;
-            }
+                const panel = new ChatPanel();
+                panel.style.height = '100%';
+                panel.style.display = 'block';
+                await panel.setAgent(agent);
+                const mount = document.getElementById('app');
+                mount.dataset.booted = '1';
+                mount.textContent = '';
+                mount.appendChild(panel);
+                status('boot: ready');
+              } catch (err) {
+                const msg = err?.stack || err?.message || String(err);
+                window.__clawdisLog(msg);
+                document.body.style.color = '#e06666';
+                document.body.style.fontFamily = 'monospace';
+                document.body.style.padding = '16px';
+                document.body.innerText = 'Web chat failed to load:\\n' + msg;
+              }
+            })();
           </script>
         </body>
         </html>
@@ -191,8 +215,15 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any],
               let id = body["id"] as? String,
-              let type = body["type"] as? String,
-              type == "chat",
+              let type = body["type"] as? String
+        else { return }
+
+        if id == "log", let log = body["log"] as? String {
+            NSLog("WebChat JS: %@", log)
+            return
+        }
+
+        guard type == "chat",
               let payload = body["payload"] as? [String: Any],
               let text = payload["text"] as? String
         else { return }

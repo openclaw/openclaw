@@ -23,5 +23,5 @@ The macOS Clawdis app ships a built-in web chat window that reuses your primary 
 
 ## Usage
 
-- Launch the macOS Clawdis menu bar app, click the lobster icon → “Open Web Chat”.
+- Launch the macOS Clawdis menu bar app, click the lobster icon → “Open Chat”.
 - Type and send; replies continue the primary Clawd session.
