@@ -43,8 +43,9 @@ kill_all_clawdis() {
 log "==> Killing existing Clawdis instances"
 kill_all_clawdis
 
-# 2) Rebuild (and optionally extend to tests later if desired).
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q"
+# 2) Rebuild into the same path the packager consumes.
+run_step "clean build cache" bash -lc "rm -rf '${ROOT_DIR}/apps/macos/.build-local'"
+run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --build-path .build-local --product Clawdis"
 
 # 3) Package + relaunch the app (script also stops any stragglers).
 run_step "package app" "${ROOT_DIR}/scripts/package-mac-app.sh"
