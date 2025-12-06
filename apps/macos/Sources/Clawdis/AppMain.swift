@@ -631,10 +631,14 @@ struct ClawdisApp: App {
 
 private struct MenuContent: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var relayManager = RelayProcessManager.shared
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
-        Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
+        VStack(alignment: .leading, spacing: 8) {
+            self.relayStatusRow
+            Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
+        }
         Toggle(isOn: self.$state.swabbleEnabled) { Text("Voice Wake") }
             .disabled(!voiceWakeSupported)
             .opacity(voiceWakeSupported ? 1 : 0.5)
@@ -652,6 +656,28 @@ private struct MenuContent: View {
         NSApp.activate(ignoringOtherApps: true)
         self.openSettings()
         NotificationCenter.default.post(name: .clawdisSelectSettingsTab, object: tab)
+    }
+
+    private var relayStatusRow: some View {
+        let status = self.relayManager.status
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(self.statusColor(status))
+                .frame(width: 8, height: 8)
+            Text(status.label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func statusColor(_ status: RelayProcessManager.Status) -> Color {
+        switch status {
+        case .running: return .green
+        case .starting, .restarting: return .orange
+        case .failed: return .red
+        case .stopped: return .secondary
+        }
     }
 
     private var activeBinding: Binding<Bool> {
