@@ -49,3 +49,21 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  macos-app:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Swift build (release)
+        run: swift build --package-path apps/macos --configuration release
+
+      - name: Swift tests
+        run: swift test --package-path apps/macos --parallel
