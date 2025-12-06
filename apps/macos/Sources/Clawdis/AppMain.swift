@@ -25,6 +25,7 @@ private let swabbleTriggersKey = "clawdis.swabbleTriggers"
 private let defaultVoiceWakeTriggers = ["clawd", "claude"]
 private let voiceWakeMicKey = "clawdis.voiceWakeMicID"
 private let voiceWakeLocaleKey = "clawdis.voiceWakeLocaleID"
+private let voiceWakeAdditionalLocalesKey = "clawdis.voiceWakeAdditionalLocaleIDs"
 private let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
 
 // MARK: - App model
@@ -65,6 +66,9 @@ final class AppState: ObservableObject {
     @Published var voiceWakeLocaleID: String {
         didSet { UserDefaults.standard.set(voiceWakeLocaleID, forKey: voiceWakeLocaleKey) }
     }
+    @Published var voiceWakeAdditionalLocaleIDs: [String] {
+        didSet { UserDefaults.standard.set(voiceWakeAdditionalLocaleIDs, forKey: voiceWakeAdditionalLocalesKey) }
+    }
 
     init() {
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
@@ -77,6 +81,7 @@ final class AppState: ObservableObject {
         self.swabbleTriggerWords = UserDefaults.standard.stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
+        self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard.stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
     }
 }
 
@@ -1947,16 +1952,74 @@ struct VoiceWakeSettings: View {
             LabeledContent("Recognition language") {
                 Picker("Language", selection: $state.voiceWakeLocaleID) {
                     let current = Locale(identifier: Locale.current.identifier)
-                    Text("\(displayName(for: current)) (System)").tag(Locale.current.identifier)
+                    Text("\(friendlyName(for: current)) (System)").tag(Locale.current.identifier)
                     ForEach(availableLocales.map { $0.identifier }, id: \.self) { id in
                         if id != Locale.current.identifier {
-                            Text(displayName(for: Locale(identifier: id))).tag(id)
+                            Text(friendlyName(for: Locale(identifier: id))).tag(id)
                         }
                     }
                 }
                 .labelsHidden()
                 .frame(width: 260)
             }
+
+            if !state.voiceWakeAdditionalLocaleIDs.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Additional languages")
+                        .font(.footnote.weight(.semibold))
+                    ForEach(Array(state.voiceWakeAdditionalLocaleIDs.enumerated()), id: \.offset) { idx, localeID in
+                        HStack(spacing: 8) {
+                            Picker("Extra \(idx + 1)", selection: Binding(
+                                get: { localeID },
+                                set: { newValue in
+                                    guard state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
+                                    state.voiceWakeAdditionalLocaleIDs[idx] = newValue
+                                }
+                            )) {
+                                ForEach(availableLocales.map { $0.identifier }, id: \.self) { id in
+                                    Text(friendlyName(for: Locale(identifier: id))).tag(id)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 220)
+
+                            Button {
+                                guard state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
+                                state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove language")
+                        }
+                    }
+
+                    Button {
+                        if let first = availableLocales.first {
+                            state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
+                        }
+                    } label: {
+                        Label("Add language", systemImage: "plus")
+                    }
+                    .disabled(availableLocales.isEmpty)
+                }
+                .padding(.top, 4)
+            } else {
+                Button {
+                    if let first = availableLocales.first {
+                        state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
+                    }
+                } label: {
+                    Label("Add additional language", systemImage: "plus")
+                }
+                .buttonStyle(.link)
+                .disabled(availableLocales.isEmpty)
+                .padding(.top, 4)
+            }
+
+            Text("Languages are tried in order. Models may need a first-use download on macOS 26.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -1977,13 +2040,41 @@ struct VoiceWakeSettings: View {
     private func loadLocalesIfNeeded() async {
         guard availableLocales.isEmpty else { return }
         availableLocales = Array(SFSpeechRecognizer.supportedLocales()).sorted { lhs, rhs in
-            displayName(for: lhs).localizedCaseInsensitiveCompare(displayName(for: rhs)) == .orderedAscending
+            friendlyName(for: lhs).localizedCaseInsensitiveCompare(friendlyName(for: rhs)) == .orderedAscending
         }
     }
 
-    private func displayName(for locale: Locale) -> String {
-        let name = locale.localizedString(forIdentifier: locale.identifier) ?? locale.identifier
-        return name
+    /// Produce a human-friendly label without odd BCP-47 variants (rg=zzzz, calendar, collation, numbering).
+    private func friendlyName(for locale: Locale) -> String {
+        let cleanedID = normalizedLocaleIdentifier(locale.identifier)
+        let cleanLocale = Locale(identifier: cleanedID)
+
+        if let langCode = cleanLocale.languageCode,
+           let lang = cleanLocale.localizedString(forLanguageCode: langCode),
+           let regionCode = cleanLocale.regionCode,
+           let region = cleanLocale.localizedString(forRegionCode: regionCode) {
+            return "\(lang) (\(region))"
+        }
+        if let langCode = cleanLocale.languageCode,
+           let lang = cleanLocale.localizedString(forLanguageCode: langCode) {
+            return lang
+        }
+        return cleanLocale.localizedString(forIdentifier: cleanedID) ?? cleanedID
+    }
+
+    /// Strip uncommon BCP-47 subtags so labels stay readable (e.g. remove @rg=zzzz, -u- extensions).
+    private func normalizedLocaleIdentifier(_ raw: String) -> String {
+        var trimmed = raw
+        if let at = trimmed.firstIndex(of: "@") {
+            trimmed = String(trimmed[..<at])
+        }
+        if let u = trimmed.range(of: "-u-") {
+            trimmed = String(trimmed[..<u.lowerBound])
+        }
+        if let t = trimmed.range(of: "-t-") { // transform extension
+            trimmed = String(trimmed[..<t.lowerBound])
+        }
+        return trimmed
     }
 
     private var levelMeter: some View {
