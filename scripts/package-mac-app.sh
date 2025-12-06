@@ -44,7 +44,9 @@ cat > "$APP_ROOT/Contents/Info.plist" <<'PLIST'
     <key>NSScreenCaptureDescription</key>
     <string>Clawdis captures the screen when the agent needs screenshots for context.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Clawdis may record screen or audio when requested by the agent.</string>
+    <string>Clawdis needs the mic for Voice Wake tests and agent audio capture.</string>
+    <key>NSSpeechRecognitionUsageDescription</key>
+    <string>Clawdis uses speech recognition to detect your Voice Wake trigger phrase.</string>
 </dict>
 </plist>
 PLIST
