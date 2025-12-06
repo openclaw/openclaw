@@ -1314,7 +1314,6 @@ enum VoiceWakeTestState: Equatable {
     case failed(String)
 }
 
-@MainActor
 final class VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -1325,6 +1324,7 @@ final class VoiceWakeTester {
         self.recognizer = SFSpeechRecognizer(locale: locale)
     }
 
+    @MainActor
     func start(triggers: [String], onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
         guard recognitionTask == nil else { return }
         guard let recognizer, recognizer.isAvailable else {
@@ -1376,6 +1376,7 @@ final class VoiceWakeTester {
         }
     }
 
+    @MainActor
     func stop() {
         audioEngine.stop()
         recognitionRequest?.endAudio()
@@ -1390,14 +1391,12 @@ final class VoiceWakeTester {
         return triggers.contains { lowered.contains($0.lowercased()) }
     }
 
-    private static func ensurePermissions() async throws -> Bool {
+    nonisolated private static func ensurePermissions() async throws -> Bool {
         let speechStatus = SFSpeechRecognizer.authorizationStatus()
         if speechStatus == .notDetermined {
             let granted = await withCheckedContinuation { continuation in
                 SFSpeechRecognizer.requestAuthorization { status in
-                    Task { @MainActor in
-                        continuation.resume(returning: status == .authorized)
-                    }
+                    continuation.resume(returning: status == .authorized)
                 }
             }
             guard granted else { return false }
@@ -1411,7 +1410,7 @@ final class VoiceWakeTester {
         case .notDetermined:
             return await withCheckedContinuation { continuation in
                 AVCaptureDevice.requestAccess(for: .audio) { granted in
-                    Task { @MainActor in continuation.resume(returning: granted) }
+                    continuation.resume(returning: granted)
                 }
             }
         default:
