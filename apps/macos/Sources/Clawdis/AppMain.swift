@@ -1319,6 +1319,12 @@ enum VoiceWakeTestState: Equatable {
     case failed(String)
 }
 
+private struct AudioInputDevice: Identifiable, Equatable {
+    let uid: String
+    let name: String
+    var id: String { uid }
+}
+
 actor VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -1329,7 +1335,7 @@ actor VoiceWakeTester {
         self.recognizer = SFSpeechRecognizer(locale: locale)
     }
 
-    func start(triggers: [String], onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
+    func start(triggers: [String], micID: String?, onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
         guard recognitionTask == nil else { return }
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(domain: "VoiceWakeTester", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
@@ -1343,6 +1349,8 @@ actor VoiceWakeTester {
         guard granted else {
             throw NSError(domain: "VoiceWakeTester", code: 2, userInfo: [NSLocalizedDescriptionKey: "Microphone or speech permission denied"])
         }
+
+        configureSession(preferredMicID: micID)
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest?.shouldReportPartialResults = true
@@ -1390,14 +1398,20 @@ actor VoiceWakeTester {
         onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void
     ) async {
         if matched, let text {
-            await stop()
+            stop()
             await MainActor.run { onUpdate(.detected(text)) }
             return
         }
         if let errorMessage {
-            await stop()
+            stop()
             await MainActor.run { onUpdate(.failed(errorMessage)) }
         }
+    }
+
+    private func configureSession(preferredMicID: String?) {
+        // macOS uses the system default input for AVAudioEngine. Selection is stored for future
+        // pipeline wiring; test currently relies on the system default device.
+        _ = preferredMicID
     }
 
     private static func matches(text: String, triggers: [String]) -> Bool {
@@ -1758,6 +1772,7 @@ struct VoiceWakeSettings: View {
             do {
                 try await tester.start(
                     triggers: triggers,
+                    micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                     onUpdate: { newState in
                         self.testState = newState
                         if case .detected = newState { self.isTesting = false }
