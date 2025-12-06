@@ -41,7 +41,7 @@ export const opencodeSpec: AgentSpec = {
     // Identity prefix
     // Opencode streams text tokens; we still seed an identity so the agent
     // keeps context on first turn.
-    const shouldPrependIdentity = !(ctx.sendSystemOnce && ctx.systemSent);
+    const shouldPrependIdentity = ctx.isNewSession || !(ctx.sendSystemOnce && ctx.systemSent);
     const bodyWithIdentity =
       shouldPrependIdentity && body
         ? [ctx.identityPrefix ?? OPENCODE_IDENTITY_PREFIX, body]

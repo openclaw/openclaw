@@ -471,9 +471,10 @@ export async function getReplyFromConfig(
   // Optional prefix injected before Body for templating/command prompts.
   const sendSystemOnce = sessionCfg?.sendSystemOnce === true;
   const isFirstTurnInSession = isNewSession || !systemSent;
+  const sessionIntroConfig = sessionCfg?.sessionIntro;
   const sessionIntro =
-    isFirstTurnInSession && sessionCfg?.sessionIntro
-      ? applyTemplate(sessionCfg.sessionIntro, sessionCtx)
+    isFirstTurnInSession && sessionIntroConfig
+      ? applyTemplate(sessionIntroConfig, sessionCtx)
       : "";
   const groupIntro =
     isFirstTurnInSession && sessionCtx.ChatType === "group"
@@ -497,7 +498,19 @@ export async function getReplyFromConfig(
   const bodyPrefix = reply?.bodyPrefix
     ? applyTemplate(reply.bodyPrefix, sessionCtx)
     : "";
-  const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  let baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+
+  // Extract stray think level token from user's message BEFORE adding prefixes
+  // (to avoid removing "Think" from bodyPrefix like "Think deeply whenever asked.")
+  if (!resolvedThinkLevel && baseBody) {
+    const parts = baseBody.split(/\s+/);
+    const maybeLevel = normalizeThinkLevel(parts[0]);
+    if (maybeLevel) {
+      resolvedThinkLevel = maybeLevel;
+      baseBody = parts.slice(1).join(" ").trim();
+    }
+  }
+
   const abortedHint =
     reply?.mode === "command" && abortedLastRun
       ? "Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification."
@@ -562,22 +575,13 @@ export async function getReplyFromConfig(
     mediaNote && reply?.mode === "command"
       ? "To send an image back, add a line like: MEDIA:https://example.com/image.jpg (no spaces). Keep caption in the text body."
       : undefined;
-  let commandBody = mediaNote
+  const commandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""]
         .filter(Boolean)
         .join("\n")
         .trim()
     : prefixedBody;
 
-  // Fallback: if a stray leading level token remains, consume it
-  if (!resolvedThinkLevel && commandBody) {
-    const parts = commandBody.split(/\s+/);
-    const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel) {
-      resolvedThinkLevel = maybeLevel;
-      commandBody = parts.slice(1).join(" ").trim();
-    }
-  }
   const templatingCtx: TemplateContext = {
     ...sessionCtx,
     Body: commandBody,
@@ -629,6 +633,7 @@ export async function getReplyFromConfig(
         isNewSession,
         isFirstTurnInSession,
         systemSent,
+        sessionIntro,
         timeoutMs,
         timeoutSeconds,
         commandRunner,

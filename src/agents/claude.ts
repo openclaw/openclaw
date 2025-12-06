@@ -55,13 +55,12 @@ export const claudeSpec: AgentSpec = {
       beforeBody.push("-p");
     }
 
-    const shouldPrependIdentity = !(ctx.sendSystemOnce && ctx.systemSent);
-    const bodyWithIdentity =
-      shouldPrependIdentity && body
-        ? [ctx.identityPrefix ?? CLAUDE_IDENTITY_PREFIX, body]
-            .filter(Boolean)
-            .join("\n\n")
-        : body;
+    const shouldPrependIdentity = ctx.isNewSession || !(ctx.sendSystemOnce && ctx.systemSent);
+    const bodyWithIdentity = shouldPrependIdentity
+      ? [ctx.identityPrefix ?? CLAUDE_IDENTITY_PREFIX, body]
+          .filter(Boolean)
+          .join("\n\n")
+      : body;
 
     return [...beforeBody, bodyWithIdentity, ...afterBody];
   },

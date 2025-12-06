@@ -26,10 +26,8 @@ vi.mock("../env.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({
-    telegram: {
-      allowFrom: ["@testuser"],
-    },
     inbound: {
+      allowFrom: ["@testuser"],
       reply: {
         mode: "text",
         text: "Auto-reply test",
@@ -207,10 +205,8 @@ describe("monitorTelegramProvider", () => {
 
     // Set allowFrom filter
     (loadConfig as Mock).mockReturnValueOnce({
-      telegram: {
-        allowFrom: ["@alloweduser"],
-      },
       inbound: {
+        allowFrom: ["@alloweduser"],
         reply: {
           mode: "text",
           text: "Auto-reply test",

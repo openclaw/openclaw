@@ -39,6 +39,38 @@ describe("agent buildArgs + parseOutput helpers", () => {
     expect(builtNoIdentity.at(-1)).not.toContain(CLAUDE_IDENTITY_PREFIX);
   });
 
+  it("claudeSpec prepends identity even when body is empty (e.g. /new)", () => {
+    // This is the /new reset trigger case - body is empty after reset trigger is stripped
+    const argv = ["claude", ""];
+    const built = claudeSpec.buildArgs({
+      argv,
+      bodyIndex: 1,
+      isNewSession: true,
+      sessionId: "sess",
+      sendSystemOnce: true,
+      systemSent: false,
+      identityPrefix: "Custom session intro here",
+      format: "json",
+    });
+
+    // Should still prepend the identity prefix even though body is empty
+    const lastArg = built.at(-1);
+    expect(lastArg).toContain("Custom session intro here");
+
+    // Verify it doesn't prepend identity when systemSent is true
+    const builtAfterSystem = claudeSpec.buildArgs({
+      argv,
+      bodyIndex: 1,
+      isNewSession: false,
+      sessionId: "sess",
+      sendSystemOnce: true,
+      systemSent: true,
+      identityPrefix: "Custom session intro here",
+      format: "json",
+    });
+    expect(builtAfterSystem.at(-1)).toBe("");
+  });
+
   it("opencodeSpec adds format flag and identity prefix when needed", () => {
     const argv = ["opencode", "body"];
     const built = opencodeSpec.buildArgs({

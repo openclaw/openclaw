@@ -43,10 +43,6 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
-export type TelegramConfig = {
-  allowFrom?: string[]; // @username or user IDs
-};
-
 export type GroupChatConfig = {
   requireMention?: boolean;
   mentionPatterns?: string[];
@@ -90,7 +86,6 @@ export type WarelayConfig = {
     };
   };
   web?: WebConfig;
-  telegram?: TelegramConfig;
 };
 
 // New branding path (preferred)

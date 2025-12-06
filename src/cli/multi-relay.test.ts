@@ -126,7 +126,7 @@ describe("runMultiProviderRelay", () => {
 			undefined,
 			mockRuntime,
 			expect.any(AbortSignal),
-			webTuning,
+			{ ...webTuning, suppressStartMessage: true },
 		);
 	});
 

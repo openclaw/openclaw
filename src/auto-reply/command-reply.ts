@@ -36,6 +36,7 @@ type CommandReplyParams = {
   isNewSession: boolean;
   isFirstTurnInSession: boolean;
   systemSent: boolean;
+  sessionIntro?: string;
   timeoutMs: number;
   timeoutSeconds: number;
   commandRunner: typeof runCommandWithTimeout;
@@ -288,6 +289,7 @@ export async function runCommandReply(
     isNewSession,
     isFirstTurnInSession,
     systemSent,
+    sessionIntro,
     timeoutMs,
     timeoutSeconds,
     commandRunner,
@@ -392,7 +394,7 @@ export async function runCommandReply(
         sessionId: templatingCtx.SessionId,
         sendSystemOnce,
         systemSent,
-        identityPrefix: agentCfg.identityPrefix,
+        identityPrefix: agentCfg.identityPrefix ?? sessionIntro,
         format: agentCfg.format,
       })
     : argv;

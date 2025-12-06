@@ -23,11 +23,36 @@ import { normalizeAllowFromEntry } from "../utils.js";
 const TELEGRAM_TEXT_LIMIT = 4096; // Telegram's message length limit
 
 /**
+ * Format timestamp in the same format as WhatsApp relay.
+ * Example: [Dec 5 22:41]
+ */
+function formatTimestamp(ts: number, config?: ReturnType<typeof loadConfig>): string {
+  const tsCfg = config?.inbound?.timestampPrefix;
+  const tsEnabled = tsCfg !== false; // default true
+  if (!tsEnabled) return "";
+  const tz = typeof tsCfg === "string" ? tsCfg : "UTC";
+  const date = new Date(ts);
+  try {
+    return `[${date.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: tz })} ${date.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: tz })}] `;
+  } catch {
+    return `[${date.toISOString().slice(5, 16).replace("T", " ")}] `;
+  }
+}
+
+/**
  * Convert ProviderMessage to MsgContext for auto-reply system.
  */
-function providerMessageToContext(message: ProviderMessage): MsgContext {
+function providerMessageToContext(
+  message: ProviderMessage,
+  config?: ReturnType<typeof loadConfig>,
+): MsgContext {
+  const timestampPrefix = formatTimestamp(message.timestamp, config);
+  const bodyWithTimestamp = timestampPrefix
+    ? `${timestampPrefix}${message.body}`
+    : message.body;
+
   return {
-    Body: message.body,
+    Body: bodyWithTimestamp,
     From: message.from,
     To: message.to,
     MessageSid: message.id,
@@ -68,10 +93,13 @@ async function sendReply(
         media: firstMedia ? [{ type: "image", url: firstMedia }] : undefined,
       });
 
+      // Log the reply text
+      runtime.log(`↩️  ${firstChunk}`);
+
       if (isVerbose()) {
         runtime.log(
           success(
-            `↩️  Auto-replied to ${replyTo} via Telegram (id ${result.messageId})`,
+            `Auto-replied to ${replyTo} via Telegram (id ${result.messageId})`,
           ),
         );
       }
@@ -85,6 +113,7 @@ async function sendReply(
   for (let i = 1; i < chunks.length; i++) {
     try {
       await provider.send(replyTo, chunks[i]);
+      runtime.log(`↩️  ${chunks[i]}`);
     } catch (err) {
       runtime.error(
         danger(`Failed to send Telegram reply chunk ${i}: ${String(err)}`),
@@ -114,11 +143,11 @@ async function handleInboundMessage(
   provider: Provider,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const ctx = providerMessageToContext(message);
   const config = loadConfig();
+  const ctx = providerMessageToContext(message, config);
 
   // Check allowFrom filter
-  const allowFrom = config.telegram?.allowFrom;
+  const allowFrom = config.inbound?.allowFrom;
   if (Array.isArray(allowFrom) && allowFrom.length > 0) {
     if (!allowFrom.includes("*")) {
       const normalizedFrom = normalizeAllowFromEntry(message.from, "telegram");
@@ -128,7 +157,7 @@ async function handleInboundMessage(
       if (!normalizedAllowList.includes(normalizedFrom)) {
         if (isVerbose()) {
           logVerbose(
-            `Skipping auto-reply: sender ${message.from} not in telegram.allowFrom list`,
+            `Skipping auto-reply: sender ${message.from} not in allowFrom list`,
           );
         }
         return;
@@ -137,9 +166,9 @@ async function handleInboundMessage(
   }
 
   // Log inbound message
-  const timestamp = new Date(message.timestamp).toISOString();
+  const formattedTs = formatTimestamp(message.timestamp, config);
   runtime.log(
-    `\n[${timestamp}] ${message.from} -> ${message.to}: ${message.body}`,
+    `\n${formattedTs}${message.from} -> ${message.to}: ${message.body}`,
   );
 
   // Get reply from config
@@ -209,7 +238,7 @@ export async function monitorTelegramProvider(
     apiId: Number.parseInt(env.telegram.apiId, 10),
     apiHash: env.telegram.apiHash,
     sessionDir: undefined, // Uses default ~/.warelay/telegram
-    allowFrom: config.telegram?.allowFrom,
+    allowFrom: config.inbound?.allowFrom,
     verbose,
   };
 

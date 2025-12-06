@@ -158,7 +158,8 @@ export const piSpec: AgentSpec = {
     }
     // Session defaults
     // Identity prefix optional; Pi usually doesn't need it, but allow injection
-    if (!(ctx.sendSystemOnce && ctx.systemSent) && argv[ctx.bodyIndex]) {
+    const shouldPrependIdentity = ctx.isNewSession || !(ctx.sendSystemOnce && ctx.systemSent);
+    if (shouldPrependIdentity && argv[ctx.bodyIndex]) {
       const existingBody = argv[ctx.bodyIndex];
       argv[ctx.bodyIndex] = [ctx.identityPrefix, existingBody]
         .filter(Boolean)
