@@ -1486,15 +1486,6 @@ struct ConfigSettings: View {
                     }
             }
 
-            LabeledContent("Context tokens") {
-                TextField("Optional", text: self.$configContextTokens)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 160)
-                    .onChange(of: self.configContextTokens) { _, _ in
-                        self.autosaveConfig()
-                    }
-            }
-
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -1525,7 +1516,6 @@ struct ConfigSettings: View {
         guard let data = try? Data(contentsOf: url) else {
             self.configModel = SessionLoader.fallbackModel
             self.configStorePath = SessionLoader.defaultStorePath
-            self.configContextTokens = ""
             return
         }
         guard
@@ -1547,11 +1537,6 @@ struct ConfigSettings: View {
             self.configModel = SessionLoader.fallbackModel
             self.customModel = SessionLoader.fallbackModel
         }
-        if let ctx = (agent?["contextTokens"] as? NSNumber)?.intValue {
-            self.configContextTokens = "\(ctx)"
-        } else {
-            self.configContextTokens = ""
-        }
     }
 
     private func autosaveConfig() {
@@ -1564,7 +1549,6 @@ struct ConfigSettings: View {
         self.configSaving = true
         defer { self.configSaving = false }
 
-        let ctxTokens: Int? = Int(self.configContextTokens.trimmingCharacters(in: .whitespacesAndNewlines))
         var session: [String: Any] = [:]
         var agent: [String: Any] = [:]
 
@@ -1575,7 +1559,6 @@ struct ConfigSettings: View {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = chosenModel
         if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
-        if let ctxTokens { agent["contextTokens"] = ctxTokens }
 
         let reply: [String: Any] = [
             "session": session,
