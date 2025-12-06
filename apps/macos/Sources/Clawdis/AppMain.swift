@@ -1258,6 +1258,10 @@ final class VoiceWakeTester {
             throw NSError(domain: "VoiceWakeTester", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
         }
 
+        guard Self.hasPrivacyStrings else {
+            throw NSError(domain: "VoiceWakeTester", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing mic/speech privacy strings. Rebuild the mac app (scripts/restart-mac.sh) to include usage descriptions."])
+        }
+
         let granted = try await Self.ensurePermissions()
         guard granted else {
             throw NSError(domain: "VoiceWakeTester", code: 2, userInfo: [NSLocalizedDescriptionKey: "Microphone or speech permission denied"])
@@ -1334,6 +1338,12 @@ final class VoiceWakeTester {
         default:
             return false
         }
+    }
+
+    private static var hasPrivacyStrings: Bool {
+        let speech = Bundle.main.object(forInfoDictionaryKey: "NSSpeechRecognitionUsageDescription") as? String
+        let mic = Bundle.main.object(forInfoDictionaryKey: "NSMicrophoneUsageDescription") as? String
+        return speech?.isEmpty == false && mic?.isEmpty == false
     }
 }
 
@@ -2043,7 +2053,7 @@ struct OnboardingView: View {
                     .interactiveSpring(response: 0.5, dampingFraction: 0.86, blendDuration: 0.25),
                     value: currentPage
                 )
-                .frame(height: contentHeight, alignment: .top)
+                .frame(width: pageWidth, height: contentHeight, alignment: .top)
                 .clipped()
             }
             .frame(height: 260)
