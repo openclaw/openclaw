@@ -24,6 +24,7 @@ private let swabbleEnabledKey = "clawdis.swabbleEnabled"
 private let swabbleTriggersKey = "clawdis.swabbleTriggers"
 private let defaultVoiceWakeTriggers = ["clawd", "claude"]
 private let voiceWakeMicKey = "clawdis.voiceWakeMicID"
+private let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
 
 // MARK: - App model
 
@@ -67,7 +68,8 @@ final class AppState: ObservableObject {
         self.launchAtLogin = SMAppService.mainApp.status == .enabled
         self.onboardingSeen = UserDefaults.standard.bool(forKey: "clawdis.onboardingSeen")
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: "clawdis.debugPaneEnabled")
-        self.swabbleEnabled = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
+        let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
+        self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard.stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
     }
@@ -440,6 +442,8 @@ private struct MenuContent: View {
     var body: some View {
         Toggle(isOn: activeBinding) { Text("Clawdis Active") }
         Toggle(isOn: $state.swabbleEnabled) { Text("Voice Wake") }
+            .disabled(!voiceWakeSupported)
+            .opacity(voiceWakeSupported ? 1 : 0.5)
         Button("Settings…") { open(tab: .general) }
             .keyboardShortcut(",", modifiers: [.command])
         Button("About Clawdis") { open(tab: .about) }
@@ -1662,6 +1666,16 @@ struct VoiceWakeSettings: View {
                 subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands.",
                 binding: $state.swabbleEnabled
             )
+            .disabled(!voiceWakeSupported)
+
+            if !voiceWakeSupported {
+                Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.yellow)
+                    .padding(8)
+                    .background(Color.secondary.opacity(0.15))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
 
             micPicker
             levelMeter
@@ -1823,6 +1837,10 @@ struct VoiceWakeSettings: View {
     }
 
     private func toggleTest() {
+        guard voiceWakeSupported else {
+            testState = .failed("Voice Wake requires macOS 26 or newer.")
+            return
+        }
         if isTesting {
             tester.stop()
             isTesting = false
