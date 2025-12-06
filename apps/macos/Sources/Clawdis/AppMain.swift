@@ -636,19 +636,19 @@ private struct MenuContent: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            self.relayStatusRow
             Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
+            Toggle(isOn: self.$state.swabbleEnabled) { Text("Voice Wake") }
+                .disabled(!voiceWakeSupported)
+                .opacity(voiceWakeSupported ? 1 : 0.5)
+            Button("Open Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
+            self.relayStatusRow
+            Divider()
+            Button("Settings…") { self.open(tab: .general) }
+                .keyboardShortcut(",", modifiers: [.command])
+            Button("About Clawdis") { self.open(tab: .about) }
+            Divider()
+            Button("Quit") { NSApplication.shared.terminate(nil) }
         }
-        Toggle(isOn: self.$state.swabbleEnabled) { Text("Voice Wake") }
-            .disabled(!voiceWakeSupported)
-            .opacity(voiceWakeSupported ? 1 : 0.5)
-        Button("Open Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
-        Divider()
-        Button("Settings…") { self.open(tab: .general) }
-            .keyboardShortcut(",", modifiers: [.command])
-        Button("About Clawdis") { self.open(tab: .about) }
-        Divider()
-        Button("Quit") { NSApplication.shared.terminate(nil) }
     }
 
     private func open(tab: SettingsTab) {
