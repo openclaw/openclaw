@@ -1025,13 +1025,50 @@ struct SessionsSettings: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: 10) {
-                        ForEach(rows) { row in
-                            SessionRowView(row: row)
+                Table(rows) {
+                    TableColumn("Key") { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(row.key)
+                                .font(.body.weight(.semibold))
+                            HStack(spacing: 6) {
+                                SessionKindBadge(kind: row.kind)
+                                if !row.flagLabels.isEmpty {
+                                    ForEach(row.flagLabels, id: \.self) { flag in
+                                        Badge(text: flag)
+                                    }
+                                }
+                            }
                         }
                     }
+                    .width(170)
+
+                    TableColumn("Updated", value: \.ageText)
+                        .width(80)
+
+                    TableColumn("Tokens") { row in
+                        Text(row.tokens.summary)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .width(210)
+
+                    TableColumn("Model") { row in
+                        Text(row.model ?? "—")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .width(120)
+
+                    TableColumn("Session ID") { row in
+                        Text(row.sessionId ?? "—")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
+                .tableStyle(.inset(alternatesRowBackgrounds: true))
+                .frame(maxHeight: .infinity, alignment: .top)
             }
         }
     }
@@ -1145,6 +1182,20 @@ private struct SessionKindBadge: View {
             .padding(.vertical, 4)
             .foregroundStyle(kind.tint)
             .background(kind.tint.opacity(0.15))
+            .clipShape(Capsule())
+    }
+}
+
+private struct Badge: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .foregroundStyle(.secondary)
+            .background(Color.secondary.opacity(0.12))
             .clipShape(Capsule())
     }
 }
@@ -1344,7 +1395,9 @@ final class VoiceWakeTester {
         if speechStatus == .notDetermined {
             let granted = await withCheckedContinuation { continuation in
                 SFSpeechRecognizer.requestAuthorization { status in
-                    continuation.resume(returning: status == .authorized)
+                    Task { @MainActor in
+                        continuation.resume(returning: status == .authorized)
+                    }
                 }
             }
             guard granted else { return false }
@@ -1356,7 +1409,11 @@ final class VoiceWakeTester {
         switch micStatus {
         case .authorized: return true
         case .notDetermined:
-            return await AVCaptureDevice.requestAccess(for: .audio)
+            return await withCheckedContinuation { continuation in
+                AVCaptureDevice.requestAccess(for: .audio) { granted in
+                    Task { @MainActor in continuation.resume(returning: granted) }
+                }
+            }
         default:
             return false
         }
