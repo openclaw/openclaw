@@ -1096,15 +1096,19 @@ enum ModelCatalogLoader {
     }
 
     private static func sanitize(source: String) -> String {
-        var text = source
-        text = text.replacingOccurrences(of: #"(?m)^import[^\n]*\n"#, with: "", options: .regularExpression)
-        text = text.replacingOccurrences(
-            of: #"export\s+const\s+MODELS"#,
-            with: "var MODELS",
+        guard let exportRange = source.range(of: "export const MODELS"),
+              let firstBrace = source[exportRange.upperBound...].firstIndex(of: "{"),
+              let lastBrace = source.lastIndex(of: "}")
+        else {
+            return "var MODELS = {}"
+        }
+        var body = String(source[firstBrace...lastBrace])
+        body = body.replacingOccurrences(
+            of: #"satisfies\s+[A-Za-z0-9_<>.,\-\s]+"#,
+            with: "",
             options: .regularExpression)
-        text = text.replacingOccurrences(of: #"satisfies\s+Model<[^>]+>"#, with: "", options: .regularExpression)
-        text = text.replacingOccurrences(of: #"as\s+Model<[^>]+>"#, with: "", options: .regularExpression)
-        return text
+        body = body.replacingOccurrences(of: #"as\s+[A-Za-z0-9_<>.,\-\s]+"#, with: "", options: .regularExpression)
+        return "var MODELS = \(body);"
     }
 }
 
