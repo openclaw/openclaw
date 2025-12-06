@@ -1760,21 +1760,13 @@ struct SettingsRootView: View {
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
 
-            ToolsSettings()
-                .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
-                .tag(SettingsTab.tools)
-
-            SessionsSettings()
-                .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
-                .tag(SettingsTab.sessions)
+            VoiceWakeSettings(state: self.state)
+                .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
+                .tag(SettingsTab.voiceWake)
 
             ConfigSettings()
                 .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
                 .tag(SettingsTab.config)
-
-            VoiceWakeSettings(state: self.state)
-                .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
-                .tag(SettingsTab.voiceWake)
 
             PermissionsSettings(
                 status: self.permissionMonitor.status,
@@ -1782,6 +1774,14 @@ struct SettingsRootView: View {
                 showOnboarding: { OnboardingController.shared.show() })
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
                 .tag(SettingsTab.permissions)
+
+            SessionsSettings()
+                .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
+                .tag(SettingsTab.sessions)
+
+            ToolsSettings()
+                .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
+                .tag(SettingsTab.tools)
 
             if self.state.debugPaneEnabled {
                 DebugSettings()
