@@ -1827,6 +1827,7 @@ struct VoiceWakeSettings: View {
         testState = .requesting
         Task { @MainActor in
             do {
+                await meter.stop() // free the mic for speech recognizer
                 try await tester.start(
                     triggers: triggers,
                     micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
@@ -1834,6 +1835,8 @@ struct VoiceWakeSettings: View {
                         self.testState = newState
                         if case .detected = newState { self.isTesting = false }
                         if case .failed = newState { self.isTesting = false }
+                        if case .detected = newState { Task { await restartMeter() } }
+                        if case .failed = newState { Task { await restartMeter() } }
                     }
                 )
                 // timeout after 10s
@@ -1842,11 +1845,13 @@ struct VoiceWakeSettings: View {
                     await tester.stop()
                     testState = .failed("Timeout: no trigger heard")
                     isTesting = false
+                    await restartMeter()
                 }
             } catch {
                 await tester.stop()
                 testState = .failed(error.localizedDescription)
                 isTesting = false
+                await restartMeter()
             }
         }
     }
