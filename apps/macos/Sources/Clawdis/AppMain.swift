@@ -1325,6 +1325,58 @@ private struct AudioInputDevice: Identifiable, Equatable {
     var id: String { uid }
 }
 
+actor MicLevelMonitor {
+    private let engine = AVAudioEngine()
+    private var update: (@Sendable (Double) -> Void)?
+    private var running = false
+    private var smoothedLevel: Double = 0
+
+    func start(onLevel: @Sendable @escaping (Double) -> Void) async throws {
+        update = onLevel
+        if running { return }
+        let input = engine.inputNode
+        let format = input.outputFormat(forBus: 0)
+        input.removeTap(onBus: 0)
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
+            guard let self else { return }
+            let level = Self.normalizedLevel(from: buffer)
+            Task { await self.push(level: level) }
+        }
+        engine.prepare()
+        try engine.start()
+        running = true
+    }
+
+    func stop() {
+        guard running else { return }
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        running = false
+    }
+
+    private func push(level: Double) {
+        smoothedLevel = (smoothedLevel * 0.85) + (level * 0.15)
+        guard let update else { return }
+        let value = smoothedLevel
+        Task { @MainActor in update(value) }
+    }
+
+    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Double {
+        guard let channel = buffer.floatChannelData?[0] else { return 0 }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return 0 }
+        var sum: Float = 0
+        for i in 0..<frameCount {
+            let s = channel[i]
+            sum += s * s
+        }
+        let rms = sqrt(sum / Float(frameCount) + 1e-12)
+        let db = 20 * log10(Double(rms))
+        let normalized = max(0, min(1, (db + 50) / 50)) // -50dB -> 0, 0dB -> 1
+        return normalized
+    }
+}
+
 actor VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
@@ -1588,12 +1640,9 @@ struct VoiceWakeSettings: View {
     @State private var isTesting = false
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
-
-    struct AudioInputDevice: Identifiable, Hashable {
-        let uid: String
-        let name: String
-        var id: String { uid }
-    }
+    @State private var meterLevel: Double = 0
+    @State private var meterError: String?
+    private let meter = MicLevelMonitor()
 
     private struct IndexedWord: Identifiable {
         let id: Int
@@ -1609,6 +1658,7 @@ struct VoiceWakeSettings: View {
             )
 
             micPicker
+            levelMeter
 
             testCard
 
@@ -1661,6 +1711,13 @@ struct VoiceWakeSettings: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .task { await loadMicsIfNeeded() }
+        .task { await restartMeter() }
+        .onChange(of: state.voiceWakeMicID) { _, _ in
+            Task { await restartMeter() }
+        }
+        .onDisappear {
+            Task { await meter.stop() }
+        }
     }
 
     private var indexedWords: [IndexedWord] {
@@ -1830,6 +1887,44 @@ struct VoiceWakeSettings: View {
         )
         availableMics = discovery.devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
         loadingMics = false
+    }
+
+    private var levelMeter: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("Live level").font(.callout.weight(.semibold))
+                MicLevelBar(level: meterLevel)
+                Text(levelLabel)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            if let meterError {
+                Text(meterError)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var levelLabel: String {
+        let db = (meterLevel * 50) - 50
+        return String(format: "%.0f dB", db)
+    }
+
+    @MainActor
+    private func restartMeter() async {
+        meterError = nil
+        await meter.stop()
+        do {
+            try await meter.start { [weak state] level in
+                Task { @MainActor in
+                    guard state != nil else { return }
+                    self.meterLevel = level
+                }
+            }
+        } catch {
+            meterError = error.localizedDescription
+        }
     }
 }
 
@@ -2143,6 +2238,34 @@ private struct PermissionRow: View {
         case .microphone: return "mic" 
         case .speechRecognition: return "waveform" 
         }
+    }
+}
+
+struct MicLevelBar: View {
+    let level: Double
+    let segments: Int = 12
+
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<segments, id: \.self) { idx in
+                let fill = level * Double(segments) > Double(idx)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(fill ? segmentColor(for: idx) : Color.gray.opacity(0.35))
+                    .frame(width: 14, height: 10)
+            }
+        }
+        .padding(4)
+        .background(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(Color.gray.opacity(0.25), lineWidth: 1)
+        )
+    }
+
+    private func segmentColor(for idx: Int) -> Color {
+        let fraction = Double(idx + 1) / Double(segments)
+        if fraction < 0.65 { return .green }
+        if fraction < 0.85 { return .yellow }
+        return .red
     }
 }
 
