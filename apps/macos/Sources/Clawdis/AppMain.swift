@@ -5,6 +5,7 @@ import AVFoundation
 import ClawdisIPC
 import CoreGraphics
 import Foundation
+import JavaScriptCore
 import MenuBarExtraAccess
 import OSLog
 @preconcurrency import ScreenCaptureKit
@@ -26,6 +27,7 @@ private let defaultVoiceWakeTriggers = ["clawd", "claude"]
 private let voiceWakeMicKey = "clawdis.voiceWakeMicID"
 private let voiceWakeLocaleKey = "clawdis.voiceWakeLocaleID"
 private let voiceWakeAdditionalLocalesKey = "clawdis.voiceWakeAdditionalLocaleIDs"
+private let modelCatalogPathKey = "clawdis.modelCatalogPath"
 private let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
 
 // MARK: - App model
@@ -892,6 +894,27 @@ private struct SessionDefaults {
     let contextTokens: Int
 }
 
+private struct ModelChoice: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let provider: String
+    let contextWindow: Int?
+}
+
+extension [String] {
+    fileprivate func dedupedPreserveOrder() -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for item in self {
+            if !seen.contains(item) {
+                seen.insert(item)
+                result.append(item)
+            }
+        }
+        return result
+    }
+}
+
 private struct SessionConfigHints {
     let storePath: String?
     let model: String?
@@ -964,6 +987,17 @@ private enum SessionLoader {
         return preferred
     }
 
+    static func availableModels(storeOverride: String?) -> [String] {
+        let path = self.resolveStorePath(override: storeOverride)
+        guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+              let decoded = try? JSONDecoder().decode([String: SessionEntryRecord].self, from: data)
+        else {
+            return [self.fallbackModel]
+        }
+        let models = decoded.values.compactMap(\.model)
+        return ([self.fallbackModel] + models).dedupedPreserveOrder()
+    }
+
     static func loadRows(at path: String, defaults: SessionDefaults) async throws -> [SessionRow] {
         try await Task.detached(priority: .utility) {
             guard FileManager.default.fileExists(atPath: path) else {
@@ -1009,6 +1043,59 @@ private enum SessionLoader {
 
     private static func standardize(_ path: String) -> String {
         (path as NSString).expandingTildeInPath.replacingOccurrences(of: "//", with: "/")
+    }
+}
+
+enum ModelCatalogLoader {
+    static let defaultPath: String = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Projects/pi-mono/packages/ai/src/models.generated.ts").path
+
+    static func load(from path: String) async throws -> [ModelChoice] {
+        let expanded = (path as NSString).expandingTildeInPath
+        let source = try String(contentsOfFile: expanded, encoding: .utf8)
+        let sanitized = self.sanitize(source: source)
+
+        let ctx = JSContext()
+        ctx?.exceptionHandler = { _, exception in
+            if let exception { print("JS exception: \(exception)") }
+        }
+        ctx?.evaluateScript(sanitized)
+        guard let rawModels = ctx?.objectForKeyedSubscript("MODELS")?.toDictionary() as? [String: Any] else {
+            throw NSError(
+                domain: "ModelCatalogLoader",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to parse models.generated.ts"])
+        }
+
+        var choices: [ModelChoice] = []
+        for (provider, value) in rawModels {
+            guard let models = value as? [String: Any] else { continue }
+            for (id, payload) in models {
+                guard let dict = payload as? [String: Any] else { continue }
+                let name = dict["name"] as? String ?? id
+                let ctxWindow = dict["contextWindow"] as? Int
+                choices.append(ModelChoice(id: id, name: name, provider: provider, contextWindow: ctxWindow))
+            }
+        }
+
+        return choices.sorted { lhs, rhs in
+            if lhs.provider == rhs.provider {
+                return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+            }
+            return lhs.provider.localizedCaseInsensitiveCompare(rhs.provider) == .orderedAscending
+        }
+    }
+
+    private static func sanitize(source: String) -> String {
+        var text = source
+        text = text.replacingOccurrences(of: #"(?m)^import[^\n]*\n"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: #"export\s+const\s+MODELS"#,
+            with: "var MODELS",
+            options: .regularExpression)
+        text = text.replacingOccurrences(of: #"satisfies\s+Model<[^>]+>"#, with: "", options: .regularExpression)
+        text = text.replacingOccurrences(of: #"as\s+Model<[^>]+>"#, with: "", options: .regularExpression)
+        return text
     }
 }
 
@@ -1204,11 +1291,17 @@ struct SessionsSettings: View {
 @MainActor
 struct ConfigSettings: View {
     @State private var configModel: String = ""
+    @State private var customModel: String = ""
     @State private var configStorePath: String = SessionLoader.defaultStorePath
     @State private var configContextTokens: String = ""
     @State private var configStatus: String?
     @State private var configSaving = false
     @State private var hasLoaded = false
+    @State private var models: [ModelChoice] = []
+    @State private var modelsLoading = false
+    @State private var modelError: String?
+    @State private var modelCatalogPath: String = UserDefaults.standard
+        .string(forKey: modelCatalogPathKey) ?? ModelCatalogLoader.defaultPath
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -1219,9 +1312,53 @@ struct ConfigSettings: View {
                 .foregroundStyle(.secondary)
 
             LabeledContent("Model") {
-                TextField("e.g. claude-3.5-sonnet", text: self.$configModel)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
+                VStack(alignment: .leading, spacing: 6) {
+                    Picker("Model", selection: self.$configModel) {
+                        ForEach(self.models) { choice in
+                            Text(
+                                "\(choice.name) — \(choice.provider.uppercased())\(choice.contextWindow.map { " \($0 / 1000)k ctx" } ?? "")")
+                                .tag(choice.id)
+                        }
+                        Text("Manual entry…").tag("__custom__")
+                    }
+                    .labelsHidden()
+                    .frame(width: 360)
+                    .disabled(self.modelsLoading || (!self.modelError.isNilOrEmpty && self.models.isEmpty))
+
+                    if self.configModel == "__custom__" {
+                        TextField("Enter model ID", text: self.$customModel)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 320)
+                            .onChange(of: self.customModel) { _, newValue in
+                                self.configModel = newValue
+                            }
+                    }
+
+                    HStack(spacing: 10) {
+                        Button {
+                            Task { await self.loadModels() }
+                        } label: {
+                            Label(self.modelsLoading ? "Loading…" : "Reload models", systemImage: "arrow.clockwise")
+                        }
+                        .disabled(self.modelsLoading)
+
+                        Button {
+                            self.chooseCatalogFile()
+                        } label: {
+                            Label("Choose file…", systemImage: "folder")
+                        }
+
+                        if let modelError {
+                            Text(modelError)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        } else if !self.models.isEmpty {
+                            Text("Loaded \(self.models.count) models")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
             }
 
             LabeledContent("Session store") {
@@ -1267,6 +1404,7 @@ struct ConfigSettings: View {
             guard !self.hasLoaded else { return }
             self.hasLoaded = true
             self.loadConfig()
+            await self.loadModels()
         }
     }
 
@@ -1297,7 +1435,14 @@ struct ConfigSettings: View {
         let session = reply["session"] as? [String: Any]
         let agent = reply["agent"] as? [String: Any]
         self.configStorePath = (session?["store"] as? String) ?? SessionLoader.defaultStorePath
-        self.configModel = (agent?["model"] as? String) ?? ""
+        let loadedModel = (agent?["model"] as? String) ?? ""
+        if !loadedModel.isEmpty {
+            self.configModel = loadedModel
+            self.customModel = loadedModel
+        } else {
+            self.configModel = ""
+            self.customModel = ""
+        }
         if let ctx = (agent?["contextTokens"] as? NSNumber)?.intValue {
             self.configContextTokens = "\(ctx)"
         } else {
@@ -1318,7 +1463,9 @@ struct ConfigSettings: View {
         let trimmedStore = self.configStorePath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedStore.isEmpty { session["store"] = trimmedStore }
 
-        let trimmedModel = self.configModel.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosenModel = (self.configModel == "__custom__" ? self.customModel : self.configModel)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedModel = chosenModel
         if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
         if let ctxTokens { agent["contextTokens"] = ctxTokens }
 
@@ -1339,6 +1486,38 @@ struct ConfigSettings: View {
             self.configStatus = "Saved to \(url.path)"
         } catch {
             self.configStatus = "Save failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadModels() async {
+        guard !self.modelsLoading else { return }
+        self.modelsLoading = true
+        self.modelError = nil
+        do {
+            let loaded = try await ModelCatalogLoader.load(from: self.modelCatalogPath)
+            self.models = loaded
+            // if current model not in list, switch to custom to keep value visible
+            if !self.configModel.isEmpty, !loaded.contains(where: { $0.id == self.configModel }) {
+                self.customModel = self.configModel
+                self.configModel = "__custom__"
+            }
+        } catch {
+            self.modelError = error.localizedDescription
+            self.models = []
+        }
+        self.modelsLoading = false
+    }
+
+    private func chooseCatalogFile() {
+        let panel = NSOpenPanel()
+        panel.title = "Select models.generated.ts"
+        panel.allowedFileTypes = ["ts"]
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: self.modelCatalogPath).deletingLastPathComponent()
+        if panel.runModal() == .OK, let url = panel.url {
+            self.modelCatalogPath = url.path
+            UserDefaults.standard.set(url.path, forKey: modelCatalogPathKey)
+            Task { await self.loadModels() }
         }
     }
 }
