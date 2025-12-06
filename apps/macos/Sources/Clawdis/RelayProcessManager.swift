@@ -87,7 +87,7 @@ final class RelayProcessManager: ObservableObject {
             let result = try await run(
                 .name(command.first ?? "clawdis"),
                 arguments: Arguments(Array(command.dropFirst())),
-                environment: .inherit,
+                environment: self.makeEnvironment(),
                 workingDirectory: nil
             ) { execution, stdin, stdout, stderr in
                 self.didStart(execution)
@@ -145,8 +145,12 @@ final class RelayProcessManager: ObservableObject {
 
     private func handleError(_ error: any Error) async {
         self.execution = nil
-        self.appendLog("[relay] failed: \(error.localizedDescription)\n")
-        self.logger.error("relay failed: \(error.localizedDescription, privacy: .public)")
+        var message = error.localizedDescription
+        if let sp = error as? SubprocessError {
+            message = "SubprocessError \(sp.code.value): \(sp)"
+        }
+        self.appendLog("[relay] failed: \(message)\n")
+        self.logger.error("relay failed: \(message, privacy: .public)")
         if self.desiredActive && !self.shouldGiveUpAfterCrashes() {
             self.status = .restarting
             self.recentCrashes.append(Date())
@@ -190,6 +194,26 @@ final class RelayProcessManager: ObservableObject {
         {
             return override.split(separator: " ").map(String.init)
         }
+        if let found = self.preferredPaths()
+            .lazy
+            .map({ ($0 as NSString).appendingPathComponent("clawdis") })
+            .first(where: { FileManager.default.isExecutableFile(atPath: $0) })
+        {
+            return [found, "relay"]
+        }
         return ["clawdis", "relay"]
+    }
+
+    private func makeEnvironment() -> Environment {
+        let merged = self.preferredPaths().joined(separator: ":")
+        return .inherit.updating(["PATH": merged])
+    }
+
+    private func preferredPaths() -> [String] {
+        let current = ProcessInfo.processInfo.environment["PATH"]?
+            .split(separator: ":").map(String.init) ?? []
+        let extras = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"]
+        var seen = Set<String>()
+        return (extras + current).filter { seen.insert($0).inserted }
     }
 }

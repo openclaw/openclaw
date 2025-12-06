@@ -297,7 +297,8 @@ enum PermissionManager {
                 let trusted = AXIsProcessTrusted()
                 results[cap] = trusted
                 if interactive, !trusted {
-                    _ = AXIsProcessTrustedWithOptions(nil)
+                    let opts: NSDictionary = ["AXTrustedCheckOptionPrompt": true]
+                    _ = AXIsProcessTrustedWithOptions(opts)
                 }
 
             case .screenRecording:
