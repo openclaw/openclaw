@@ -901,7 +901,7 @@ struct ModelChoice: Identifiable, Hashable {
     let contextWindow: Int?
 }
 
-extension Optional where Wrapped == String {
+extension String? {
     var isNilOrEmpty: Bool {
         switch self {
         case .none: true
@@ -1640,6 +1640,10 @@ struct SettingsRootView: View {
                 .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
                 .tag(SettingsTab.sessions)
 
+            ConfigSettings()
+                .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
+                .tag(SettingsTab.config)
+
             VoiceWakeSettings(state: self.state)
                 .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
                 .tag(SettingsTab.voiceWake)
@@ -1700,7 +1704,7 @@ struct SettingsRootView: View {
 }
 
 enum SettingsTab: CaseIterable {
-    case general, sessions, voiceWake, permissions, debug, about
+    case general, sessions, config, voiceWake, permissions, debug, about
     static let windowWidth: CGFloat = 520
     static let windowHeight: CGFloat = 624
     var title: String {
