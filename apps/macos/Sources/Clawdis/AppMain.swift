@@ -1315,6 +1315,7 @@ enum VoiceWakeTestState: Equatable {
     case idle
     case requesting
     case listening
+    case hearing(String)
     case detected(String)
     case failed(String)
 }
@@ -1377,7 +1378,8 @@ actor MicLevelMonitor {
     }
 }
 
-actor VoiceWakeTester {
+@MainActor
+final class VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -1387,7 +1389,7 @@ actor VoiceWakeTester {
         self.recognizer = SFSpeechRecognizer(locale: locale)
     }
 
-    func start(triggers: [String], micID: String?, onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
+    func start(triggers: [String], micID: String?, onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
         guard recognitionTask == nil else { return }
         guard let recognizer, recognizer.isAvailable else {
             throw NSError(domain: "VoiceWakeTester", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speech recognition unavailable"])
@@ -1412,21 +1414,21 @@ actor VoiceWakeTester {
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            Task { await self.appendBuffer(buffer) }
+            self.recognitionRequest?.append(buffer)
         }
 
         audioEngine.prepare()
         try audioEngine.start()
-        await MainActor.run { onUpdate(.listening) }
+        onUpdate(.listening)
 
         guard let request = recognitionRequest else { return }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            let text = result?.bestTranscription.formattedString
-            let matched = text.map { Self.matches(text: $0, triggers: triggers) } ?? false
-            let errorMessage = error?.localizedDescription
             guard let self else { return }
-            Task { await self.handleResult(matched: matched, text: text, errorMessage: errorMessage, onUpdate: onUpdate) }
+            let text = result?.bestTranscription.formattedString ?? ""
+            let matched = Self.matches(text: text, triggers: triggers)
+            let errorMessage = error?.localizedDescription
+            self.handleResult(matched: matched, text: text, isFinal: result?.isFinal ?? false, errorMessage: errorMessage, onUpdate: onUpdate)
         }
     }
 
@@ -1439,24 +1441,28 @@ actor VoiceWakeTester {
         audioEngine.inputNode.removeTap(onBus: 0)
     }
 
-    private func appendBuffer(_ buffer: AVAudioPCMBuffer) {
-        recognitionRequest?.append(buffer)
-    }
-
     private func handleResult(
         matched: Bool,
-        text: String?,
+        text: String,
+        isFinal: Bool,
         errorMessage: String?,
-        onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void
-    ) async {
-        if matched, let text {
+        onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void
+    ) {
+        if matched, !text.isEmpty {
             stop()
-            await MainActor.run { onUpdate(.detected(text)) }
+            onUpdate(.detected(text))
             return
         }
         if let errorMessage {
             stop()
-            await MainActor.run { onUpdate(.failed(errorMessage)) }
+            onUpdate(.failed(errorMessage))
+            return
+        }
+        if isFinal {
+            stop()
+            onUpdate(text.isEmpty ? .failed("No speech detected") : .failed("No trigger heard: “\(text)”"))
+        } else {
+            onUpdate(text.isEmpty ? .listening : .hearing(text))
         }
     }
 
@@ -1764,7 +1770,7 @@ struct VoiceWakeSettings: View {
             AnyView(Image(systemName: "waveform").foregroundStyle(.secondary))
         case .requesting:
             AnyView(ProgressView().controlSize(.small))
-        case .listening:
+        case .listening, .hearing:
             AnyView(
                 Image(systemName: "ear.and.waveform")
                     .symbolEffect(.pulse)
@@ -1785,6 +1791,8 @@ struct VoiceWakeSettings: View {
             return "Requesting mic & speech permission…"
         case .listening:
             return "Listening… say your trigger word."
+        case let .hearing(text):
+            return "Heard: \(text)"
         case .detected:
             return "Voice wake detected!"
         case let .failed(reason):
@@ -1816,7 +1824,7 @@ struct VoiceWakeSettings: View {
 
     private func toggleTest() {
         if isTesting {
-            Task { await tester.stop() }
+            tester.stop()
             isTesting = false
             testState = .idle
             return
@@ -1842,13 +1850,13 @@ struct VoiceWakeSettings: View {
                 // timeout after 10s
                 try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
                 if isTesting {
-                    await tester.stop()
+                    tester.stop()
                     testState = .failed("Timeout: no trigger heard")
                     isTesting = false
                     await restartMeter()
                 }
             } catch {
-                await tester.stop()
+                tester.stop()
                 testState = .failed(error.localizedDescription)
                 isTesting = false
                 await restartMeter()
