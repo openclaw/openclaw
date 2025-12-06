@@ -34,7 +34,7 @@
 - Pi/Tau sessions live under `~/.clawdis/sessions/` by default; the base directory is not configurable.
 
 ## Agent-Specific Notes
-- Relay is managed by launchctl (label `com.steipete.clawdis`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.clawdis` and verify via `launchctl list | grep clawdis`. Legacy label `com.steipete.warelay` still exists for rollback; prefer the new one. Use tmux only if you spin up a temporary relay yourself and clean it up afterward.
+- Relay now runs inside the mac app (child process tied to the menu bar toggle), not via launchd. Restart by quitting/reopening the Clawdis app or running `scripts/restart-mac.sh`. Avoid tmux unless you intentionally spin up a temporary relay and clean it up afterward.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
 - When asked to open a “session” file, open the Pi/Tau session logs under `~/.tau/agent/sessions/clawdis/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`.
 - Menubar dimming + restart flow mirrors Trimmy: use `scripts/restart-mac.sh` (kills all Clawdis variants, runs `swift build`, packages, relaunches). Icon dimming depends on MenuBarExtraAccess wiring in AppMain; keep `appearsDisabled` updates intact when touching the status item.
