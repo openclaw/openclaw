@@ -40,18 +40,6 @@ struct AboutSettings: View {
                     .padding(.horizontal, 18)
             }
 
-            VStack(alignment: .leading, spacing: 6) {
-                AboutMetaRow(label: "Bundle ID", value: self.bundleID)
-                AboutMetaRow(label: "Git commit", value: self.gitCommit)
-                #if DEBUG
-                AboutMetaRow(label: "Build", value: "Debug")
-                #else
-                AboutMetaRow(label: "Build", value: "Release")
-                #endif
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal, 4)
-
             VStack(alignment: .center, spacing: 6) {
                 AboutLinkRow(
                     icon: "chevron.left.slash.chevron.right",
