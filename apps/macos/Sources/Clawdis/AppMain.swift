@@ -1314,7 +1314,7 @@ enum VoiceWakeTestState: Equatable {
     case failed(String)
 }
 
-final class VoiceWakeTester {
+actor VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -1324,7 +1324,6 @@ final class VoiceWakeTester {
         self.recognizer = SFSpeechRecognizer(locale: locale)
     }
 
-    @MainActor
     func start(triggers: [String], onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void) async throws {
         guard recognitionTask == nil else { return }
         guard let recognizer, recognizer.isAvailable else {
@@ -1348,35 +1347,24 @@ final class VoiceWakeTester {
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
             guard let self else { return }
-            Task { @MainActor in self.recognitionRequest?.append(buffer) }
+            Task { await self.appendBuffer(buffer) }
         }
 
         audioEngine.prepare()
         try audioEngine.start()
-        onUpdate(.listening)
+        await MainActor.run { onUpdate(.listening) }
 
         guard let request = recognitionRequest else { return }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            let text = result?.bestTranscription.formattedString
+            let matched = text.map { Self.matches(text: $0, triggers: triggers) } ?? false
+            let errorMessage = error?.localizedDescription
             guard let self else { return }
-            Task { @MainActor in
-                if let result {
-                    let text = result.bestTranscription.formattedString
-                    if Self.matches(text: text, triggers: triggers) {
-                        self.stop()
-                        onUpdate(.detected(text))
-                        return
-                    }
-                }
-                if let error {
-                    self.stop()
-                    onUpdate(.failed(error.localizedDescription))
-                }
-            }
+            Task { await self.handleResult(matched: matched, text: text, errorMessage: errorMessage, onUpdate: onUpdate) }
         }
     }
 
-    @MainActor
     func stop() {
         audioEngine.stop()
         recognitionRequest?.endAudio()
@@ -1384,6 +1372,27 @@ final class VoiceWakeTester {
         recognitionTask = nil
         recognitionRequest = nil
         audioEngine.inputNode.removeTap(onBus: 0)
+    }
+
+    private func appendBuffer(_ buffer: AVAudioPCMBuffer) {
+        recognitionRequest?.append(buffer)
+    }
+
+    private func handleResult(
+        matched: Bool,
+        text: String?,
+        errorMessage: String?,
+        onUpdate: @MainActor @escaping @Sendable (VoiceWakeTestState) -> Void
+    ) async {
+        if matched, let text {
+            await stop()
+            await MainActor.run { onUpdate(.detected(text)) }
+            return
+        }
+        if let errorMessage {
+            await stop()
+            await MainActor.run { onUpdate(.failed(errorMessage)) }
+        }
     }
 
     private static func matches(text: String, triggers: [String]) -> Bool {
@@ -1720,7 +1729,7 @@ struct VoiceWakeSettings: View {
 
     private func toggleTest() {
         if isTesting {
-            tester.stop()
+            Task { await tester.stop() }
             isTesting = false
             testState = .idle
             return
@@ -1742,12 +1751,12 @@ struct VoiceWakeSettings: View {
                 // timeout after 10s
                 try await Task.sleep(nanoseconds: 10 * 1_000_000_000)
                 if isTesting {
-                    tester.stop()
+                    await tester.stop()
                     testState = .failed("Timeout: no trigger heard")
                     isTesting = false
                 }
             } catch {
-                tester.stop()
+                await tester.stop()
                 testState = .failed(error.localizedDescription)
                 isTesting = false
             }
