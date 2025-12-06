@@ -1517,19 +1517,10 @@ struct ConfigSettings: View {
                             .foregroundStyle(.secondary)
                     }
 
-                    HStack(spacing: 10) {
-                        Button {
-                            Task { await self.loadModels() }
-                        } label: {
-                            Label(self.modelsLoading ? "Loading…" : "Reload models", systemImage: "arrow.clockwise")
-                        }
-                        .disabled(self.modelsLoading)
-
-                        if let modelError {
-                            Text(modelError)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
+                    if let modelError {
+                        Text(modelError)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
