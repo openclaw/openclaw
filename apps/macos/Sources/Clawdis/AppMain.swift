@@ -1419,15 +1419,13 @@ final class VoiceWakeTester {
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         recognitionRequest?.shouldReportPartialResults = true
+        let request = recognitionRequest
 
         let inputNode = audioEngine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self] buffer, _ in
-            guard let self else { return }
-            Task { @MainActor in
-                self.recognitionRequest?.append(buffer)
-            }
+        inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
+            request?.append(buffer)
         }
 
         audioEngine.prepare()
@@ -1439,12 +1437,13 @@ final class VoiceWakeTester {
         guard let request = recognitionRequest else { return }
 
         recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
             let text = result?.bestTranscription.formattedString ?? ""
             let matched = Self.matches(text: text, triggers: triggers)
+            let isFinal = result?.isFinal ?? false
             let errorMessage = error?.localizedDescription
-            Task { @MainActor in
-                self.handleResult(matched: matched, text: text, isFinal: result?.isFinal ?? false, errorMessage: errorMessage, onUpdate: onUpdate)
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.handleResult(matched: matched, text: text, isFinal: isFinal, errorMessage: errorMessage, onUpdate: onUpdate)
             }
         }
     }
