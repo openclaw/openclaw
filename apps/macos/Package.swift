@@ -24,8 +24,7 @@ let package = Package(
             dependencies: [],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
-            ]
-        ),
+            ]),
         .executableTarget(
             name: "Clawdis",
             dependencies: [
@@ -40,8 +39,7 @@ let package = Package(
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
-            ]
-        ),
+            ]),
         .executableTarget(
             name: "ClawdisCLI",
             dependencies: [
@@ -50,15 +48,12 @@ let package = Package(
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
-            ]
-        ),
+            ]),
         .testTarget(
             name: "ClawdisIPCTests",
-            dependencies: ["ClawdisIPC"],
+            dependencies: ["ClawdisIPC", "Clawdis"],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),
-            ]
-        ),
-    ]
-)
+            ]),
+    ])

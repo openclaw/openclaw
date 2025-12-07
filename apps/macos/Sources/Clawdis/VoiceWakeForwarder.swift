@@ -60,7 +60,7 @@ enum VoiceWakeForwarder {
         await self.wait(process, timeout: config.timeout)
     }
 
-    private static func renderedCommand(template: String, transcript: String) -> String {
+    static func renderedCommand(template: String, transcript: String) -> String {
         let escaped = Self.shellEscape(transcript)
         if template.contains("${text}") {
             return template.replacingOccurrences(of: "${text}", with: escaped)
@@ -68,7 +68,7 @@ enum VoiceWakeForwarder {
         return template
     }
 
-    private static func shellEscape(_ text: String) -> String {
+    static func shellEscape(_ text: String) -> String {
         // Single-quote based shell escaping.
         let replaced = text.replacingOccurrences(of: "'", with: "'\\''")
         return "'\(replaced)'"
@@ -95,7 +95,7 @@ enum VoiceWakeForwarder {
         }
     }
 
-    private static func parse(target: String) -> (user: String?, host: String, port: Int)? {
+    static func parse(target: String) -> (user: String?, host: String, port: Int)? {
         guard !target.isEmpty else { return nil }
         var remainder = target
         var user: String?
