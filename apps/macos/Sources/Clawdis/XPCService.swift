@@ -71,14 +71,24 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
         case let .agent(message, thinking, session):
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return Response(ok: false, message: "message empty") }
+            let sessionKey = session ?? "main"
+
+            // Try RPC first for lower latency; fall back to one-shot CLI.
+            let rpcResult = await AgentRPC.shared.send(
+                text: trimmed,
+                thinking: thinking,
+                session: sessionKey)
+            if rpcResult.ok {
+                return Response(ok: true, message: rpcResult.text ?? "sent")
+            }
 
             let result = await self.runAgentCLI(
                 message: trimmed,
                 thinking: thinking,
-                session: session ?? "main")
+                session: sessionKey)
             return result.ok
                 ? Response(ok: true, message: result.text ?? "sent")
-                : Response(ok: false, message: result.error ?? "failed to send")
+                : Response(ok: false, message: result.error ?? rpcResult.error ?? "failed to send")
         }
     }
 
