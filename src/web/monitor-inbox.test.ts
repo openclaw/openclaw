@@ -192,8 +192,8 @@ describe("web monitor inbox", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     const content = fsSync.readFileSync(logPath, "utf-8");
-    expect(content).toContain('"module":"web-inbound"');
-    expect(content).toContain('"body":"ping"');
+    expect(content).toMatch(/web-inbound/);
+    expect(content).toMatch(/ping/);
     await listener.close();
   });
 

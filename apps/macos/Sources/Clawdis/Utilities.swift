@@ -39,7 +39,8 @@ enum LaunchAgentManager {
             _ = self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             _ = self.runLaunchctl(["kickstart", "-k", "gui/\(getuid())/\(launchdLabel)"])
         } else {
-            _ = self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
+            // Disable autostart going forward but leave the current app running.
+            // bootout would terminate the launchd job immediately (and crash the app if launched via agent).
             try? FileManager.default.removeItem(at: self.plistURL)
         }
     }

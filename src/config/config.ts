@@ -51,6 +51,8 @@ export type TelegramConfig = {
   mediaMaxMb?: number;
   proxy?: string;
   webhookUrl?: string;
+  webhookSecret?: string;
+  webhookPath?: string;
 };
 
 export type GroupChatConfig = {
@@ -232,6 +234,8 @@ const WarelaySchema = z.object({
       mediaMaxMb: z.number().positive().optional(),
       proxy: z.string().optional(),
       webhookUrl: z.string().optional(),
+      webhookSecret: z.string().optional(),
+      webhookPath: z.string().optional(),
     })
     .optional(),
 });

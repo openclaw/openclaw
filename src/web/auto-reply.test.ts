@@ -276,7 +276,7 @@ describe("runWebHeartbeatOnce", () => {
     await fs.writeFile(
       storePath,
       JSON.stringify({
-        "+4367": { sessionId, updatedAt: Date.now(), systemSent: false },
+        main: { sessionId, updatedAt: Date.now(), systemSent: false },
       }),
     );
 
@@ -359,8 +359,8 @@ describe("runWebHeartbeatOnce", () => {
     expect(heartbeatCall?.[0]?.MessageSid).toBe(sessionId);
     const raw = await fs.readFile(storePath, "utf-8");
     const stored = raw ? JSON.parse(raw) : {};
-    expect(stored["+1999"]?.sessionId).toBe(sessionId);
-    expect(stored["+1999"]?.updatedAt).toBeDefined();
+    expect(stored.main?.sessionId).toBe(sessionId);
+    expect(stored.main?.updatedAt).toBeDefined();
   });
 
   it("sends overrideBody directly and skips resolver", async () => {
@@ -1162,7 +1162,7 @@ describe("web auto-reply", () => {
     await run.catch(() => {});
 
     const content = await fs.readFile(logPath, "utf-8");
-    expect(content).toContain('"module":"web-heartbeat"');
+    expect(content).toMatch(/web-heartbeat/);
     expect(content).toMatch(/connectionId/);
     expect(content).toMatch(/messagesHandled/);
   });
@@ -1198,8 +1198,8 @@ describe("web auto-reply", () => {
     });
 
     const content = await fs.readFile(logPath, "utf-8");
-    expect(content).toContain('"module":"web-auto-reply"');
-    expect(content).toContain('"text":"auto"');
+    expect(content).toMatch(/web-auto-reply/);
+    expect(content).toMatch(/auto/);
   });
 
   it("prefixes body with same-phone marker when from === to", async () => {

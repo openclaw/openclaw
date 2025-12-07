@@ -9,6 +9,16 @@ vi.mock("../web/ipc.js", () => ({
   sendViaIpc: (...args: unknown[]) => sendViaIpcMock(...args),
 }));
 
+const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+
+beforeEach(() => {
+  process.env.TELEGRAM_BOT_TOKEN = "token-abc";
+});
+
+afterAll(() => {
+  process.env.TELEGRAM_BOT_TOKEN = originalTelegramToken;
+});
+
 const runtime: RuntimeEnv = {
   log: vi.fn(),
   error: vi.fn(),
@@ -86,7 +96,7 @@ describe("sendCommand", () => {
     expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
       "123",
       "hi",
-      expect.objectContaining({ token: expect.any(String) }),
+      expect.objectContaining({ token: "token-abc" }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });

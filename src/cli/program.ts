@@ -570,22 +570,59 @@ Examples:
     .command("relay:telegram")
     .description("Auto-reply to Telegram (Bot API, long-poll)")
     .option("--verbose", "Verbose logging", false)
+    .option("--webhook", "Run webhook server instead of long-poll", false)
+    .option(
+      "--webhook-path <path>",
+      "Webhook path (default /telegram-webhook when webhook enabled)",
+    )
+    .option(
+      "--webhook-secret <secret>",
+      "Secret token to verify Telegram webhook requests",
+    )
+    .option(
+      "--port <port>",
+      "Port for webhook server (default 8787)",
+    )
     .addHelpText(
       "after",
       `
 Examples:
   clawdis relay:telegram                # uses TELEGRAM_BOT_TOKEN env
   TELEGRAM_BOT_TOKEN=xxx clawdis relay:telegram --verbose
+  TELEGRAM_BOT_TOKEN=xxx clawdis relay:telegram --webhook --port 9000 --webhook-secret secret
 `,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
-      const token = process.env.TELEGRAM_BOT_TOKEN;
+      const token =
+        process.env.TELEGRAM_BOT_TOKEN ?? loadConfig().telegram?.botToken;
       if (!token) {
         defaultRuntime.error(
-          danger("Set TELEGRAM_BOT_TOKEN to use telegram relay"),
+          danger("Set TELEGRAM_BOT_TOKEN or telegram.botToken to use telegram relay"),
         );
         defaultRuntime.exit(1);
+        return;
+      }
+      const useWebhook = Boolean(opts.webhook);
+      if (useWebhook) {
+        const port = opts.port ? Number.parseInt(String(opts.port), 10) : 8787;
+        const path = opts.webhookPath ?? "/telegram-webhook";
+        try {
+          await import("../telegram/webhook-server.js").then((m) =>
+            m.startTelegramWebhookServer({
+              token,
+              port,
+              path,
+              secret: opts.webhookSecret ?? loadConfig().telegram?.webhookSecret,
+              runtime: defaultRuntime,
+            }),
+          );
+        } catch (err) {
+          defaultRuntime.error(
+            danger(`Telegram webhook server failed: ${String(err)}`),
+          );
+          defaultRuntime.exit(1);
+        }
         return;
       }
       try {

@@ -83,7 +83,9 @@
       ]
     },
     "exclude": [
-      "dist/**"
+      "dist/**",
+      "apps/macos/**",
+      "apps/macos/.build/**"
     ]
   }
 }

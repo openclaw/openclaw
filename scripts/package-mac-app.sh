@@ -123,6 +123,11 @@ PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
 PNPM_HOME="$HOME/Library/pnpm" \
 pnpm rebuild sharp --config.ignore-workspace-root-check=true --dir "$TMP_DEPLOY"
 rsync -aL "$TMP_DEPLOY/node_modules/" "$RELAY_DIR/node_modules/"
+# Flatten sharp copies and prune dev artifacts
+find "$RELAY_DIR/node_modules/.pnpm" -maxdepth 1 -name "*sharp*" -type d -print0 | xargs -0 -I{} rsync -a --delete "{}/node_modules/@img/sharp-darwin-arm64" "$RELAY_DIR/node_modules/@img/" 2>/dev/null || true
+find "$RELAY_DIR/node_modules/.pnpm" -maxdepth 1 -name "*sharp-libvips*" -type d -print0 | xargs -0 -I{} rsync -a --delete "{}/node_modules/@img/sharp-libvips-darwin-arm64" "$RELAY_DIR/node_modules/@img/" 2>/dev/null || true
+rm -rf "$RELAY_DIR/node_modules/.pnpm"/*sharp* "$RELAY_DIR/node_modules/.pnpm/node_modules/@img" 2>/dev/null || true
+rm -f "$RELAY_DIR/node_modules/.bin"/vite "$RELAY_DIR/node_modules/.bin"/rolldown "$RELAY_DIR/node_modules/.bin"/biome 2>/dev/null || true
 rm -rf "$TMP_DEPLOY"
 
 if [ -f "$CLI_BIN" ]; then
