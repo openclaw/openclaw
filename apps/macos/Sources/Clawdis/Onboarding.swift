@@ -124,7 +124,7 @@ struct OnboardingView: View {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard {
+            self.onboardingCard(spacing: 10, padding: 12) {
                 Picker("Mode", selection: self.$state.connectionMode) {
                     Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                     Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
@@ -133,22 +133,29 @@ struct OnboardingView: View {
                 .frame(width: 320)
 
                 if self.state.connectionMode == .remote {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 8) {
                         LabeledContent("SSH target") {
                             TextField("user@host[:22]", text: self.$state.remoteTarget)
                                 .textFieldStyle(.roundedBorder)
-                                .frame(width: 280)
+                                .frame(width: 260)
                         }
-                        LabeledContent("Identity file") {
-                            TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 280)
+
+                        DisclosureGroup("Advanced") {
+                            VStack(alignment: .leading, spacing: 8) {
+                                LabeledContent("Identity file") {
+                                    TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 260)
+                                }
+                                LabeledContent("Project root") {
+                                    TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: 260)
+                                }
+                            }
+                            .padding(.top, 4)
                         }
-                        LabeledContent("Project root") {
-                            TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
-                                .textFieldStyle(.roundedBorder)
-                                .frame(width: 320)
-                        }
+
                         Text("Tip: keep a Tailscale IP here so the agent stays reachable off-LAN.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -349,11 +356,11 @@ struct OnboardingView: View {
         .frame(width: self.pageWidth, alignment: .top)
     }
 
-    private func onboardingCard(@ViewBuilder _ content: () -> some View) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
+    private func onboardingCard(spacing: CGFloat = 12, padding: CGFloat = 16, @ViewBuilder _ content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: spacing) {
             content()
         }
-        .padding(16)
+        .padding(padding)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
