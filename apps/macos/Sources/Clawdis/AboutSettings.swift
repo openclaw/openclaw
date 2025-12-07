@@ -19,6 +19,7 @@ struct AboutSettings: View {
                     .scaleEffect(self.iconHover ? 1.06 : 1.0)
             }
             .buttonStyle(.plain)
+            .focusable(false)
             .onHover { hover in
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.72)) { self.iconHover = hover }
             }
