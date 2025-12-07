@@ -33,6 +33,7 @@
     "@mariozechner/pi-coding-agent": "^0.13.2",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "body-parser": "^2.2.1",
+    "@grammyjs/transformer-throttler": "^1.2.1",
     "chalk": "^5.6.2",
     "commander": "^14.0.2",
     "dotenv": "^17.2.3",
@@ -42,7 +43,9 @@
     "tslog": "^4.9.3",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
-    "zod": "^4.1.13"
+    "undici": "^6.20.1",
+    "zod": "^4.1.13",
+    "grammy": "^1.27.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.8",
@@ -82,10 +85,16 @@
         "src/**/*.test.ts"
       ]
     },
+    "include": [
+      "src/**/*.test.ts"
+    ],
     "exclude": [
       "dist/**",
       "apps/macos/**",
-      "apps/macos/.build/**"
+      "apps/macos/.build/**",
+      "**/vendor/**",
+      "apps/macos/.build/**",
+      "dist/Clawdis.app/**"
     ]
   }
 }

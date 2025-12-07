@@ -117,17 +117,32 @@ pnpm install \
   --config.enable-pre-post-scripts=true \
   --config.ignore-workspace-root-check=true \
   --config.shared-workspace-lockfile=false \
-  --lockfile-dir "$ROOT_DIR" \
+  --config.node-linker=hoisted \
+  --lockfile-dir "$TMP_DEPLOY" \
   --dir "$TMP_DEPLOY"
 PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
 PNPM_HOME="$HOME/Library/pnpm" \
 pnpm rebuild sharp --config.ignore-workspace-root-check=true --dir "$TMP_DEPLOY"
-rsync -aL "$TMP_DEPLOY/node_modules/" "$RELAY_DIR/node_modules/"
-# Flatten sharp copies and prune dev artifacts
-find "$RELAY_DIR/node_modules/.pnpm" -maxdepth 1 -name "*sharp*" -type d -print0 | xargs -0 -I{} rsync -a --delete "{}/node_modules/@img/sharp-darwin-arm64" "$RELAY_DIR/node_modules/@img/" 2>/dev/null || true
-find "$RELAY_DIR/node_modules/.pnpm" -maxdepth 1 -name "*sharp-libvips*" -type d -print0 | xargs -0 -I{} rsync -a --delete "{}/node_modules/@img/sharp-libvips-darwin-arm64" "$RELAY_DIR/node_modules/@img/" 2>/dev/null || true
-rm -rf "$RELAY_DIR/node_modules/.pnpm"/*sharp* "$RELAY_DIR/node_modules/.pnpm/node_modules/@img" 2>/dev/null || true
-rm -f "$RELAY_DIR/node_modules/.bin"/vite "$RELAY_DIR/node_modules/.bin"/rolldown "$RELAY_DIR/node_modules/.bin"/biome 2>/dev/null || true
+rsync -a "$TMP_DEPLOY/node_modules/" "$RELAY_DIR/node_modules/"
+
+# Keep only the arm64 macOS sharp vendor payloads to shrink the bundle
+SHARP_VENDOR_DIR="$RELAY_DIR/node_modules/@img"
+if [ -d "$SHARP_VENDOR_DIR" ]; then
+  find "$SHARP_VENDOR_DIR" -maxdepth 1 -type d -name "sharp-*" \
+    ! -name "sharp-darwin-arm64" \
+    ! -name "sharp-libvips-darwin-arm64" -exec rm -rf {} +
+fi
+
+# Prune obvious dev/build tooling to keep size down
+rm -rf \
+  "$RELAY_DIR/node_modules/.bin"/vite \
+  "$RELAY_DIR/node_modules/.bin"/rolldown \
+  "$RELAY_DIR/node_modules/.bin"/biome \
+  "$RELAY_DIR/node_modules/.bin"/vitest \
+  "$RELAY_DIR/node_modules/.bin"/tsc \
+  "$RELAY_DIR/node_modules/.bin"/tsx 2>/dev/null || true
+rm -rf \
+  "$RELAY_DIR/node_modules"/{vite,rolldown,vitest,ts-node,ts-node-dev,typescript,@types,docx-preview,jszip,lucide,ollama} 2>/dev/null || true
 rm -rf "$TMP_DEPLOY"
 
 if [ -f "$CLI_BIN" ]; then
