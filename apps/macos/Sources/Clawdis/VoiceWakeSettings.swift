@@ -304,6 +304,7 @@ struct VoiceWakeSettings: View {
     @State private var showForwardAdvanced = false
     @State private var forwardStatus: ForwardStatus = .idle
     private let fieldLabelWidth: CGFloat = 110
+    private let controlWidth: CGFloat = 300
 
     private var voiceWakeBinding: Binding<Bool> {
         Binding(
@@ -576,7 +577,7 @@ struct VoiceWakeSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 260)
+                .frame(width: self.controlWidth)
             }
             if self.loadingMics {
                 ProgressView().controlSize(.small)
@@ -597,7 +598,7 @@ struct VoiceWakeSettings: View {
                     }
                 }
                 .labelsHidden()
-                .frame(width: 260)
+                .frame(width: self.controlWidth)
             }
 
             if !self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
@@ -727,7 +728,7 @@ struct VoiceWakeSettings: View {
                     .font(.callout.weight(.semibold))
                     .frame(width: self.fieldLabelWidth, alignment: .leading)
                 MicLevelBar(level: self.meterLevel)
-                    .frame(width: 260, alignment: .leading)
+                    .frame(width: self.controlWidth, alignment: .leading)
                 Text(self.levelLabel)
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
