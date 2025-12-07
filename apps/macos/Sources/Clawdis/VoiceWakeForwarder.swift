@@ -138,8 +138,14 @@ enum VoiceWakeForwarder {
         }
         args.append(userHost)
 
-        let rendered = self.renderedCommand(template: config.commandTemplate, transcript: transcript)
-        args.append(contentsOf: ["sh", "-c", self.commandWithCliPath(rendered, target: destination)])
+        let cmdTemplate: String
+        if config.commandTemplate.contains("${text}") {
+            cmdTemplate = config.commandTemplate.replacingOccurrences(of: "${text}", with: "$CLAW_TEXT")
+        } else {
+            cmdTemplate = config.commandTemplate
+        }
+        let shellCommand = "CLAW_TEXT=$(cat); \(self.commandWithCliPath(cmdTemplate, target: destination))"
+        args.append(contentsOf: ["sh", "-c", shellCommand])
 
         let debugCmd = (["/usr/bin/ssh"] + args).joined(separator: " ")
         self.logger.info("voice wake ssh cmd=\(debugCmd, privacy: .public)")
