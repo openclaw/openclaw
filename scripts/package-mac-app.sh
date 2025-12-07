@@ -76,6 +76,9 @@ chmod +x "$APP_ROOT/Contents/MacOS/Clawdis"
 echo "🖼  Copying app icon"
 cp "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/Clawdis.icns" "$APP_ROOT/Contents/Resources/Clawdis.icns"
 
+echo "📦 Copying WebChat resources"
+rsync -a "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/WebChat" "$APP_ROOT/Contents/Resources/"
+
 if [ -f "$CLI_BIN" ]; then
   echo "🔧 Copying CLI helper"
   cp "$CLI_BIN" "$APP_ROOT/Contents/MacOS/ClawdisCLI"
