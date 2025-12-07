@@ -2,12 +2,44 @@
 set -euo pipefail
 
 APP_BUNDLE="${1:-dist/Clawdis.app}"
-IDENTITY="${SIGN_IDENTITY:--}"
+IDENTITY="${SIGN_IDENTITY:-}"
 ENT_TMP=$(mktemp /tmp/clawdis-entitlements.XXXXXX.plist)
 
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
   exit 1
+fi
+
+select_identity() {
+  local preferred available first
+
+  # Prefer a Developer ID Application cert.
+  preferred="$(security find-identity -p codesigning -v 2>/dev/null \
+    | awk -F'\"' '/Developer ID Application/ { print $2; exit }')"
+
+  if [ -n "$preferred" ]; then
+    echo "$preferred"
+    return
+  fi
+
+  # Fallback to the first valid signing identity.
+  available="$(security find-identity -p codesigning -v 2>/dev/null \
+    | sed -n 's/.*\"\\(.*\\)\"/\\1/p')"
+
+  if [ -n "$available" ]; then
+    first="$(printf '%s\n' "$available" | head -n1)"
+    echo "$first"
+    return
+  fi
+
+  return 1
+}
+
+if [ -z "$IDENTITY" ]; then
+  if ! IDENTITY="$(select_identity)"; then
+    echo "ERROR: No signing identity found. Set SIGN_IDENTITY to a valid codesigning certificate." >&2
+    exit 1
+  fi
 fi
 
 echo "Using signing identity: $IDENTITY"
