@@ -93,6 +93,12 @@ final class HealthStore: ObservableObject {
         self.isRefreshing = true
         defer { self.isRefreshing = false }
 
+        guard CommandResolver.clawdisExecutable() != nil else {
+            self.lastError = "clawdis CLI not found; install the CLI (pnpm) or symlink it into PATH"
+            if onDemand { self.snapshot = nil }
+            return
+        }
+
         let response = await ShellRunner.run(
             command: CommandResolver.clawdisCommand(subcommand: "health", extraArgs: ["--json"]),
             cwd: nil,

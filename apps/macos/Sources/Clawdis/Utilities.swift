@@ -176,6 +176,7 @@ enum CLIInstaller {
 
 enum CommandResolver {
     private static let projectRootDefaultsKey = "clawdis.relayProjectRootPath"
+    private static let helperName = "clawdis"
 
     static func projectRoot() -> URL {
         if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
@@ -223,8 +224,12 @@ enum CommandResolver {
         return nil
     }
 
+    static func clawdisExecutable() -> String? {
+        self.findExecutable(named: self.helperName)
+    }
+
     static func clawdisCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
-        if let clawdisPath = self.findExecutable(named: "clawdis") {
+        if let clawdisPath = self.clawdisExecutable() {
             return [clawdisPath, subcommand] + extraArgs
         }
         if let node = self.findExecutable(named: "node") {
