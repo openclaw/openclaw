@@ -195,7 +195,7 @@ final class RelayProcessManager: ObservableObject {
     }
 
     private func resolveCommand() -> [String] {
-        // Keep it simple: rely on system-installed clawdis/warelay.
+        // Keep it simple: rely on a system-installed clawdis binary.
         // Default to `clawdis relay`; users can provide an override via env if needed.
         if let override = ProcessInfo.processInfo.environment["CLAWDIS_RELAY_CMD"],
            !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -211,9 +211,9 @@ final class RelayProcessManager: ObservableObject {
             return [pnpm, "clawdis", "relay"]
         }
         if let node = self.findExecutable(named: "node") {
-            let warelay = self.defaultProjectRoot().appendingPathComponent("bin/warelay.js").path
-            if FileManager.default.isReadableFile(atPath: warelay) {
-                return [node, warelay, "relay"]
+            let clawdis = self.defaultProjectRoot().appendingPathComponent("bin/clawdis.js").path
+            if FileManager.default.isReadableFile(atPath: clawdis) {
+                return [node, clawdis, "relay"]
             }
         }
         return ["clawdis", "relay"]

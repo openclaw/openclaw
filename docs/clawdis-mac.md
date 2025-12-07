@@ -4,7 +4,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-05
 
 ## Purpose
 - Single macOS menu-bar app named **Clawdis** that:
-  - Shows native notifications for Clawdis/warelay events.
+  - Shows native notifications for Clawdis/clawdis events.
   - Owns TCC prompts (Notifications, Accessibility, Screen Recording, Automation/AppleScript, Microphone, Speech Recognition).
   - Brokers privileged actions (screen capture, shell with elevated UI context) via XPC.
   - Provides a tiny CLI (`clawdis-mac`) that talks to the app; Node/TS shells out to it.
@@ -65,7 +65,7 @@ struct Response { ok: Bool; message?: String; payload?: Data }
   - `status`
 - Internals: builds Request, connects via AsyncXPCConnection, prints Response as JSON to stdout.
 
-## Integration with warelay/Clawdis (Node/TS)
+## Integration with clawdis/Clawdis (Node/TS)
 - Add helper module that shells to `clawdis-mac`:
   - Prefer `ensure-permissions` before actions that need TCC.
   - Use `notify` for desktop toasts; fall back to JS notifier only if CLI missing or platform ≠ macOS.

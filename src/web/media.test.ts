@@ -27,7 +27,7 @@ describe("web media loading", () => {
       .jpeg({ quality: 95 })
       .toBuffer();
 
-    const file = path.join(os.tmpdir(), `warelay-media-${Date.now()}.jpg`);
+    const file = path.join(os.tmpdir(), `clawdis-media-${Date.now()}.jpg`);
     tmpFiles.push(file);
     await fs.writeFile(file, buffer);
 
@@ -45,7 +45,7 @@ describe("web media loading", () => {
     })
       .png()
       .toBuffer();
-    const wrongExt = path.join(os.tmpdir(), `warelay-media-${Date.now()}.bin`);
+    const wrongExt = path.join(os.tmpdir(), `clawdis-media-${Date.now()}.bin`);
     tmpFiles.push(wrongExt);
     await fs.writeFile(wrongExt, pngBuffer);
 

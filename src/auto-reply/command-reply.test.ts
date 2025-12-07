@@ -355,7 +355,7 @@ describe("runCommandReply (pi)", () => {
   });
 
   it("parses MEDIA tokens and respects mediaMaxMb for local files", async () => {
-    const tmp = path.join(os.tmpdir(), `warelay-test-${Date.now()}.bin`);
+    const tmp = path.join(os.tmpdir(), `clawdis-test-${Date.now()}.bin`);
     const bigBuffer = Buffer.alloc(2 * 1024 * 1024, 1);
     await fs.writeFile(tmp, bigBuffer);
 

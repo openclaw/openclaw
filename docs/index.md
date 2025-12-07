@@ -59,7 +59,7 @@ clawdis status
 
 - [Configuration Guide](./configuration.md) — Setting up your CLAWDIS
 - [Agent Integration](./agents.md) — Connecting AI agents
-- [Direct Agent CLI](./agent-send.md) — Use `warelay agent` without sending WhatsApp messages
+- [Direct Agent CLI](./agent-send.md) — Use `clawdis agent` without sending WhatsApp messages
 - [Group Chats](./groups.md) — Mention patterns and filtering
 - [Media Handling](./media.md) — Images, voice, documents
 - [Session Management](./session.md) — How conversations are keyed and reset

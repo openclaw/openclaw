@@ -5,7 +5,7 @@ import { PassThrough } from "node:stream";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 const realOs = await vi.importActual<typeof import("node:os")>("node:os");
-const HOME = path.join(realOs.tmpdir(), "warelay-home-redirect");
+const HOME = path.join(realOs.tmpdir(), "clawdis-home-redirect");
 const mockRequest = vi.fn();
 
 vi.doMock("node:os", () => ({

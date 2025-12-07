@@ -30,7 +30,7 @@ const configSpy = vi.spyOn(configModule, "loadConfig");
 function makeStorePath() {
   return path.join(
     os.tmpdir(),
-    `warelay-agent-test-${Date.now()}-${Math.random()}.json`,
+    `clawdis-agent-test-${Date.now()}-${Math.random()}.json`,
   );
 }
 

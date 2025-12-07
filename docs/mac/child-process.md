@@ -3,7 +3,7 @@
 Date: 2025-12-06 · Status: draft · Owner: steipete
 
 ## Goal
-Run the Node-based Clawdis/warelay relay as a direct child of the LSUIElement app (instead of a launchd agent) while keeping all TCC-sensitive work inside the Swift app/XPC and wiring the existing “Clawdis Active” toggle to start/stop the child.
+Run the Node-based Clawdis/clawdis relay as a direct child of the LSUIElement app (instead of a launchd agent) while keeping all TCC-sensitive work inside the Swift app/XPC and wiring the existing “Clawdis Active” toggle to start/stop the child.
 
 ## When to prefer the child-process mode
 - You want relay lifetime strictly coupled to the menu-bar app (dies when the app quits) and controlled by the “Clawdis Active” toggle without touching launchd.
@@ -30,7 +30,7 @@ Run the Node-based Clawdis/warelay relay as a direct child of the LSUIElement ap
   - `execution: Execution?` from `Swift Subprocess` to track the child.
   - `start(config)` called when “Clawdis Active” flips ON:
     - binary: bundled Node or packaged relay CLI under `Clawdis.app/Contents/Resources/Relay/`
-    - args: current warelay/clawdis entrypoint and flags
+    - args: current clawdis/clawdis entrypoint and flags
     - cwd/env: point to `~/.clawdis` as today; inject `PATH` if the embedded Node isn’t on PATH
     - output: stream stdout/stderr to `/tmp/clawdis-relay.log` (cap buffer via Subprocess OutputLimits)
     - restart: optional linear/backoff restart if exit was non-zero and Active is still true

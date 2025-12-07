@@ -1,13 +1,13 @@
-# Plan: `warelay agent` (direct-to-agent invocation)
+# Plan: `clawdis agent` (direct-to-agent invocation)
 
-Goal: Add a CLI subcommand that talks directly to the configured agent/command runner (no WhatsApp send), while reusing the same session handling and config warelay already uses for auto-replies.
+Goal: Add a CLI subcommand that talks directly to the configured agent/command runner (no WhatsApp send), while reusing the same session handling and config clawdis already uses for auto-replies.
 
 ## Why
 - Sometimes we want to poke the agent directly (same prompt templates/sessions) without sending a WhatsApp message.
 - Current flows (`send`, relay, directives) always route through WhatsApp or add wrapping text; we need a clean “talk to agent now” tool.
 
 ## Behavior
-- Command: `warelay agent`
+- Command: `clawdis agent`
 - Required: `--message <text>`
 - Session selection:
   - If `--session-id` given, use it.

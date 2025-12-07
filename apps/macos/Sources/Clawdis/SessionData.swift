@@ -155,10 +155,6 @@ enum SessionLoader {
     private static let legacyStorePaths: [String] = [
         standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".clawdis/sessions.json")
             .path),
-        standardize(FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".warelay/sessions/sessions.json").path),
-        standardize(FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".warelay/sessions.json")
-            .path),
     ]
 
     static func configHints() -> SessionConfigHints {

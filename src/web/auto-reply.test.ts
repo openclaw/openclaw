@@ -28,7 +28,7 @@ import {
 const makeSessionStore = async (
   entries: Record<string, unknown> = {},
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> => {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "warelay-session-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-session-"));
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(entries));
   return {
@@ -229,7 +229,7 @@ describe("runWebHeartbeatOnce", () => {
 
   it("does not refresh updatedAt when heartbeat is skipped", async () => {
     const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "warelay-heartbeat-"),
+      path.join(os.tmpdir(), "clawdis-heartbeat-"),
     );
     const storePath = path.join(tmpDir, "sessions.json");
     const now = Date.now();
@@ -269,7 +269,7 @@ describe("runWebHeartbeatOnce", () => {
 
   it("heartbeat reuses existing session id when last inbound is present", async () => {
     const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "warelay-heartbeat-session-"),
+      path.join(os.tmpdir(), "clawdis-heartbeat-session-"),
     );
     const storePath = path.join(tmpDir, "sessions.json");
     const sessionId = "sess-keep";
@@ -319,7 +319,7 @@ describe("runWebHeartbeatOnce", () => {
 
   it("heartbeat honors session-id override and seeds store", async () => {
     const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "warelay-heartbeat-override-"),
+      path.join(os.tmpdir(), "clawdis-heartbeat-override-"),
     );
     const storePath = path.join(tmpDir, "sessions.json");
     await fs.writeFile(storePath, JSON.stringify({}));
@@ -527,7 +527,7 @@ describe("web auto-reply", () => {
 
   it("skips reply heartbeat when requests are running", async () => {
     const tmpDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "warelay-heartbeat-queue-"),
+      path.join(os.tmpdir(), "clawdis-heartbeat-queue-"),
     );
     const storePath = path.join(tmpDir, "sessions.json");
     await fs.writeFile(storePath, JSON.stringify({}));
@@ -1126,7 +1126,7 @@ describe("web auto-reply", () => {
 
   it("emits heartbeat logs with connection metadata", async () => {
     vi.useFakeTimers();
-    const logPath = `/tmp/warelay-heartbeat-${crypto.randomUUID()}.log`;
+    const logPath = `/tmp/clawdis-heartbeat-${crypto.randomUUID()}.log`;
     setLoggerOverride({ level: "trace", file: logPath });
 
     const runtime = {
@@ -1168,7 +1168,7 @@ describe("web auto-reply", () => {
   });
 
   it("logs outbound replies to file", async () => {
-    const logPath = `/tmp/warelay-log-test-${crypto.randomUUID()}.log`;
+    const logPath = `/tmp/clawdis-log-test-${crypto.randomUUID()}.log`;
     setLoggerOverride({ level: "trace", file: logPath });
 
     let capturedOnMessage:
@@ -1362,7 +1362,7 @@ describe("web auto-reply", () => {
       sendMedia: vi.fn(),
     });
 
-    // HEARTBEAT_OK should NOT have prefix - warelay needs exact match
+    // HEARTBEAT_OK should NOT have prefix - clawdis needs exact match
     expect(reply).toHaveBeenCalledWith(HEARTBEAT_TOKEN);
     resetLoadConfigMock();
   });

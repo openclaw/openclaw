@@ -3,7 +3,7 @@
 Clawdis treats **one session as primary**. By default the canonical key is `main`; set `inbound.reply.session.mainKey` to change it. Older/local sessions can stay on disk, but only the primary key is used for desktop/web chat and direct agent calls.
 
 ## Where state lives
-- Store file: `~/.clawdis/sessions/sessions.json` (legacy: `~/.warelay/sessions.json`).
+- Store file: `~/.clawdis/sessions/sessions.json` (legacy: `~/.clawdis/sessions.json`).
 - Transcripts: `~/.clawdis/sessions/<SessionId>.jsonl` (one file per session id).
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
 

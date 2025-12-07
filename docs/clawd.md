@@ -1,4 +1,4 @@
-# Building Your Own AI Personal Assistant with warelay
+# Building Your Own AI Personal Assistant with clawdis
 
 > **TL;DR:** CLAWDIS (Pi/Tau only) lets you run a proactive assistant over WhatsApp. It can check in on you, remember context across conversations, run commands on your Mac, and even wake you up with music. This doc was originally written for Claude Code; where you see `claude ...`, use `pi --mode rpc ...` instead. A Pi-specific rewrite is coming soon.
 
@@ -33,11 +33,11 @@ This is experimental software running experimental AI. The author uses it daily,
 
 ### Why a Dedicated Number?
 
-warelay uses WhatsApp Web to receive messages. If you link your personal WhatsApp, *you* become the assistant - every message to you goes to Claude. Instead, give Claude its own identity:
+clawdis uses WhatsApp Web to receive messages. If you link your personal WhatsApp, *you* become the assistant - every message to you goes to Claude. Instead, give Claude its own identity:
 
 - 📱 **Get a second SIM** - cheap prepaid SIM, eSIM, or old phone with a number
 - 💬 **Install WhatsApp** on that phone and verify the number
-- 🔗 **Link to warelay** - run `warelay login` and scan the QR with that phone's WhatsApp
+- 🔗 **Link to clawdis** - run `clawdis login` and scan the QR with that phone's WhatsApp
 - ✉️ **Message your AI** - now you (and others) can text that number to reach Claude
 
 ### The Setup
@@ -52,7 +52,7 @@ Your Phone (personal)          Second Phone (AI)
                                        ▼
                               ┌─────────────────┐
                               │  Your Mac       │
-                              │  (warelay)      │
+                              │  (clawdis)      │
                               │  Claude Code    │
                               └─────────────────┘
 ```
@@ -65,7 +65,7 @@ The second phone just needs to stay on and connected to the internet occasionall
 
 ![Clawd in action on WhatsApp](whatsapp-clawd.jpg)
 
-Clawd is @steipete's personal AI assistant built on warelay. Here's what makes it special:
+Clawd is @steipete's personal AI assistant built on clawdis. Here's what makes it special:
 
 - **Always available** via WhatsApp - no app switching, works on any device
 - **Proactive heartbeats** - Clawd checks in every 10 minutes and can alert you to things (low battery, calendar reminders, anything it notices)
@@ -73,11 +73,11 @@ Clawd is @steipete's personal AI assistant built on warelay. Here's what makes i
 - **Full Mac access** - can run commands, take screenshots, control Spotify, read/write files
 - **Personal workspace** - has its own folder (`~/clawd`) where it stores notes, memories, and artifacts
 
-The magic is in the combination: WhatsApp's ubiquity + Claude's intelligence + warelay's plumbing + your Mac's capabilities.
+The magic is in the combination: WhatsApp's ubiquity + Claude's intelligence + clawdis's plumbing + your Mac's capabilities.
 
 ## Prerequisites
 
-- Node 22+, `warelay` installed: `npm install -g warelay`
+- Node 22+, `clawdis` installed: `npm install -g clawdis`
 - Claude CLI installed and logged in:
   ```sh
   brew install anthropic-ai/cli/claude
@@ -91,7 +91,7 @@ This is the actual config running on @steipete's Mac (`~/.clawdis/clawdis.json`)
 
 ```json5
 {
-  logging: { level: "trace", file: "/tmp/warelay/warelay.log" },
+  logging: { level: "trace", file: "/tmp/clawdis/clawdis.log" },
   inbound: {
     allowFrom: ["+1234567890"],  // your phone number
     reply: {
@@ -153,7 +153,7 @@ Peter trusts you with a lot of power. Don't betray that trust.`,
 
 ## Heartbeats: Your Proactive Assistant
 
-This is where warelay gets interesting. Every 10 minutes (configurable), warelay pings Claude with:
+This is where clawdis gets interesting. Every 10 minutes (configurable), clawdis pings Claude with:
 
 ```
 HEARTBEAT /think:high
@@ -197,23 +197,23 @@ Set to `0` to disable heartbeats entirely.
 
 Test it anytime:
 ```sh
-warelay heartbeat --provider web --to +1234567890 --verbose
+clawdis heartbeat --provider web --to +1234567890 --verbose
 ```
 
 ## How Messages Flow
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  WhatsApp   │────▶│   warelay   │────▶│   Claude    │────▶│  Your Mac   │
+│  WhatsApp   │────▶│   clawdis   │────▶│   Claude    │────▶│  Your Mac   │
 │  (phone)    │◀────│   relay     │◀────│   CLI       │◀────│  (commands) │
 └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
 ```
 
 1. **Inbound**: WhatsApp message arrives via Baileys (WhatsApp Web protocol)
-2. **Queue**: warelay queues it (one Claude run at a time)
+2. **Queue**: clawdis queues it (one Claude run at a time)
 3. **Typing**: "composing" indicator shows while Claude thinks
 4. **Execute**: Claude runs with full shell access in your `cwd`
-5. **Parse**: warelay extracts text + any `MEDIA:` paths from output
+5. **Parse**: clawdis extracts text + any `MEDIA:` paths from output
 6. **Reply**: Response sent back to WhatsApp
 
 ## Media: Images, Voice, Documents
@@ -232,19 +232,19 @@ Inbound images/audio/video are downloaded and available as `{{MediaPath}}`. Voic
 ```
 
 ### Sending Media
-Include `MEDIA:/path/to/file.png` in Claude's output to attach images. warelay handles resizing and format conversion automatically.
+Include `MEDIA:/path/to/file.png` in Claude's output to attach images. clawdis handles resizing and format conversion automatically.
 
 ## Starting the Relay
 
 ```sh
 # Foreground (see all logs)
-warelay relay --provider web --verbose
+clawdis relay --provider web --verbose
 
 # Background in tmux (recommended)
-warelay relay:tmux
+clawdis relay:tmux
 
 # With immediate heartbeat on startup
-warelay relay:heartbeat:tmux
+clawdis relay:heartbeat:tmux
 ```
 
 ## Tips for a Great Personal Assistant
@@ -402,7 +402,7 @@ mcporter handles OAuth flows for services like Linear and Notion, and keeps your
 3. **GitHub + Linear** = AI manages your dev workflow end-to-end
 4. **Chrome DevTools** = AI can see and interact with web pages
 
-The combination of warelay (WhatsApp) + MCPs (services) + Claude Code (execution) creates a surprisingly capable personal assistant.
+The combination of clawdis (WhatsApp) + MCPs (services) + Claude Code (execution) creates a surprisingly capable personal assistant.
 
 ### browser-tools for Web Scraping
 
@@ -475,7 +475,7 @@ Returns song title, artist, album, and Spotify link. Works great for identifying
 
 ## See It In Action
 
-Check out these tweets showing warelay + Clawd in the wild:
+Check out these tweets showing clawdis + Clawd in the wild:
 
 - [Clawd with full system access via WhatsApp](https://x.com/steipete/status/1993342394184745270) - "I'll be nice to Clawd"
 - [Voice support - talk with Clawd on the go](https://x.com/steipete/status/1993455673229840588) - and it talks back!

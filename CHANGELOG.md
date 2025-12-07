@@ -23,7 +23,7 @@
 ## 1.4.1 — 2025-12-04
 
 ### Changes
-- Added `warelay agent` CLI command to talk directly to the configured agent using existing session handling (no WhatsApp send), with JSON output and delivery option.
+- Added `clawdis agent` CLI command to talk directly to the configured agent using existing session handling (no WhatsApp send), with JSON output and delivery option.
 - `/new` reset trigger now works even when inbound messages have timestamp prefixes (e.g., `[Dec 4 17:35]`).
 - WhatsApp mention parsing accepts nullable arrays and flattens safely to avoid missed mentions.
 
@@ -31,7 +31,7 @@
 
 ### Highlights
 - **Thinking directives & state:** `/t|/think|/thinking <level>` (aliases off|minimal|low|medium|high|max/highest). Inline applies to that message; directive-only message pins the level for the session; `/think:off` clears. Resolution: inline > session override > `inbound.reply.thinkingDefault` > off. Pi/Tau get `--thinking <level>` (except off); other agents append cue words (`think` → `think hard` → `think harder` → `ultrathink`). Heartbeat probe uses `HEARTBEAT /think:high`.
-- **Group chats (web provider):** Warelay now fully supports WhatsApp groups: mention-gated triggers (including image-only @ mentions), recent group history injection, per-group sessions, sender attribution, and a first-turn primer with group subject/member roster; heartbeats are skipped for groups.
+- **Group chats (web provider):** Clawdis now fully supports WhatsApp groups: mention-gated triggers (including image-only @ mentions), recent group history injection, per-group sessions, sender attribution, and a first-turn primer with group subject/member roster; heartbeats are skipped for groups.
 - **Group session primer:** The first turn of a group session now tells the agent it is in a WhatsApp group and lists known members/subject so it can address the right speaker.
 - **Media failures are surfaced:** When a web auto-reply media fetch/send fails (e.g., HTTP 404), we now append a warning to the fallback text so you know the attachment was skipped.
 - **Verbose directives + session hints:** `/v|/verbose on|full|off` mirrors thinking: inline > session > config default. Directive-only replies with an acknowledgement; invalid levels return a hint. When enabled, tool results from JSON-emitting agents (Pi/Tau, etc.) are forwarded as metadata-only `[🛠️ <tool-name> <arg>]` messages (now streamed as they happen), and new sessions surface a `🧭 New session: <id>` hint.
@@ -53,7 +53,7 @@
 - Verbose tool messages now include emoji + args + a short result preview for bash/read/edit/write/attach (derived from RPC tool start/end events).
 
 ### Security / Hardening
-- IPC socket hardened (0700 dir / 0600 socket, no symlinks/foreign owners); `warelay logout` also prunes session store.
+- IPC socket hardened (0700 dir / 0600 socket, no symlinks/foreign owners); `clawdis logout` also prunes session store.
 - Media server blocks symlinks and enforces path containment; logging rotates daily and prunes >24h.
 
 ### Bug Fixes
@@ -81,11 +81,11 @@
 - Heartbeat alerts now honor `responsePrefix`.
 - Command failures return user-friendly messages.
 - Test session isolation to avoid touching real `sessions.json`.
-- IPC reuse for `warelay send/heartbeat` prevents Signal/WhatsApp session corruption.
+- IPC reuse for `clawdis send/heartbeat` prevents Signal/WhatsApp session corruption.
 - Web send respects media kind (image/audio/video/document) with correct limits.
 
 ### Changes
-- IPC relay socket at `~/.warelay/relay.sock` with automatic CLI fallback.
+- IPC relay socket at `~/.clawdis/relay.sock` with automatic CLI fallback.
 - Batched inbound messages with timestamps; typing indicator after IPC sends.
 - Watchdog restarts WhatsApp after long inactivity; heartbeat logging includes minutes since last message.
 - Early `allowFrom` filtering before decryption.
@@ -94,7 +94,7 @@
 ## 1.2.2 — 2025-11-28
 
 ### Changes
-- Manual heartbeat sends: `warelay heartbeat --message/--body` (web provider only); `--dry-run` previews payloads.
+- Manual heartbeat sends: `clawdis heartbeat --message/--body` (web provider only); `--dry-run` previews payloads.
 
 ## 1.2.1 — 2025-11-28
 

@@ -149,15 +149,15 @@ export CLAWDIS_CONFIG_PATH=~/.clawdis/clawdis.json
 
 ## Migrating from Warelay
 
-If you're upgrading from the old `warelay` name:
+If you're upgrading from the old `clawdis` name:
 
 ```bash
 # Move config
-mv ~/.warelay ~/.clawdis
-mv ~/.clawdis/warelay.json ~/.clawdis/clawdis.json
+mv ~/.clawdis ~/.clawdis
+mv ~/.clawdis/clawdis.json ~/.clawdis/clawdis.json
 
 # Update any hardcoded paths in your config
-sed -i '' 's/warelay/clawdis/g' ~/.clawdis/clawdis.json
+sed -i '' 's/clawdis/clawdis/g' ~/.clawdis/clawdis.json
 ```
 
 ---

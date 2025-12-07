@@ -5,18 +5,12 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "clawdis": "bin/warelay.js",
-    "warelay": "bin/warelay.js",
-    "warely": "bin/warelay.js",
-    "wa": "bin/warelay.js"
+    "clawdis": "dist/index.js"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "tsx src/index.ts",
-    "warelay": "tsx src/index.ts",
-    "warely": "tsx src/index.ts",
-    "wa": "tsx src/index.ts",
     "clawdis": "tsx src/index.ts",
     "clawdis:rpc": "tsx src/index.ts agent --mode rpc --json",
     "lint": "biome check src",

@@ -6,12 +6,12 @@
 - Keep the relay code itself tmux-agnostic; tmux is only a launcher concern.
 
 ## Commands
-- `warelay relay:tmux` — restarts the `warelay-relay` session running `pnpm warelay relay --verbose`, then attaches (skips attach when stdout isn’t a TTY).
-- `warelay relay:tmux:attach` — attach to the existing session without restarting it.
-- `warelay relay:heartbeat:tmux` — same as `relay:tmux` but adds `--heartbeat-now` so Pi is pinged immediately on startup.
+- `clawdis relay:tmux` — restarts the `clawdis-relay` session running `pnpm clawdis relay --verbose`, then attaches (skips attach when stdout isn’t a TTY).
+- `clawdis relay:tmux:attach` — attach to the existing session without restarting it.
+- `clawdis relay:heartbeat:tmux` — same as `relay:tmux` but adds `--heartbeat-now` so Pi is pinged immediately on startup.
 
-All helpers use the fixed session name `warelay-relay`.
+All helpers use the fixed session name `clawdis-relay`.
 
 ## Logs
-- The relay always writes to the configured file logger (defaults to `/tmp/warelay/warelay.log`); on start it prints the active log path and level.
+- The relay always writes to the configured file logger (defaults to `/tmp/clawdis/clawdis.log`); on start it prints the active log path and level.
 - tmux is just for interactive viewing; you can also tail the log file or use another supervisor if you prefer.

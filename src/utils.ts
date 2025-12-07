@@ -71,5 +71,5 @@ export function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Fixed configuration root; legacy ~/.warelay is no longer used.
+// Fixed configuration root; legacy ~/.clawdis is no longer used.
 export const CONFIG_DIR = path.join(os.homedir(), ".clawdis");

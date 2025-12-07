@@ -18,7 +18,7 @@ vi.mock("../config/config.js", () => ({
 
 const HOME = path.join(
   os.tmpdir(),
-  `warelay-inbound-media-${crypto.randomUUID()}`,
+  `clawdis-inbound-media-${crypto.randomUUID()}`,
 );
 process.env.HOME = HOME;
 

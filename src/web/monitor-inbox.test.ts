@@ -169,7 +169,7 @@ describe("web monitor inbox", () => {
   it("logs inbound bodies to file", async () => {
     const logPath = path.join(
       os.tmpdir(),
-      `warelay-log-test-${crypto.randomUUID()}.log`,
+      `clawdis-log-test-${crypto.randomUUID()}.log`,
     );
     setLoggerOverride({ level: "trace", file: logPath });
 

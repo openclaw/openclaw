@@ -26,7 +26,7 @@ describe("transcribeInboundAudio", () => {
 
   it("downloads mediaUrl to temp file and returns transcript", async () => {
     const tmpBuf = Buffer.from("audio-bytes");
-    const tmpFile = path.join(os.tmpdir(), `warelay-audio-${Date.now()}.ogg`);
+    const tmpFile = path.join(os.tmpdir(), `clawdis-audio-${Date.now()}.ogg`);
     await fs.writeFile(tmpFile, tmpBuf);
 
     const fetchMock = vi.fn(async () => ({
