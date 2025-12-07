@@ -4,6 +4,7 @@ import MenuBarExtraAccess
 import SwiftUI
 import Security
 import OSLog
+import OSLog
 import Darwin
 
 @main
@@ -390,6 +391,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     private var listener: NSXPCListener?
     private var state: AppState?
     private let xpcLogger = Logger(subsystem: "com.steipete.clawdis", category: "xpc")
+    private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
     private let allowedTeamIDs: Set<String> = ["Y5PE65HELJ"]
 
     @MainActor
@@ -405,6 +407,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         }
         self.startListener()
         self.scheduleFirstRunOnboardingIfNeeded()
+
+        // Developer/testing helper: auto-open WebChat when launched with --webchat
+        if CommandLine.arguments.contains("--webchat") {
+            webChatAutoLogger.debug("Auto-opening web chat via --webchat flag")
+            WebChatManager.shared.show(sessionKey: "main")
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {

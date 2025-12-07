@@ -11,6 +11,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     private let initialMessagesJSON: String
 
     init(sessionKey: String) {
+        webChatLogger.debug("init WebChatWindowController sessionKey=\(sessionKey, privacy: .public)")
         self.sessionKey = sessionKey
         self.initialMessagesJSON = WebChatWindowController.loadInitialMessagesJSON(for: sessionKey)
 
@@ -50,6 +51,16 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
           try { window.__clawdisLog(args.join(' ')); } catch (_) {}
           __origConsoleLog.apply(console, args);
         };
+        window.addEventListener('error', (e) => {
+          try {
+            window.__clawdisLog(`page error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`);
+          } catch (_) {}
+        });
+        window.addEventListener('unhandledrejection', (e) => {
+          try {
+            window.__clawdisLog(`unhandled rejection: ${e.reason}`);
+          } catch (_) {}
+        });
         """
         let userScript = WKUserScript(source: callbackScript, injectionTime: .atDocumentStart, forMainFrameOnly: true)
         contentController.addUserScript(userScript)
@@ -72,9 +83,11 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
     private func loadPage() {
+        webChatLogger.debug("loadPage begin")
         let messagesJSON = self.initialMessagesJSON.replacingOccurrences(of: "</script>", with: "<\\/script>")
         guard let webChatURL = Bundle.main.url(forResource: "WebChat", withExtension: nil) else {
             NSLog("WebChat resources missing")
+            webChatLogger.error("WebChat resources missing in bundle")
             return
         }
 
@@ -114,6 +127,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
 
         let html = self.makeHTML(importMapJSON: importMapJSON, messagesJSON: messagesJSON)
         self.webView.loadHTMLString(html, baseURL: webChatURL)
+        webChatLogger.debug("loadPage queued HTML into WKWebView baseURL=\(webChatURL.absoluteString, privacy: .public)")
     }
 
     // swiftlint:disable line_length
@@ -122,6 +136,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
         <!doctype html>
         <html>
         <head>
+          <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data: blob:;">
           <meta charset='utf-8'>
           <title>Clawd Web Chat</title>
           <link rel='stylesheet' href='app.css'>
@@ -131,7 +146,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
           <style>html,body{height:100%;margin:0;padding:0;}#app{height:100%;}</style>
         </head>
         <body>
-          <div id="app">Booting web chat…</div>
+          <div id="app" style="padding:16px;font:14px -apple-system, BlinkMacSystemFont, sans-serif;color:#222">Booting web chat…</div>
           <script type="module">
             // Minimal Node globals expected by pi-web-ui
             if (!window.process) window.process = { env: {} };
@@ -236,6 +251,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     // swiftlint:enable line_length
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        webChatLogger.debug("didFinish navigation url=\(webView.url?.absoluteString ?? "nil", privacy: .public)")
         webView.evaluateJavaScript("document.body.innerText") { result, error in
             if let error {
                 webChatLogger.error("eval error: \(error.localizedDescription, privacy: .public)")
@@ -243,6 +259,36 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
                 webChatLogger.debug("body text snapshot: \(String(text.prefix(200)), privacy: .public)")
             }
         }
+        webView.evaluateJavaScript("document.readyState") { result, _ in
+            if let state = result as? String {
+                webChatLogger.debug("readyState=\(state, privacy: .public)")
+            }
+        }
+        webView.evaluateJavaScript("window.location.href") { result, _ in
+            if let href = result as? String {
+                webChatLogger.debug("js location=\(href, privacy: .public)")
+            }
+        }
+    }
+
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
+        webChatLogger.debug("didStartProvisional url=\(webView.url?.absoluteString ?? "nil", privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        webChatLogger.debug("didCommit url=\(webView.url?.absoluteString ?? "nil", privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: any Error) {
+        webChatLogger.error("didFailProvisional error=\(error.localizedDescription, privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: any Error) {
+        webChatLogger.error("didFail error=\(error.localizedDescription, privacy: .public)")
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        webChatLogger.error("webContentProcessDidTerminate")
     }
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
