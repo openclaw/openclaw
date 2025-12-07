@@ -17,6 +17,7 @@ let package = Package(
         .package(url: "https://github.com/ChimeHQ/AsyncXPCConnection", from: "1.3.0"),
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.1.0"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
     ],
     targets: [
         .target(
@@ -32,6 +33,7 @@ let package = Package(
                 .product(name: "AsyncXPCConnection", package: "AsyncXPCConnection"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             resources: [
                 .copy("Resources/Clawdis.icns"),

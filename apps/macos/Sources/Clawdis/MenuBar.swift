@@ -19,7 +19,7 @@ struct ClawdisApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra { MenuContent(state: self.state) } label: {
+        MenuBarExtra { MenuContent(state: self.state, updater: self.delegate.updaterController) } label: {
             CritterStatusLabel(
                 isPaused: self.state.isPaused,
                 isWorking: self.state.isWorking,
@@ -38,7 +38,7 @@ struct ClawdisApp: App {
         }
 
         Settings {
-            SettingsRootView(state: self.state)
+            SettingsRootView(state: self.state, updater: self.delegate.updaterController)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         }
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
@@ -52,6 +52,7 @@ struct ClawdisApp: App {
 
 private struct MenuContent: View {
     @ObservedObject var state: AppState
+    let updater: UpdaterProviding?
     @ObservedObject private var relayManager = RelayProcessManager.shared
     @ObservedObject private var healthStore = HealthStore.shared
     @Environment(\.openSettings) private var openSettings
@@ -69,6 +70,9 @@ private struct MenuContent: View {
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
             Button("About Clawdis") { self.open(tab: .about) }
+            if let updater, updater.isAvailable {
+                Button("Check for Updates…") { updater.checkForUpdates(nil) }
+            }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
@@ -82,7 +86,6 @@ private struct MenuContent: View {
     }
 
     private var statusRow: some View {
-        let relay = self.relayManager.status
         let health = self.healthStore.state
         let isRefreshing = self.healthStore.isRefreshing
         let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
@@ -491,6 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     private let xpcLogger = Logger(subsystem: "com.steipete.clawdis", category: "xpc")
     private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
     private let allowedTeamIDs: Set<String> = ["Y5PE65HELJ"]
+    let updaterController: UpdaterProviding = makeUpdaterController()
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -609,3 +613,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     private func writeEndpoint(_ endpoint: NSXPCListenerEndpoint) {}
     @MainActor private func writeEndpointIfAvailable() {}
 }
+
+// MARK: - Sparkle updater (disabled for unsigned/dev builds)
+
+@MainActor
+protocol UpdaterProviding: AnyObject {
+    var automaticallyChecksForUpdates: Bool { get set }
+    var isAvailable: Bool { get }
+    func checkForUpdates(_ sender: Any?)
+}
+
+// No-op updater used for debug/dev runs to suppress Sparkle dialogs.
+final class DisabledUpdaterController: UpdaterProviding {
+    var automaticallyChecksForUpdates: Bool = false
+    let isAvailable: Bool = false
+    func checkForUpdates(_: Any?) {}
+}
+
+#if canImport(Sparkle)
+import Sparkle
+
+extension SPUStandardUpdaterController: UpdaterProviding {
+    var automaticallyChecksForUpdates: Bool {
+        get { self.updater.automaticallyChecksForUpdates }
+        set { self.updater.automaticallyChecksForUpdates = newValue }
+    }
+
+    var isAvailable: Bool { true }
+}
+
+private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
+    var staticCode: SecStaticCode?
+    guard SecStaticCodeCreateWithPath(bundleURL as CFURL, SecCSFlags(), &staticCode) == errSecSuccess,
+          let code = staticCode
+    else { return false }
+
+    var infoCF: CFDictionary?
+    guard SecCodeCopySigningInformation(code, SecCSFlags(rawValue: kSecCSSigningInformation), &infoCF) == errSecSuccess,
+          let info = infoCF as? [String: Any],
+          let certs = info[kSecCodeInfoCertificates as String] as? [SecCertificate],
+          let leaf = certs.first
+    else {
+        return false
+    }
+
+    if let summary = SecCertificateCopySubjectSummary(leaf) as String? {
+        return summary.hasPrefix("Developer ID Application:")
+    }
+    return false
+}
+
+private func makeUpdaterController() -> UpdaterProviding {
+    let bundleURL = Bundle.main.bundleURL
+    let isBundledApp = bundleURL.pathExtension == "app"
+    guard isBundledApp, isDeveloperIDSigned(bundleURL: bundleURL) else { return DisabledUpdaterController() }
+
+    let defaults = UserDefaults.standard
+    let autoUpdateKey = "autoUpdateEnabled"
+    // Default to true; honor the user's last choice otherwise.
+    let savedAutoUpdate = (defaults.object(forKey: autoUpdateKey) as? Bool) ?? true
+
+    let controller = SPUStandardUpdaterController(
+        startingUpdater: false,
+        updaterDelegate: nil,
+        userDriverDelegate: nil)
+    controller.updater.automaticallyChecksForUpdates = savedAutoUpdate
+    controller.startUpdater()
+    return controller
+}
+#else
+private func makeUpdaterController() -> UpdaterProviding {
+    DisabledUpdaterController()
+}
+#endif

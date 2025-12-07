@@ -5,6 +5,7 @@ struct SettingsRootView: View {
     @ObservedObject private var permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    let updater: UpdaterProviding?
 
     var body: some View {
         TabView(selection: self.$selectedTab) {
@@ -41,7 +42,7 @@ struct SettingsRootView: View {
                     .tag(SettingsTab.debug)
             }
 
-            AboutSettings()
+            AboutSettings(updater: self.updater)
                 .tabItem { Label("About", systemImage: "info.circle") }
                 .tag(SettingsTab.about)
         }

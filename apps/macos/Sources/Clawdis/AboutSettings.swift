@@ -1,7 +1,10 @@
 import SwiftUI
 
 struct AboutSettings: View {
+    weak var updater: UpdaterProviding?
     @State private var iconHover = false
+    @AppStorage("autoUpdateEnabled") private var autoCheckEnabled = true
+    @State private var didLoadUpdaterState = false
 
     var body: some View {
         VStack(spacing: 8) {
@@ -54,6 +57,25 @@ struct AboutSettings: View {
             .multilineTextAlignment(.center)
             .padding(.vertical, 10)
 
+            if let updater {
+                Divider()
+                    .padding(.vertical, 8)
+
+                if updater.isAvailable {
+                    VStack(spacing: 10) {
+                        Toggle("Check for updates automatically", isOn: self.$autoCheckEnabled)
+                            .toggleStyle(.checkbox)
+                            .frame(maxWidth: .infinity, alignment: .center)
+
+                        Button("Check for Updates…") { updater.checkForUpdates(nil) }
+                    }
+                } else {
+                    Text("Updates unavailable in this build.")
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+            }
+
             Text("© 2025 Peter Steinberger — MIT License.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
@@ -65,6 +87,15 @@ struct AboutSettings: View {
         .padding(.top, 4)
         .padding(.horizontal, 24)
         .padding(.bottom, 24)
+        .onAppear {
+            guard let updater, !self.didLoadUpdaterState else { return }
+            // Keep Sparkle’s auto-check setting in sync with the persisted toggle.
+            updater.automaticallyChecksForUpdates = self.autoCheckEnabled
+            self.didLoadUpdaterState = true
+        }
+        .onChange(of: self.autoCheckEnabled) { _, newValue in
+            self.updater?.automaticallyChecksForUpdates = newValue
+        }
     }
 
     private var versionString: String {

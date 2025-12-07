@@ -91,4 +91,4 @@ struct Response { ok: Bool; message?: String; payload?: Data }
 - Where to place the dev symlink `bin/clawdis-mac` (repo root vs. `apps/macos/bin`)?
 - Should `runShell` support streaming stdout/stderr (XPC with AsyncSequence) or just buffered? (Start buffered; streaming later.)
 - Icon: reuse Clawdis lobster or new mac-specific glyph?
-- Sparkle updates: out of scope initially; add later if we ship signed builds.
+- Sparkle updates: bundled via Sparkle; release builds point at `https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml` and enable auto-checks, while debug builds leave the feed blank and disable checks.

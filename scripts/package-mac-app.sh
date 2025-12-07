@@ -14,6 +14,14 @@ BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-$PKG_VERSION}"
+BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml}"
+AUTO_CHECKS=true
+if [[ "$BUNDLE_ID" == *.debug ]]; then
+  SPARKLE_FEED_URL=""
+  AUTO_CHECKS=false
+fi
 
 echo "📦 Ensuring deps (pnpm install)"
 (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
@@ -22,16 +30,17 @@ echo "📦 Building JS (pnpm exec tsc)"
 
 cd "$ROOT_DIR/apps/macos"
 
-echo "🔨 Building $PRODUCT (debug)"
-swift build -c debug --product "$PRODUCT" --product "${PRODUCT}CLI" --build-path "$BUILD_PATH"
+echo "🔨 Building $PRODUCT ($BUILD_CONFIG)"
+swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --product "${PRODUCT}CLI" --build-path "$BUILD_PATH"
 
-BIN="$BUILD_PATH/debug/$PRODUCT"
-CLI_BIN="$BUILD_PATH/debug/ClawdisCLI"
+BIN="$BUILD_PATH/$BUILD_CONFIG/$PRODUCT"
+CLI_BIN="$BUILD_PATH/$BUILD_CONFIG/ClawdisCLI"
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
 mkdir -p "$APP_ROOT/Contents/MacOS"
 mkdir -p "$APP_ROOT/Contents/Resources"
 mkdir -p "$APP_ROOT/Contents/Resources/Relay"
+mkdir -p "$APP_ROOT/Contents/Frameworks"
 
 echo "📄 Writing Info.plist"
 cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
@@ -61,6 +70,12 @@ cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
     <string>${BUILD_TS}</string>
     <key>ClawdisGitCommit</key>
     <string>${GIT_COMMIT}</string>
+    <key>SUFeedURL</key>
+    <string>${SPARKLE_FEED_URL}</string>
+    <key>SUPublicEDKey</key>
+    <string>${SPARKLE_PUBLIC_ED_KEY}</string>
+    <key>SUEnableAutomaticChecks</key>
+    <${AUTO_CHECKS}/>
     <key>NSUserNotificationUsageDescription</key>
     <string>Clawdis needs notification permission to show alerts for agent actions.</string>
     <key>NSScreenCaptureDescription</key>
@@ -78,6 +93,14 @@ PLIST
 echo "🚚 Copying binary"
 cp "$BIN" "$APP_ROOT/Contents/MacOS/Clawdis"
 chmod +x "$APP_ROOT/Contents/MacOS/Clawdis"
+
+SPARKLE_FRAMEWORK="$BUILD_PATH/$BUILD_CONFIG/Sparkle.framework"
+if [ -d "$SPARKLE_FRAMEWORK" ]; then
+  echo "✨ Embedding Sparkle.framework"
+  cp -R "$SPARKLE_FRAMEWORK" "$APP_ROOT/Contents/Frameworks/"
+  chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
+  install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP_ROOT/Contents/MacOS/Clawdis"
+fi
 
 echo "🖼  Copying app icon"
 cp "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/Clawdis.icns" "$APP_ROOT/Contents/Resources/Clawdis.icns"

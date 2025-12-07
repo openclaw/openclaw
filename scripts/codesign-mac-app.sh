@@ -69,6 +69,11 @@ sign_item() {
   codesign --force --options runtime --timestamp=none --entitlements "$ENT_TMP" --sign "$IDENTITY" "$target"
 }
 
+sign_plain_item() {
+  local target="$1"
+  codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$target"
+}
+
 # Sign main binary and CLI helper if present
 if [ -f "$APP_BUNDLE/Contents/MacOS/Clawdis" ]; then
   echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Clawdis"
@@ -84,10 +89,26 @@ if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   done
 fi
 
-# Sign any embedded frameworks/dylibs if they ever appear
+# Sign Sparkle deeply if present
+SPARKLE="$APP_BUNDLE/Contents/Frameworks/Sparkle.framework"
+if [ -d "$SPARKLE" ]; then
+  echo "Signing Sparkle framework and helpers"
+  sign_plain_item "$SPARKLE/Versions/B/Sparkle"
+  sign_plain_item "$SPARKLE/Versions/B/Autoupdate"
+  sign_plain_item "$SPARKLE/Versions/B/Updater.app/Contents/MacOS/Updater"
+  sign_plain_item "$SPARKLE/Versions/B/Updater.app"
+  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Downloader.xpc/Contents/MacOS/Downloader"
+  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Installer.xpc/Contents/MacOS/Installer"
+  sign_plain_item "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+  sign_plain_item "$SPARKLE/Versions/B"
+  sign_plain_item "$SPARKLE"
+fi
+
+# Sign any other embedded frameworks/dylibs
 if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
-  find "$APP_BUNDLE/Contents/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) -print0 | while IFS= read -r -d '' f; do
-    echo "Signing framework: $f"; sign_item "$f"
+  find "$APP_BUNDLE/Contents/Frameworks" \( -name "*.framework" -o -name "*.dylib" \) ! -path "*Sparkle.framework*" -print0 | while IFS= read -r -d '' f; do
+    echo "Signing framework: $f"; sign_plain_item "$f"
   done
 fi
 
