@@ -143,18 +143,20 @@ struct DebugSettings: View {
                     .buttonStyle(.borderedProminent)
                     .disabled(self.debugSendInFlight)
 
-                    if let debugSendStatus {
-                        Text(debugSendStatus)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if let debugSendError {
-                        Text(debugSendError)
-                            .font(.caption)
-                            .foregroundStyle(.red)
-                    } else {
-                        Text("Uses the Voice Wake path: forwards over SSH when configured, otherwise runs locally via rpc.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                    if !self.debugSendInFlight {
+                        if let debugSendStatus {
+                            Text(debugSendStatus)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else if let debugSendError {
+                            Text(debugSendError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        } else {
+                            Text("Uses the Voice Wake path: forwards over SSH when configured, otherwise runs locally via rpc.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
                 HStack {
