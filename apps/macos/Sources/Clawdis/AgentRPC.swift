@@ -53,6 +53,26 @@ actor AgentRPC {
         }
     }
 
+    func status() async -> (ok: Bool, error: String?) {
+        do {
+            try await ensureRunning()
+            let payload: [String: Any] = ["type": "status"]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            guard let stdinHandle else { throw RpcError(message: "stdin missing") }
+            stdinHandle.write(data)
+            stdinHandle.write(Data([0x0A]))
+
+            let line = try await nextLine()
+            let parsed = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            if let ok = parsed?["ok"] as? Bool, ok { return (true, nil) }
+            return (false, parsed?["error"] as? String ?? "rpc status failed")
+        } catch {
+            logger.error("rpc status failed: \(error.localizedDescription, privacy: .public)")
+            await stop()
+            return (false, error.localizedDescription)
+        }
+    }
+
     // MARK: - Process lifecycle
 
     private func ensureRunning() async throws {

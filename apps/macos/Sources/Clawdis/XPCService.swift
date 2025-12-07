@@ -51,6 +51,10 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
         case .status:
             return Response(ok: true, message: "ready")
 
+        case .rpcStatus:
+            let result = await AgentRPC.shared.status()
+            return Response(ok: result.ok, message: result.error)
+
         case let .screenshot(displayID, windowID, _):
             let authorized = await PermissionManager
                 .ensure([.screenRecording], interactive: false)[.screenRecording] ?? false

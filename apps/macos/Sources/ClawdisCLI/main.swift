@@ -133,6 +133,9 @@ struct ClawdisCLI {
         case "status":
             return .status
 
+        case "rpc-status":
+            return .rpcStatus
+
         case "agent":
             var message: String?
             var thinking: String?
@@ -174,6 +177,7 @@ struct ClawdisCLI {
           clawdis-mac screenshot [--display-id <u32>] [--window-id <u32>]
           clawdis-mac run [--cwd <path>] [--env KEY=VAL] [--timeout <sec>] [--needs-screen-recording] <command ...>
           clawdis-mac status
+          clawdis-mac rpc-status
           clawdis-mac agent --message <text> [--thinking <low|default|high>] [--session <key>]
           clawdis-mac --help
 

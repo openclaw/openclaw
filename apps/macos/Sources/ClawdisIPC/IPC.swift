@@ -26,6 +26,7 @@ public enum Request: Sendable {
         needsScreenRecording: Bool)
     case status
     case agent(message: String, thinking: String?, session: String?)
+    case rpcStatus
 }
 
 // MARK: - Responses
@@ -53,6 +54,7 @@ extension Request: Codable {
         case displayID, windowID, format
         case command, cwd, env, timeoutSec, needsScreenRecording
         case message, thinking, session
+        case rpcStatus
     }
 
     private enum Kind: String, Codable {
@@ -62,6 +64,7 @@ extension Request: Codable {
         case runShell
         case status
         case agent
+        case rpcStatus
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -100,6 +103,9 @@ extension Request: Codable {
             try container.encode(message, forKey: .message)
             try container.encodeIfPresent(thinking, forKey: .thinking)
             try container.encodeIfPresent(session, forKey: .session)
+
+        case .rpcStatus:
+            try container.encode(Kind.rpcStatus, forKey: .type)
         }
     }
 
@@ -140,6 +146,9 @@ extension Request: Codable {
             let thinking = try container.decodeIfPresent(String.self, forKey: .thinking)
             let session = try container.decodeIfPresent(String.self, forKey: .session)
             self = .agent(message: message, thinking: thinking, session: session)
+
+        case .rpcStatus:
+            self = .rpcStatus
         }
     }
 }
