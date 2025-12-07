@@ -20,10 +20,6 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
         config.userContentController = contentController
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
-        // Allow module imports between local file:// resources (needed because WebKit treats distinct
-        // file URLs as cross-origin by default).
-        config.preferences.setValue(true, forKey: "allowFileAccessFromFileURLs")
-        config.preferences.setValue(true, forKey: "allowUniversalAccessFromFileURLs")
 
         // Inject callback receiver stub
         let callbackScript = """
@@ -89,7 +85,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     private func loadPage() {
         webChatLogger.debug("loadPage begin")
         guard let webChatURL = Bundle.main.url(forResource: "WebChat", withExtension: nil),
-              let htmlURL = Bundle.main.url(forResource: "index", withExtension: "html", subdirectory: "WebChat")
+              let htmlURL = URL(string: "index.html")
         else {
             NSLog("WebChat resources missing")
             webChatLogger.error("WebChat resources missing in bundle")
@@ -108,8 +104,14 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
             forMainFrameOnly: true)
         self.webView.configuration.userContentController.addUserScript(userScript)
 
-        self.webView.loadFileURL(htmlURL, allowingReadAccessTo: webChatURL)
-        webChatLogger.debug("loadPage queued HTML into WKWebView fileURL=\(htmlURL.absoluteString, privacy: .public)")
+        WebChatServer.shared.start(root: webChatURL)
+        guard let baseURL = WebChatServer.shared.baseURL() else {
+            webChatLogger.error("WebChatServer not ready; cannot load web chat")
+            return
+        }
+        let url = baseURL.appendingPathComponent(htmlURL.relativePath)
+        self.webView.load(URLRequest(url: url))
+        webChatLogger.debug("loadPage queued HTML into WKWebView url=\(url.absoluteString, privacy: .public)")
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
