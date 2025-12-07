@@ -54,7 +54,20 @@ import Testing
 
         let cmd = CommandResolver.clawdisCommand(subcommand: "rpc")
 
-        #expect(cmd.prefix(3).elementsEqual([pnpmPath.path, "clawdis", "rpc"]))
+        #expect(cmd.prefix(4).elementsEqual([pnpmPath.path, "--silent", "clawdis", "rpc"]))
+    }
+
+    @Test func pnpmKeepsExtraArgsAfterSubcommand() async throws {
+        let tmp = try makeTempDir()
+        CommandResolver.setProjectRoot(tmp.path)
+
+        let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
+        try makeExec(at: pnpmPath)
+
+        let cmd = CommandResolver.clawdisCommand(subcommand: "health", extraArgs: ["--json", "--timeout", "5"])
+
+        #expect(cmd.prefix(5).elementsEqual([pnpmPath.path, "--silent", "clawdis", "health", "--json"]))
+        #expect(cmd.suffix(2).elementsEqual(["--timeout", "5"]))
     }
 
     @Test func preferredPathsStartWithProjectNodeBins() async throws {

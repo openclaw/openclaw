@@ -250,7 +250,8 @@ enum CommandResolver {
             }
         }
         if let pnpm = self.findExecutable(named: "pnpm") {
-            return [pnpm, "clawdis", subcommand] + extraArgs
+            // Use --silent to avoid pnpm lifecycle banners that would corrupt JSON outputs.
+            return [pnpm, "--silent", "clawdis", subcommand] + extraArgs
         }
         return ["clawdis", subcommand] + extraArgs
     }

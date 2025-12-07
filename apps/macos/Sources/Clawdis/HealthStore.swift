@@ -99,10 +99,13 @@ final class HealthStore: ObservableObject {
             return
         }
 
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+
         let response = await ShellRunner.run(
             command: CommandResolver.clawdisCommand(subcommand: "health", extraArgs: ["--json"]),
-            cwd: nil,
-            env: nil,
+            cwd: CommandResolver.projectRootPath(),
+            env: env,
             timeout: 15)
 
         guard response.ok, let data = response.payload, !data.isEmpty else {
