@@ -77,4 +77,30 @@ import Testing
         let first = CommandResolver.preferredPaths().first
         #expect(first == tmp.appendingPathComponent("node_modules/.bin").path)
     }
+
+    @Test func buildsSSHCommandForRemoteMode() async throws {
+        UserDefaults.standard.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        UserDefaults.standard.set("[redacted-email]:2222", forKey: remoteTargetKey)
+        UserDefaults.standard.set("/tmp/id_ed25519", forKey: remoteIdentityKey)
+        UserDefaults.standard.set("/srv/clawdis", forKey: remoteProjectRootKey)
+        defer {
+            UserDefaults.standard.removeObject(forKey: connectionModeKey)
+            UserDefaults.standard.removeObject(forKey: remoteTargetKey)
+            UserDefaults.standard.removeObject(forKey: remoteIdentityKey)
+            UserDefaults.standard.removeObject(forKey: remoteProjectRootKey)
+        }
+
+        let cmd = CommandResolver.clawdisCommand(subcommand: "status", extraArgs: ["--json"])
+
+        #expect(cmd.first == "/usr/bin/ssh")
+        #expect(cmd.contains("[redacted-email]"))
+        #expect(cmd.contains("-i"))
+        #expect(cmd.contains("/tmp/id_ed25519"))
+        if let script = cmd.last {
+            #expect(script.contains("cd '/srv/clawdis'"))
+            #expect(script.contains("clawdis"))
+            #expect(script.contains("status"))
+            #expect(script.contains("--json"))
+        }
+    }
 }

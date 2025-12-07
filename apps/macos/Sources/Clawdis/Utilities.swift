@@ -302,8 +302,7 @@ enum CommandResolver {
         let quotedArgs = (["clawdis", subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
         let cdPrefix = settings.projectRoot.isEmpty ? "" : "cd \(self.shellQuote(settings.projectRoot)) && "
         let scriptBody = "\(cdPrefix)\(quotedArgs)"
-        let wrapped = VoiceWakeForwarder.commandWithCliPath(scriptBody, target: settings.target)
-        args.append(contentsOf: ["/bin/sh", "-c", wrapped])
+        args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
         return ["/usr/bin/ssh"] + args
     }
 

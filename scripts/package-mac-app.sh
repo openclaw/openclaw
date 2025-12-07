@@ -15,8 +15,8 @@ GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "u
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-$PKG_VERSION}"
 
-echo "📦 Building JS (pnpm build)"
-(cd "$ROOT_DIR" && pnpm build)
+echo "📦 Building JS (pnpm exec tsc)"
+(cd "$ROOT_DIR" && pnpm exec tsc -p tsconfig.json)
 
 cd "$ROOT_DIR/apps/macos"
 
@@ -100,18 +100,25 @@ if [ -f "$ROOT_DIR/.npmrc" ]; then
   cp "$ROOT_DIR/.npmrc" "$RELAY_DIR/"
 fi
 
-echo "📦 Installing prod node_modules into bundle (hoisted, scripts enabled for sharp)"
-PNPM_STORE_DIR="$RELAY_DIR/.pnpm-store" \
+echo "📦 Installing prod node_modules into bundle via temp project"
+TMP_DEPLOY=$(mktemp -d /tmp/clawdis-deps.XXXXXX)
+cp "$ROOT_DIR/package.json" "$TMP_DEPLOY/"
+cp "$ROOT_DIR/pnpm-lock.yaml" "$TMP_DEPLOY/"
+[ -f "$ROOT_DIR/.npmrc" ] && cp "$ROOT_DIR/.npmrc" "$TMP_DEPLOY/"
+PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
 PNPM_HOME="$HOME/Library/pnpm" \
 pnpm install \
   --prod \
-  --frozen-lockfile \
-  --config.node-linker=hoisted \
+  --force \
+  --no-frozen-lockfile \
+  --ignore-scripts=false \
+  --config.enable-pre-post-scripts=true \
   --config.ignore-workspace-root-check=true \
   --config.shared-workspace-lockfile=false \
-  --modules-dir "$RELAY_DIR/node_modules" \
   --lockfile-dir "$ROOT_DIR" \
-  --dir "$RELAY_DIR"
+  --dir "$TMP_DEPLOY"
+rsync -a "$TMP_DEPLOY/node_modules" "$RELAY_DIR/"
+rm -rf "$TMP_DEPLOY"
 
 if [ -f "$CLI_BIN" ]; then
   echo "🔧 Copying CLI helper"
