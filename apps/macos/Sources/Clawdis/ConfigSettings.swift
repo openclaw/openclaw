@@ -66,8 +66,8 @@ struct ConfigSettings: View {
             }
 
             LabeledContent("Heartbeat") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
                         Stepper(
                             value: Binding(
                                 get: { self.heartbeatMinutes ?? 10 },
@@ -77,15 +77,15 @@ struct ConfigSettings: View {
                             Text("Every \(self.heartbeatMinutes ?? 10) min")
                         }
                         .help("Set to 0 to disable automatic heartbeats")
-                    }
 
-                    TextField("HEARTBEAT", text: self.$heartbeatBody)
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 320)
-                        .onChange(of: self.heartbeatBody) { _, _ in
-                            self.autosaveConfig()
-                        }
-                        .help("Message body sent on each heartbeat")
+                        TextField("HEARTBEAT", text: self.$heartbeatBody)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 240)
+                            .onChange(of: self.heartbeatBody) { _, _ in
+                                self.autosaveConfig()
+                            }
+                            .help("Message body sent on each heartbeat")
+                    }
 
                     Text("Heartbeats keep Pi sessions warm; 0 minutes disables them.")
                         .font(.footnote)
