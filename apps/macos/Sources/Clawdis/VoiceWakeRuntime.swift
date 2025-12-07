@@ -142,4 +142,10 @@ actor VoiceWakeRuntime {
         }
         return false
     }
+
+#if DEBUG
+    static func _testMatches(text: String, triggers: [String]) -> Bool {
+        Self.matches(text: text, triggers: triggers)
+    }
+#endif
 }
