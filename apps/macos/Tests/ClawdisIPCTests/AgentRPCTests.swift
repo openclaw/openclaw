@@ -1,4 +1,4 @@
-import Clawdis
+@testable import Clawdis
 import Testing
 @testable import ClawdisIPC
 
