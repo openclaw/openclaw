@@ -4,6 +4,7 @@ import AVFoundation
 import ClawdisIPC
 import CoreGraphics
 import Foundation
+import OSLog
 import Speech
 import UserNotifications
 
@@ -40,6 +41,13 @@ enum PermissionManager {
                 @unknown default:
                     results[cap] = false
                 }
+
+            case .appleScript:
+                let granted = await MainActor.run { AppleScriptPermission.isAuthorized() }
+                if interactive, !granted {
+                    await AppleScriptPermission.requestAuthorization()
+                }
+                results[cap] = await MainActor.run { AppleScriptPermission.isAuthorized() }
 
             case .accessibility:
                 let trusted = await MainActor.run { AXIsProcessTrusted() }
@@ -103,6 +111,9 @@ enum PermissionManager {
                 results[cap] = settings.authorizationStatus == .authorized
                     || settings.authorizationStatus == .provisional
 
+            case .appleScript:
+                results[cap] = await MainActor.run { AppleScriptPermission.isAuthorized() }
+
             case .accessibility:
                 results[cap] = await MainActor.run { AXIsProcessTrusted() }
 
@@ -134,6 +145,52 @@ enum NotificationPermissionHelper {
         for candidate in candidates {
             if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
                 return
+            }
+        }
+    }
+}
+
+enum AppleScriptPermission {
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "AppleScriptPermission")
+
+    /// Sends a benign AppleScript to Terminal to verify Automation permission.
+    @MainActor
+    static func isAuthorized() -> Bool {
+        let script = """
+        tell application "Terminal"
+            return "clawdis-ok"
+        end tell
+        """
+
+        var error: NSDictionary?
+        let appleScript = NSAppleScript(source: script)
+        let result = appleScript?.executeAndReturnError(&error)
+
+        if let error, let code = error["NSAppleScriptErrorNumber"] as? Int {
+            if code == -1_743 { // errAEEventWouldRequireUserConsent
+                Self.logger.debug("AppleScript permission denied (-1743)")
+                return false
+            }
+            Self.logger.debug("AppleScript check failed with code \(code)")
+        }
+
+        return result != nil
+    }
+
+    /// Triggers the TCC prompt and opens System Settings → Privacy & Security → Automation.
+    @MainActor
+    static func requestAuthorization() async {
+        _ = isAuthorized() // first attempt triggers the dialog if not granted
+
+        // Open the Automation pane to help the user if the prompt was dismissed.
+        let urlStrings = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+            "x-apple.systempreferences:com.apple.preference.security"
+        ]
+
+        for candidate in urlStrings {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+                break
             }
         }
     }

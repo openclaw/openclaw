@@ -53,6 +53,8 @@ enum VoiceWakeForwarder {
         let rendered = self.renderedCommand(template: config.commandTemplate, transcript: transcript)
         args.append(contentsOf: ["sh", "-c", rendered])
 
+        self.logger.info("voice wake forward starting host=\(userHost, privacy: .public)")
+
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
         process.arguments = args
@@ -75,7 +77,13 @@ enum VoiceWakeForwarder {
         }
         try? input.fileHandleForWriting.close()
 
-        _ = await self.wait(process, timeout: config.timeout)
+        let out = await self.wait(process, timeout: config.timeout)
+        if process.terminationStatus == 0 {
+            self.logger.info("voice wake forward ok host=\(userHost, privacy: .public)")
+        } else {
+            // swiftlint:disable:next line_length
+            self.logger.debug("voice wake forward exit=\(process.terminationStatus) host=\(userHost, privacy: .public) out=\(out, privacy: .public)")
+        }
     }
 
     static func checkConnection(config: VoiceWakeForwardConfig) async -> Result<Void, VoiceWakeForwardError> {

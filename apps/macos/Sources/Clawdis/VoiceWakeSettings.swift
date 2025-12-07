@@ -1,4 +1,5 @@
 import AVFoundation
+import OSLog
 import Speech
 import SwiftUI
 
