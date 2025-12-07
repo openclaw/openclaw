@@ -14,8 +14,6 @@ struct GeneralSettings: View {
 var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
-                self.connectionSection
-
                 if !self.state.onboardingSeen {
                     Text("Complete onboarding to finish setup")
                         .font(.callout.weight(.semibold))
@@ -28,6 +26,8 @@ var body: some View {
                         title: "Clawdis active",
                         subtitle: "Pause to stop Clawdis background helpers and notifications.",
                         binding: self.activeBinding)
+
+                    self.connectionSection
 
                     SettingsToggleRow(
                         title: "Launch at login",
