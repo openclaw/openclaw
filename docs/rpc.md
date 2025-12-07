@@ -1,56 +1,36 @@
-# Clawdis Agent RPC (proposal)
+# Clawdis Agent RPC
 
-## Motivation
-- Voice wake forwarding and mac CLI currently shell out to `pnpm clawdis agent --json`, spawning a Node process per send.
-- pi-mono’s coding-agent keeps a hot process in RPC mode: read JSON on stdin, emit JSON on stdout.
-- We want the same pattern so cross-host voice → WhatsApp uses a long-lived Node worker, better latency, and structured errors.
+Live, stdin/stdout JSON RPC used by the mac app (XPC) to avoid spawning `clawdis agent --json` for every send and to toggle runtime features (e.g., heartbeats) without restarting the relay.
 
-## Goal
-Run the Node CLI in `--mode rpc` on the host that has the active WhatsApp session. Communicate over stdin/stdout with newline-delimited JSON messages.
+## How it is launched
+- The mac app starts `clawdis rpc` in the configured project root (`CommandResolver.projectRoot()`, defaults to `~/Projects/clawdis`).
+- Environment PATH is augmented with repo `node_modules/.bin`, pnpm home, /opt/homebrew/bin, /usr/local/bin.
+- Process is kept alive; crashes are handled by the app’s RPC helper restarting it.
 
-## Proposed protocol
-### Commands (stdin)
-- `{"type":"send", "text":"hi", "session":"main", "thinking":"low"}`
-- `{"type":"abort"}` – cancel current generation (if supported)
-- `{"type":"status"}` – health ping
-- (Optional) `{"type":"compact"}` – trigger session compaction
+## Request/response protocol (newline-delimited JSON)
+### Requests (stdin)
+- `{"type":"status"}` → health ping.
+- `{"type":"send","text":"hi","session":"main","thinking":"low","deliver":false,"to":"+1555..."}` → invokes existing agent send path.
+- `{"type":"set-heartbeats","enabled":true|false}` → enables/disables web heartbeat timers in the running relay process.
 
-### Events (stdout)
-- `{"type":"message_start", "role":"assistant"}`
-- `{"type":"message_end", "text":"..."}`
-- `{"type":"error", "error":"message"}`
-- `{"type":"status", "ok":true, "details":"..."}`
-- Preserve existing `--json` payload shape where possible so consumers can reuse parsers.
+### Responses (stdout)
+- `{"type":"result","ok":true,"payload":{...}}` on success.
+- `{"type":"error","error":"..."}` on failures or unsupported commands.
 
-## Runtime design (Node CLI)
-- Add `--mode rpc` to the Node CLI (similar to pi-mono’s coding-agent).
-- Initialize agent/session once, keep it alive.
-- Use readline on stdin; for each JSON line, dispatch:
-  - `send` → call agent, stream message events to stdout as they occur.
-  - `abort` → cancel current request.
-  - `status` → emit `{type:"status", ok:true}`.
-- Never exit unless stdin closes; log fatal errors to stderr and emit `{type:"error"}` before exit.
+Notes:
+- `send` reuses the agent JSON payload extraction; `payload.payloads[0].text` carries the text reply when present.
+- Unknown `type` returns `error`.
 
-## Mac-side integration
-- Create an `RpcAgentProcess` helper:
-  - Spawn `pnpm clawdis --mode rpc` in repo root (`/Users/steipete/Projects/clawdis`).
-  - Keep stdin/stdout pipes; restart on exit.
-  - Method `send(text, session, thinking)` → write JSON line, wait for `message_end` or `error`, return result.
-- XPC handler `agent`:
-  - Prefer RpcAgentProcess; if unavailable, fall back to one-shot `pnpm clawdis agent --json` (existing behavior).
-  - Return errors to callers (voice wake, CLI) so failures are visible in logs/UI.
+## Heartbeat control (new)
+- The mac menu exposes “Send heartbeats” toggle (persisted in UserDefaults).
+- On change, mac sends `set-heartbeats` RPC; the relay updates an in-memory flag and short-circuits its heartbeat timers (`web-heartbeat` logging + reply heartbeats).
+- No relay restart required.
 
-## Voice wake path
-- Voice wake forward still SSHes to the WhatsApp host; the host’s XPC `agent` uses RpcAgentProcess to deliver the message without extra process spawn.
-- If RPC is down, it falls back to one-shot and logs the failure.
+## Fallbacks / safety
+- If the RPC process is not running, mac-side RPC calls fail fast and the app logs/clears state; callers may fall back to one-shot CLI where appropriate.
+- PATH resolution prefers a real `clawdis` binary, otherwise node + repo `bin/clawdis.js`, otherwise pnpm `clawdis`.
 
-## Error handling & observability
-- All non-OK responses emit an `error` event with the message/exit code.
-- Mac logs on `VoiceWakeForwarder` already surface SSH/CLI failures; extend to tag RPC restarts.
-- Consider a `clawdis-mac status --rpc` flag to report whether the RPC worker is live.
-
-## Next steps
-1) Implement `--mode rpc` in Node CLI (mirror pi-mono’s coding-agent main.ts rpc path).
-2) Add `RpcAgentProcess` in the mac app; switch XPC `agent` to use it.
-3) Wire `clawdis-mac agent` to prefer RPC, fall back to one-shot.
-4) Optional: add a tiny RPC health metric to status JSON.
+## Future extensions
+- Add `abort` to cancel in-flight sends.
+- Add `compact` / `status --verbose` to return relay internals (queue depth, session info).
+- Add a JSON schema test for the RPC contract.
