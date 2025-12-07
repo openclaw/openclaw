@@ -63,4 +63,14 @@ import Testing
 
         #expect(!command.contains("/tmp/custom-cli"))
     }
+
+    @Test func shellEscapeHandlesQuotesAndParens() {
+        let text = "Debug test works (and a funny pun)"
+        let escaped = VoiceWakeForwarder.shellEscape(text)
+        #expect(escaped == "'Debug test works (and a funny pun)'")
+
+        let textWithQuote = "Debug test works (and a funny pun)'"
+        let escapedQuote = VoiceWakeForwarder.shellEscape(textWithQuote)
+        #expect(escapedQuote == "'Debug test works (and a funny pun)'\\'''")
+    }
 }

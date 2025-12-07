@@ -15,6 +15,8 @@ GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "u
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-$PKG_VERSION}"
 
+echo "📦 Ensuring deps (pnpm install)"
+(cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
 echo "📦 Building JS (pnpm exec tsc)"
 (cd "$ROOT_DIR" && pnpm exec tsc -p tsconfig.json)
 
@@ -117,7 +119,7 @@ pnpm install \
   --config.shared-workspace-lockfile=false \
   --lockfile-dir "$ROOT_DIR" \
   --dir "$TMP_DEPLOY"
-rsync -a "$TMP_DEPLOY/node_modules" "$RELAY_DIR/"
+rsync -aL "$TMP_DEPLOY/node_modules" "$RELAY_DIR/"
 rm -rf "$TMP_DEPLOY"
 
 if [ -f "$CLI_BIN" ]; then
