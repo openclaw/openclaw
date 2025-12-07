@@ -166,3 +166,78 @@ enum CLIInstaller {
         "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 }
+
+enum CommandResolver {
+    private static let projectRootDefaultsKey = "clawdis.relayProjectRootPath"
+
+    static func projectRoot() -> URL {
+        if let stored = UserDefaults.standard.string(forKey: self.projectRootDefaultsKey),
+           let url = self.expandPath(stored) {
+            return url
+        }
+        let fallback = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Projects/clawdis")
+        if FileManager.default.fileExists(atPath: fallback.path) {
+            return fallback
+        }
+        return FileManager.default.homeDirectoryForCurrentUser
+    }
+
+    static func setProjectRoot(_ path: String) {
+        UserDefaults.standard.set(path, forKey: self.projectRootDefaultsKey)
+    }
+
+    static func projectRootPath() -> String {
+        self.projectRoot().path
+    }
+
+    static func preferredPaths() -> [String] {
+        let current = ProcessInfo.processInfo.environment["PATH"]?
+            .split(separator: ":").map(String.init) ?? []
+        let extras = [
+            self.projectRoot().appendingPathComponent("node_modules/.bin").path,
+            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm").path,
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+        ]
+        var seen = Set<String>()
+        return (extras + current).filter { seen.insert($0).inserted }
+    }
+
+    static func findExecutable(named name: String) -> String? {
+        for dir in self.preferredPaths() {
+            let candidate = (dir as NSString).appendingPathComponent(name)
+            if FileManager.default.isExecutableFile(atPath: candidate) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    static func clawdisCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
+        if let clawdisPath = self.findExecutable(named: "clawdis") {
+            return [clawdisPath, subcommand] + extraArgs
+        }
+        if let node = self.findExecutable(named: "node") {
+            let cli = self.projectRoot().appendingPathComponent("bin/clawdis.js").path
+            if FileManager.default.isReadableFile(atPath: cli) {
+                return [node, cli, subcommand] + extraArgs
+            }
+        }
+        if let pnpm = self.findExecutable(named: "pnpm") {
+            return [pnpm, "clawdis", subcommand] + extraArgs
+        }
+        return ["clawdis", subcommand] + extraArgs
+    }
+
+    private static func expandPath(_ path: String) -> URL? {
+        var expanded = path
+        if expanded.hasPrefix("~") {
+            let home = FileManager.default.homeDirectoryForCurrentUser.path
+            expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
+        }
+        return URL(fileURLWithPath: expanded)
+    }
+}

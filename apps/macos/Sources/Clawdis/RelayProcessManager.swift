@@ -14,10 +14,6 @@ import SystemPackage
 final class RelayProcessManager: ObservableObject {
     static let shared = RelayProcessManager()
 
-    private enum Defaults {
-        static let projectRootPath = "clawdis.relayProjectRootPath"
-    }
-
     enum Status: Equatable {
         case stopped
         case starting
@@ -203,87 +199,28 @@ final class RelayProcessManager: ObservableObject {
             return override.split(separator: " ").map(String.init)
         }
 
-        if let clawdisPath = self.findExecutable(named: "clawdis") {
-            return [clawdisPath, "relay"]
-        }
-        if let pnpm = self.findExecutable(named: "pnpm") {
-            // Run pnpm from the project root (workingDirectory handles cwd).
-            return [pnpm, "clawdis", "relay"]
-        }
-        if let node = self.findExecutable(named: "node") {
-            let clawdis = self.defaultProjectRoot().appendingPathComponent("bin/clawdis.js").path
-            if FileManager.default.isReadableFile(atPath: clawdis) {
-                return [node, clawdis, "relay"]
-            }
-        }
-        return ["clawdis", "relay"]
+        return CommandResolver.clawdisCommand(subcommand: "relay")
     }
 
     private func makeEnvironment() -> Environment {
-        let merged = self.preferredPaths().joined(separator: ":")
+        let merged = CommandResolver.preferredPaths().joined(separator: ":")
         return .inherit.updating([
             "PATH": merged,
             "PNPM_HOME": FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/pnpm").path,
-            "CLAWDIS_PROJECT_ROOT": self.defaultProjectRoot().path,
+            "CLAWDIS_PROJECT_ROOT": CommandResolver.projectRoot().path,
         ])
     }
 
-    private func preferredPaths() -> [String] {
-        let current = ProcessInfo.processInfo.environment["PATH"]?
-            .split(separator: ":").map(String.init) ?? []
-        let extras = [
-            self.defaultProjectRoot().appendingPathComponent("node_modules/.bin").path,
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm").path,
-            "/opt/homebrew/bin",
-            "/usr/local/bin",
-            "/usr/bin",
-            "/bin",
-        ]
-        var seen = Set<String>()
-        return (extras + current).filter { seen.insert($0).inserted }
-    }
-
-    private func findExecutable(named name: String) -> String? {
-        for dir in self.preferredPaths() {
-            let candidate = (dir as NSString).appendingPathComponent(name)
-            if FileManager.default.isExecutableFile(atPath: candidate) {
-                return candidate
-            }
-        }
-        return nil
-    }
-
     private func defaultProjectRoot() -> URL {
-        if let stored = UserDefaults.standard.string(forKey: Defaults.projectRootPath),
-           let url = self.expandPath(stored)
-        {
-            return url
-        }
-        let fallback = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/clawdis")
-        if FileManager.default.fileExists(atPath: fallback.path) {
-            return fallback
-        }
-        return FileManager.default.homeDirectoryForCurrentUser
+        CommandResolver.projectRoot()
     }
 
     func setProjectRoot(path: String) {
-        UserDefaults.standard.set(path, forKey: Defaults.projectRootPath)
+        CommandResolver.setProjectRoot(path)
     }
 
     func projectRootPath() -> String {
-        UserDefaults.standard.string(forKey: Defaults.projectRootPath)
-            ?? FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Projects/clawdis").path
-    }
-
-    private func expandPath(_ path: String) -> URL? {
-        var expanded = path
-        if expanded.hasPrefix("~") {
-            let home = FileManager.default.homeDirectoryForCurrentUser.path
-            expanded.replaceSubrange(expanded.startIndex...expanded.startIndex, with: home)
-        }
-        return URL(fileURLWithPath: expanded)
+        CommandResolver.projectRootPath()
     }
 }

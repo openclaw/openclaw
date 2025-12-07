@@ -81,10 +81,13 @@ actor AgentRPC {
 
     func start() async throws {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["pnpm", "clawdis", "rpc"]
-        let projectRoot = await RelayProcessManager.shared.projectRootPath()
-        process.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
+        let command = CommandResolver.clawdisCommand(subcommand: "rpc")
+        process.executableURL = URL(fileURLWithPath: command.first ?? "/usr/bin/env")
+        process.arguments = Array(command.dropFirst())
+        process.currentDirectoryURL = URL(fileURLWithPath: CommandResolver.projectRootPath())
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        process.environment = env
 
         let stdinPipe = Pipe()
         let stdoutPipe = Pipe()

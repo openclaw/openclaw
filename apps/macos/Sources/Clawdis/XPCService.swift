@@ -91,14 +91,20 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
         thinking: String?,
         session: String) async -> (ok: Bool, text: String?, error: String?)
     {
-        let projectRoot = await MainActor.run { RelayProcessManager.shared.projectRootPath() }
+        let projectRoot = CommandResolver.projectRootPath()
+        var command = CommandResolver.clawdisCommand(subcommand: "agent")
+        command += ["--message", message, "--json"]
+        if !session.isEmpty { command += ["--to", session] }
+        if let thinking { command += ["--thinking", thinking] }
+
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        var args = ["pnpm", "clawdis", "agent", "--message", message, "--json"]
-        if !session.isEmpty { args += ["--to", session] }
-        if let thinking { args += ["--thinking", thinking] }
-        process.arguments = args
+        process.executableURL = URL(fileURLWithPath: command.first ?? "/usr/bin/env")
+        process.arguments = Array(command.dropFirst())
         process.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
+
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+        process.environment = env
 
         let outPipe = Pipe()
         let errPipe = Pipe()
