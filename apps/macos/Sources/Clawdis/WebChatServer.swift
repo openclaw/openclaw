@@ -4,6 +4,8 @@ import OSLog
 
 private let webChatServerLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChatServer")
 
+/// Very small loopback-only HTTP server that serves the bundled WebChat assets.
+/// Not Sendable-safe; all state lives on the private serial queue.
 final class WebChatServer: @unchecked Sendable {
     static let shared = WebChatServer()
 
@@ -15,6 +17,7 @@ final class WebChatServer: @unchecked Sendable {
     /// Start the local HTTP server if it isn't already running. Safe to call multiple times.
     func start(root: URL) {
         self.queue.async {
+            webChatServerLogger.debug("WebChatServer start requested root=\(root.path, privacy: .public)")
             if self.listener != nil { return }
             self.root = root
             let params = NWParameters.tcp
@@ -58,6 +61,7 @@ final class WebChatServer: @unchecked Sendable {
     }
 
     private func handle(connection: NWConnection) {
+        webChatServerLogger.debug("WebChatServer new connection")
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
@@ -78,10 +82,13 @@ final class WebChatServer: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             if let data, !data.isEmpty {
                 self.respond(to: connection, requestData: data)
+            } else {
+                webChatServerLogger.error("WebChatServer empty receive")
             }
             if isComplete || error != nil {
                 if let error {
-                    webChatServerLogger.error("WebChatServer receive error: \(error.localizedDescription, privacy: .public)")
+                    webChatServerLogger
+                        .error("WebChatServer receive error: \(error.localizedDescription, privacy: .public)")
                 }
                 connection.cancel()
             } else {
@@ -91,12 +98,19 @@ final class WebChatServer: @unchecked Sendable {
     }
 
     private func respond(to connection: NWConnection, requestData: Data) {
-        guard let requestLine = String(data: requestData, encoding: .utf8)?.components(separatedBy: "\r\n").first else {
+        guard let requestText = String(data: requestData, encoding: .utf8) else {
+            webChatServerLogger.error("WebChatServer could not decode request (\(requestData.count) bytes)")
+            connection.cancel()
+            return
+        }
+        guard let requestLine = requestText.components(separatedBy: "\r\n").first else {
+            webChatServerLogger.error("WebChatServer missing request line")
             connection.cancel()
             return
         }
         let parts = requestLine.split(separator: " ")
         guard parts.count >= 2, parts[0] == "GET" else {
+            webChatServerLogger.error("WebChatServer non-GET request: \(requestLine, privacy: .public)")
             connection.cancel()
             return
         }
@@ -106,6 +120,7 @@ final class WebChatServer: @unchecked Sendable {
         }
         if path.hasPrefix("/") { path.removeFirst() }
         if path.hasPrefix("webchat/") {
+            webChatServerLogger.debug("WebChatServer request raw path=\(parts[1], privacy: .public)")
             path = String(path.dropFirst("webchat/".count))
         }
         webChatServerLogger.debug("WebChatServer request path=\(path, privacy: .public)")
@@ -142,28 +157,27 @@ final class WebChatServer: @unchecked Sendable {
 
     private func statusText(_ code: Int) -> String {
         switch code {
-        case 200: "OK"
-        case 403: "Forbidden"
-        case 404: "Not Found"
-        default: "Error"
+        case 200: return "OK"
+        case 403: return "Forbidden"
+        case 404: return "Not Found"
+        default: return "Error"
         }
     }
 
     private func mimeType(forExtension ext: String) -> String {
         switch ext.lowercased() {
-        case "html", "htm": "text/html; charset=utf-8"
-        case "js", "mjs": "application/javascript; charset=utf-8"
-        case "css": "text/css; charset=utf-8"
-        case "json": "application/json; charset=utf-8"
-        case "map": "application/json; charset=utf-8"
-        case "svg": "image/svg+xml"
-        case "png": "image/png"
-        case "jpg", "jpeg": "image/jpeg"
-        case "gif": "image/gif"
-        case "woff2": "font/woff2"
-        case "woff": "font/woff"
-        case "ttf": "font/ttf"
-        default: "application/octet-stream"
+        case "html", "htm": return "text/html; charset=utf-8"
+        case "js", "mjs": return "application/javascript; charset=utf-8"
+        case "css": return "text/css; charset=utf-8"
+        case "json", "map": return "application/json; charset=utf-8"
+        case "svg": return "image/svg+xml"
+        case "png": return "image/png"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "gif": return "image/gif"
+        case "woff2": return "font/woff2"
+        case "woff": return "font/woff"
+        case "ttf": return "font/ttf"
+        default: return "application/octet-stream"
         }
     }
 }
