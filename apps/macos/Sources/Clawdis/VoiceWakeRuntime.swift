@@ -58,6 +58,11 @@ actor VoiceWakeRuntime {
         do {
             configureSession(localeID: config.localeID)
 
+            guard let recognizer, recognizer.isAvailable else {
+                logger.error("voicewake runtime: speech recognizer unavailable")
+                return
+            }
+
             self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
             self.recognitionRequest?.shouldReportPartialResults = true
             guard let request = self.recognitionRequest else { return }
@@ -76,7 +81,7 @@ actor VoiceWakeRuntime {
             lastHeard = Date()
             cooldownUntil = nil
 
-            self.recognitionTask = recognizer?.recognitionTask(with: request) { [weak self] result, error in
+            self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 guard let self else { return }
                 let transcript = result?.bestTranscription.formattedString
                 Task { await self.handleRecognition(transcript: transcript, error: error, config: config) }
