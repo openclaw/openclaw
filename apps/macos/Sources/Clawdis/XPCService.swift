@@ -72,17 +72,61 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else { return Response(ok: false, message: "message empty") }
 
-            let sent = await MainActor.run {
-                WebChatManager.shared.sendMessage(
-                    trimmed,
-                    thinking: thinking ?? "default",
-                    sessionKey: session ?? "main")
-            }
-
-            if sent {
-                return Response(ok: true, message: "sent")
-            }
-            return Response(ok: false, message: "failed to enqueue message")
+            let result = await self.runAgentCLI(
+                message: trimmed,
+                thinking: thinking,
+                session: session ?? "main")
+            return result.ok
+                ? Response(ok: true, message: result.text ?? "sent")
+                : Response(ok: false, message: result.error ?? "failed to send")
         }
+    }
+
+    private static func runAgentCLI(
+        message: String,
+        thinking: String?,
+        session: String) async -> (ok: Bool, text: String?, error: String?)
+    {
+        let projectRoot = await MainActor.run { RelayProcessManager.shared.projectRootPath() }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        var args = ["pnpm", "clawdis", "agent", "--message", message, "--json"]
+        if !session.isEmpty { args += ["--to", session] }
+        if let thinking { args += ["--thinking", thinking] }
+        process.arguments = args
+        process.currentDirectoryURL = URL(fileURLWithPath: projectRoot)
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        do {
+            try process.run()
+        } catch {
+            return (false, nil, "launch failed: \(error.localizedDescription)")
+        }
+
+        process.waitUntilExit()
+        let outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
+
+        guard process.terminationStatus == 0 else {
+            let errStr = String(data: errorData, encoding: .utf8) ?? "agent failed"
+            return (false, nil, errStr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+
+        if
+            let obj = try? JSONSerialization.jsonObject(with: outputData) as? [String: Any],
+            let payloads = obj["payloads"] as? [[String: Any]],
+            let first = payloads.first,
+            let text = first["text"] as? String
+        {
+            return (true, text, nil)
+        }
+
+        let fallback = String(data: outputData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return (true, fallback, nil)
     }
 }
