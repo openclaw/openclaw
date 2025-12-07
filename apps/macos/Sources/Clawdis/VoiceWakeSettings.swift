@@ -227,7 +227,7 @@ struct VoiceWakeSettings: View {
     private var localePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Recognition language")
+                Text("Language")
                     .font(.callout.weight(.semibold))
                     .frame(width: self.fieldLabelWidth, alignment: .leading)
                 Picker("Language", selection: self.$state.voiceWakeLocaleID) {
