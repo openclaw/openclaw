@@ -3,6 +3,7 @@ import SwiftUI
 
 struct GeneralSettings: View {
     @ObservedObject var state: AppState
+    @ObservedObject private var healthStore = HealthStore.shared
     @State private var isInstallingCLI = false
     @State private var cliStatus: String?
     @State private var cliInstalled = false
@@ -53,6 +54,12 @@ struct GeneralSettings: View {
                     .labelsHidden()
                     .frame(width: 140)
                 }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Health")
+                    .font(.callout.weight(.semibold))
+                self.healthCard
             }
 
             VStack(alignment: .leading, spacing: 6) {
@@ -143,4 +150,69 @@ struct GeneralSettings: View {
         self.cliInstallLocation = installLocation
         self.cliInstalled = installLocation != nil
     }
+
+    private var healthCard: some View {
+        let snapshot = self.healthStore.snapshot
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(self.healthStore.state.tint)
+                    .frame(width: 10, height: 10)
+                Text(self.healthStore.summaryLine)
+                    .font(.callout.weight(.semibold))
+            }
+
+            if let snap = snapshot {
+                Text("Linked auth age: \(healthAgeString(snap.web.authAgeMs))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if let recent = snap.sessions.recent.first {
+                    Text("Last activity: \(recent.key) \(recent.updatedAt != nil ? relativeAge(from: Date(timeIntervalSince1970: (recent.updatedAt ?? 0) / 1000)) : "unknown")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text("Last check: \(relativeAge(from: self.healthStore.lastSuccess))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else if let error = self.healthStore.lastError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            } else {
+                Text("Health check pending…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    Task { await self.healthStore.refresh(onDemand: true) }
+                } label: {
+                    if self.healthStore.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("Run Health Check", systemImage: "arrow.clockwise")
+                    }
+                }
+                .disabled(self.healthStore.isRefreshing)
+
+                Button {
+                    NSWorkspace.shared.selectFile("/tmp/clawdis/clawdis.log", inFileViewerRootedAtPath: "/tmp/clawdis/")
+                } label: {
+                    Label("Reveal Logs", systemImage: "doc.text.magnifyingglass")
+                }
+            }
+        }
+        .padding(12)
+        .background(Color.gray.opacity(0.08))
+        .cornerRadius(10)
+    }
+}
+
+private func healthAgeString(_ ms: Double?) -> String {
+    guard let ms else { return "unknown" }
+    return msToAge(ms)
 }

@@ -214,8 +214,8 @@ export async function runWebHeartbeatOnce(opts: {
 
   const cfg = cfgOverride ?? loadConfig();
   const sessionCfg = cfg.inbound?.reply?.session;
-  const mainKey = sessionCfg?.mainKey ?? "main";
   const sessionScope = sessionCfg?.scope ?? "per-sender";
+  const mainKey = sessionCfg?.mainKey;
   const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
   if (sessionId) {
     const storePath = resolveStorePath(cfg.inbound?.reply?.session?.store);
@@ -439,7 +439,7 @@ function getSessionSnapshot(
   const key = resolveSessionKey(
     scope,
     { From: from, To: "", Body: "" },
-    sessionCfg?.mainKey ?? "main",
+    sessionCfg?.mainKey,
   );
   const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
   const entry = store[key];

@@ -54,12 +54,14 @@ struct ClawdisApp: App {
 private struct MenuContent: View {
     @ObservedObject var state: AppState
     @ObservedObject private var relayManager = RelayProcessManager.shared
+    @ObservedObject private var healthStore = HealthStore.shared
     @Environment(\.openSettings) private var openSettings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
             self.relayStatusRow
+            self.healthStatusRow
             Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
@@ -68,6 +70,7 @@ private struct MenuContent: View {
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
             Button("About Clawdis") { self.open(tab: .about) }
+            Button("Run Health Check") { Task { await self.healthStore.refresh(onDemand: true) } }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
@@ -91,6 +94,19 @@ private struct MenuContent: View {
                 .foregroundStyle(.primary)
         }
         .padding(.vertical, 4)
+    }
+
+    private var healthStatusRow: some View {
+        let state = self.healthStore.state
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(state.tint)
+                .frame(width: 8, height: 8)
+            Text(self.healthStore.summaryLine)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .padding(.vertical, 2)
     }
 
     private func statusColor(_ status: RelayProcessManager.Status) -> Color {

@@ -38,7 +38,7 @@ describe("web login", () => {
     const waiter: typeof waitForWaConnection = vi
       .fn()
       .mockResolvedValue(undefined);
-    await loginWeb(false, waiter);
+    await loginWeb(false, "web", waiter);
     await new Promise((resolve) => setTimeout(resolve, 550));
     expect(sock.ws.close).toHaveBeenCalled();
   });

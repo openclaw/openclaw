@@ -19,5 +19,5 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 - Repeated reconnect exits → tune `web.reconnect` (flags: `--web-retries`, `--web-retry-initial`, `--web-retry-max`) and rerun relay.
 - No inbound messages → confirm linked phone is online and sender is allowed; use `pnpm clawdis heartbeat --all --verbose` to test each known recipient.
 
-## Planned "health" command
-A dedicated `clawdis health --json` probe (connect-only, no sends) is planned to report: linked creds, auth age, Baileys connect result/status code, session-store summary, and IPC presence. Until it lands, use the checks above.
+## Dedicated "health" command
+`pnpm clawdis health --json` runs a connect-only probe (no sends) and reports: linked creds, auth age, Baileys connect result/status code, session-store summary, IPC presence, and a probe duration. It exits non-zero if not linked or if the connect fails/timeouts. Use `--timeout <ms>` to override the 10s default.
