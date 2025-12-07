@@ -10,6 +10,7 @@ actor AgentRPC {
     private var buffer = Data()
     private var waiters: [CheckedContinuation<String, Error>] = []
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "agent.rpc")
+    private var starting = false
 
     private struct RpcError: Error { let message: String }
 
@@ -20,8 +21,12 @@ actor AgentRPC {
         deliver: Bool,
         to: String?) async -> (ok: Bool, text: String?, error: String?)
     {
-        guard process?.isRunning == true else {
-            return (false, nil, "rpc worker not running")
+        if process?.isRunning != true {
+            do {
+                try await self.start()
+            } catch {
+                return (false, nil, "rpc worker not running: \(error.localizedDescription)")
+            }
         }
         do {
             var payload: [String: Any] = [
@@ -55,7 +60,7 @@ actor AgentRPC {
             if let err = parsed["error"] as? String {
                 return (false, nil, err)
             }
-            return (false, nil, "rpc returned unexpected response")
+            return (false, nil, "rpc returned unexpected response: \(line)")
         } catch {
             logger.error("rpc send failed: \(error.localizedDescription, privacy: .public)")
             await stop()
@@ -64,8 +69,12 @@ actor AgentRPC {
     }
 
     func status() async -> (ok: Bool, error: String?) {
-        guard process?.isRunning == true else {
-            return (false, "rpc worker not running")
+        if process?.isRunning != true {
+            do {
+                try await self.start()
+            } catch {
+                return (false, "rpc worker not running: \(error.localizedDescription)")
+            }
         }
         do {
             let payload: [String: Any] = ["type": "status"]
@@ -77,7 +86,7 @@ actor AgentRPC {
             let line = try await nextLine()
             let parsed = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
             if let ok = parsed?["ok"] as? Bool, ok { return (true, nil) }
-            return (false, parsed?["error"] as? String ?? "rpc status failed")
+            return (false, parsed?["error"] as? String ?? "rpc status failed: \(line)")
         } catch {
             logger.error("rpc status failed: \(error.localizedDescription, privacy: .public)")
             await stop()
@@ -108,6 +117,9 @@ actor AgentRPC {
     // MARK: - Process lifecycle
 
     func start() async throws {
+        if self.starting { return }
+        self.starting = true
+        defer { self.starting = false }
         let process = Process()
         let command = CommandResolver.clawdisCommand(subcommand: "rpc")
         process.executableURL = URL(fileURLWithPath: command.first ?? "/usr/bin/env")
