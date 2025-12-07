@@ -105,10 +105,12 @@ export function buildProgram() {
     .command("login")
     .description("Link your personal WhatsApp via QR (web provider)")
     .option("--verbose", "Verbose connection logs", false)
+    .option("--provider <provider>", "Provider alias (default: whatsapp)")
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
       try {
-        await loginWeb(Boolean(opts.verbose));
+        const provider = opts.provider ?? "whatsapp";
+        await loginWeb(Boolean(opts.verbose), provider);
       } catch (err) {
         defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
         defaultRuntime.exit(1);
@@ -118,8 +120,10 @@ export function buildProgram() {
   program
     .command("logout")
     .description("Clear cached WhatsApp Web credentials")
-    .action(async () => {
+    .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .action(async (opts) => {
       try {
+        void opts.provider; // placeholder for future multi-provider; currently web only.
         await logoutWeb(defaultRuntime);
       } catch (err) {
         defaultRuntime.error(danger(`Logout failed: ${String(err)}`));

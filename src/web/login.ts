@@ -14,9 +14,13 @@ import {
 
 export async function loginWeb(
   verbose: boolean,
+  provider = "whatsapp",
   waitForConnection: typeof waitForWaConnection = waitForWaConnection,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
+  if (provider !== "whatsapp" && provider !== "web") {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
   const sock = await createWaSocket(true, verbose);
   logInfo("Waiting for WhatsApp connection...", runtime);
   try {
