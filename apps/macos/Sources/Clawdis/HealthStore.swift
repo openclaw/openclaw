@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import OSLog
 
 struct HealthSnapshot: Codable, Sendable {
     struct Web: Codable, Sendable {
@@ -60,6 +61,8 @@ enum HealthState: Equatable {
 final class HealthStore: ObservableObject {
     static let shared = HealthStore()
 
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "health")
+
     @Published private(set) var snapshot: HealthSnapshot?
     @Published private(set) var lastSuccess: Date?
     @Published private(set) var lastError: String?
@@ -108,18 +111,23 @@ final class HealthStore: ObservableObject {
             env: env,
             timeout: 15)
 
-        // Always try to decode JSON even when the CLI exits non-zero; it prints the
-        // failure snapshot before exiting so we can surface a useful message.
-        if let data = response.payload, !data.isEmpty,
-           let decoded = try? JSONDecoder().decode(HealthSnapshot.self, from: data)
-        {
-            self.snapshot = decoded
-            if response.ok {
-                self.lastSuccess = Date()
-                self.lastError = nil
-            } else {
-                self.lastError = self.describeFailure(from: decoded, fallback: response.message)
+        if let data = response.payload, !data.isEmpty {
+            if let decoded = decodeHealthSnapshot(from: data) {
+                self.snapshot = decoded
+                if response.ok {
+                    self.lastSuccess = Date()
+                    self.lastError = nil
+                } else {
+                    self.lastError = self.describeFailure(from: decoded, fallback: response.message)
+                }
+                return
             }
+
+            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let snippet = String(text.prefix(220))
+            Self.logger.error("health decode failed; payload=\(snippet, privacy: .public)")
+            self.lastError = snippet.isEmpty ? (response.message ?? "health probe failed") : "health output not JSON: \(snippet)"
+            if onDemand { self.snapshot = nil }
             return
         }
 
@@ -182,4 +190,19 @@ func msToAge(_ ms: Double) -> String {
     if hours < 48 { return "\(hours)h" }
     let days = Int(round(Double(hours) / 24))
     return "\(days)d"
+}
+
+/// Decode a health snapshot, tolerating stray log lines before/after the JSON blob.
+func decodeHealthSnapshot(from data: Data) -> HealthSnapshot? {
+    let decoder = JSONDecoder()
+    if let snap = try? decoder.decode(HealthSnapshot.self, from: data) {
+        return snap
+    }
+    guard let text = String(data: data, encoding: .utf8) else { return nil }
+    guard let firstBrace = text.firstIndex(of: "{"), let lastBrace = text.lastIndex(of: "}") else {
+        return nil
+    }
+    let slice = text[firstBrace...lastBrace]
+    let cleaned = Data(slice.utf8)
+    return try? decoder.decode(HealthSnapshot.self, from: cleaned)
 }
