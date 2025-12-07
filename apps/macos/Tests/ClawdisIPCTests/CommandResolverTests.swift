@@ -101,6 +101,7 @@ import Testing
             #expect(script.contains("clawdis"))
             #expect(script.contains("status"))
             #expect(script.contains("--json"))
+            #expect(script.contains("CLI="))
         }
     }
 }
