@@ -260,8 +260,9 @@ struct DebugSettings: View {
                     self.debugSendStatus = "Forwarded via \(trimmedTarget). Await reply."
                     self.debugSendError = nil
                 case let .failure(error):
-                    self.debugSendStatus = "Target: \(config.target)" + (config.identityPath.isEmpty ? "" : " · identity: \(config.identityPath)")
-                    self.debugSendError = error.localizedDescription
+                    let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.debugSendStatus = "Forward failed: \(detail)"
+                    self.debugSendError = nil
                 }
             }
             return
@@ -286,15 +287,20 @@ struct DebugSettings: View {
                     self.debugSendStatus = "Sent locally via voice wake path."
                     self.debugSendError = nil
                 } else {
-                    self.debugSendStatus = "Local voice wake send failed"
-                    self.debugSendError = rpcResult.error ?? "Unknown error"
+                    let reason = rpcResult.error?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let detail = (reason?.isEmpty == false)
+                        ? reason!
+                        : "No error returned. Check /tmp/clawdis.log or rpc output."
+                    self.debugSendStatus = "Local send failed: \(detail)"
+                    self.debugSendError = nil
                 }
             }
         } catch {
             await MainActor.run {
                 self.debugSendInFlight = false
-                self.debugSendStatus = "Local voice wake send failed"
-                self.debugSendError = error.localizedDescription
+                let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.debugSendStatus = "Local send failed: \(detail)"
+                self.debugSendError = nil
             }
         }
     }
