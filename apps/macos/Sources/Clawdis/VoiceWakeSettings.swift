@@ -268,81 +268,83 @@ struct VoiceWakeSettings: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            SettingsToggleRow(
-                title: "Enable Voice Wake",
-                subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands. "
-                    + "Voice recognition runs fully on-device.",
-                binding: self.$state.swabbleEnabled)
-                .disabled(!voiceWakeSupported)
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsToggleRow(
+                    title: "Enable Voice Wake",
+                    subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands. "
+                        + "Voice recognition runs fully on-device.",
+                    binding: self.$state.swabbleEnabled)
+                    .disabled(!voiceWakeSupported)
 
-            if !voiceWakeSupported {
-                Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
-                    .font(.callout)
-                    .foregroundStyle(.yellow)
-                    .padding(8)
-                    .background(Color.secondary.opacity(0.15))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-            }
-
-            self.localePicker
-            self.micPicker
-            self.levelMeter
-
-            self.forwardSection
-
-            self.testCard
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Trigger words")
-                        .font(.callout.weight(.semibold))
-                    Spacer()
-                    Button {
-                        self.addWord()
-                    } label: {
-                        Label("Add word", systemImage: "plus")
-                    }
-                    .disabled(self.state.swabbleTriggerWords
-                        .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
-
-                    Button("Reset defaults") { self.state.swabbleTriggerWords = defaultVoiceWakeTriggers }
+                if !voiceWakeSupported {
+                    Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.yellow)
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.15))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
 
-                Table(self.indexedWords) {
-                    TableColumn("Word") { row in
-                        TextField("Wake word", text: self.binding(for: row.id))
-                            .textFieldStyle(.roundedBorder)
-                    }
-                    TableColumn("") { row in
+                self.localePicker
+                self.micPicker
+                self.levelMeter
+
+                self.forwardSection
+
+                self.testCard
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Trigger words")
+                            .font(.callout.weight(.semibold))
+                        Spacer()
                         Button {
-                            self.removeWord(at: row.id)
+                            self.addWord()
                         } label: {
-                            Image(systemName: "trash")
+                            Label("Add word", systemImage: "plus")
                         }
-                        .buttonStyle(.borderless)
-                        .help("Remove trigger word")
+                        .disabled(self.state.swabbleTriggerWords
+                            .contains(where: { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
+
+                        Button("Reset defaults") { self.state.swabbleTriggerWords = defaultVoiceWakeTriggers }
                     }
-                    .width(36)
+
+                    Table(self.indexedWords) {
+                        TableColumn("Word") { row in
+                            TextField("Wake word", text: self.binding(for: row.id))
+                                .textFieldStyle(.roundedBorder)
+                        }
+                        TableColumn("") { row in
+                            Button {
+                                self.removeWord(at: row.id)
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Remove trigger word")
+                        }
+                        .width(36)
+                    }
+                    .frame(minHeight: 180)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+
+                    Text(
+                        "Clawdis reacts when any trigger appears in a transcription. "
+                            + "Keep them short to avoid false positives.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(minHeight: 180)
-                .clipShape(RoundedRectangle(cornerRadius: 6))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
 
-                Text(
-                    "Clawdis reacts when any trigger appears in a transcription. "
-                        + "Keep them short to avoid false positives.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
             }
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
         .task { await self.loadMicsIfNeeded() }
         .task { await self.loadLocalesIfNeeded() }
         .task { await self.restartMeter() }
