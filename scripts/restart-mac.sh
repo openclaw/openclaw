@@ -56,7 +56,42 @@ run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q -
 # 3) Package + relaunch the app (script also stops any stragglers).
 run_step "package app" "${ROOT_DIR}/scripts/package-mac-app.sh"
 
-# 4) Verify the packaged app is alive.
+# 4) Install launch agent with Mach service and bootstrap it (no KeepAlive).
+cat > "${LAUNCH_AGENT}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.steipete.clawdis</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${APP_BUNDLE}/Contents/MacOS/Clawdis</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>${ROOT_DIR}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>MachServices</key>
+  <dict>
+    <key>com.steipete.clawdis.xpc</key>
+    <true/>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/clawdis.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/clawdis.log</string>
+</dict>
+</plist>
+PLIST
+
+stop_launch_agent
+run_step "bootstrap launch agent" launchctl bootstrap gui/"$UID" "${LAUNCH_AGENT}"
+run_step "kickstart" launchctl kickstart -k gui/"$UID"/com.steipete.clawdis
+
+# 5) Verify the packaged app is alive.
 sleep 1
 if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
   log "OK: Clawdis is running."

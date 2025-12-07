@@ -2,6 +2,9 @@ import AppKit
 import Foundation
 import MenuBarExtraAccess
 import SwiftUI
+import Security
+import OSLog
+import Darwin
 
 @main
 struct ClawdisApp: App {
@@ -386,6 +389,8 @@ enum CritterIconRenderer {
 final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate {
     private var listener: NSXPCListener?
     private var state: AppState?
+    private let xpcLogger = Logger(subsystem: "com.steipete.clawdis", category: "xpc")
+    private let allowedTeamIDs: Set<String> = ["Y5PE65HELJ"]
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -426,6 +431,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     }
 
     func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
+        guard self.isAllowed(connection: connection) else {
+            self.xpcLogger.error("Rejecting XPC connection: team ID mismatch or invalid audit token")
+            connection.invalidate()
+            return false
+        }
         let interface = NSXPCInterface(with: ClawdisXPCProtocol.self)
         connection.exportedInterface = interface
         connection.exportedObject = ClawdisXPCService()
@@ -438,4 +448,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
         return running.count > 1
     }
+
+    private func isAllowed(connection: NSXPCConnection) -> Bool {
+        // Prefer audit token (available via KVC); fall back to pid-based lookup.
+        if let tokenData = connection.value(forKey: "auditToken") as? Data,
+           tokenData.count == MemoryLayout<audit_token_t>.size {
+            var token = audit_token_t()
+            _ = withUnsafeMutableBytes(of: &token) { tokenData.copyBytes(to: $0) }
+            let attrs: NSDictionary = [kSecGuestAttributeAudit: tokenData]
+            if self.teamIDMatches(attrs: attrs) { return true }
+        }
+
+        let pid = connection.processIdentifier
+        guard pid > 0 else { return false }
+        let attrs: NSDictionary = [kSecGuestAttributePid: pid]
+        if self.teamIDMatches(attrs: attrs) { return true }
+
+        // Fallback: allow same-user processes (still local-only).
+        var pidInfo = kinfo_proc()
+        var size = MemoryLayout.size(ofValue: pidInfo)
+        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        let result = name.withUnsafeMutableBufferPointer { namePtr -> Bool in
+            return sysctl(namePtr.baseAddress, u_int(namePtr.count), &pidInfo, &size, nil, 0) == 0
+        }
+        if result, pidInfo.kp_eproc.e_ucred.cr_uid == getuid() {
+            return true
+        }
+        return false
+    }
+
+    private func teamIDMatches(attrs: NSDictionary) -> Bool {
+        var secCode: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, attrs, SecCSFlags(), &secCode) == errSecSuccess,
+              let code = secCode else { return false }
+
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
+              let sCode = staticCode else { return false }
+
+        var infoCF: CFDictionary?
+        guard SecCodeCopySigningInformation(sCode, SecCSFlags(), &infoCF) == errSecSuccess,
+              let info = infoCF as? [String: Any],
+              let teamID = info[kSecCodeInfoTeamIdentifier as String] as? String else {
+            return false
+        }
+
+        return self.allowedTeamIDs.contains(teamID)
+    }
+
+    @MainActor
+    private func writeEndpoint(_ endpoint: NSXPCListenerEndpoint) {}
+    @MainActor private func writeEndpointIfAvailable() {}
 }

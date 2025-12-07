@@ -89,6 +89,3 @@ echo "🔏 Signing bundle (ad-hoc by default; set SIGN_IDENTITY for real cert)"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}" "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"
 
 echo "✅ Bundle ready at $APP_ROOT"
-
-echo "🚀 Launching app"
-open "$APP_ROOT"
