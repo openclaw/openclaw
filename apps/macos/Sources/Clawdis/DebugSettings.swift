@@ -15,7 +15,8 @@ struct DebugSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             LabeledContent("PID") { Text("\(ProcessInfo.processInfo.processIdentifier)") }
             LabeledContent("Log file") {
-                Button("Open /tmp/clawdis.log") { NSWorkspace.shared.open(URL(fileURLWithPath: "/tmp/clawdis.log")) }
+                Button("Open pino log") { NSWorkspace.shared.open(URL(fileURLWithPath: self.pinoLogPath)) }
+                    .help(self.pinoLogPath)
             }
             LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
             LabeledContent("Relay status") {
@@ -110,6 +111,15 @@ struct DebugSettings: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 12)
         .task { await self.reloadModels() }
+    }
+
+    private var pinoLogPath: String {
+        let df = DateFormatter()
+        df.calendar = Calendar(identifier: .iso8601)
+        df.locale = Locale(identifier: "en_US_POSIX")
+        df.dateFormat = "yyyy-MM-dd"
+        let today = df.string(from: Date())
+        return "/tmp/clawdis/clawdis-\(today).log"
     }
 
     private func chooseCatalogFile() {
