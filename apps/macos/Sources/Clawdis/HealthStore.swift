@@ -118,7 +118,7 @@ final class HealthStore: ObservableObject {
                 self.lastSuccess = Date()
                 self.lastError = nil
             } else {
-                self.lastError = self.describeFailure(from: decoded)
+                self.lastError = self.describeFailure(from: decoded, fallback: response.message)
             }
             return
         }
@@ -150,7 +150,7 @@ final class HealthStore: ObservableObject {
         return "linked · auth \(auth) · socket ok"
     }
 
-    private func describeFailure(from snap: HealthSnapshot) -> String {
+    private func describeFailure(from snap: HealthSnapshot, fallback: String?) -> String {
         if !snap.web.linked {
             return "Not linked — run clawdis login"
         }
@@ -162,6 +162,9 @@ final class HealthStore: ObservableObject {
         }
         if !snap.ipc.exists {
             return "IPC socket missing at \(snap.ipc.path)"
+        }
+        if let fallback, !fallback.isEmpty {
+            return fallback
         }
         return "health probe failed"
     }
