@@ -95,10 +95,7 @@ var body: some View {
 
     private var connectionSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Clawdis runs")
-                .font(.callout.weight(.semibold))
-
-            Picker("Mode", selection: self.$state.connectionMode) {
+            Picker("Clawdis runs", selection: self.$state.connectionMode) {
                 Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                 Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
             }
