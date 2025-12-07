@@ -13,6 +13,8 @@ struct ConfigSettings: View {
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @State private var allowAutosave = false
+    @State private var heartbeatMinutes: Int?
+    @State private var heartbeatBody: String = "HEARTBEAT"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -60,6 +62,34 @@ struct ConfigSettings: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
+                }
+            }
+
+            LabeledContent("Heartbeat") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Stepper(
+                            value: Binding(
+                                get: { self.heartbeatMinutes ?? 10 },
+                                set: { self.heartbeatMinutes = $0; self.autosaveConfig() }),
+                            in: 0...720)
+                        {
+                            Text("Every \(self.heartbeatMinutes ?? 10) min")
+                        }
+                        .help("Set to 0 to disable automatic heartbeats")
+                    }
+
+                    TextField("HEARTBEAT", text: self.$heartbeatBody)
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 320)
+                        .onChange(of: self.heartbeatBody) { _, _ in
+                            self.autosaveConfig()
+                        }
+                        .help("Message body sent on each heartbeat")
+
+                    Text("Heartbeats keep Pi sessions warm; 0 minutes disables them.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
 
@@ -114,6 +144,9 @@ struct ConfigSettings: View {
 
         let session = reply["session"] as? [String: Any]
         let agent = reply["agent"] as? [String: Any]
+        let heartbeatMinutes = reply["heartbeatMinutes"] as? Int
+        let heartbeatBody = reply["heartbeatBody"] as? String
+
         self.configStorePath = (session?["store"] as? String) ?? SessionLoader.defaultStorePath
         let loadedModel = (agent?["model"] as? String) ?? ""
         if !loadedModel.isEmpty {
@@ -123,6 +156,9 @@ struct ConfigSettings: View {
             self.configModel = SessionLoader.fallbackModel
             self.customModel = SessionLoader.fallbackModel
         }
+
+        if let heartbeatMinutes { self.heartbeatMinutes = heartbeatMinutes }
+        if let heartbeatBody, !heartbeatBody.isEmpty { self.heartbeatBody = heartbeatBody }
     }
 
     private func autosaveConfig() {
@@ -137,6 +173,7 @@ struct ConfigSettings: View {
 
         var session: [String: Any] = [:]
         var agent: [String: Any] = [:]
+        var reply: [String: Any] = [:]
 
         let trimmedStore = self.configStorePath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedStore.isEmpty { session["store"] = trimmedStore }
@@ -146,10 +183,18 @@ struct ConfigSettings: View {
         let trimmedModel = chosenModel
         if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
 
-        let reply: [String: Any] = [
-            "session": session,
-            "agent": agent,
-        ]
+        reply["session"] = session
+        reply["agent"] = agent
+
+        if let heartbeatMinutes {
+            reply["heartbeatMinutes"] = heartbeatMinutes
+        }
+
+        let trimmedBody = self.heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedBody.isEmpty {
+            reply["heartbeatBody"] = trimmedBody
+        }
+
         let inbound: [String: Any] = ["reply": reply]
         let root: [String: Any] = ["inbound": inbound]
 
