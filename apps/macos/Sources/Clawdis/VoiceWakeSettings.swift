@@ -303,7 +303,7 @@ struct VoiceWakeSettings: View {
     @State private var availableLocales: [Locale] = []
     @State private var showForwardAdvanced = false
     @State private var forwardStatus: ForwardStatus = .idle
-    private let fieldLabelWidth: CGFloat = 110
+    private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 300
 
     private var voiceWakeBinding: Binding<Bool> {
