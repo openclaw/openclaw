@@ -15,7 +15,7 @@ struct DebugSettings: View {
         VStack(alignment: .leading, spacing: 10) {
             LabeledContent("PID") { Text("\(ProcessInfo.processInfo.processIdentifier)") }
             LabeledContent("Log file") {
-                Button("Open pino log") { NSWorkspace.shared.open(URL(fileURLWithPath: self.pinoLogPath)) }
+                Button("Open pino log") { self.openLog() }
                     .help(self.pinoLogPath)
             }
             LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
@@ -119,7 +119,15 @@ struct DebugSettings: View {
         df.locale = Locale(identifier: "en_US_POSIX")
         df.dateFormat = "yyyy-MM-dd"
         let today = df.string(from: Date())
-        return "/tmp/clawdis/clawdis-\(today).log"
+        // Prefer rolling log; fall back to legacy single-file path.
+        let rolling = URL(fileURLWithPath: "/tmp/clawdis/clawdis-\(today).log").path
+        if FileManager.default.fileExists(atPath: rolling) { return rolling }
+        return "/tmp/clawdis.log"
+    }
+
+    private func openLog() {
+        let url = URL(fileURLWithPath: self.pinoLogPath)
+        NSWorkspace.shared.open(url)
     }
 
     private func chooseCatalogFile() {
