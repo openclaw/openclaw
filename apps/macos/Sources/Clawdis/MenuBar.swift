@@ -458,31 +458,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     }
 
     private func isAllowed(connection: NSXPCConnection) -> Bool {
-        // Prefer audit token (available via KVC); fall back to pid-based lookup.
-        if let tokenData = connection.value(forKey: "auditToken") as? Data,
-           tokenData.count == MemoryLayout<audit_token_t>.size {
-            var token = audit_token_t()
-            _ = withUnsafeMutableBytes(of: &token) { tokenData.copyBytes(to: $0) }
-            let attrs: NSDictionary = [kSecGuestAttributeAudit: tokenData]
-            if self.teamIDMatches(attrs: attrs) { return true }
-        }
-
         let pid = connection.processIdentifier
         guard pid > 0 else { return false }
+
+        // Same-user shortcut: allow quickly when caller uid == ours.
+        if let callerUID = self.uid(for: pid), callerUID == getuid() {
+            return true
+        }
+
         let attrs: NSDictionary = [kSecGuestAttributePid: pid]
         if self.teamIDMatches(attrs: attrs) { return true }
 
-        // Fallback: allow same-user processes (still local-only).
-        var pidInfo = kinfo_proc()
-        var size = MemoryLayout.size(ofValue: pidInfo)
-        var name: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        let result = name.withUnsafeMutableBufferPointer { namePtr -> Bool in
-            return sysctl(namePtr.baseAddress, u_int(namePtr.count), &pidInfo, &size, nil, 0) == 0
-        }
-        if result, pidInfo.kp_eproc.e_ucred.cr_uid == getuid() {
-            return true
-        }
         return false
+    }
+
+    private func uid(for pid: pid_t) -> uid_t? {
+        var info = kinfo_proc()
+        var size = MemoryLayout.size(ofValue: info)
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        let ok = mib.withUnsafeMutableBufferPointer { mibPtr -> Bool in
+            return sysctl(mibPtr.baseAddress, u_int(mibPtr.count), &info, &size, nil, 0) == 0
+        }
+        return ok ? info.kp_eproc.e_ucred.cr_uid : nil
     }
 
     private func teamIDMatches(attrs: NSDictionary) -> Bool {

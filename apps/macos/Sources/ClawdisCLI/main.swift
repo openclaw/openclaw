@@ -222,6 +222,8 @@ struct ClawdisCLI {
         let proc = Process()
         proc.launchPath = "/usr/bin/open"
         proc.arguments = ["-n", appURL.path]
+        proc.standardOutput = Pipe()
+        proc.standardError = Pipe()
         try proc.run()
         try? await Task.sleep(nanoseconds: 100_000_000)
     }
