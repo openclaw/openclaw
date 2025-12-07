@@ -105,13 +105,29 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
         self.webView.configuration.userContentController.addUserScript(userScript)
 
         WebChatServer.shared.start(root: webChatURL)
-        guard let baseURL = WebChatServer.shared.baseURL() else {
+        guard let baseURL = self.waitForWebChatServer() else {
             webChatLogger.error("WebChatServer not ready; cannot load web chat")
             return
         }
         let url = baseURL.appendingPathComponent(htmlURL.relativePath)
         self.webView.load(URLRequest(url: url))
         webChatLogger.debug("loadPage queued HTML into WKWebView url=\(url.absoluteString, privacy: .public)")
+    }
+
+    private func waitForWebChatServer(timeout: TimeInterval = 2.0) -> URL? {
+        let deadline = Date().addingTimeInterval(timeout)
+        var base: URL?
+        while Date() < deadline {
+            if let url = WebChatServer.shared.baseURL() {
+                base = url
+                break
+            }
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
+        if base == nil {
+            webChatLogger.error("WebChatServer failed to become ready within \(timeout, privacy: .public)s")
+        }
+        return base
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

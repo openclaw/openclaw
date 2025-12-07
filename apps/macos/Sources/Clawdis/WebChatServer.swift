@@ -61,6 +61,7 @@ final class WebChatServer: @unchecked Sendable {
         connection.stateUpdateHandler = { state in
             switch state {
             case .ready:
+                webChatServerLogger.debug("WebChatServer connection ready")
                 self.receive(on: connection)
             case let .failed(error):
                 webChatServerLogger
@@ -79,6 +80,9 @@ final class WebChatServer: @unchecked Sendable {
                 self.respond(to: connection, requestData: data)
             }
             if isComplete || error != nil {
+                if let error {
+                    webChatServerLogger.error("WebChatServer receive error: \(error.localizedDescription, privacy: .public)")
+                }
                 connection.cancel()
             } else {
                 self.receive(on: connection)
@@ -104,6 +108,7 @@ final class WebChatServer: @unchecked Sendable {
         if path.hasPrefix("webchat/") {
             path = String(path.dropFirst("webchat/".count))
         }
+        webChatServerLogger.debug("WebChatServer request path=\(path, privacy: .public)")
         if path.isEmpty { path = "index.html" }
 
         guard let root else {
