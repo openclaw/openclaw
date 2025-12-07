@@ -18,7 +18,8 @@
     "format": "biome format src",
     "format:fix": "biome format src --write",
     "test": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "webchat:bundle": "rolldown -c apps/macos/Sources/Clawdis/Resources/WebChat/rolldown.config.mjs"
   },
   "keywords": [],
   "author": "",
@@ -28,9 +29,9 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
-    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "@mariozechner/pi-ai": "^0.12.11",
     "@mariozechner/pi-coding-agent": "^0.12.11",
+    "@whiskeysockets/baileys": "7.0.0-rc.9",
     "body-parser": "^2.2.1",
     "chalk": "^5.6.2",
     "commander": "^14.0.2",
@@ -44,11 +45,14 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.3.7",
+    "@mariozechner/mini-lit": "0.2.1",
     "@types/body-parser": "^1.19.6",
     "@types/express": "^5.0.5",
     "@types/node": "^24.10.1",
     "@types/qrcode-terminal": "^0.12.2",
     "@vitest/coverage-v8": "^4.0.13",
+    "lit": "^3.3.1",
+    "rolldown": "1.0.0-beta.53",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "vitest": "^4.0.13"

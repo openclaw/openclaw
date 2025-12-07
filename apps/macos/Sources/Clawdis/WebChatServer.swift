@@ -22,6 +22,7 @@ final class WebChatServer: @unchecked Sendable {
             self.root = root
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
+            params.requiredInterfaceType = .loopback
             do {
                 let listener = try NWListener(using: params, on: .any)
                 listener.stateUpdateHandler = { [weak self] state in
