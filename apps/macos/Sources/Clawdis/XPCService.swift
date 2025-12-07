@@ -67,6 +67,22 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
                 guard authorized else { return Response(ok: false, message: "screen recording permission missing") }
             }
             return await ShellRunner.run(command: command, cwd: cwd, env: env, timeout: timeoutSec)
+
+        case let .agent(message, thinking, session):
+            let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return Response(ok: false, message: "message empty") }
+
+            let sent = await MainActor.run {
+                WebChatManager.shared.sendMessage(
+                    trimmed,
+                    thinking: thinking ?? "default",
+                    sessionKey: session ?? "main")
+            }
+
+            if sent {
+                return Response(ok: true, message: "sent")
+            }
+            return Response(ok: false, message: "failed to enqueue message")
         }
     }
 }
