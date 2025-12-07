@@ -26,7 +26,7 @@ vi.mock("../web/session.js", () => ({
   createWaSocket: vi.fn(async () => ({ ws: { close: vi.fn() }, ev: { on: vi.fn() } })),
   waitForWaConnection: (...args: unknown[]) => waitForWaConnection(...args),
   webAuthExists: (...args: unknown[]) => webAuthExists(...args),
-  getStatusCode: () => undefined,
+  getStatusCode: vi.fn(() => 440),
   getWebAuthAgeMs: () => 5000,
   logWebSelfId: vi.fn(),
 }));
@@ -58,5 +58,18 @@ describe("healthCommand", () => {
     webAuthExists.mockResolvedValue(false);
     await healthCommand({ json: true }, runtime as never);
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("exits non-zero when connect fails", async () => {
+    webAuthExists.mockResolvedValue(true);
+    waitForWaConnection.mockRejectedValueOnce({ output: { statusCode: 440 } });
+
+    await healthCommand({ json: true }, runtime as never);
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    const logged = runtime.log.mock.calls[0][0] as string;
+    const parsed = JSON.parse(logged);
+    expect(parsed.web.connect.ok).toBe(false);
+    expect(parsed.web.connect.status).toBe(440);
   });
 });
