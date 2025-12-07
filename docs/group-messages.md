@@ -11,7 +11,7 @@ Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that 
 - Ephemeral/view-once: we unwrap those before extracting text/mentions, so pings inside them still trigger.
 - New session primer: on the first turn of a group session we now prepend a short blurb to the model like `You are replying inside the WhatsApp group "<subject>". Group members: +44..., +43..., … Address the specific sender noted in the message context.` If metadata isn’t available we still tell the agent it’s a group chat.
 
-## Config for Clawd UK (+447511247203)
+## Config for Clawd UK (+447700900123)
 Add a `groupChat` block to `~/.clawdis/clawdis.json` so display-name pings work even when WhatsApp strips the visual `@` in the text body:
 
 ```json5
@@ -24,7 +24,7 @@ Add a `groupChat` block to `~/.clawdis/clawdis.json` so display-name pings work 
         "@?clawd",
         "@?clawd\\s*uk",
         "@?clawdbot",
-        "\\+?447511247203"
+        "\\+?447700900123"
       ]
     }
   }
@@ -36,7 +36,7 @@ Notes:
 - WhatsApp still sends canonical mentions via `mentionedJids` when someone taps the contact, so the number fallback is rarely needed but is a good safety net.
 
 ## How to use
-1) Add Clawd UK (`+447511247203`) to the group.
+1) Add Clawd UK (`+447700900123`) to the group.
 2) Say `@clawd …` (or `@clawd uk`, `@clawdbot`, or include the number). Anyone in the group can trigger it.
 3) The agent prompt will include recent group context plus the trailing `[from: …]` marker so it can address the right person.
 4) Session-level directives (`/verbose on`, `/think:high`, `/new`) apply only to that group’s session; your personal DM session remains independent.

@@ -72,7 +72,7 @@ export function buildProgram() {
       "Link personal WhatsApp Web and show QR + connection logs.",
     ],
     [
-      'clawdis send --to +15551234567 --message "Hi" --json',
+      'clawdis send --to +15555550123 --message "Hi" --json',
       "Send via your web session and print JSON result.",
     ],
     [
@@ -88,7 +88,7 @@ export function buildProgram() {
       "Show web session health and recent session recipients.",
     ],
     [
-      'clawdis agent --to +15551234567 --message "Run summary" --deliver',
+      'clawdis agent --to +15555550123 --message "Run summary" --deliver',
       "Talk directly to the agent using the same session handling; optionally send the reply.",
     ],
   ] as const;
@@ -137,7 +137,7 @@ export function buildProgram() {
     .description("Send a WhatsApp message (web provider)")
     .requiredOption(
       "-t, --to <number>",
-      "Recipient number in E.164 (e.g. +15551234567)",
+      "Recipient number in E.164 (e.g. +15555550123)",
     )
     .requiredOption("-m, --message <text>", "Message body")
     .option(
@@ -151,10 +151,10 @@ export function buildProgram() {
       "after",
       `
 Examples:
-  clawdis send --to +15551234567 --message "Hi"
-  clawdis send --to +15551234567 --message "Hi" --media photo.jpg
-  clawdis send --to +15551234567 --message "Hi" --dry-run      # print payload only
-  clawdis send --to +15551234567 --message "Hi" --json         # machine-readable result`,
+  clawdis send --to +15555550123 --message "Hi"
+  clawdis send --to +15555550123 --message "Hi" --media photo.jpg
+  clawdis send --to +15555550123 --message "Hi" --dry-run      # print payload only
+  clawdis send --to +15555550123 --message "Hi" --json         # machine-readable result`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -197,10 +197,10 @@ Examples:
       "after",
       `
 Examples:
-  clawdis agent --to +15551234567 --message "status update"
+  clawdis agent --to +15555550123 --message "status update"
   clawdis agent --session-id 1234 --message "Summarize inbox" --thinking medium
-  clawdis agent --to +15551234567 --message "Trace logs" --verbose on --json
-  clawdis agent --to +15551234567 --message "Summon reply" --deliver
+  clawdis agent --to +15555550123 --message "Trace logs" --verbose on --json
+  clawdis agent --to +15555550123 --message "Summon reply" --deliver
 `,
     )
     .action(async (opts) => {

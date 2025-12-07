@@ -38,7 +38,7 @@ This is social engineering 101. Create distrust, encourage snooping.
 ```json
 {
   "inbound": {
-    "allowFrom": ["+15551234567"]
+    "allowFrom": ["+15555550123"]
   }
 }
 ```
