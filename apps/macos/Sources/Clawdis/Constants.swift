@@ -24,7 +24,7 @@ let modelCatalogPathKey = "clawdis.modelCatalogPath"
 let modelCatalogReloadKey = "clawdis.modelCatalogReload"
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
 let cliHelperSearchPaths = ["/usr/local/bin", "/opt/homebrew/bin"]
-let defaultVoiceWakeForwardCommand = "clawdis-mac agent --message \"${text}\" --thinking low --session main --deliver"
+let defaultVoiceWakeForwardCommand = "clawdis-mac agent --message \"${text}\" --thinking low"
 let defaultVoiceWakeForwardPort = 22
 // Allow enough time for remote agent responses (LLM replies often take >10s).
 let defaultVoiceWakeForwardTimeout: TimeInterval = 30
