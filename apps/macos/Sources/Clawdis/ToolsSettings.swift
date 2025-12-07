@@ -205,6 +205,11 @@ private struct ToolRow: View {
     @State private var state: InstallState = .checking
     @State private var statusMessage: String?
 
+    private enum Layout {
+        // Ensure progress indicators and buttons occupy the same space so the row doesn't shift.
+        static let actionWidth: CGFloat = 96
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 10) {
@@ -248,6 +253,7 @@ private struct ToolRow: View {
                     .buttonStyle(.borderedProminent)
             }
         }
+        .frame(width: Layout.actionWidth, alignment: .trailing)
     }
 
     private func refresh() {
