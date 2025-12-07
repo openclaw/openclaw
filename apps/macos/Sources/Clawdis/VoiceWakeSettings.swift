@@ -587,7 +587,10 @@ struct VoiceWakeSettings: View {
 
     private var localePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("Recognition language") {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Recognition language")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.fieldLabelWidth, alignment: .leading)
                 Picker("Language", selection: self.$state.voiceWakeLocaleID) {
                     let current = Locale(identifier: Locale.current.identifier)
                     Text("\(self.friendlyName(for: current)) (System)").tag(Locale.current.identifier)
