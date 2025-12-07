@@ -5,6 +5,7 @@ let launchdLabel = "com.steipete.clawdis"
 let onboardingVersionKey = "clawdis.onboardingVersion"
 let currentOnboardingVersion = 2
 let pauseDefaultsKey = "clawdis.pauseEnabled"
+let iconAnimationsEnabledKey = "clawdis.iconAnimationsEnabled"
 let swabbleEnabledKey = "clawdis.swabbleEnabled"
 let swabbleTriggersKey = "clawdis.swabbleTriggers"
 let showDockIconKey = "clawdis.showDockIcon"

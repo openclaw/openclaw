@@ -34,6 +34,11 @@ struct GeneralSettings: View {
                     binding: self.$state.showDockIcon)
 
                 SettingsToggleRow(
+                    title: "Play menu bar icon animations",
+                    subtitle: "Enable idle blinks and wiggles on the status icon.",
+                    binding: self.$state.iconAnimationsEnabled)
+
+                SettingsToggleRow(
                     title: "Enable debug tools",
                     subtitle: "Show the Debug tab with development utilities.",
                     binding: self.$state.debugPaneEnabled)

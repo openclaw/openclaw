@@ -25,7 +25,8 @@ struct ClawdisApp: App {
                 isPaused: self.state.isPaused,
                 isWorking: self.state.isWorking,
                 earBoostActive: self.state.earBoostActive,
-                relayStatus: self.relayManager.status)
+                relayStatus: self.relayManager.status,
+                animationsEnabled: self.state.iconAnimationsEnabled)
         }
         .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
@@ -137,6 +138,7 @@ private struct CritterStatusLabel: View {
     var isWorking: Bool
     var earBoostActive: Bool
     var relayStatus: RelayProcessManager.Status
+    var animationsEnabled: Bool
 
     @State private var blinkAmount: CGFloat = 0
     @State private var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
@@ -165,6 +167,11 @@ private struct CritterStatusLabel: View {
                         .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
                         .offset(x: self.wiggleOffset)
                         .onReceive(self.ticker) { now in
+                            guard self.animationsEnabled else {
+                                self.resetMotion()
+                                return
+                            }
+
                             if now >= self.nextBlink {
                                 self.blink()
                                 self.nextBlink = now.addingTimeInterval(Double.random(in: 3.5...8.5))
@@ -190,6 +197,13 @@ private struct CritterStatusLabel: View {
                             }
                         }
                         .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
+                        .onChange(of: self.animationsEnabled) { _, enabled in
+                            if enabled {
+                                self.scheduleRandomTimers(from: Date())
+                            } else {
+                                self.resetMotion()
+                            }
+                        }
                 }
             }
 
@@ -264,6 +278,13 @@ private struct CritterStatusLabel: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) {
             withAnimation(.interpolatingSpring(stiffness: 260, damping: 19)) { self.earWiggle = 0 }
         }
+    }
+
+    private func scheduleRandomTimers(from date: Date) {
+        self.nextBlink = date.addingTimeInterval(Double.random(in: 3.5...8.5))
+        self.nextWiggle = date.addingTimeInterval(Double.random(in: 6.5...14))
+        self.nextLegWiggle = date.addingTimeInterval(Double.random(in: 5.0...11.0))
+        self.nextEarWiggle = date.addingTimeInterval(Double.random(in: 7.0...14.0))
     }
 
     private var relayNeedsAttention: Bool {

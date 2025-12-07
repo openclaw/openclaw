@@ -40,6 +40,10 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var iconAnimationsEnabled: Bool {
+        didSet { UserDefaults.standard.set(self.iconAnimationsEnabled, forKey: iconAnimationsEnabledKey) }
+    }
+
     @Published var showDockIcon: Bool {
         didSet {
             UserDefaults.standard.set(self.showDockIcon, forKey: showDockIconKey)
@@ -90,6 +94,12 @@ final class AppState: ObservableObject {
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
+        if let storedIconAnimations = UserDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
+            self.iconAnimationsEnabled = storedIconAnimations
+        } else {
+            self.iconAnimationsEnabled = true
+            UserDefaults.standard.set(true, forKey: iconAnimationsEnabledKey)
+        }
         self.showDockIcon = UserDefaults.standard.bool(forKey: showDockIconKey)
         self.voiceWakeMicID = UserDefaults.standard.string(forKey: voiceWakeMicKey) ?? ""
         self.voiceWakeLocaleID = UserDefaults.standard.string(forKey: voiceWakeLocaleKey) ?? Locale.current.identifier
