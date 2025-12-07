@@ -1,6 +1,6 @@
 {
   "name": "clawdis",
-  "version": "1.4.0",
+  "version": "2.0.0",
   "description": "WhatsApp relay CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
