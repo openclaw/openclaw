@@ -160,7 +160,7 @@ var body: some View {
                 }
             }
 
-            Text("Tip: use Tailscale for stable remote access; we recommend enabling it when you pick a remote Clawdis.")
+            Text("Tip: use Tailscale so your remote Clawdis stays reachable.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
