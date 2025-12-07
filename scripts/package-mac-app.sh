@@ -9,10 +9,11 @@ APP_ROOT="$ROOT_DIR/dist/Clawdis.app"
 BUILD_PATH="$ROOT_DIR/apps/macos/.build"
 PRODUCT="Clawdis"
 BUNDLE_ID="${BUNDLE_ID:-com.steipete.clawdis.debug}"
+PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-APP_VERSION="${APP_VERSION:-0.0.0}"
-APP_BUILD="${APP_BUILD:-$GIT_COMMIT}"
+APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
+APP_BUILD="${APP_BUILD:-$PKG_VERSION}"
 
 cd "$ROOT_DIR/apps/macos"
 
