@@ -30,19 +30,48 @@ enum CLIInstaller {
         }
 
         let targets = ["/usr/local/bin/clawdis-mac", "/opt/homebrew/bin/clawdis-mac"]
-        var messages: [String] = []
-        for target in targets {
-            do {
-                try FileManager.default.createDirectory(
-                    atPath: (target as NSString).deletingLastPathComponent,
-                    withIntermediateDirectories: true)
-                try? FileManager.default.removeItem(atPath: target)
-                try FileManager.default.createSymbolicLink(atPath: target, withDestinationPath: helper.path)
-                messages.append("Linked \(target)")
-            } catch {
-                messages.append("Failed \(target): \(error.localizedDescription)")
+        let result = await self.privilegedSymlink(source: helper.path, targets: targets)
+        await statusHandler(result)
+    }
+
+    private static func privilegedSymlink(source: String, targets: [String]) async -> String {
+        let escapedSource = self.shellEscape(source)
+        let targetList = targets.map(self.shellEscape).joined(separator: " ")
+        let cmds = [
+            "mkdir -p /usr/local/bin /opt/homebrew/bin",
+            targets.map { "ln -sf \(escapedSource) \($0)" }.joined(separator: "; ")
+        ].joined(separator: "; ")
+
+        let script = """
+        do shell script "\(cmds)" with administrator privileges
+        """
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        proc.arguments = ["-e", script]
+
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = pipe
+
+        do {
+            try proc.run()
+            proc.waitUntilExit()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if proc.terminationStatus == 0 {
+                return output.isEmpty ? "CLI helper linked into \(targetList)" : output
             }
+            if output.lowercased().contains("user canceled") {
+                return "Install canceled"
+            }
+            return "Failed to install CLI helper: \(output)"
+        } catch {
+            return "Failed to run installer: \(error.localizedDescription)"
         }
-        await statusHandler(messages.joined(separator: "; "))
+    }
+
+    private static func shellEscape(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
     }
 }
