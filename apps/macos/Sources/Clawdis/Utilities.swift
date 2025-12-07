@@ -60,8 +60,6 @@ enum LaunchAgentManager {
           <string>\(FileManager.default.homeDirectoryForCurrentUser.path)</string>
           <key>RunAtLoad</key>
           <true/>
-          <key>KeepAlive</key>
-          <true/>
           <key>MachServices</key>
           <dict>
             <key>com.steipete.clawdis.xpc</key>
