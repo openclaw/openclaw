@@ -159,11 +159,36 @@ struct ClawdisCLI {
     }
 
     private static func printVersion() {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "unknown"
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""
-        let git = Bundle.main.object(forInfoDictionaryKey: "ClawdisGitCommit") as? String ?? "unknown"
-        let ts = Bundle.main.object(forInfoDictionaryKey: "ClawdisBuildTimestamp") as? String ?? "unknown"
+        let info = loadInfo()
+        let version = info["CFBundleShortVersionString"] as? String ?? "unknown"
+        let build = info["CFBundleVersion"] as? String ?? ""
+        let git = info["ClawdisGitCommit"] as? String ?? "unknown"
+        let ts = info["ClawdisBuildTimestamp"] as? String ?? "unknown"
         print("clawdis-mac \(version) (\(build)) git:\(git) built:\(ts)")
+    }
+
+    private static func loadInfo() -> [String: Any] {
+        if let dict = Bundle.main.infoDictionary, !dict.isEmpty { return dict }
+        guard let exePath = executablePath() else { return [:] }
+        let infoURL = exePath
+            .deletingLastPathComponent() // MacOS
+            .deletingLastPathComponent() // Contents
+            .appendingPathComponent("Info.plist")
+        if let data = try? Data(contentsOf: infoURL),
+           let dict = (try? PropertyListSerialization.propertyList(
+               from: data,
+               options: [],
+               format: nil)) as? [String: Any] {
+            return dict
+        }
+        return [:]
+    }
+
+    private static func executablePath() -> URL? {
+        if let cstr = _dyld_get_image_name(0) {
+            return URL(fileURLWithPath: String(cString: cstr)).resolvingSymlinksInPath()
+        }
+        return nil
     }
 
     private static func send(request: Request) async throws -> Response {

@@ -11,6 +11,8 @@ PRODUCT="Clawdis"
 BUNDLE_ID="${BUNDLE_ID:-com.steipete.clawdis.debug}"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+APP_VERSION="${APP_VERSION:-0.0.0}"
+APP_BUILD="${APP_BUILD:-$GIT_COMMIT}"
 
 cd "$ROOT_DIR/apps/macos"
 
@@ -32,6 +34,10 @@ cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
 <dict>
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${APP_VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${APP_BUILD}</string>
     <key>CFBundleName</key>
     <string>Clawdis</string>
     <key>CFBundleExecutable</key>
