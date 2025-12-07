@@ -98,6 +98,12 @@ final class AppState: ObservableObject {
 
     @Published var isWorking: Bool = false
     @Published var earBoostActive: Bool = false
+    @Published var heartbeatsEnabled: Bool {
+        didSet {
+            UserDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
+            Task { _ = await AgentRPC.shared.setHeartbeatsEnabled(self.heartbeatsEnabled) }
+        }
+    }
 
     private var earBoostTask: Task<Void, Never>?
 
@@ -129,6 +135,12 @@ final class AppState: ObservableObject {
         self.voiceWakeForwardIdentity = UserDefaults.standard.string(forKey: voiceWakeForwardIdentityKey) ?? ""
         self.voiceWakeForwardCommand = UserDefaults.standard
             .string(forKey: voiceWakeForwardCommandKey) ?? defaultVoiceWakeForwardCommand
+        if let storedHeartbeats = UserDefaults.standard.object(forKey: heartbeatsEnabledKey) as? Bool {
+            self.heartbeatsEnabled = storedHeartbeats
+        } else {
+            self.heartbeatsEnabled = true
+            UserDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
+        }
 
         if self.swabbleEnabled && !PermissionManager.voiceWakePermissionsGranted() {
             self.swabbleEnabled = false

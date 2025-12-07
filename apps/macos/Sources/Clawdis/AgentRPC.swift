@@ -85,6 +85,26 @@ actor AgentRPC {
         }
     }
 
+    func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
+        guard process?.isRunning == true else { return false }
+        do {
+            let payload: [String: Any] = ["type": "set-heartbeats", "enabled": enabled]
+            let data = try JSONSerialization.data(withJSONObject: payload)
+            guard let stdinHandle else { throw RpcError(message: "stdin missing") }
+            stdinHandle.write(data)
+            stdinHandle.write(Data([0x0A]))
+
+            let line = try await nextLine()
+            let parsed = try JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            if let ok = parsed?["ok"] as? Bool, ok { return true }
+            return false
+        } catch {
+            logger.error("rpc set-heartbeats failed: \(error.localizedDescription, privacy: .public)")
+            await stop()
+            return false
+        }
+    }
+
     // MARK: - Process lifecycle
 
     func start() async throws {

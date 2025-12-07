@@ -62,6 +62,7 @@ private struct MenuContent: View {
             Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
             self.relayStatusRow
             self.healthStatusRow
+            Toggle(isOn: self.heartbeatsBinding) { Text("Send heartbeats") }
             Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
@@ -129,6 +130,10 @@ private struct MenuContent: View {
 
     private var activeBinding: Binding<Bool> {
         Binding(get: { !self.state.isPaused }, set: { self.state.isPaused = !$0 })
+    }
+
+    private var heartbeatsBinding: Binding<Bool> {
+        Binding(get: { self.state.heartbeatsEnabled }, set: { self.state.heartbeatsEnabled = $0 })
     }
 
     private var voiceWakeBinding: Binding<Bool> {
@@ -451,7 +456,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         if let state {
             RelayProcessManager.shared.setActive(!state.isPaused)
         }
-        Task { try? await AgentRPC.shared.start() }
+        Task {
+            try? await AgentRPC.shared.start()
+            _ = await AgentRPC.shared.setHeartbeatsEnabled(AppStateStore.shared.heartbeatsEnabled)
+        }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         self.startListener()
         self.scheduleFirstRunOnboardingIfNeeded()

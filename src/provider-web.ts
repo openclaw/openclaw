@@ -7,6 +7,7 @@ export {
   monitorWebProvider,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
+  setHeartbeatsEnabled,
   type WebMonitorTuning,
 } from "./web/auto-reply.js";
 export {

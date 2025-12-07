@@ -33,6 +33,11 @@ import { getWebAuthAgeMs } from "./session.js";
 const WEB_TEXT_LIMIT = 4000;
 const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 
+let heartbeatsEnabled = true;
+export function setHeartbeatsEnabled(enabled: boolean) {
+  heartbeatsEnabled = enabled;
+}
+
 /**
  * Send a message via IPC if relay is running, otherwise fall back to direct.
  * This avoids Signal session corruption from multiple Baileys connections.
@@ -1026,6 +1031,7 @@ export async function monitorWebProvider(
 
     if (keepAlive) {
       heartbeat = setInterval(() => {
+        if (!heartbeatsEnabled) return;
         const authAgeMs = getWebAuthAgeMs();
         const minutesSinceLastMessage = lastMessageAt
           ? Math.floor((Date.now() - lastMessageAt) / 60000)
@@ -1081,6 +1087,7 @@ export async function monitorWebProvider(
     }
 
     const runReplyHeartbeat = async () => {
+      if (!heartbeatsEnabled) return;
       const queued = getQueueSize();
       if (queued > 0) {
         heartbeatLogger.info(
@@ -1282,6 +1289,7 @@ export async function monitorWebProvider(
     if (replyHeartbeatMinutes && !replyHeartbeatTimer) {
       const intervalMs = replyHeartbeatMinutes * 60_000;
       replyHeartbeatTimer = setInterval(() => {
+        if (!heartbeatsEnabled) return;
         void runReplyHeartbeat();
       }, intervalMs);
       if (tuning.replyHeartbeatNow) {

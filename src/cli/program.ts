@@ -14,6 +14,7 @@ import {
   monitorWebProvider,
   resolveHeartbeatRecipients,
   runWebHeartbeatOnce,
+  setHeartbeatsEnabled,
   type WebMonitorTuning,
 } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
@@ -237,6 +238,11 @@ Examples:
         try {
           const cmd = JSON.parse(line);
           if (cmd.type === "status") {
+            respond({ type: "result", ok: true });
+            return;
+          }
+          if (cmd.type === "set-heartbeats") {
+            setHeartbeatsEnabled(Boolean(cmd.enabled));
             respond({ type: "result", ok: true });
             return;
           }
