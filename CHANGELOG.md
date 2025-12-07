@@ -34,8 +34,8 @@ First Clawdis release after the Warelay rebrand. This is a semver-major because 
 - Launchd PATH and helper lookup hardened for packaged macOS builds; health probes surface missing binaries quickly.
 
 ### Docs
-- Added `docs/telegram.md` outlining the upcoming Telegram Bot API provider (grammY-based) and how it will share the `main` session.
-- CLI now exposes `relay:telegram` and text/media sends via `--provider telegram`; typing/webhook still pending.
+- Added `docs/telegram.md` outlining the Telegram Bot API provider (grammY) and how it shares the `main` session. Default grammY throttler keeps Bot API calls under rate limits.
+- CLI exposes `relay:telegram` (grammY) and text/media sends via `--provider telegram`; webhook/proxy options documented.
 
 ## 1.5.0 — 2025-12-05
 

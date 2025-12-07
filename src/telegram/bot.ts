@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 
 import { Bot, InputFile, webhookCallback } from "grammy";
+import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions } from "grammy";
 
 import { chunkText } from "../auto-reply/chunk.js";
@@ -38,6 +39,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     : undefined;
 
   const bot = new Bot(opts.token, { client });
+  bot.api.config.use(apiThrottler());
 
   const cfg = loadConfig();
   const requireMention =

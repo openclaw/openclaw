@@ -101,7 +101,7 @@ Create `~/.clawdis/clawdis.json`:
 - [Security](./docs/security.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 - [The Lore](./docs/lore.md) 🦞
-- [Telegram (Bot API) — WIP](./docs/telegram.md)
+- [Telegram (Bot API)](./docs/telegram.md)
 
 ## Clawd
 
@@ -120,8 +120,8 @@ clawdis login      # Scan QR code
 clawdis relay      # Start listening
 ```
 
-### Telegram (Bot API) — WIP
-Bot-mode support (long-poll) shares the same `main` session as WhatsApp/WebChat, with groups kept isolated. Text and media send work via `clawdis send --provider telegram`; a relay is available via `clawdis relay:telegram` (TELEGRAM_BOT_TOKEN or telegram.botToken in config). See `docs/telegram.md` for current limits and setup.
+### Telegram (Bot API)
+Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebChat, with groups kept isolated. Text and media send work via `clawdis send --provider telegram`; a relay is available via `clawdis relay:telegram` (TELEGRAM_BOT_TOKEN or telegram.botToken in config). Webhook mode: `--webhook --port … --webhook-secret … --webhook-url …` (or register via BotFather). See `docs/telegram.md` for setup and limits.
 
 ## Commands
 

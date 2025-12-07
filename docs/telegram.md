@@ -24,7 +24,7 @@ Status: ready for bot-mode use with grammY (long-poll + webhook). Text + media s
 - Typing indicators (`sendChatAction`) supported; inline reply/threading supported where Telegram allows.
 
 ## Planned implementation details
-- Library: grammY is the only client for send + relay (fetch fallback removed).
+- Library: grammY is the only client for send + relay (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
 - Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, and `Timestamp`; groups require @bot mention by default.
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
 - Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.requireMention`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl` supported.
