@@ -102,6 +102,10 @@ final class AppState: ObservableObject {
         self.voiceWakeForwardIdentity = UserDefaults.standard.string(forKey: voiceWakeForwardIdentityKey) ?? ""
         self.voiceWakeForwardCommand = UserDefaults.standard
             .string(forKey: voiceWakeForwardCommandKey) ?? defaultVoiceWakeForwardCommand
+
+        if self.swabbleEnabled && !PermissionManager.voiceWakePermissionsGranted() {
+            self.swabbleEnabled = false
+        }
     }
 
     func triggerVoiceEars(ttl: TimeInterval = 5) {
@@ -111,6 +115,26 @@ final class AppState: ObservableObject {
             try? await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
             await MainActor.run { [weak self] in self?.earBoostActive = false }
         }
+    }
+
+    func setVoiceWakeEnabled(_ enabled: Bool) async {
+        guard voiceWakeSupported else {
+            self.swabbleEnabled = false
+            return
+        }
+
+        if !enabled {
+            self.swabbleEnabled = false
+            return
+        }
+
+        if PermissionManager.voiceWakePermissionsGranted() {
+            self.swabbleEnabled = true
+            return
+        }
+
+        let granted = await PermissionManager.ensureVoiceWakePermissions(interactive: true)
+        self.swabbleEnabled = granted
     }
 
     func setWorking(_ working: Bool) {

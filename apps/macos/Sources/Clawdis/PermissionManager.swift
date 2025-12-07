@@ -82,6 +82,17 @@ enum PermissionManager {
         return results
     }
 
+    static func voiceWakePermissionsGranted() -> Bool {
+        let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+        let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
+        return mic && speech
+    }
+
+    static func ensureVoiceWakePermissions(interactive: Bool) async -> Bool {
+        let results = await self.ensure([.microphone, .speechRecognition], interactive: interactive)
+        return results[.microphone] == true && results[.speechRecognition] == true
+    }
+
     static func status(_ caps: [Capability] = Capability.allCases) async -> [Capability: Bool] {
         var results: [Capability: Bool] = [:]
         for cap in caps {

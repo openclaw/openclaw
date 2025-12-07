@@ -82,6 +82,10 @@ final class VoiceWakeTester {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var isStopping = false
+    private var detectionStart: Date?
+    private var lastHeard: Date?
+    private var holdingAfterDetect = false
+    private var detectedText: String?
 
     init(locale: Locale = .current) {
         self.recognizer = SFSpeechRecognizer(locale: locale)
@@ -143,6 +147,9 @@ final class VoiceWakeTester {
             onUpdate(.listening)
         }
 
+        self.detectionStart = Date()
+        self.lastHeard = self.detectionStart
+
         guard let request = recognitionRequest else { return }
 
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
@@ -180,14 +187,19 @@ final class VoiceWakeTester {
         errorMessage: String?,
         onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void)
     {
+        if !text.isEmpty {
+            self.lastHeard = Date()
+        }
         if matched, !text.isEmpty {
-            self.stop()
+            self.holdingAfterDetect = true
+            self.detectedText = text
             AppStateStore.shared.triggerVoiceEars()
             let config = AppStateStore.shared.voiceWakeForwardConfig
             Task.detached {
                 await VoiceWakeForwarder.forward(transcript: text, config: config)
             }
             onUpdate(.detected(text))
+            self.holdUntilSilence(onUpdate: onUpdate)
             return
         }
         if let errorMessage {
@@ -200,6 +212,28 @@ final class VoiceWakeTester {
             onUpdate(text.isEmpty ? .failed("No speech detected") : .failed("No trigger heard: “\(text)”"))
         } else {
             onUpdate(text.isEmpty ? .listening : .hearing(text))
+        }
+    }
+
+    private func holdUntilSilence(onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let start = self.detectionStart ?? Date()
+            let deadline = start.addingTimeInterval(10)
+            while !self.isStopping {
+                let now = Date()
+                if now >= deadline { break }
+                if let last = self.lastHeard, now.timeIntervalSince(last) >= 1 {
+                    break
+                }
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            if !self.isStopping {
+                self.stop()
+                if let detectedText {
+                    onUpdate(.detected(detectedText))
+                }
+            }
         }
     }
 
@@ -262,6 +296,14 @@ struct VoiceWakeSettings: View {
     @State private var showForwardAdvanced = false
     @State private var forwardStatus: ForwardStatus = .idle
 
+    private var voiceWakeBinding: Binding<Bool> {
+        Binding(
+            get: { self.state.swabbleEnabled },
+            set: { newValue in
+                Task { await self.state.setVoiceWakeEnabled(newValue) }
+            })
+    }
+
     private struct IndexedWord: Identifiable {
         let id: Int
         let value: String
@@ -274,7 +316,7 @@ struct VoiceWakeSettings: View {
                     title: "Enable Voice Wake",
                     subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands. "
                         + "Voice recognition runs fully on-device.",
-                    binding: self.$state.swabbleEnabled)
+                    binding: self.voiceWakeBinding)
                     .disabled(!voiceWakeSupported)
 
                 if !voiceWakeSupported {

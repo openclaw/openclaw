@@ -55,7 +55,7 @@ private struct MenuContent: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
             self.relayStatusRow
-            Toggle(isOn: self.$state.swabbleEnabled) { Text("Voice Wake") }
+            Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
             Button("Open Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
@@ -99,6 +99,14 @@ private struct MenuContent: View {
 
     private var activeBinding: Binding<Bool> {
         Binding(get: { !self.state.isPaused }, set: { self.state.isPaused = !$0 })
+    }
+
+    private var voiceWakeBinding: Binding<Bool> {
+        Binding(
+            get: { self.state.swabbleEnabled },
+            set: { newValue in
+                Task { await self.state.setVoiceWakeEnabled(newValue) }
+            })
     }
 
     private func primarySessionKey() -> String {
