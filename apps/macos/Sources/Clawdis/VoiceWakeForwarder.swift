@@ -34,7 +34,8 @@ enum VoiceWakeForwarder {
 
     private static func cliLookupPrefix(target: String, echoPath: Bool) -> String {
         let normalizedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
-        let pathPrefix = "PATH=\(cliHelperSearchPaths.joined(separator: ":")):$PATH"
+        // Use a clean, deterministic PATH so remote shells with spaces or odd entries don't break.
+        let pathPrefix = "PATH=\(cliHelperSearchPaths.joined(separator: ":"))"
         let searchList = self.cliSearchCandidates.joined(separator: " ")
 
         var steps: [String] = [pathPrefix]
