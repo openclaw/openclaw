@@ -187,7 +187,7 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 12) {
                 Button {
                     Task { await self.healthStore.refresh(onDemand: true) }
                 } label: {
@@ -198,6 +198,8 @@ struct GeneralSettings: View {
                     }
                 }
                 .disabled(self.healthStore.isRefreshing)
+
+                Divider().frame(height: 18)
 
                 Button {
                     self.revealLogs()
