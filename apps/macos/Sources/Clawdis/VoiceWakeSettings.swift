@@ -299,6 +299,7 @@ struct VoiceWakeSettings: View {
     @State private var availableLocales: [Locale] = []
     @State private var showForwardAdvanced = false
     @State private var forwardStatus: ForwardStatus = .idle
+    private let fieldLabelWidth: CGFloat = 110
 
     private var voiceWakeBinding: Binding<Bool> {
         Binding(
@@ -558,7 +559,10 @@ struct VoiceWakeSettings: View {
 
     private var micPicker: some View {
         VStack(alignment: .leading, spacing: 6) {
-            LabeledContent("Microphone") {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text("Microphone")
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.fieldLabelWidth, alignment: .leading)
                 Picker("Microphone", selection: self.$state.voiceWakeMicID) {
                     Text("System default").tag("")
                     ForEach(self.availableMics) { mic in
@@ -712,16 +716,16 @@ struct VoiceWakeSettings: View {
 
     private var levelMeter: some View {
         VStack(alignment: .leading, spacing: 6) {
-            LabeledContent {
-                HStack(spacing: 10) {
-                    MicLevelBar(level: self.meterLevel)
-                    Text(self.levelLabel)
-                        .font(.callout.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            } label: {
+            HStack(alignment: .center, spacing: 10) {
                 Text("Live level")
                     .font(.callout.weight(.semibold))
+                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+                MicLevelBar(level: self.meterLevel)
+                    .frame(width: 260, alignment: .leading)
+                Text(self.levelLabel)
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 60, alignment: .trailing)
             }
             if let meterError {
                 Text(meterError)
