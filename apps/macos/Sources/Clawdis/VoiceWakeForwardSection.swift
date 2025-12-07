@@ -16,11 +16,22 @@ struct VoiceWakeForwardSection: View {
     @Binding var status: VoiceWakeForwardStatus
     let onTest: () -> Void
     let onChange: () -> Void
+    var showToggle: Bool = true
+    var title: String = "Forward wake to host (SSH)"
+    var subtitle: String = "Send wake transcripts to a remote Clawdis host."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle(isOn: self.$enabled) {
-                Text("Forward wake to host (SSH)")
+            if self.showToggle {
+                Toggle(isOn: self.$enabled) {
+                    Text(self.title)
+                }
+            } else {
+                Text(self.title)
+                    .font(.callout.weight(.semibold))
+                Text(self.subtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
             }
 
             if self.enabled {
