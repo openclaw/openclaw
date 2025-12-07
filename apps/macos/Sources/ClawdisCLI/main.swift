@@ -31,6 +31,9 @@ struct ClawdisCLI {
             FileHandle.standardOutput.write(json)
             FileHandle.standardOutput.write(Data([0x0A]))
             exit(response.ok ? 0 : 1)
+        } catch CLIError.help {
+            printHelp()
+            exit(0)
         } catch {
             fputs("clawdis-mac error: \(error)\n", stderr)
             exit(2)
@@ -44,6 +47,9 @@ struct ClawdisCLI {
         args = Array(args.dropFirst())
 
         switch command {
+        case "--help", "-h", "help":
+            throw CLIError.help
+
         case "notify":
             var title: String?
             var body: String?
@@ -128,6 +134,24 @@ struct ClawdisCLI {
     }
 
     // swiftlint:enable cyclomatic_complexity
+
+    private static func printHelp() {
+        let usage = """
+        clawdis-mac — talk to the running Clawdis.app XPC service
+
+        Usage:
+          clawdis-mac notify --title <t> --body <b> [--sound <name>]
+          clawdis-mac ensure-permissions [--cap <notifications|accessibility|screenRecording|microphone|speechRecognition>] [--interactive]
+          clawdis-mac screenshot [--display-id <u32>] [--window-id <u32>]
+          clawdis-mac run [--cwd <path>] [--env KEY=VAL] [--timeout <sec>] [--needs-screen-recording] <command ...>
+          clawdis-mac status
+          clawdis-mac --help
+
+        Returns JSON to stdout:
+          {"ok":<bool>,"message":"...","payload":"..."}
+        """
+        print(usage)
+    }
 
     private static func send(request: Request) async throws -> Response {
         let conn = NSXPCConnection(machServiceName: serviceName)
