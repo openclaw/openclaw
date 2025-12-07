@@ -54,11 +54,11 @@ private struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) { Text("Clawdis Active") }
+            self.relayStatusRow
             Toggle(isOn: self.$state.swabbleEnabled) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
             Button("Open Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
-            self.relayStatusRow
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
