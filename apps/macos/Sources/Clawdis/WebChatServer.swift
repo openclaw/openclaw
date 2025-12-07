@@ -82,8 +82,9 @@ final class WebChatServer: @unchecked Sendable {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
             if let data, !data.isEmpty {
                 self.respond(to: connection, requestData: data)
-            } else {
-                webChatServerLogger.error("WebChatServer empty receive")
+            } else if isComplete {
+                connection.cancel()
+                return
             }
             if isComplete || error != nil {
                 if let error {
@@ -108,6 +109,7 @@ final class WebChatServer: @unchecked Sendable {
             connection.cancel()
             return
         }
+        webChatServerLogger.debug("WebChatServer request line=\(requestLine, privacy: .public)")
         let parts = requestLine.split(separator: " ")
         guard parts.count >= 2, parts[0] == "GET" else {
             webChatServerLogger.error("WebChatServer non-GET request: \(requestLine, privacy: .public)")
@@ -131,11 +133,13 @@ final class WebChatServer: @unchecked Sendable {
             return
         }
         let fileURL = root.appendingPathComponent(path)
+        webChatServerLogger.debug("WebChatServer resolved file=\(fileURL.path, privacy: .public)")
         guard fileURL.path.hasPrefix(root.path) else {
             self.send(status: 403, mime: "text/plain", body: Data("Forbidden".utf8), over: connection)
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else {
+            webChatServerLogger.error("WebChatServer 404 missing \(fileURL.lastPathComponent, privacy: .public)")
             self.send(status: 404, mime: "text/plain", body: Data("Not Found".utf8), over: connection)
             return
         }
