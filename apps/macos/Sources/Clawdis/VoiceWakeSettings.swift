@@ -86,6 +86,7 @@ final class VoiceWakeTester {
     private var lastHeard: Date?
     private var holdingAfterDetect = false
     private var detectedText: String?
+    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake")
 
     init(locale: Locale = .current) {
         self.recognizer = SFSpeechRecognizer(locale: locale)
@@ -193,6 +194,7 @@ final class VoiceWakeTester {
         if matched, !text.isEmpty {
             self.holdingAfterDetect = true
             self.detectedText = text
+            self.logger.info("voice wake detected; forwarding (len=\(text.count))")
             AppStateStore.shared.triggerVoiceEars()
             let config = AppStateStore.shared.voiceWakeForwardConfig
             Task.detached {
@@ -231,6 +233,7 @@ final class VoiceWakeTester {
             if !self.isStopping {
                 self.stop()
                 if let detectedText {
+                    self.logger.info("voice wake hold finished; len=\(detectedText.count)")
                     onUpdate(.detected(detectedText))
                 }
             }
