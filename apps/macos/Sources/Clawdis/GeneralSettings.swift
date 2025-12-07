@@ -61,8 +61,6 @@ var body: some View {
                     }
                 }
 
-                self.healthRow
-
                 Spacer(minLength: 12)
                 HStack {
                     Spacer()
