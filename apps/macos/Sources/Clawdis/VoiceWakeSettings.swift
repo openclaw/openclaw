@@ -60,20 +60,6 @@ struct VoiceWakeSettings: View {
                 self.micPicker
                 self.levelMeter
 
-                if self.state.connectionMode == .remote {
-                    VoiceWakeForwardSection(
-                        enabled: Binding.constant(true),
-                        target: self.$state.remoteTarget,
-                        identity: self.$state.remoteIdentity,
-                        command: self.$state.voiceWakeForwardCommand,
-                        showAdvanced: self.$showForwardAdvanced,
-                        status: self.$forwardStatus,
-                        onTest: { Task { await self.checkForwardConnection() } },
-                        onChange: self.forwardConfigChanged,
-                        showToggle: false,
-                        title: "Voice Wake uses remote host",
-                        subtitle: "SSH uses your remote Clawdis settings.")
-                }
 
                 VoiceWakeTestCard(
                     testState: self.$testState,

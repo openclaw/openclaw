@@ -204,6 +204,7 @@ private struct ToolRow: View {
     let tool: ToolEntry
     @State private var state: InstallState = .checking
     @State private var statusMessage: String?
+    @State private var linkHovering = false
 
     private enum Layout {
         // Ensure progress indicators and buttons occupy the same space so the row doesn't shift.
@@ -214,8 +215,13 @@ private struct ToolRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 10) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Link(self.tool.name, destination: self.tool.url)
-                        .font(.headline)
+                    Link(destination: self.tool.url) {
+                        Text(self.tool.name)
+                            .font(.headline)
+                            .underline(self.linkHovering, color: .accentColor)
+                    }
+                    .foregroundColor(.accentColor)
+                    .onHover { self.linkHovering = $0 }
                     Text(self.tool.description)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)

@@ -101,7 +101,9 @@ struct SessionsSettings: View {
                             Text(row.key)
                                 .font(.body.weight(.semibold))
                             HStack(spacing: 6) {
-                                SessionKindBadge(kind: row.kind)
+                                if row.kind != .direct {
+                                    SessionKindBadge(kind: row.kind)
+                                }
                                 if !row.flagLabels.isEmpty {
                                     ForEach(row.flagLabels, id: \.self) { flag in
                                         Badge(text: flag)
@@ -110,17 +112,17 @@ struct SessionsSettings: View {
                             }
                         }
                     }
-                    .width(170)
+                    .width(220)
 
                     TableColumn("Updated", value: \.ageText)
-                        .width(80)
+                        .width(70)
 
                     TableColumn("Tokens") { row in
                         Text(row.tokens.summary)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    .width(210)
+                    .width(170)
 
                     TableColumn("Model") { row in
                         Text(row.model ?? "—")
