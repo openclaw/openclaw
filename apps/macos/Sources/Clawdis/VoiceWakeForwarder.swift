@@ -156,8 +156,10 @@ enum VoiceWakeForwarder {
         if process.terminationStatus == 0 {
             self.logger.info("voice wake forward ok host=\(userHost, privacy: .public)")
         } else {
-            // swiftlint:disable:next line_length
-            self.logger.debug("voice wake forward exit=\(process.terminationStatus) host=\(userHost, privacy: .public) out=\(out, privacy: .public)")
+            // surface the failure instead of being silent
+            let clipped = out.prefix(240)
+            self.logger.error(
+                "voice wake forward failed exit=\(process.terminationStatus) host=\(userHost, privacy: .public) out=\(clipped, privacy: .public)")
         }
     }
 
