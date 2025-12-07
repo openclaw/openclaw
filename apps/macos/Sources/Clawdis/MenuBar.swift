@@ -426,6 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         if let state {
             RelayProcessManager.shared.setActive(!state.isPaused)
         }
+        Task { try? await AgentRPC.shared.start() }
         self.startListener()
         self.scheduleFirstRunOnboardingIfNeeded()
 

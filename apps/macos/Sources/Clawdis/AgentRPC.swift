@@ -14,8 +14,10 @@ actor AgentRPC {
     private struct RpcError: Error { let message: String }
 
     func send(text: String, thinking: String?, session: String) async -> (ok: Bool, text: String?, error: String?) {
+        guard process?.isRunning == true else {
+            return (false, nil, "rpc worker not running")
+        }
         do {
-            try await ensureRunning()
             let payload: [String: Any] = [
                 "type": "send",
                 "text": text,
@@ -54,8 +56,10 @@ actor AgentRPC {
     }
 
     func status() async -> (ok: Bool, error: String?) {
+        guard process?.isRunning == true else {
+            return (false, "rpc worker not running")
+        }
         do {
-            try await ensureRunning()
             let payload: [String: Any] = ["type": "status"]
             let data = try JSONSerialization.data(withJSONObject: payload)
             guard let stdinHandle else { throw RpcError(message: "stdin missing") }
@@ -75,12 +79,7 @@ actor AgentRPC {
 
     // MARK: - Process lifecycle
 
-    private func ensureRunning() async throws {
-        if let process, process.isRunning { return }
-        try await start()
-    }
-
-    private func start() async throws {
+    func start() async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["pnpm", "clawdis", "rpc"]
