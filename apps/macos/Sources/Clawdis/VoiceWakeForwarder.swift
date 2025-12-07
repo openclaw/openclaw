@@ -142,7 +142,7 @@ enum VoiceWakeForwarder {
         args.append(contentsOf: ["sh", "-c", self.commandWithCliPath(rendered, target: destination)])
 
         let debugCmd = (["/usr/bin/ssh"] + args).joined(separator: " ")
-        self.logger.debug("voice wake ssh cmd=\(debugCmd, privacy: .public)")
+        self.logger.info("voice wake ssh cmd=\(debugCmd, privacy: .public)")
 
         self.logger.info("voice wake forward starting host=\(userHost, privacy: .public)")
 
