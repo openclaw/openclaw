@@ -127,6 +127,8 @@ final class HealthStore: ObservableObject {
     }
 
     var summaryLine: String {
+        if self.isRefreshing { return "Health check running…" }
+        if let error = self.lastError { return "Health check failed: \(error)" }
         guard let snap = self.snapshot else { return "Health check pending" }
         if !snap.web.linked { return "Not linked — run clawdis login" }
         let auth = snap.web.authAgeMs.map { msToAge($0) } ?? "unknown"

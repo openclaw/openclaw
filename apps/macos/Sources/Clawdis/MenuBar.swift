@@ -70,7 +70,6 @@ private struct MenuContent: View {
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
             Button("About Clawdis") { self.open(tab: .about) }
-            Button("Run Health Check") { Task { await self.healthStore.refresh(onDemand: true) } }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
