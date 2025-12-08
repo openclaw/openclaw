@@ -1,20 +1,19 @@
-import http from "node:http";
-import path from "node:path";
-import os from "node:os";
-import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import sharp from "sharp";
 
+import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { danger, info } from "../globals.js";
 import { logDebug } from "../logger.js";
-import { agentCommand } from "../commands/agent.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const WEBCHAT_DEFAULT_PORT = 18788;
@@ -24,18 +23,23 @@ type WebChatServerState = {
   port: number;
 };
 
+type ChatMessage = { role: string; content: string };
+type AttachmentInput = {
+  content?: string;
+  mimeType?: string;
+  fileName?: string;
+  type?: string;
+};
+type RpcPayload = { role: string; content: string };
+
 let state: WebChatServerState | null = null;
 
 function resolveWebRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
 
-  // 1) Packaged app: resources live next to the relay bundle at
-  //    Contents/Resources/WebChat. The relay binary runs from
-  //    Contents/Resources/Relay/bun, so walk up one and check.
   const packagedRoot = path.resolve(path.dirname(process.execPath), "../WebChat");
   if (fs.existsSync(packagedRoot)) return packagedRoot;
 
-  // 2) Dev / source checkout: repo-relative path.
   return path.resolve(here, "../../apps/macos/Sources/Clawdis/Resources/WebChat");
 }
 
@@ -55,9 +59,12 @@ function pickSessionId(sessionKey: string, store: Record<string, SessionEntry>):
   return first ?? null;
 }
 
-function readSessionMessages(sessionId: string, storePath: string): any[] {
+function readSessionMessages(sessionId: string, storePath: string): ChatMessage[] {
   const dir = path.dirname(storePath);
-  const candidates = [path.join(dir, `${sessionId}.jsonl`), path.join(os.homedir(), ".tau/agent/sessions/clawdis", `${sessionId}.jsonl`)];
+  const candidates = [
+    path.join(dir, `${sessionId}.jsonl`),
+    path.join(os.homedir(), ".tau/agent/sessions/clawdis", `${sessionId}.jsonl`),
+  ];
   let content: string | null = null;
   for (const p of candidates) {
     if (fs.existsSync(p)) {
@@ -71,7 +78,7 @@ function readSessionMessages(sessionId: string, storePath: string): any[] {
   }
   if (!content) return [];
 
-  const messages: any[] = [];
+  const messages: ChatMessage[] = [];
   for (const line of content.split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
@@ -87,7 +94,7 @@ function readSessionMessages(sessionId: string, storePath: string): any[] {
 }
 
 async function persistAttachments(
-  attachments: any[],
+  attachments: AttachmentInput[],
   sessionId: string,
 ): Promise<{ placeholder: string; path: string }[]> {
   const out: { placeholder: string; path: string }[] = [];
@@ -100,7 +107,8 @@ async function persistAttachments(
   for (const att of attachments) {
     try {
       if (!att?.content || typeof att.content !== "string") continue;
-      const mime = typeof att.mimeType === "string" ? att.mimeType : "application/octet-stream";
+      const mime =
+        typeof att.mimeType === "string" ? att.mimeType : "application/octet-stream";
       const baseName = att.fileName || `${att.type || "attachment"}-${idx}`;
       const ext = mime.startsWith("image/") ? mime.split("/")[1] || "bin" : "bin";
       const fileName = `${baseName}.${ext}`.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -123,7 +131,6 @@ async function persistAttachments(
         }
       }
 
-      // Hard cap ~6MB after processing
       if (finalBuf.length > 6 * 1024 * 1024) {
         out.push({
           placeholder: `[Attachment too large: ${baseName} (${(finalBuf.length / 1024 / 1024).toFixed(1)} MB)]`,
@@ -149,16 +156,35 @@ async function persistAttachments(
   return out;
 }
 
-function formatMessageWithAttachments(text: string, saved: { placeholder: string }[]): string {
+function formatMessageWithAttachments(
+  text: string,
+  saved: { placeholder: string }[],
+): string {
   if (!saved || saved.length === 0) return text;
   const parts = [text, ...saved.map((s) => `\n\n${s.placeholder}`)];
   return parts.join("");
 }
 
-async function handleRpc(body: any, sessionKey: string): Promise<{ ok: boolean; payloads?: any[]; error?: string }> {
-  const text: string = (body?.text ?? "").toString();
+async function handleRpc(
+  body: unknown,
+  sessionKey: string,
+): Promise<{ ok: boolean; payloads?: RpcPayload[]; error?: string }> {
+  const payload = body as {
+    text?: unknown;
+    attachments?: unknown;
+    thinking?: unknown;
+    deliver?: unknown;
+    to?: unknown;
+  };
+
+  const text: string = (payload.text ?? "").toString();
   if (!text.trim()) return { ok: false, error: "empty text" };
-  const attachments = Array.isArray(body?.attachments) ? body.attachments : [];
+  const attachments = Array.isArray(payload.attachments)
+    ? (payload.attachments as AttachmentInput[])
+    : [];
+  const thinking = typeof payload.thinking === "string" ? payload.thinking : undefined;
+  const to = typeof payload.to === "string" ? payload.to : undefined;
+  const deliver = Boolean(payload.deliver);
 
   const cfg = loadConfig();
   const replyCfg = cfg.inbound?.reply;
@@ -172,7 +198,6 @@ async function handleRpc(body: any, sessionKey: string): Promise<{ ok: boolean; 
   const store = loadSessionStore(storePath);
   const sessionId = pickSessionId(sessionKey, store) ?? crypto.randomUUID();
 
-  // Run the agent in-process and capture JSON output instead of spawning the CLI.
   const logs: string[] = [];
   const runtime: RuntimeEnv = {
     log: (msg: string) => void logs.push(String(msg)),
@@ -189,10 +214,9 @@ async function handleRpc(body: any, sessionKey: string): Promise<{ ok: boolean; 
       {
         message: formatMessageWithAttachments(text, savedAttachments),
         sessionId,
-        thinking: body?.thinking,
-        thinkingOnce: body?.thinkingOnce,
-        deliver: Boolean(body?.deliver),
-        to: body?.to,
+        thinking,
+        deliver,
+        to,
         json: true,
       },
       runtime,
@@ -222,7 +246,6 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
   const root = resolveWebRoot();
   const server = http.createServer(async (req, res) => {
     if (!req.url) return notFound(res);
-    // enforce loopback only
     if (req.socket.remoteAddress && !req.socket.remoteAddress.startsWith("127.")) {
       res.statusCode = 403;
       res.end("loopback only");
@@ -242,9 +265,9 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
         : resolveStorePath(undefined);
       const store = loadSessionStore(storePath);
       const sessionId = pickSessionId(sessionKey, store);
-      const sessionEntry = sessionKey ? store[sessionKey] : undefined;
-      const persistedThinking = sessionEntry?.thinkingLevel;
-      const messages = sessionId ? readSessionMessages(sessionId, storePath) : [];
+      const messages = sessionId
+        ? readSessionMessages(sessionId, storePath)
+        : [];
       res.setHeader("Content-Type", "application/json");
       res.end(
         JSON.stringify({
@@ -254,10 +277,6 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
           sessionId,
           initialMessages: messages,
           basePath: "/",
-          thinkingLevel:
-            typeof persistedThinking === "string"
-              ? persistedThinking
-              : cfg.inbound?.reply?.thinkingDefault ?? "off",
         }),
       );
       return;
@@ -265,13 +284,13 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
 
     if (isRpc && req.method === "POST") {
       const bodyBuf = await readBody(req);
-      let body: any = {};
+      let body: Record<string, unknown> = {};
       try {
         body = JSON.parse(bodyBuf.toString("utf-8"));
       } catch {
         // ignore
       }
-      const sessionKey = body.session || "main";
+      const sessionKey = typeof body.session === "string" ? body.session : "main";
       const result = await handleRpc(body, sessionKey);
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify(result));
@@ -280,7 +299,7 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
 
     if (url.pathname.startsWith("/webchat")) {
       let rel = url.pathname.replace(/^\/webchat\/?/, "");
-      if (!rel || rel.endsWith("/")) rel = rel + "index.html";
+      if (!rel || rel.endsWith("/")) rel = `${rel}index.html`;
       const filePath = path.join(root, rel);
       if (!filePath.startsWith(root)) return notFound(res);
       if (!fs.existsSync(filePath)) return notFound(res);
@@ -307,22 +326,12 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
       return;
     }
 
-    // Static files from root (when served at /)
     const relPath = url.pathname.replace(/^\//, "");
     if (relPath) {
       const filePath = path.join(root, relPath);
       if (filePath.startsWith(root) && fs.existsSync(filePath)) {
         const data = fs.readFileSync(filePath);
-        const ext = path.extname(filePath).toLowerCase();
-        const type =
-          ext === ".html"
-            ? "text/html"
-            : ext === ".js"
-              ? "application/javascript"
-              : ext === ".css"
-                ? "text/css"
-                : "application/octet-stream";
-        res.setHeader("Content-Type", type);
+        res.setHeader("Content-Type", "application/octet-stream");
         res.end(data);
         return;
       }
@@ -337,7 +346,7 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
   });
 
   state = { server, port };
-  logDebug(info(`webchat server listening on 127.0.0.1:${port}`));
+  logDebug(`webchat server listening on 127.0.0.1:${port}`);
   return state;
 }
 
@@ -352,13 +361,4 @@ export async function ensureWebChatServerFromConfig() {
     throw err;
   }
 }
-
-export function getWebChatServer(): WebChatServerState | null {
-  return state;
-}
-
-export async function stopWebChatServer() {
-  if (!state) return;
-  await new Promise<void>((resolve) => state?.server.close(() => resolve()));
-  state = null;
-}
+*** End
