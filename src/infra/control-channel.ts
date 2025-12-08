@@ -196,5 +196,3 @@ export async function startControlChannel(
     },
   };
 }
-
-export { HeartbeatEventPayload } from "./heartbeat-events.js";
