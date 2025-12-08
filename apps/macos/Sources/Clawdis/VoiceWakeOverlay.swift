@@ -18,6 +18,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         var attributed: NSAttributedString = NSAttributedString(string: "")
         var isOverflowing: Bool = false
         var isEditing: Bool = false
+        var level: Double = 0 // normalized 0...1 speech level for UI
     }
 
     private var window: NSPanel?
@@ -42,6 +43,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isSending = false
         self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
+        self.model.level = 0
         self.present()
         self.updateWindowFrame(animate: true)
     }
@@ -61,6 +63,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isSending = false
         self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
+        self.model.level = 0
         self.present()
         self.scheduleAutoSend(after: delay, sendChime: sendChime)
     }
@@ -135,8 +138,13 @@ final class VoiceWakeOverlayController: ObservableObject {
             Task { @MainActor in
                 window.orderOut(nil)
                 self.model.isVisible = false
+                self.model.level = 0
             }
         }
+    }
+
+    func updateLevel(_ level: Double) {
+        self.model.level = max(0, min(1, level))
     }
 
     enum DismissReason { case explicit, empty }
@@ -292,6 +300,12 @@ private struct VoiceWakeOverlayView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             HStack(alignment: .top, spacing: 8) {
+                if self.controller.model.isVisible {
+                    LevelBars(level: self.controller.model.level)
+                        .frame(width: 36, height: 26)
+                        .padding(.top, 2)
+                }
+
                 if self.controller.model.isEditing {
                     TranscriptTextView(
                         text: Binding(
@@ -566,6 +580,28 @@ private struct CloseButtonOverlay: View {
             }
         }
         .allowsHitTesting(isVisible)
+    }
+}
+
+private struct LevelBars: View {
+    var level: Double
+
+    private let barCount = 14
+
+    var body: some View {
+        let capped = max(0, min(1, level))
+        let active = Int(Double(barCount) * capped.rounded(.up))
+        HStack(alignment: .bottom, spacing: 2) {
+            ForEach(0..<barCount, id: \.self) { idx in
+                let norm = Double(idx) / Double(barCount - 1)
+                let height = 6 + (norm * 16)
+                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                    .fill(idx < active ? Color.accentColor : Color.primary.opacity(0.35))
+                    .frame(width: 3, height: height)
+            }
+        }
+        .animation(.easeOut(duration: 0.08), value: active)
+        .accessibilityHidden(true)
     }
 }
 

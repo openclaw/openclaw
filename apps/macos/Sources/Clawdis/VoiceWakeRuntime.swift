@@ -294,6 +294,7 @@ actor VoiceWakeRuntime {
         self.triggerChimePlayed = false
 
         await MainActor.run { AppStateStore.shared.stopVoiceEars() }
+        await MainActor.run { VoiceWakeOverlayController.shared.updateLevel(0) }
 
         let forwardConfig = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
         // Auto-send should fire as soon as the silence threshold is satisfied (2s after speech, 5s after trigger-only).
@@ -329,6 +330,11 @@ actor VoiceWakeRuntime {
         let threshold = max(self.minSpeechRMS, self.noiseFloorRMS * self.speechBoostFactor)
         if rms >= threshold {
             self.lastHeard = Date()
+        }
+
+        let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
+        Task { @MainActor in
+            VoiceWakeOverlayController.shared.updateLevel(clamped)
         }
     }
 
