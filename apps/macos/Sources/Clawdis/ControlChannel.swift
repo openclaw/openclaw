@@ -13,6 +13,44 @@ struct ControlHeartbeatEvent: Codable {
     let reason: String?
 }
 
+// Handles single-shot continuation resumption without Sendable capture issues
+actor ConnectionWaiter {
+    private var cont: CheckedContinuation<Void, Error>?
+    private var resumed = false
+    private var pendingResult: Result<Void, Error>?
+
+    func wait() async throws {
+        try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
+            if let pending = pendingResult {
+                pendingResult = nil
+                resumed = true
+                c.resume(with: pending)
+            } else {
+                cont = c
+            }
+        }
+    }
+
+    func succeed() {
+        resume(.success(()))
+    }
+
+    func fail(_ error: Error) {
+        resume(.failure(error))
+    }
+
+    private func resume(_ result: Result<Void, Error>) {
+        if resumed { return }
+        if let c = cont {
+            resumed = true
+            cont = nil
+            c.resume(with: result)
+        } else {
+            pendingResult = result
+        }
+    }
+}
+
 struct ControlHealthSnapshot: Codable {
     struct Web: Codable {
         let linked: Bool
@@ -169,28 +207,35 @@ final class ControlChannel: ObservableObject {
         let conn = NWConnection(host: host, port: port, using: .tcp)
         self.connection = conn
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            conn.stateUpdateHandler = { [weak self, weak conn] state in
-                guard let self else { return }
-                switch state {
-                case .ready:
-                    Task { @MainActor in self.state = .connected }
+        let waiter = ConnectionWaiter()
+
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
+            switch state {
+            case .ready:
+                Task { @MainActor in self?.state = .connected }
+                Task {
+                    await waiter.succeed()
                     conn?.stateUpdateHandler = nil
-                    cont.resume(returning: ())
-                case let .failed(err):
-                    Task { @MainActor in self.state = .degraded(err.localizedDescription) }
-                    conn?.stateUpdateHandler = nil
-                    cont.resume(throwing: err)
-                case let .waiting(err):
-                    Task { @MainActor in self.state = .degraded(err.localizedDescription) }
-                    conn?.stateUpdateHandler = nil
-                    cont.resume(throwing: err)
-                default:
-                    break
                 }
+            case let .failed(err):
+                Task { @MainActor in self?.state = .degraded(err.localizedDescription) }
+                Task {
+                    await waiter.fail(err)
+                    conn?.stateUpdateHandler = nil
+                }
+            case let .waiting(err):
+                Task { @MainActor in self?.state = .degraded(err.localizedDescription) }
+                Task {
+                    await waiter.fail(err)
+                    conn?.stateUpdateHandler = nil
+                }
+            default:
+                break
             }
-            conn.start(queue: .global())
         }
+
+        conn.start(queue: .global())
+        try await waiter.wait()
 
         self.listenTask = Task.detached { [weak self] in
             await self?.listen()
