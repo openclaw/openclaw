@@ -24,7 +24,7 @@ This flow lets the macOS app act as a full remote control for a Clawdis relay ru
 
 ## Web Chat over SSH
 - The relay hosts a loopback-only HTTP server (default 18788, see `webchat.port`).
-- The mac app forwards `127.0.0.1:<port>` over SSH (`ssh -L <ephemeral>:127.0.0.1:<port>`), then loads `/webchat/?session=<key>` in-app.
+- The mac app forwards `127.0.0.1:<port>` over SSH (`ssh -L <ephemeral>:127.0.0.1:<port>`), then loads `/webchat/?session=<key>` in-app. Sends go in-process on the relay (no CLI spawn/PATH issues).
 - Keep the feature enabled in *Settings → Config → Web chat*. Disable it to hide the menu entry entirely.
 
 ## Permissions
@@ -38,7 +38,7 @@ This flow lets the macOS app act as a full remote control for a Clawdis relay ru
 ## Troubleshooting
 - **exit 127 / not found**: `clawdis` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
 - **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`clawdis status --json`).
-- **Web Chat stuck**: confirm the relay is running on the remote host and `webchat.enabled` is true; ensure the forwarded port matches *Settings → Config*.
+- **Web Chat stuck**: confirm the relay is running on the remote host and `webchat.enabled` is true; ensure the forwarded port matches *Settings → Config*. Since RPC is in-process, PATH is no longer a factor.
 - **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
 
 ## Notification sounds

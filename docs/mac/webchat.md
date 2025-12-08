@@ -10,7 +10,7 @@ The macOS menu bar app opens the relay’s loopback web chat server in a WKWebVi
 
 ## How it’s wired
 - Assets: `apps/macos/Sources/Clawdis/Resources/WebChat/` contains the `pi-web-ui` dist plus a local import map pointing at bundled vendor modules and a tiny `pi-ai` stub. Everything is served from the relay at `/webchat/*`.
-- Bridge: none. The web UI calls `/webchat/rpc` directly; Swift no longer proxies messages.
+- Bridge: none. The web UI calls `/webchat/rpc` directly; Swift no longer proxies messages. RPC is handled in-process inside the relay (no CLI spawn/PATH dependency).
 - Session: always primary; multiple transports (WhatsApp/Telegram/Desktop) share the same session key so context is unified.
 
 ## Security / surface area
