@@ -46,7 +46,13 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.updateWindowFrame(animate: true)
     }
 
-    func presentFinal(transcript: String, forwardConfig: VoiceWakeForwardConfig, delay: TimeInterval, attributed: NSAttributedString? = nil) {
+    func presentFinal(
+        transcript: String,
+        forwardConfig: VoiceWakeForwardConfig,
+        delay: TimeInterval,
+        sendChime: VoiceWakeChime = .none,
+        attributed: NSAttributedString? = nil)
+    {
         self.autoSendTask?.cancel()
         self.forwardConfig = forwardConfig
         self.model.text = transcript
@@ -56,7 +62,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.present()
-        self.scheduleAutoSend(after: delay)
+        self.scheduleAutoSend(after: delay, sendChime: sendChime)
     }
 
     func userBeganEditing() {
@@ -248,11 +254,14 @@ final class VoiceWakeOverlayController: ObservableObject {
         }
     }
 
-    private func scheduleAutoSend(after delay: TimeInterval) {
+    private func scheduleAutoSend(after delay: TimeInterval, sendChime: VoiceWakeChime) {
         guard let forwardConfig, forwardConfig.enabled else { return }
         self.autoSendTask = Task { [weak self] in
             let nanos = UInt64(delay * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)
+            if sendChime != .none {
+                VoiceWakeChimePlayer.play(sendChime)
+            }
             self?.sendNow()
         }
     }
@@ -267,75 +276,107 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 }
 
+private struct CloseHoverButton: View {
+    var onClose: () -> Void
+
+    var body: some View {
+        Button(action: self.onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(Color.white.opacity(0.85))
+                .frame(width: 22, height: 22)
+                .background(Color.black.opacity(0.35))
+                .clipShape(Circle())
+                .shadow(color: Color.black.opacity(0.35), radius: 6, y: 2)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .contentShape(Circle())
+        .padding(6)
+    }
+}
+
 private struct VoiceWakeOverlayView: View {
     @ObservedObject var controller: VoiceWakeOverlayController
     @FocusState private var textFocused: Bool
+    @State private var isHovering: Bool = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 8) {
-            if self.controller.model.isEditing {
-                TranscriptTextView(
-                    text: Binding(
-                        get: { self.controller.model.text },
-                        set: { self.controller.updateText($0) }),
-                    attributed: self.controller.model.attributed,
-                    isFinal: self.controller.model.isFinal,
-                    isOverflowing: self.controller.model.isOverflowing,
-                    onBeginEditing: {
-                        self.controller.userBeganEditing()
-                    },
-                    onEscape: {
-                        self.controller.cancelEditingAndDismiss()
-                    },
-                    onEndEditing: {
-                        self.controller.endEditing()
-                    },
-                    onSend: {
-                        self.controller.sendNow()
-                    })
-                    .focused(self.$textFocused)
-                    .frame(minHeight: 32, maxHeight: .infinity)
-                    .id("editing")
-            } else {
-                VibrantLabelView(
-                    attributed: self.controller.model.attributed,
-                    onTap: {
-                        self.controller.userBeganEditing()
-                        self.textFocused = true
-                    })
-                    .frame(minHeight: 32, maxHeight: .infinity)
-                    .id("display")
-            }
-
-            Button {
-                self.controller.sendNow()
-            } label: {
-                let sending = self.controller.model.isSending
-                ZStack {
-                    Image(systemName: "paperplane.fill")
-                        .opacity(sending ? 0 : 1)
-                        .scaleEffect(sending ? 0.5 : 1)
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .opacity(sending ? 1 : 0)
-                        .scaleEffect(sending ? 1.05 : 0.8)
+        ZStack(alignment: .topLeading) {
+            HStack(alignment: .top, spacing: 8) {
+                if self.controller.model.isEditing {
+                    TranscriptTextView(
+                        text: Binding(
+                            get: { self.controller.model.text },
+                            set: { self.controller.updateText($0) }),
+                        attributed: self.controller.model.attributed,
+                        isFinal: self.controller.model.isFinal,
+                        isOverflowing: self.controller.model.isOverflowing,
+                        onBeginEditing: {
+                            self.controller.userBeganEditing()
+                        },
+                        onEscape: {
+                            self.controller.cancelEditingAndDismiss()
+                        },
+                        onEndEditing: {
+                            self.controller.endEditing()
+                        },
+                        onSend: {
+                            self.controller.sendNow()
+                        })
+                        .focused(self.$textFocused)
+                        .frame(minHeight: 32, maxHeight: .infinity)
+                        .id("editing")
+                } else {
+                    VibrantLabelView(
+                        attributed: self.controller.model.attributed,
+                        onTap: {
+                            self.controller.userBeganEditing()
+                            self.textFocused = true
+                        })
+                        .frame(minHeight: 32, maxHeight: .infinity)
+                        .id("display")
                 }
-                .imageScale(.small)
-                .padding(.vertical, 6)
-                .padding(.horizontal, 10)
-                .background(Color.accentColor.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sending)
+
+                Button {
+                    self.controller.sendNow()
+                } label: {
+                    let sending = self.controller.model.isSending
+                    ZStack {
+                        Image(systemName: "paperplane.fill")
+                            .opacity(sending ? 0 : 1)
+                            .scaleEffect(sending ? 0.5 : 1)
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .opacity(sending ? 1 : 0)
+                            .scaleEffect(sending ? 1.05 : 0.8)
+                    }
+                    .imageScale(.small)
+                    .padding(.vertical, 6)
+                    .padding(.horizontal, 10)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sending)
+                }
+                .buttonStyle(.plain)
+                .disabled(!self.controller.model.forwardEnabled || self.controller.model.isSending)
+                .keyboardShortcut(.return, modifiers: [.command])
             }
-            .buttonStyle(.plain)
-            .disabled(!self.controller.model.forwardEnabled || self.controller.model.isSending)
-            .keyboardShortcut(.return, modifiers: [.command])
+            .padding(.vertical, 8)
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(.regularMaterial)
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .onHover { self.isHovering = $0 }
+
+            if self.controller.model.isEditing || self.isHovering {
+                CloseHoverButton(onClose: {
+                    self.controller.cancelEditingAndDismiss()
+                })
+                .offset(x: -10, y: -10)
+                .transition(AnyTransition.scale.combined(with: .opacity))
+            }
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 10)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(.regularMaterial)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onAppear { self.textFocused = false }
         .onChange(of: self.controller.model.text) { _, _ in
             self.textFocused = self.controller.model.isEditing
@@ -488,20 +529,40 @@ private struct VibrantLabelView: NSViewRepresentable {
     }
 
 private final class ClickCatcher: NSView {
-        let onTap: () -> Void
-        init(onTap: @escaping () -> Void) {
-            self.onTap = onTap
-            super.init(frame: .zero)
-        }
-
-        @available(*, unavailable)
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-        override func mouseDown(with event: NSEvent) {
-            super.mouseDown(with: event)
-            self.onTap()
-        }
+    let onTap: () -> Void
+    init(onTap: @escaping () -> Void) {
+        self.onTap = onTap
+        super.init(frame: .zero)
     }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func mouseDown(with event: NSEvent) {
+        super.mouseDown(with: event)
+        self.onTap()
+    }
+}
+
+private struct CloseHoverButton: View {
+    var onClose: () -> Void
+
+    var body: some View {
+        Button(action: self.onClose) {
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(Color.white.opacity(0.85))
+                .frame(width: 22, height: 22)
+                .background(Color.black.opacity(0.35))
+                .clipShape(Circle())
+                .shadow(color: Color.black.opacity(0.35), radius: 6, y: 2)
+        }
+        .buttonStyle(.plain)
+        .focusable(false)
+        .contentShape(Circle())
+        .padding(6)
+    }
+}
 }
 
 private extension NSAttributedString {
