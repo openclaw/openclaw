@@ -39,7 +39,6 @@ Goal: add a simple heartbeat poll for command-based auto-replies (Pi/Tau) that o
 - Expose CLI triggers:
   - `clawdis heartbeat` (web provider, defaults to first `allowFrom`; optional `--to` override)
     - `--session-id <uuid>` forces resuming a specific session for that heartbeat
-  - `clawdis relay:heartbeat` to run the relay loop with an immediate heartbeat (no tmux)
-  - `clawdis relay:heartbeat:tmux` to run the same in tmux (detached, attachable)
-  - Relay supports `--heartbeat-now` to fire once at startup (including the tmux helper).
+  - `clawdis relay:heartbeat` to run the relay loop with an immediate heartbeat
+  - Relay supports `--heartbeat-now` to fire once at startup.
   - When multiple sessions are active or `allowFrom` is only `"*"`, require `--to <E.164>` or `--all` for manual heartbeats to avoid ambiguous targets.

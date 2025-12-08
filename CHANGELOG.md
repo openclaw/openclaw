@@ -9,6 +9,7 @@ First Clawdis release after the Warelay rebrand. This is a semver-major because 
 - Pi/Tau only: `inbound.reply.agent.kind` accepts only `"pi"`, and the agent CLI/CLI flags for Claude/Codex/Gemini were removed. The Pi CLI runs in RPC mode with a persistent worker.
 - WhatsApp Web is the only transport; Twilio support and related CLI flags/tests were removed.
 - Direct chats now collapse into a single `main` session by default (no config needed); groups stay isolated as `group:<jid>`.
+- Relay background helpers were removed; run `clawdis relay --verbose` under your supervisor of choice if you want it detached.
 
 ### macOS companion app
 - **Clawdis.app menu bar companion**: packaged, signed bundle with relay start/stop, launchd toggle, project-root and pnpm/node auto-resolution, live log shortcut, restart button, and status/recipient table plus badges/dimming for attention and paused states.
@@ -147,7 +148,7 @@ First Clawdis release after the Warelay rebrand. This is a semver-major because 
 
 ### Changes
 - Heartbeat interval default 10m for command mode; prompt `HEARTBEAT /think:high`; skips don’t refresh session; session `heartbeatIdleMinutes` support.
-- Heartbeat tooling: `--session-id`, `--heartbeat-now`, relay helpers `relay:heartbeat` and `relay:heartbeat:tmux`.
+- Heartbeat tooling: `--session-id`, `--heartbeat-now`, and a relay helper `relay:heartbeat` for immediate startup probes.
 - Prompt structure: `sessionIntro` plus per-message `/think:high`; session idle up to 7 days.
 - Thinking directives: `/think:<level>`; Pi uses `--thinking`; others append cue; `/think:off` no-op.
 - Robustness: Baileys/WebSocket guards; global unhandled error handlers; WhatsApp LID mapping; hosted media MIME-sniffing and cleanup.

@@ -6,7 +6,6 @@ const loginWeb = vi.fn();
 const monitorWebProvider = vi.fn();
 const logWebSelfId = vi.fn();
 const waitForever = vi.fn();
-const spawnRelayTmux = vi.fn().mockResolvedValue("clawdis-relay");
 const monitorTelegramProvider = vi.fn();
 
 const runtime = {
@@ -31,7 +30,6 @@ vi.mock("./deps.js", () => ({
   createDefaultDeps: () => ({ waitForever }),
   logWebSelfId,
 }));
-vi.mock("./relay_tmux.js", () => ({ spawnRelayTmux }));
 
 const { buildProgram } = await import("./program.js");
 
@@ -78,16 +76,6 @@ describe("cli program", () => {
     expect(logWebSelfId).toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
     runtime.exit = originalExit;
-  });
-
-  it("runs relay heartbeat tmux helper", async () => {
-    const program = buildProgram();
-    await program.parseAsync(["relay:heartbeat:tmux"], { from: "user" });
-    const shouldAttach = Boolean(process.stdout.isTTY);
-    expect(spawnRelayTmux).toHaveBeenCalledWith(
-      "pnpm clawdis relay --verbose --heartbeat-now",
-      shouldAttach,
-    );
   });
 
   it("runs telegram relay when token set", async () => {

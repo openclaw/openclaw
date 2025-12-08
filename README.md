@@ -1,4 +1,4 @@
-# 🦞 CLAWDIS — WhatsApp Gateway for AI Agents
+# 🦞 CLAWDIS — WhatsApp & Telegram Gateway for AI Agents
 
 <p align="center">
   <img src="docs/whatsapp-clawd.jpg" alt="CLAWDIS" width="400">
@@ -14,12 +14,13 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**CLAWDIS** (formerly Warelay) is a WhatsApp-to-AI gateway. Send a message, get an AI response. It's like having a genius lobster in your pocket 24/7.
+**CLAWDIS** (formerly Warelay) is a WhatsApp- and Telegram-to-AI gateway. Send a message, get an AI response. It's like having a genius lobster in your pocket 24/7.
 
 ```
 ┌─────────────┐      ┌──────────┐      ┌─────────────┐
 │  WhatsApp   │ ───▶ │ CLAWDIS  │ ───▶ │  AI Agent   │
-│  (You)      │ ◀─── │  🦞⏱️💙   │ ◀─── │   (Pi/Tau)  │
+│  Telegram   │ ───▶ │  🦞⏱️💙   │ ◀─── │   (Pi/Tau)  │
+│  (You)      │ ◀─── │          │      │             │
 └─────────────┘      └──────────┘      └─────────────┘
 ```
 
@@ -32,6 +33,7 @@ Because every space lobster needs a time-and-space machine. The Doctor has a TAR
 ## Features
 
 - 📱 **WhatsApp Integration** — Personal WhatsApp Web (Baileys)
+- ✈️ **Telegram (Bot API)** — DMs and groups via grammY
 - 🤖 **AI Agent Gateway** — Pi/Tau only (Pi CLI in RPC mode)
 - 💬 **Session Management** — Per-sender conversation context
 - 🔔 **Heartbeats** — Periodic check-ins for proactive AI

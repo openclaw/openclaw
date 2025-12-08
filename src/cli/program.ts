@@ -25,17 +25,16 @@ import {
   resolveReconnectPolicy,
 } from "../web/reconnect.js";
 import { createDefaultDeps, logWebSelfId } from "./deps.js";
-import { spawnRelayTmux } from "./relay_tmux.js";
 
 export function buildProgram() {
   const program = new Command();
   const PROGRAM_VERSION = VERSION;
   const TAGLINE =
-    "Send, receive, and auto-reply on WhatsApp—Baileys (web) only.";
+    "Send, receive, and auto-reply on WhatsApp (web) and Telegram (bot).";
 
   program
     .name("clawdis")
-    .description("WhatsApp relay CLI (WhatsApp Web session only)")
+    .description("Messaging relay CLI for WhatsApp Web and Telegram Bot API")
     .version(PROGRAM_VERSION);
 
   const formatIntroLine = (version: string, rich = true) => {
@@ -91,7 +90,11 @@ export function buildProgram() {
     ],
     [
       'clawdis agent --to +15555550123 --message "Run summary" --deliver',
-      "Talk directly to the agent using the same session handling; optionally send the reply.",
+      "Talk directly to the agent using the same session handling; optionally send the WhatsApp reply.",
+    ],
+    [
+      'clawdis send --provider telegram --to @mychat --message "Hi"',
+      "Send via your Telegram bot.",
     ],
   ] as const;
 
@@ -176,7 +179,7 @@ Examples:
   program
     .command("agent")
     .description(
-      "Talk directly to the configured agent (no WhatsApp send, reuses sessions)",
+      "Talk directly to the configured agent (no chat send; optional WhatsApp delivery)",
     )
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option(
@@ -312,7 +315,7 @@ Examples:
 
   program
     .command("heartbeat")
-    .description("Trigger a heartbeat or manual send once (web only, no tmux)")
+    .description("Trigger a heartbeat or manual send once (web provider only)")
     .option("--to <number>", "Override target E.164; defaults to allowFrom[0]")
     .option(
       "--session-id <id>",
@@ -396,7 +399,7 @@ Examples:
 
   program
     .command("relay")
-    .description("Auto-reply to inbound messages (web only)")
+    .description("Auto-reply to inbound WhatsApp messages (web provider)")
     .option(
       "--web-heartbeat <seconds>",
       "Heartbeat interval for web relay health logs (seconds)",
@@ -528,9 +531,7 @@ Examples:
 
   program
     .command("relay:heartbeat")
-    .description(
-      "Run relay with an immediate heartbeat (no tmux); requires web provider",
-    )
+    .description("Run relay with an immediate heartbeat; requires web provider")
     .option("--verbose", "Verbose logging", false)
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -735,88 +736,6 @@ Shows token usage per session when the agent reports it; set inbound.reply.agent
         },
         defaultRuntime,
       );
-    });
-
-  program
-    .command("relay:tmux")
-    .description(
-      "Run relay --verbose inside tmux (session clawdis-relay), restarting if already running, then attach",
-    )
-    .action(async () => {
-      try {
-        const shouldAttach = Boolean(process.stdout.isTTY);
-        const session = await spawnRelayTmux(
-          "pnpm clawdis relay --verbose",
-          shouldAttach,
-        );
-        defaultRuntime.log(
-          info(
-            shouldAttach
-              ? `tmux session started and attached: ${session} (pane running "pnpm clawdis relay --verbose")`
-              : `tmux session started: ${session} (pane running "pnpm clawdis relay --verbose"); attach manually with "tmux attach -t ${session}"`,
-          ),
-        );
-      } catch (err) {
-        defaultRuntime.error(
-          danger(`Failed to start relay tmux session: ${String(err)}`),
-        );
-        defaultRuntime.exit(1);
-      }
-    });
-
-  program
-    .command("relay:tmux:attach")
-    .description(
-      "Attach to the existing clawdis-relay tmux session (no restart)",
-    )
-    .action(async () => {
-      try {
-        if (!process.stdout.isTTY) {
-          defaultRuntime.error(
-            danger(
-              "Cannot attach: stdout is not a TTY. Run this in a terminal or use 'tmux attach -t clawdis-relay' manually.",
-            ),
-          );
-          defaultRuntime.exit(1);
-          return;
-        }
-        await spawnRelayTmux("pnpm clawdis relay --verbose", true, false);
-        defaultRuntime.log(info("Attached to clawdis-relay session."));
-      } catch (err) {
-        defaultRuntime.error(
-          danger(`Failed to attach to clawdis-relay: ${String(err)}`),
-        );
-        defaultRuntime.exit(1);
-      }
-    });
-
-  program
-    .command("relay:heartbeat:tmux")
-    .description(
-      "Run relay --verbose with an immediate heartbeat inside tmux (session clawdis-relay), then attach",
-    )
-    .action(async () => {
-      try {
-        const shouldAttach = Boolean(process.stdout.isTTY);
-        const session = await spawnRelayTmux(
-          "pnpm clawdis relay --verbose --heartbeat-now",
-          shouldAttach,
-        );
-        defaultRuntime.log(
-          info(
-            shouldAttach
-              ? `tmux session started and attached: ${session} (pane running "pnpm clawdis relay --verbose --heartbeat-now")`
-              : `tmux session started: ${session} (pane running "pnpm clawdis relay --verbose --heartbeat-now"); attach manually with "tmux attach -t ${session}"`,
-          ),
-        );
-      } catch (err) {
-        defaultRuntime.error(
-          danger(
-            `Failed to start relay tmux session with heartbeat: ${String(err)}`,
-          ),
-        );
-        defaultRuntime.exit(1);
-      }
     });
 
   program

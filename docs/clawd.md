@@ -240,12 +240,11 @@ Include `MEDIA:/path/to/file.png` in Claude's output to attach images. clawdis h
 # Foreground (see all logs)
 clawdis relay --provider web --verbose
 
-# Background in tmux (recommended)
-clawdis relay:tmux
-
 # With immediate heartbeat on startup
-clawdis relay:heartbeat:tmux
+clawdis relay:heartbeat
 ```
+
+For backgrounding, run the relay under your preferred supervisor (e.g., launchd/systemd) and point it at the same `clawdis relay --provider web --verbose` command.
 
 ## Tips for a Great Personal Assistant
 
