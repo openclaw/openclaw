@@ -35,6 +35,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isSending = false
         self.model.attributed = attributed ?? NSAttributedString(string: transcript)
         self.present()
+        self.updateWindowFrame(animate: true)
     }
 
     func presentFinal(transcript: String, forwardConfig: VoiceWakeForwardConfig, delay: TimeInterval, attributed: NSAttributedString? = nil) {
