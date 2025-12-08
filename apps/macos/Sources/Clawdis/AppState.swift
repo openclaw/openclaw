@@ -35,13 +35,8 @@ final class AppState: ObservableObject {
 
     @Published var swabbleTriggerWords: [String] {
         didSet {
-            // Trim user input but keep empty placeholders so the UI can show newly added rows.
-            let cleaned = self.swabbleTriggerWords.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            UserDefaults.standard.set(cleaned, forKey: swabbleTriggersKey)
-            if cleaned != self.swabbleTriggerWords {
-                self.swabbleTriggerWords = cleaned
-                return
-            }
+            // Preserve the raw editing state; sanitization happens when we actually use the triggers.
+            UserDefaults.standard.set(self.swabbleTriggerWords, forKey: swabbleTriggersKey)
             if self.swabbleEnabled {
                 Task { await VoiceWakeRuntime.shared.refresh(state: self) }
             }

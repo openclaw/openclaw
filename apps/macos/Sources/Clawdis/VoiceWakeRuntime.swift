@@ -46,7 +46,7 @@ actor VoiceWakeRuntime {
         let snapshot = await MainActor.run { () -> (Bool, RuntimeConfig) in
             let enabled = state.swabbleEnabled
             let config = RuntimeConfig(
-                triggers: state.swabbleTriggerWords,
+                triggers: sanitizeVoiceWakeTriggers(state.swabbleTriggerWords),
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
                 localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID)
             return (enabled, config)
