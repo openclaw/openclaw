@@ -265,7 +265,7 @@ private struct VoiceWakeOverlayView: View {
     @FocusState private var textFocused: Bool
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             if self.controller.model.isEditing {
                 TranscriptTextView(
                     text: Binding(
