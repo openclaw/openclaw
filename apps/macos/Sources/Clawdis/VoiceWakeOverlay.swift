@@ -448,36 +448,28 @@ private struct VibrantLabelView: NSViewRepresentable {
         label.drawsBackground = false
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 0
+        label.usesSingleLineMode = false
+        label.cell?.wraps = true
+        label.cell?.isScrollable = false
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.allowsDefaultTighteningForTruncation = false
-
-        let effect = NSVisualEffectView()
-        effect.material = .hudWindow
-        effect.blendingMode = .withinWindow
-        effect.state = .active
-        effect.translatesAutoresizingMaskIntoConstraints = false
-        effect.addSubview(label)
-
-        label.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-            label.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-            label.topAnchor.constraint(equalTo: effect.topAnchor),
-            label.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
-        ])
+        label.textColor = .labelColor
 
         let container = ClickCatcher(onTap: onTap)
-        container.addSubview(effect)
-        effect.frame = container.bounds
-        effect.autoresizingMask = [.width, .height]
+        container.addSubview(label)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            label.topAnchor.constraint(equalTo: container.topAnchor),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
         return container
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let container = nsView as? ClickCatcher,
-              let effect = container.subviews.first as? NSVisualEffectView,
-              let label = effect.subviews.first as? NSTextField else { return }
+              let label = container.subviews.first as? NSTextField else { return }
         label.attributedStringValue = self.attributed
     }
 
