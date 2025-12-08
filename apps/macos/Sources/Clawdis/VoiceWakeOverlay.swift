@@ -453,7 +453,7 @@ private struct VibrantLabelView: NSViewRepresentable {
         label.cell?.isScrollable = false
         label.setContentHuggingPriority(.defaultLow, for: .horizontal)
         label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        label.textColor = .labelColor
+        label.textColor = .textColor
 
         let container = ClickCatcher(onTap: onTap)
         container.addSubview(label)
