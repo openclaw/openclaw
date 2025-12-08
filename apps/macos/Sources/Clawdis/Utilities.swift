@@ -417,9 +417,26 @@ enum CommandResolver {
         if command -v clawdis >/dev/null 2>&1; then
           CLI="$(command -v clawdis)"
           clawdis \(quotedArgs);
-        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/clawdis.js" ] && command -v node >/dev/null 2>&1; then
-          CLI="node $PRJ/bin/clawdis.js"
-          node "$PRJ/bin/clawdis.js" \(quotedArgs);
+        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/dist/index.js" ]; then
+          if command -v bun >/dev/null 2>&1; then
+            CLI="bun $PRJ/dist/index.js"
+            bun "$PRJ/dist/index.js" \(quotedArgs);
+          elif command -v node >/dev/null 2>&1; then
+            CLI="node $PRJ/dist/index.js"
+            node "$PRJ/dist/index.js" \(quotedArgs);
+          else
+            echo "Node >=22 or Bun >=1.3 required on remote host"; exit 127;
+          fi
+        elif [ -n "${PRJ:-}" ] && [ -f "$PRJ/bin/clawdis.js" ]; then
+          if command -v bun >/dev/null 2>&1; then
+            CLI="bun $PRJ/bin/clawdis.js"
+            bun "$PRJ/bin/clawdis.js" \(quotedArgs);
+          elif command -v node >/dev/null 2>&1; then
+            CLI="node $PRJ/bin/clawdis.js"
+            node "$PRJ/bin/clawdis.js" \(quotedArgs);
+          else
+            echo "Node >=22 or Bun >=1.3 required on remote host"; exit 127;
+          fi
         elif command -v pnpm >/dev/null 2>&1; then
           CLI="pnpm --silent clawdis"
           pnpm --silent clawdis \(quotedArgs);
