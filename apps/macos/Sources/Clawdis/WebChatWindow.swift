@@ -11,10 +11,12 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     private let sessionKey: String
     private var tunnel: WebChatTunnel?
     private var baseEndpoint: URL?
+    private let remotePort: Int
 
     init(sessionKey: String) {
         webChatLogger.debug("init WebChatWindowController sessionKey=\(sessionKey, privacy: .public)")
         self.sessionKey = sessionKey
+        self.remotePort = AppStateStore.webChatPort
 
         let config = WKWebViewConfiguration()
         let contentController = WKUserContentController()
@@ -59,7 +61,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
             guard AppStateStore.webChatEnabled else {
                 throw NSError(domain: "WebChat", code: 5, userInfo: [NSLocalizedDescriptionKey: "Web chat disabled in settings"])
             }
-            let endpoint = try await self.prepareEndpoint(remotePort: AppStateStore.webChatPort)
+            let endpoint = try await self.prepareEndpoint(remotePort: self.remotePort)
             self.baseEndpoint = endpoint
             await MainActor.run {
                 var comps = URLComponents(url: endpoint.appendingPathComponent("webchat/"), resolvingAgainstBaseURL: false)
@@ -79,15 +81,40 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     private func prepareEndpoint(remotePort: Int) async throws -> URL {
         if CommandResolver.connectionModeIsRemote() {
-            let tunnel = try await WebChatTunnel.create(remotePort: remotePort)
-            self.tunnel = tunnel
-            guard let port = tunnel.localPort else {
-                throw NSError(domain: "WebChat", code: 2, userInfo: [NSLocalizedDescriptionKey: "tunnel missing port"])
-            }
-            return URL(string: "http://127.0.0.1:\(port)/")!
+            return try await self.startOrRestartTunnel()
         } else {
             return URL(string: "http://127.0.0.1:\(remotePort)/")!
         }
+    }
+
+    private func startOrRestartTunnel() async throws -> URL {
+        // Kill existing tunnel if any
+        self.tunnel?.terminate()
+
+        let tunnel = try await WebChatTunnel.create(remotePort: self.remotePort, preferredLocalPort: 18_788)
+        self.tunnel = tunnel
+
+        // Auto-restart on unexpected termination while window lives
+        tunnel.process.terminationHandler = { [weak self] _ in
+            guard let self else { return }
+            webChatLogger.error("webchat tunnel terminated; restarting")
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    _ = try await self.startOrRestartTunnel()
+                    if let base = self.baseEndpoint {
+                        await MainActor.run { self.loadPage(baseURL: base) }
+                    }
+                } catch {
+                    await MainActor.run { self.showError(error.localizedDescription) }
+                }
+            }
+        }
+
+        guard let port = tunnel.localPort else {
+            throw NSError(domain: "WebChat", code: 2, userInfo: [NSLocalizedDescriptionKey: "tunnel missing port"])
+        }
+        return URL(string: "http://127.0.0.1:\(port)/")!
     }
 
     private func showError(_ text: String) {
@@ -134,14 +161,29 @@ final class WebChatTunnel {
         self.process.terminate()
     }
 
-    static func create(remotePort: Int) async throws -> WebChatTunnel {
+    func terminate() {
+        if self.process.isRunning {
+            self.process.terminate()
+        }
+    }
+
+    static func create(remotePort: Int, preferredLocalPort: UInt16? = nil) async throws -> WebChatTunnel {
         let settings = CommandResolver.connectionSettings()
         guard settings.mode == .remote, let parsed = VoiceWakeForwarder.parse(target: settings.target) else {
             throw NSError(domain: "WebChat", code: 3, userInfo: [NSLocalizedDescriptionKey: "remote not configured"])
         }
 
-        let localPort = try Self.findFreePort()
-        var args: [String] = ["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes", "-N", "-L", "\(localPort):127.0.0.1:\(remotePort)"]
+        let localPort = try Self.findPort(preferred: preferredLocalPort)
+        var args: [String] = [
+            "-o", "BatchMode=yes",
+            "-o", "IdentitiesOnly=yes",
+            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ServerAliveInterval=15",
+            "-o", "ServerAliveCountMax=3",
+            "-o", "TCPKeepAlive=yes",
+            "-N",
+            "-L", "\(localPort):127.0.0.1:\(remotePort)"
+        ]
         if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
         if !identity.isEmpty { args.append(contentsOf: ["-i", identity]) }
@@ -153,12 +195,21 @@ final class WebChatTunnel {
         process.arguments = args
         let pipe = Pipe()
         process.standardError = pipe
+        // Consume stderr so ssh cannot block if it logs
+        pipe.fileHandleForReading.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let line = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty else { return }
+            webChatLogger.error("webchat tunnel stderr: \(line, privacy: .public)")
+        }
         try process.run()
 
         return WebChatTunnel(process: process, localPort: localPort)
     }
 
-    private static func findFreePort() throws -> UInt16 {
+    private static func findPort(preferred: UInt16?) throws -> UInt16 {
+        if let preferred {
+            if Self.portIsFree(preferred) { return preferred }
+        }
         let listener = try NWListener(using: .tcp, on: .any)
         listener.start(queue: .main)
         while listener.port == nil {
@@ -168,6 +219,16 @@ final class WebChatTunnel {
         listener.cancel()
         guard let port else { throw NSError(domain: "WebChat", code: 4, userInfo: [NSLocalizedDescriptionKey: "no port"])}
         return port
+    }
+
+    private static func portIsFree(_ port: UInt16) -> Bool {
+        do {
+            let listener = try NWListener(using: .tcp, on: NWEndpoint.Port(rawValue: port)!)
+            listener.cancel()
+            return true
+        } catch {
+            return false
+        }
     }
 }
 
