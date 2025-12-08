@@ -170,17 +170,27 @@ final class ControlChannel: ObservableObject {
         self.connection = conn
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+            var resumed = false
+            let resume: (Result<Void, Error>) -> Void = { result in
+                guard !resumed else { return }
+                resumed = true
+                switch result {
+                case .success: cont.resume(returning: ())
+                case let .failure(err): cont.resume(throwing: err)
+                }
+            }
+
             conn.stateUpdateHandler = { state in
                 switch state {
                 case .ready:
-                    cont.resume(returning: ())
                     Task { @MainActor in self.state = .connected }
+                    resume(.success(()))
                 case let .failed(err):
                     Task { @MainActor in self.state = .degraded(err.localizedDescription) }
-                    cont.resume(throwing: err)
+                    resume(.failure(err))
                 case let .waiting(err):
                     Task { @MainActor in self.state = .degraded(err.localizedDescription) }
-                    cont.resume(throwing: err)
+                    resume(.failure(err))
                 default:
                     break
                 }
