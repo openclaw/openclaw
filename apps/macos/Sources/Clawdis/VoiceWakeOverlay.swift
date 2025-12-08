@@ -29,6 +29,8 @@ final class VoiceWakeOverlayController: ObservableObject {
     private let buttonWidth: CGFloat = 36
     private let spacing: CGFloat = 8
     private let verticalPadding: CGFloat = 8
+    private let maxHeight: CGFloat = 400
+    private let minHeight: CGFloat = 48
 
     func showPartial(transcript: String, attributed: NSAttributedString? = nil) {
         self.autoSendTask?.cancel()
@@ -210,8 +212,8 @@ final class VoiceWakeOverlayController: ObservableObject {
 
         let contentHeight = ceil(used.height + (textInset.height * 2))
         let total = contentHeight + self.verticalPadding * 2
-        self.model.isOverflowing = total > 400
-        return max(48, min(total, 400))
+        self.model.isOverflowing = total > self.maxHeight
+        return max(self.minHeight, min(total, self.maxHeight))
     }
 
     private func dismissTargetFrame(for frame: NSRect, reason: DismissReason, outcome: SendOutcome) -> NSRect? {
