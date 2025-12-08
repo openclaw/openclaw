@@ -313,25 +313,54 @@ extension GeneralSettings {
     @MainActor
     private func testRemote() async {
         self.remoteStatus = .checking
-        let command = CommandResolver.clawdisCommand(subcommand: "status", extraArgs: ["--json"])
-        let response = await ShellRunner.run(command: command, cwd: nil, env: nil, timeout: 10)
-        if response.ok {
-            self.remoteStatus = .ok
+        let settings = CommandResolver.connectionSettings()
+        guard !settings.target.isEmpty else {
+            self.remoteStatus = .failed("Set an SSH target first")
             return
         }
 
-        let msg: String
-        if let payload = response.payload,
-           let text = String(data: payload, encoding: .utf8),
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            msg = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        } else if let message = response.message, !message.isEmpty {
-            msg = message
-        } else {
-            msg = "Remote status failed (is clawdis on PATH on the remote host?)"
+        // Step 1: basic SSH reachability check
+        let sshResult = await ShellRunner.run(
+            command: Self.sshCheckCommand(target: settings.target, identity: settings.identity),
+            cwd: nil,
+            env: nil,
+            timeout: 8)
+
+        guard sshResult.ok else {
+            let msg = sshResult.message ?? "SSH check failed"
+            self.remoteStatus = .failed(msg)
+            return
         }
-        self.remoteStatus = .failed(msg)
+
+        // Step 2: control channel health over tunnel
+        let originalMode = AppStateStore.shared.connectionMode
+        do {
+            try await ControlChannel.shared.configure(mode: .remote(target: settings.target, identity: settings.identity))
+            let data = try await ControlChannel.shared.health(timeout: 10)
+            if decodeHealthSnapshot(from: data) != nil {
+                self.remoteStatus = .ok
+            } else {
+                self.remoteStatus = .failed("Control channel returned invalid health JSON")
+            }
+        } catch {
+            self.remoteStatus = .failed(error.localizedDescription)
+        }
+
+        // Restore original mode if we temporarily switched
+        if originalMode != .remote {
+            let restoreMode: ControlChannel.Mode = .local
+            try? await ControlChannel.shared.configure(mode: restoreMode)
+        }
+    }
+
+    private static func sshCheckCommand(target: String, identity: String) -> [String] {
+        var args: [String] = ["/usr/bin/ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+        if !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            args.append(contentsOf: ["-i", identity])
+        }
+        args.append(target)
+        args.append("echo ok")
+        return args
     }
 
     private func revealLogs() {

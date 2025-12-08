@@ -5,21 +5,20 @@ import SwiftUI
 final class HeartbeatStore: ObservableObject {
     static let shared = HeartbeatStore()
 
-    @Published private(set) var lastEvent: AgentRPC.HeartbeatEvent?
+    @Published private(set) var lastEvent: ControlHeartbeatEvent?
 
     private var observer: NSObjectProtocol?
 
     private init() {
         self.observer = NotificationCenter.default.addObserver(
-            forName: AgentRPC.heartbeatNotification,
+            forName: .controlHeartbeat,
             object: nil,
-            queue: .main
-        ) { [weak self] note in
-            guard let event = note.object as? AgentRPC.HeartbeatEvent else { return }
-            Task { @MainActor in
-                self?.lastEvent = event
+            queue: .main) { [weak self] note in
+                guard let data = note.object as? Data else { return }
+                if let decoded = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data) {
+                    Task { @MainActor in self?.lastEvent = decoded }
+                }
             }
-        }
     }
 
     @MainActor

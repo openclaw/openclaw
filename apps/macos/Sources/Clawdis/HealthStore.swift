@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import SwiftUI
+import Network
 
 struct HealthSnapshot: Codable, Sendable {
     struct Web: Codable, Sendable {
@@ -96,43 +97,30 @@ final class HealthStore: ObservableObject {
         self.isRefreshing = true
         defer { self.isRefreshing = false }
 
-        guard CommandResolver.hasAnyClawdisInvoker() else {
-            self.lastError = "clawdis CLI not found; install deps in the configured project root or add it to PATH"
-            if onDemand { self.snapshot = nil }
-            return
-        }
-
-        var env = ProcessInfo.processInfo.environment
-        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
-
-        let response = await ShellRunner.run(
-            command: CommandResolver.clawdisCommand(subcommand: "health", extraArgs: ["--json"]),
-            cwd: CommandResolver.projectRootPath(),
-            env: env,
-            timeout: 15)
-
-        if let data = response.payload, !data.isEmpty {
-            if let decoded = decodeHealthSnapshot(from: data) {
-                self.snapshot = decoded
-                if response.ok {
-                    self.lastSuccess = Date()
-                    self.lastError = nil
-                } else {
-                    self.lastError = self.describeFailure(from: decoded, fallback: response.message)
-                }
-                return
+        do {
+            let mode = AppStateStore.shared.connectionMode
+            switch mode {
+            case .local:
+                try await ControlChannel.shared.configure(mode: .local)
+            case .remote:
+                let target = AppStateStore.shared.remoteTarget
+                let identity = AppStateStore.shared.remoteIdentity
+                try await ControlChannel.shared.configure(mode: .remote(target: target, identity: identity))
             }
 
-            let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let snippet = String(text.prefix(220))
-            Self.logger.error("health decode failed; payload=\(snippet, privacy: .public)")
-            self.lastError = snippet.isEmpty ? (response.message ?? "health probe failed") : "health output not JSON: \(snippet)"
+            let data = try await ControlChannel.shared.health(timeout: 15)
+            if let decoded = decodeHealthSnapshot(from: data) {
+                self.snapshot = decoded
+                self.lastSuccess = Date()
+                self.lastError = nil
+            } else {
+                self.lastError = "health output not JSON"
+                if onDemand { self.snapshot = nil }
+            }
+        } catch {
+            self.lastError = error.localizedDescription
             if onDemand { self.snapshot = nil }
-            return
         }
-
-        self.lastError = response.message ?? "health probe failed"
-        if onDemand { self.snapshot = nil }
     }
 
     var state: HealthState {

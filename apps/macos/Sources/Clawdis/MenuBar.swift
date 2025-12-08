@@ -6,6 +6,7 @@ import MenuBarExtraAccess
 import OSLog
 import Security
 import SwiftUI
+import Network
 
 @main
 struct ClawdisApp: App {
@@ -661,6 +662,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
             RelayProcessManager.shared.setActive(!state.isPaused)
         }
         Task {
+            let controlMode: ControlChannel.Mode = AppStateStore.shared.connectionMode == .remote
+                ? .remote(target: AppStateStore.shared.remoteTarget, identity: AppStateStore.shared.remoteIdentity)
+                : .local
+            try? await ControlChannel.shared.configure(mode: controlMode)
             try? await AgentRPC.shared.start()
             _ = await AgentRPC.shared.setHeartbeatsEnabled(AppStateStore.shared.heartbeatsEnabled)
         }
