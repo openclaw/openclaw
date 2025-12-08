@@ -225,17 +225,10 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     private static func loadInitialMessagesJSON(for sessionKey: String) -> String {
         // Prefer remote session log when running in remote mode; fall back to local files.
         var content: String?
-        if self.connectionModeIsRemote(),
-           let sessionId = self.remoteSessionId(for: sessionKey)
-        {
-            if let data = self.readRemoteFile("$HOME/.clawdis/sessions/\(sessionId).jsonl"),
-               let text = String(data: data, encoding: .utf8)
-            {
-                content = text
-            } else if let data = self.readRemoteFile("$HOME/.tau/agent/sessions/clawdis/\(sessionId).jsonl"),
-                      let text = String(data: data, encoding: .utf8)
-            {
-                content = text
+
+        if self.connectionModeIsRemote() {
+            if let remote = self.fetchRemoteSessionLog(sessionKey: sessionKey) {
+                content = remote
             }
         } else if let sessionId = self.sessionId(for: sessionKey) {
             let primary = self.expand("~/.clawdis/sessions/\(sessionId).jsonl")
@@ -300,22 +293,66 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
         return (target: target, identity: identity)
     }
 
-    private static func remoteSessionId(for key: String) -> String? {
-        if let data = self.readRemoteFile("$HOME/.clawdis/sessions/sessions.json"),
-           let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let entry = decoded[key] as? [String: Any],
-           let sessionId = entry["sessionId"] as? String
-        {
-            return sessionId
+    private struct SessionsSummary: Decodable {
+        struct Entry: Decodable {
+            let key: String
+            let sessionId: String?
         }
-        if let data = self.readRemoteFile("$HOME/.tau/agent/sessions/clawdis/sessions.json"),
-           let decoded = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-           let entry = decoded[key] as? [String: Any],
-           let sessionId = entry["sessionId"] as? String
-        {
-            return sessionId
+
+        let path: String
+        let sessions: [Entry]
+    }
+
+    private static func remoteSessionsSummary() -> SessionsSummary? {
+        guard let jsonData = self.runClawdisCommand(subcommand: "sessions", args: ["--json"]) else {
+            webChatLogger.error("remote sessions summary command failed")
+            return nil
+        }
+        if let decoded = try? JSONDecoder().decode(SessionsSummary.self, from: jsonData) {
+            return decoded
+        }
+        if let text = String(data: jsonData, encoding: .utf8) {
+            webChatLogger.error("failed to decode sessions summary json=\(text, privacy: .public)")
         }
         return nil
+    }
+
+    private static func runClawdisCommand(subcommand: String, args: [String]) -> Data? {
+        var env = ProcessInfo.processInfo.environment
+        env["PATH"] = CommandResolver.preferredPaths().joined(separator: ":")
+
+        let command = CommandResolver.clawdisCommand(subcommand: subcommand, extraArgs: args)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: command.first ?? "/usr/bin/env")
+        process.arguments = Array(command.dropFirst())
+        process.currentDirectoryURL = URL(fileURLWithPath: CommandResolver.projectRootPath())
+        process.environment = env
+
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+
+        do { try process.run() } catch {
+            webChatLogger.error("clawdis \(subcommand) failed to launch: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+        process.waitUntilExit()
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        if !data.isEmpty { return data }
+        let msg = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        webChatLogger.error("clawdis \(subcommand) produced no output: \(msg, privacy: .public)")
+        return nil
+    }
+
+    private static func remoteSessionId(for key: String) -> String? {
+        if let summary = self.remoteSessionsSummary(),
+           let entry = summary.sessions.first(where: { $0.key == key }),
+           let sessionId = entry.sessionId
+        {
+            return sessionId
+        }
+        return self.remoteSessionsSummary()?.sessions.first?.sessionId
     }
 
     private static func readRemoteFile(_ path: String) -> Data? {
@@ -344,8 +381,47 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
 
         do { try process.run() } catch { return nil }
         process.waitUntilExit()
-        guard process.terminationStatus == 0 else { return nil }
+        guard process.terminationStatus == 0 else {
+            let stderr = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            webChatLogger.error("ssh cat failed status=\(process.terminationStatus, privacy: .public) stderr=\(stderr, privacy: .public)")
+            return nil
+        }
         return out.fileHandleForReading.readDataToEndOfFile()
+    }
+
+    private static func fetchRemoteSessionLog(sessionKey: String) -> String? {
+        guard let summary = self.remoteSessionsSummary() else {
+            webChatLogger.error("remote sessions summary missing")
+            return nil
+        }
+
+        let sessionId = summary.sessions.first(where: { $0.key == sessionKey })?.sessionId
+            ?? summary.sessions.first?.sessionId
+        guard let sessionId else {
+            webChatLogger.error("remote session id missing for key=\(sessionKey, privacy: .public)")
+            return nil
+        }
+
+        // Prefer the path reported by the CLI; replace trailing sessions.json with the log file.
+        let basePath = summary.path
+        let logPath: String = if basePath.hasSuffix("sessions.json") {
+            String(basePath.dropLast("sessions.json".count)) + "\(sessionId).jsonl"
+        } else {
+            basePath + "/\(sessionId).jsonl"
+        }
+
+        if let data = self.readRemoteFile(logPath), let text = String(data: data, encoding: .utf8) {
+            return text
+        }
+
+        // Legacy path fallback if the CLI reports a different store.
+        let legacy = "$HOME/.tau/agent/sessions/clawdis/\(sessionId).jsonl"
+        if let data = self.readRemoteFile(legacy), let text = String(data: data, encoding: .utf8) {
+            return text
+        }
+
+        webChatLogger.error("remote session log not found at \(logPath, privacy: .public)")
+        return nil
     }
 
     private static func expand(_ path: String) -> String {
