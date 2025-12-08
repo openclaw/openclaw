@@ -161,6 +161,7 @@ type CommandReplyParams = {
   verboseLevel?: "off" | "on";
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
   runId?: string;
+  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void;
 };
 
 export type CommandReplyMeta = {
@@ -596,6 +597,14 @@ export async function runCommandReply(
                 args: ev.args,
               },
             });
+            params.onAgentEvent?.({
+              stream: "tool",
+              data: {
+                phase: "start",
+                name: ev.toolName,
+                toolCallId: ev.toolCallId,
+              },
+            });
           }
 
           if (
@@ -612,6 +621,15 @@ export async function runCommandReply(
 
             emitAgentEvent({
               runId,
+              stream: "tool",
+              data: {
+                phase: "result",
+                name: toolName,
+                toolCallId,
+                meta,
+              },
+            });
+            params.onAgentEvent?.({
               stream: "tool",
               data: {
                 phase: "result",
@@ -646,6 +664,13 @@ export async function runCommandReply(
 
           if (ev.type === "message_end") {
             streamAssistantFinal(ev.message);
+            const text = extractRpcAssistantText(line);
+            if (text) {
+              params.onAgentEvent?.({
+                stream: "assistant",
+                data: { text },
+              });
+            }
           }
 
           // Preserve existing partial reply hook when provided.
