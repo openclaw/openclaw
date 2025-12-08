@@ -139,6 +139,9 @@ final class VoiceWakeOverlayController: ObservableObject {
                 window.orderOut(nil)
                 self.model.isVisible = false
                 self.model.level = 0
+                if outcome == .empty {
+                    AppStateStore.shared.blinkOnce()
+                }
                 AppStateStore.shared.stopVoiceEars()
             }
         }

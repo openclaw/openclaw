@@ -106,6 +106,7 @@ final class AppState: ObservableObject {
 
     @Published var isWorking: Bool = false
     @Published var earBoostActive: Bool = false
+    @Published var blinkTick: Int = 0
     @Published var heartbeatsEnabled: Bool {
         didSet {
             UserDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
@@ -226,6 +227,10 @@ final class AppState: ObservableObject {
         self.earBoostTask?.cancel()
         self.earBoostTask = nil
         self.earBoostActive = false
+    }
+
+    func blinkOnce() {
+        self.blinkTick &+= 1
     }
 
     func setVoiceWakeEnabled(_ enabled: Bool) async {
