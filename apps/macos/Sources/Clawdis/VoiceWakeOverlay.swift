@@ -1,4 +1,5 @@
 import AppKit
+import QuartzCore
 import SwiftUI
 
 /// Lightweight, borderless panel that shows the current voice wake transcript near the menu bar.
@@ -13,6 +14,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         var isFinal: Bool = false
         var isVisible: Bool = false
         var forwardEnabled: Bool = false
+        var isSending: Bool = false
     }
 
     private var window: NSPanel?
@@ -29,6 +31,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.text = transcript
         self.model.isFinal = false
         self.model.forwardEnabled = false
+        self.model.isSending = false
         self.present()
     }
 
@@ -38,16 +41,20 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.text = transcript
         self.model.isFinal = true
         self.model.forwardEnabled = forwardConfig.enabled
+        self.model.isSending = false
         self.present()
         self.scheduleAutoSend()
     }
 
     func userBeganEditing() {
         self.autoSendTask?.cancel()
+        self.model.isSending = false
     }
 
     func updateText(_ text: String) {
         self.model.text = text
+        self.model.isSending = false
+        self.updateWindowFrame(animate: true)
     }
 
     func sendNow() {
@@ -62,18 +69,23 @@ final class VoiceWakeOverlayController: ObservableObject {
             return
         }
 
+        self.model.isSending = true
         let payload = VoiceWakeForwarder.prefixedTranscript(text)
         Task.detached {
             await VoiceWakeForwarder.forward(transcript: payload, config: forwardConfig)
         }
-        self.dismiss()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
+            self.dismiss()
+        }
     }
 
     func dismiss(reason: DismissReason = .explicit) {
         self.autoSendTask?.cancel()
+        self.model.isSending = false
         guard let window else { return }
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             window.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in
@@ -90,18 +102,23 @@ final class VoiceWakeOverlayController: ObservableObject {
     private func present() {
         self.ensureWindow()
         self.hostingView?.rootView = VoiceWakeOverlayView(controller: self)
-        self.updateWindowFrame()
+        let target = self.targetFrame()
 
         guard let window else { return }
         if !self.model.isVisible {
             self.model.isVisible = true
+            let start = target.offsetBy(dx: 0, dy: -6)
+            window.setFrame(start, display: true)
             window.alphaValue = 0
             window.orderFrontRegardless()
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(target, display: true)
                 window.animator().alphaValue = 1
             }
         } else {
+            self.updateWindowFrame(animate: true)
             window.orderFrontRegardless()
         }
     }
@@ -132,16 +149,33 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.window = panel
     }
 
-    private func updateWindowFrame() {
-        guard let screen = NSScreen.main, let window, let host = self.hostingView else { return }
+    private func targetFrame() -> NSRect {
+        guard let screen = NSScreen.main, let host = self.hostingView else {
+            return .zero
+        }
+        host.layoutSubtreeIfNeeded()
         let fit = host.fittingSize
-        let height = max(42, min(fit.height, 140))
+        let height = max(42, min(fit.height, 180))
         let size = NSSize(width: self.width, height: height)
         let visible = screen.visibleFrame
         let origin = CGPoint(
             x: visible.maxX - size.width - self.padding,
             y: visible.maxY - size.height - self.padding)
-        window.setFrame(NSRect(origin: origin, size: size), display: true, animate: false)
+        return NSRect(origin: origin, size: size)
+    }
+
+    private func updateWindowFrame(animate: Bool = false) {
+        guard let window else { return }
+        let frame = self.targetFrame()
+        if animate {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.12
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(frame, display: true)
+            }
+        } else {
+            window.setFrame(frame, display: true)
+        }
     }
 
     private func scheduleAutoSend() {
@@ -176,15 +210,25 @@ private struct VoiceWakeOverlayView: View {
             Button {
                 self.controller.sendNow()
             } label: {
-                Image(systemName: "paperplane.fill")
-                    .imageScale(.small)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(Color.accentColor.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                let sending = self.controller.model.isSending
+                ZStack {
+                    Image(systemName: "paperplane.fill")
+                        .opacity(sending ? 0 : 1)
+                        .scaleEffect(sending ? 0.5 : 1)
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .opacity(sending ? 1 : 0)
+                        .scaleEffect(sending ? 1.05 : 0.8)
+                }
+                .imageScale(.small)
+                .padding(.vertical, 6)
+                .padding(.horizontal, 10)
+                .background(Color.accentColor.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sending)
             }
             .buttonStyle(.plain)
-            .disabled(!self.controller.model.forwardEnabled)
+            .disabled(!self.controller.model.forwardEnabled || self.controller.model.isSending)
             .keyboardShortcut(.return, modifiers: [.command])
         }
         .padding(.vertical, 8)
