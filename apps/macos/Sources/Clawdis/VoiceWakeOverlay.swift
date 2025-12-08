@@ -33,6 +33,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     private let verticalPadding: CGFloat = 8
     private let maxHeight: CGFloat = 400
     private let minHeight: CGFloat = 48
+    private let closeOverflow: CGFloat = 18
 
     func showPartial(transcript: String, attributed: NSAttributedString? = nil) {
         self.autoSendTask?.cancel()
@@ -184,7 +185,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     private func ensureWindow() {
         if self.window != nil { return }
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: self.width, height: 60),
+            contentRect: NSRect(x: 0, y: 0, width: self.width + self.closeOverflow, height: 60 + self.closeOverflow),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false)
@@ -210,7 +211,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     private func targetFrame() -> NSRect {
         guard let screen = NSScreen.main else { return .zero }
         let height = self.measuredHeight()
-        let size = NSSize(width: self.width, height: height)
+        let size = NSSize(width: self.width + self.closeOverflow, height: height + self.closeOverflow)
         let visible = screen.visibleFrame
         let origin = CGPoint(
             x: visible.maxX - size.width - self.padding,
@@ -349,20 +350,32 @@ private struct VoiceWakeOverlayView: View {
                     self.controller.sendNow()
                 } label: {
                     let sending = self.controller.model.isSending
+                    let level = self.controller.model.level
                     ZStack {
-                        Image(systemName: "paperplane.fill")
-                            .opacity(sending ? 0 : 1)
-                            .scaleEffect(sending ? 0.5 : 1)
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                            .opacity(sending ? 1 : 0)
-                            .scaleEffect(sending ? 1.05 : 0.8)
+                        GeometryReader { geo in
+                            let width = geo.size.width
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.12))
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.accentColor.opacity(0.25))
+                                .frame(width: width * max(0, min(1, level)), alignment: .leading)
+                                .animation(.easeOut(duration: 0.08), value: level)
+                        }
+                        .frame(height: 28)
+
+                        ZStack {
+                            Image(systemName: "paperplane.fill")
+                                .opacity(sending ? 0 : 1)
+                                .scaleEffect(sending ? 0.5 : 1)
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .opacity(sending ? 1 : 0)
+                                .scaleEffect(sending ? 1.05 : 0.8)
+                        }
+                        .imageScale(.small)
                     }
-                    .imageScale(.small)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
-                    .background(Color.accentColor.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .frame(width: 32, height: 28)
                     .animation(.spring(response: 0.35, dampingFraction: 0.78), value: sending)
                 }
                 .buttonStyle(.plain)
@@ -531,7 +544,8 @@ private struct VibrantLabelView: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         guard let container = nsView as? ClickCatcher,
               let label = container.subviews.first as? NSTextField else { return }
-        label.attributedStringValue = self.attributed
+        label.attributedStringValue = self.attributed.strippingForegroundColor()
+        label.textColor = .labelColor
     }
 
 }
@@ -627,5 +641,13 @@ private final class TranscriptNSTextView: NSTextView {
             return
         }
         super.keyDown(with: event)
+    }
+}
+
+private extension NSAttributedString {
+    func strippingForegroundColor() -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: self)
+        mutable.removeAttribute(.foregroundColor, range: NSRange(location: 0, length: mutable.length))
+        return mutable
     }
 }
