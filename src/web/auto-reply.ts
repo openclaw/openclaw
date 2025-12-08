@@ -14,6 +14,10 @@ import { danger, info, isVerbose, logVerbose, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
+import {
+  type HeartbeatEvent,
+  writeHeartbeatEvent,
+} from "../process/heartbeat-events.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { jidToE164, normalizeE164 } from "../utils.js";
 import { monitorWebInbox } from "./inbound.js";
@@ -78,6 +82,10 @@ const formatDuration = (ms: number) =>
 
 const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
+
+function emitHeartbeatEvent(evt: Omit<HeartbeatEvent, "type" | "ts">) {
+  writeHeartbeatEvent({ type: "heartbeat", ts: Date.now(), ...evt });
+}
 export const HEARTBEAT_PROMPT = "HEARTBEAT /think:high";
 
 function elide(text?: string, limit = 400) {
@@ -261,6 +269,12 @@ export async function runWebHeartbeatOnce(opts: {
         return;
       }
       const sendResult = await sender(to, overrideBody, { verbose });
+      emitHeartbeatEvent({
+        status: "sent",
+        to,
+        preview: overrideBody.slice(0, 160),
+        hasMedia: false,
+      });
       heartbeatLogger.info(
         {
           to,
@@ -307,6 +321,7 @@ export async function runWebHeartbeatOnce(opts: {
         "heartbeat skipped",
       );
       if (verbose) console.log(success("heartbeat: ok (empty reply)"));
+      emitHeartbeatEvent({ status: "ok-empty", to });
       return;
     }
 
@@ -328,6 +343,7 @@ export async function runWebHeartbeatOnce(opts: {
         "heartbeat skipped",
       );
       console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
+      emitHeartbeatEvent({ status: "ok-token", to });
       return;
     }
 
@@ -351,6 +367,12 @@ export async function runWebHeartbeatOnce(opts: {
     }
 
     const sendResult = await sender(to, finalText, { verbose });
+    emitHeartbeatEvent({
+      status: "sent",
+      to,
+      preview: finalText.slice(0, 160),
+      hasMedia,
+    });
     heartbeatLogger.info(
       {
         to,
@@ -364,6 +386,7 @@ export async function runWebHeartbeatOnce(opts: {
   } catch (err) {
     heartbeatLogger.warn({ to, error: String(err) }, "heartbeat failed");
     console.log(danger(`heartbeat: failed - ${String(err)}`));
+    emitHeartbeatEvent({ status: "failed", to, reason: String(err) });
     throw err;
   }
 }

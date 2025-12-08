@@ -24,6 +24,10 @@ import {
   resolveReconnectPolicy,
 } from "../web/reconnect.js";
 import {
+  readLatestHeartbeat,
+  tailHeartbeatEvents,
+} from "../process/heartbeat-events.js";
+import {
   ensureWebChatServerFromConfig,
   startWebChatServer,
 } from "../webchat/server.js";
@@ -241,6 +245,14 @@ Examples:
         }
       };
 
+      const forwardHeartbeat = (payload: unknown) => {
+        respond({ type: "event", event: "heartbeat", payload });
+      };
+
+      const latest = readLatestHeartbeat();
+      if (latest) forwardHeartbeat(latest);
+      const stopTail = tailHeartbeatEvents(forwardHeartbeat);
+
       rl.on("line", async (line: string) => {
         if (!line.trim()) return;
         try {
@@ -311,6 +323,8 @@ Examples:
       };
 
       await new Promise(() => {});
+
+      stopTail();
     });
 
   program

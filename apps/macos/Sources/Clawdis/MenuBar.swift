@@ -56,6 +56,7 @@ private struct MenuContent: View {
     let updater: UpdaterProviding?
     @ObservedObject private var relayManager = RelayProcessManager.shared
     @ObservedObject private var healthStore = HealthStore.shared
+    @ObservedObject private var heartbeatStore = HeartbeatStore.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
@@ -68,6 +69,7 @@ private struct MenuContent: View {
             }
             self.statusRow
             Toggle(isOn: self.heartbeatsBinding) { Text("Send Heartbeats") }
+            self.heartbeatStatusRow
             Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
@@ -167,6 +169,45 @@ private struct MenuContent: View {
         case .failed: .red
         case .stopped: .secondary
         }
+    }
+
+    private var heartbeatStatusRow: some View {
+        let label: String
+        let color: Color
+
+        if let evt = self.heartbeatStore.lastEvent {
+            let ageText = age(from: Date(timeIntervalSince1970: evt.ts / 1000))
+            switch evt.status {
+            case "sent":
+                label = "Last heartbeat sent · \(ageText)"
+                color = .blue
+            case "ok-empty", "ok-token":
+                label = "Heartbeat ok · \(ageText)"
+                color = .green
+            case "skipped":
+                label = "Heartbeat skipped · \(ageText)"
+                color = .secondary
+            case "failed":
+                label = "Heartbeat failed · \(ageText)"
+                color = .red
+            default:
+                label = "Heartbeat · \(ageText)"
+                color = .secondary
+            }
+        } else {
+            label = "No heartbeat yet"
+            color = .secondary
+        }
+
+        return HStack(spacing: 8) {
+            Circle()
+                .fill(color)
+                .frame(width: 8, height: 8)
+            Text(label)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.primary)
+        }
+        .padding(.vertical, 2)
     }
 
     private var activeBinding: Binding<Bool> {

@@ -4,6 +4,18 @@ import OSLog
 actor AgentRPC {
     static let shared = AgentRPC()
 
+    struct HeartbeatEvent: Codable {
+        let ts: Double
+        let status: String
+        let to: String?
+        let preview: String?
+        let durationMs: Double?
+        let hasMedia: Bool?
+        let reason: String?
+    }
+
+    static let heartbeatNotification = Notification.Name("clawdis.rpc.heartbeat")
+
     private var process: Process?
     private var stdinHandle: FileHandle?
     private var stdoutHandle: FileHandle?
@@ -175,11 +187,38 @@ actor AgentRPC {
             let lineData = self.buffer.subdata(in: self.buffer.startIndex..<range.lowerBound)
             self.buffer.removeSubrange(self.buffer.startIndex...range.lowerBound)
             guard let line = String(data: lineData, encoding: .utf8) else { continue }
+
+            // Handle event envelopes (unsolicited)
+            if let event = self.parseHeartbeatEvent(from: line) {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: Self.heartbeatNotification, object: event)
+                }
+                continue
+            }
+
             if let waiter = waiters.first {
                 self.waiters.removeFirst()
                 waiter.resume(returning: line)
             }
         }
+    }
+
+    private func parseHeartbeatEvent(from line: String) -> HeartbeatEvent? {
+        guard let data = line.data(using: .utf8) else { return nil }
+        guard
+            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let type = obj["type"] as? String,
+            type == "event",
+            let evt = obj["event"] as? String,
+            evt == "heartbeat",
+            let payload = obj["payload"] as? [String: Any]
+        else {
+            return nil
+        }
+
+        let decoder = JSONDecoder()
+        guard let payloadData = try? JSONSerialization.data(withJSONObject: payload) else { return nil }
+        return try? decoder.decode(HeartbeatEvent.self, from: payloadData)
     }
 
     private func nextLine() async throws -> String {
