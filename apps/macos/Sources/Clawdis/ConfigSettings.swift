@@ -14,6 +14,8 @@ struct ConfigSettings: View {
     @State private var allowAutosave = false
     @State private var heartbeatMinutes: Int?
     @State private var heartbeatBody: String = "HEARTBEAT"
+    @AppStorage(webChatEnabledKey) private var webChatEnabled: Bool = true
+    @AppStorage(webChatPortKey) private var webChatPort: Int = 18788
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -89,6 +91,27 @@ struct ConfigSettings: View {
                     Text("Heartbeats keep Pi sessions warm; 0 minutes disables them.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+            }
+
+            Divider().padding(.vertical, 4)
+
+            LabeledContent("Web chat") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Toggle("Enable embedded web chat (loopback only)", isOn: self.$webChatEnabled)
+                        .toggleStyle(.switch)
+                        .frame(width: 320, alignment: .leading)
+                    HStack(spacing: 8) {
+                        Text("Port")
+                        TextField("18788", value: self.$webChatPort, formatter: NumberFormatter())
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 100)
+                            .disabled(!self.webChatEnabled)
+                    }
+                    Text("Mac app connects to the relay’s loopback web chat on this port. Remote mode uses SSH -L to forward it.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: 480, alignment: .leading)
                 }
             }
 

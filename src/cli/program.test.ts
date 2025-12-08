@@ -7,6 +7,7 @@ const monitorWebProvider = vi.fn();
 const logWebSelfId = vi.fn();
 const waitForever = vi.fn();
 const monitorTelegramProvider = vi.fn();
+const startWebChatServer = vi.fn(async () => ({ port: 18788, token: null }));
 
 const runtime = {
   log: vi.fn(),
@@ -25,6 +26,10 @@ vi.mock("../provider-web.js", () => ({
 }));
 vi.mock("../telegram/monitor.js", () => ({
   monitorTelegramProvider,
+}));
+vi.mock("../webchat/server.js", () => ({
+  startWebChatServer,
+  getWebChatServer: () => null,
 }));
 vi.mock("./deps.js", () => ({
   createDefaultDeps: () => ({ waitForever }),
@@ -91,5 +96,15 @@ describe("cli program", () => {
     const program = buildProgram();
     await program.parseAsync(["status"], { from: "user" });
     expect(statusCommand).toHaveBeenCalled();
+  });
+
+  it("starts webchat server and prints json", async () => {
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(["webchat", "--json"], { from: "user" });
+    expect(startWebChatServer).toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      JSON.stringify({ port: 18788, token: null, basePath: "/webchat/", host: "127.0.0.1" }),
+    );
   });
 });

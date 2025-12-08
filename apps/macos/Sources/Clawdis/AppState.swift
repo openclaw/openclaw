@@ -110,6 +110,14 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
     }
 
+    @Published var webChatEnabled: Bool {
+        didSet { UserDefaults.standard.set(self.webChatEnabled, forKey: webChatEnabledKey) }
+    }
+
+    @Published var webChatPort: Int {
+        didSet { UserDefaults.standard.set(self.webChatPort, forKey: webChatPortKey) }
+    }
+
     @Published var remoteTarget: String {
         didSet { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
     }
@@ -170,6 +178,9 @@ final class AppState: ObservableObject {
         self.remoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
+        self.webChatEnabled = UserDefaults.standard.object(forKey: webChatEnabledKey) as? Bool ?? true
+        let storedPort = UserDefaults.standard.integer(forKey: webChatPortKey)
+        self.webChatPort = storedPort > 0 ? storedPort : 18788
 
         if self.swabbleEnabled, !PermissionManager.voiceWakePermissionsGranted() {
             self.swabbleEnabled = false
@@ -231,6 +242,15 @@ enum AppStateStore {
 
     static func updateLaunchAtLogin(enabled: Bool) {
         LaunchAgentManager.set(enabled: enabled, bundlePath: Bundle.main.bundlePath)
+    }
+
+    static var webChatEnabled: Bool {
+        UserDefaults.standard.object(forKey: webChatEnabledKey) as? Bool ?? true
+    }
+
+    static var webChatPort: Int {
+        let stored = UserDefaults.standard.integer(forKey: webChatPortKey)
+        return stored > 0 ? stored : 18788
     }
 }
 

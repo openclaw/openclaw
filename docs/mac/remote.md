@@ -1,29 +1,51 @@
-# Remote Clawd mode (Dec 2025)
+# Remote Clawdis (macOS ⇄ remote host)
 
-## What it is
-- Run the Clawdis relay on another machine (Linux/macOS) reachable over SSH while the macOS app keeps TCC, notifications, and UI.
-- You can toggle Local vs Remote in **Settings → General → Clawdis runs**; remote adds fields for SSH target, identity file, and project root.
-- We recommend running a Tailscale node on both sides so the target is reachable even off-LAN.
+Updated: 2025-12-08
 
-## Requirements
-- SSH access with public-key auth (`BatchMode=yes`); set `user@host[:port]` and an identity file.
-- The remote host must have a working `clawdis` install in the project root you specify.
-- `clawdis-mac` is still used for permissioned actions; the CLI path is auto-discovered on the remote via `command -v` + common prefixes.
+This flow lets the macOS app act as a full remote control for a Clawdis relay running on another host (e.g. a Mac Studio). All features—health checks, permissions bootstrapping via the helper CLI, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from *Settings → General*.
 
-## How it works
-- The app builds commands through the new runner:
-  - `clawdis status/health/agent/relay` are wrapped in `ssh … /bin/sh -c '<cd project && clawdis …>'` with CLI path lookup.
-  - `clawdis rpc` is tunneled over a long-lived SSH process so web chat and the app’s Agent tab stay responsive.
-- Local TCC flows remain unchanged; if the remote agent needs local permissions, it should SSH back here and invoke `clawdis-mac …` (same CLI surface).
+## Modes
+- **Local (this Mac)**: Everything runs on the laptop. No SSH involved.
+- **Remote over SSH**: Clawdis commands are executed on the remote host. The mac app opens an SSH connection with `-o BatchMode` plus your chosen identity/key.
 
-## Setup steps
-1) Open **Settings → General → Clawdis runs** and pick **Remote over SSH**.
-2) Fill **SSH target**, **Identity file**, and **Project root** (where `clawdis` lives on the remote).
-3) Click **Test remote**; it runs `clawdis status --json` remotely and caches the resolved CLI path.
-4) Run onboarding’s WhatsApp login step on the machine where the relay will run (remote if remote mode is enabled).
+## Prereqs on the remote host
+1) Install Node + pnpm and build/install the Clawdis CLI (`pnpm install && pnpm build && pnpm link --global`).
+2) Ensure `clawdis` is on PATH for non-interactive shells. If you prefer, symlink `clawdis-mac` too so TCC-capable actions can run remotely when needed.
+3) Open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
 
-## Notes
-- Connection strings accept `user@host:port`; leading `ssh ` is stripped if pasted from a shell snippet.
-- Project root defaults to the path you enter; if blank, no `cd` is issued before the relay command.
-- The remote log path remains `/tmp/clawdis/clawdis.log`; view it via SSH if you need details.
-- If you switch back to Local, existing remote state is left untouched; re-run Test remote when switching again.
+## macOS app setup
+1) Open *Settings → General*.
+2) Under **Clawdis runs**, pick **Remote over SSH** and set:
+   - **SSH target**: `user@host` (optional `:port`).
+   - **Identity file** (advanced): path to your key.
+   - **Project root** (advanced): remote checkout path used for commands.
+3) Hit **Test remote**. Success indicates the remote `clawdis status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn’t found remotely.
+4) Health checks and Web Chat will now run through this SSH tunnel automatically.
+
+## Web Chat over SSH
+- The relay hosts a loopback-only HTTP server (`clawdis webchat --port <port>`; default 18788).
+- The mac app forwards `127.0.0.1:<port>` over SSH (`ssh -L <ephemeral>:127.0.0.1:<port>`), loads `/webchat/info`, and serves the Web Chat UI in-app.
+- Keep the feature enabled in *Settings → Config → Web chat*. Disable it to hide the menu entry entirely.
+
+## Permissions
+- The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine to grant them once.
+- When remote commands need local TCC (e.g., screenshots on the remote Mac), ensure `clawdis-mac` is installed there so the helper can request/hold those permissions.
+
+## WhatsApp login flow (remote)
+- Run `clawdis login --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
+- Re-run login on that host if auth expires. Health check will surface link problems.
+
+## Troubleshooting
+- **exit 127 / not found**: `clawdis` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
+- **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`clawdis status --json`).
+- **Web Chat stuck**: confirm the remote webchat server is running (`clawdis webchat --json`) and the port matches *Settings → Config*.
+- **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
+
+## Notification sounds
+Pick sounds per notification from scripts with the helper CLI, e.g.:
+
+```bash
+clawdis-mac notify --title "Ping" --body "Remote relay ready" --sound Glass
+```
+
+There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.

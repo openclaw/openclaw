@@ -110,6 +110,9 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     private func bootstrap() async {
         do {
             let cliInfo = try await self.fetchWebChatCliInfo()
+            guard AppStateStore.webChatEnabled else {
+                throw NSError(domain: "WebChat", code: 5, userInfo: [NSLocalizedDescriptionKey: "Web chat disabled in settings"])
+            }
             let endpoint = try await self.prepareEndpoint(remotePort: cliInfo.port)
             self.baseEndpoint = endpoint
             let infoURL = endpoint.appendingPathComponent("webchat/info")
@@ -138,8 +141,11 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     }
 
     private func fetchWebChatCliInfo() async throws -> WebChatCliInfo {
+        var args = ["--json"]
+        let port = AppStateStore.webChatPort
+        if port > 0 { args += ["--port", String(port)] }
         let response = await ShellRunner.run(
-            command: CommandResolver.clawdisCommand(subcommand: "webchat", extraArgs: ["--json"]),
+            command: CommandResolver.clawdisCommand(subcommand: "webchat", extraArgs: args),
             cwd: CommandResolver.projectRootPath(),
             env: nil,
             timeout: 10)
@@ -209,50 +215,42 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     private func runAgent(text: String, sessionKey: String) async -> (text: String?, error: String?) {
         await MainActor.run { AppStateStore.shared.setWorking(true) }
         defer { Task { await MainActor.run { AppStateStore.shared.setWorking(false) } } }
-        if let base = self.baseEndpoint {
-            do {
-                var req = URLRequest(url: base.appendingPathComponent("webchat/rpc"))
-                req.httpMethod = "POST"
-                var headers: [String: String] = ["Content-Type": "application/json"]
-                if let apiToken, !apiToken.isEmpty { headers["Authorization"] = "Bearer \(apiToken)" }
-                req.allHTTPHeaderFields = headers
-                let body: [String: Any] = [
-                    "text": text,
-                    "session": sessionKey,
-                    "thinking": "default",
-                    "deliver": false,
-                    "to": sessionKey,
-                ]
-                req.httpBody = try JSONSerialization.data(withJSONObject: body)
-                let (data, _) = try await URLSession.shared.data(for: req)
-                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let ok = obj["ok"] as? Bool,
-                   ok == true
-                {
-                    if let payloads = obj["payloads"] as? [[String: Any]],
-                       let first = payloads.first,
-                       let txt = first["text"] as? String
-                    {
-                        return (txt, nil)
-                    }
-                    return (nil, nil)
-                }
-                let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
-                let err = (errObj?["error"] as? String) ?? "rpc failed"
-                return (nil, err)
-            } catch {
-                return (nil, error.localizedDescription)
-            }
+        guard let base = self.baseEndpoint else {
+            return (nil, "web chat endpoint missing")
         }
-
-        // Fallback to AgentRPC when no base endpoint is known (should not happen after bootstrap).
-        let result = await AgentRPC.shared.send(
-            text: text,
-            thinking: "default",
-            session: sessionKey,
-            deliver: false,
-            to: sessionKey)
-        return (result.text, result.error)
+        do {
+            var req = URLRequest(url: base.appendingPathComponent("webchat/rpc"))
+            req.httpMethod = "POST"
+            var headers: [String: String] = ["Content-Type": "application/json"]
+            if let apiToken, !apiToken.isEmpty { headers["Authorization"] = "Bearer \(apiToken)" }
+            req.allHTTPHeaderFields = headers
+            let body: [String: Any] = [
+                "text": text,
+                "session": sessionKey,
+                "thinking": "default",
+                "deliver": false,
+                "to": sessionKey,
+            ]
+            req.httpBody = try JSONSerialization.data(withJSONObject: body)
+            let (data, _) = try await URLSession.shared.data(for: req)
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let ok = obj["ok"] as? Bool,
+               ok == true
+            {
+                if let payloads = obj["payloads"] as? [[String: Any]],
+                   let first = payloads.first,
+                   let txt = first["text"] as? String
+                {
+                    return (txt, nil)
+                }
+                return (nil, nil)
+            }
+            let errObj = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+            let err = (errObj?["error"] as? String) ?? "rpc failed"
+            return (nil, err)
+        } catch {
+            return (nil, error.localizedDescription)
+        }
     }
 }
 

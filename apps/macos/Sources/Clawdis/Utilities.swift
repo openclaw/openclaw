@@ -309,8 +309,7 @@ enum CommandResolver {
 
     private static func sshCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
         guard !settings.target.isEmpty else { return nil }
-        let parsed = VoiceWakeForwarder.parse(target: settings.target)
-        guard let parsed else { return nil }
+        guard let parsed = VoiceWakeForwarder.parse(target: settings.target) else { return nil }
 
         var args: [String] = ["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"]
         if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
@@ -320,11 +319,21 @@ enum CommandResolver {
         let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
         args.append(userHost)
 
-        let quotedArgs = (["clawdis", subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
+        // Prefer the Node CLI ("clawdis") on the remote host; fall back to pnpm or the mac helper if present.
+        let exportedPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/steipete/Library/pnpm:$PATH"
         let cdPrefix = settings.projectRoot.isEmpty ? "" : "cd \(self.shellQuote(settings.projectRoot)) && "
-        let scriptBody = "\(cdPrefix)\(quotedArgs)"
-        let wrapped = VoiceWakeForwarder.commandWithCliPath(scriptBody, target: settings.target)
-        args.append(contentsOf: ["/bin/sh", "-c", wrapped])
+        let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
+        let scriptBody = """
+        PATH=\(exportedPath);
+        CLI="";
+        if command -v clawdis >/dev/null 2>&1; then CLI="clawdis";
+        elif command -v pnpm >/dev/null 2>&1; then CLI="pnpm --silent clawdis";
+        elif command -v clawdis-mac >/dev/null 2>&1; then CLI="clawdis-mac";
+        fi;
+        if [ -z "$CLI" ]; then echo "clawdis missing on remote host"; exit 127; fi;
+        \(cdPrefix)$CLI \(quotedArgs)
+        """
+        args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
         return ["/usr/bin/ssh"] + args
     }
 

@@ -1,3 +1,4 @@
+import AVFoundation
 import AppKit
 import Darwin
 import Foundation
@@ -56,6 +57,8 @@ private struct MenuContent: View {
     @ObservedObject private var relayManager = RelayProcessManager.shared
     @ObservedObject private var healthStore = HealthStore.shared
     @Environment(\.openSettings) private var openSettings
+    @State private var availableMics: [AudioInputDevice] = []
+    @State private var loadingMics = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -68,7 +71,12 @@ private struct MenuContent: View {
             Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
-            Button("Open Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
+            if self.showVoiceWakeMicPicker {
+                self.voiceWakeMicMenu
+            }
+            if AppStateStore.webChatEnabled {
+                Button("Open Chat") { WebChatManager.shared.show(sessionKey: self.primarySessionKey()) }
+            }
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
@@ -78,6 +86,11 @@ private struct MenuContent: View {
             }
             Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
+        }
+        .task(id: self.state.swabbleEnabled) {
+            if self.state.swabbleEnabled {
+                await self.loadMicrophones(force: true)
+            }
         }
     }
 
@@ -166,6 +179,77 @@ private struct MenuContent: View {
             })
     }
 
+    private var showVoiceWakeMicPicker: Bool {
+        voiceWakeSupported && self.state.swabbleEnabled
+    }
+
+    private var voiceWakeMicMenu: some View {
+        Menu {
+            Picker("Microphone", selection: self.$state.voiceWakeMicID) {
+                Text(self.defaultMicLabel).tag("")
+                ForEach(self.availableMics) { mic in
+                    Text(mic.name).tag(mic.uid)
+                }
+            }
+            .labelsHidden()
+
+            if self.loadingMics {
+                Divider()
+                Label("Refreshing microphones…", systemImage: "arrow.triangle.2.circlepath")
+                    .labelStyle(.titleOnly)
+                    .foregroundStyle(.secondary)
+                    .disabled(true)
+            }
+        } label: {
+            HStack {
+                Text("Microphone")
+                Spacer()
+                Text(self.selectedMicLabel)
+                    .foregroundStyle(.secondary)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task { await self.loadMicrophones() }
+    }
+
+    private var selectedMicLabel: String {
+        if self.state.voiceWakeMicID.isEmpty { return self.defaultMicLabel }
+        if let match = self.availableMics.first(where: { $0.uid == self.state.voiceWakeMicID }) {
+            return match.name
+        }
+        return "Unavailable"
+    }
+
+    private var defaultMicLabel: String {
+        if let host = Host.current().localizedName, !host.isEmpty {
+            return "Auto-detect (\(host))"
+        }
+        return "System default"
+    }
+
+    @MainActor
+    private func loadMicrophones(force: Bool = false) async {
+        guard self.showVoiceWakeMicPicker else {
+            self.availableMics = []
+            self.loadingMics = false
+            return
+        }
+        if !force, !self.availableMics.isEmpty { return }
+        self.loadingMics = true
+        let discovery = AVCaptureDevice.DiscoverySession(
+            deviceTypes: [.external, .microphone],
+            mediaType: .audio,
+            position: .unspecified)
+        self.availableMics = discovery.devices
+            .sorted { lhs, rhs in
+                lhs.localizedName.localizedCaseInsensitiveCompare(rhs.localizedName) == .orderedAscending
+            }
+            .map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        self.loadingMics = false
+    }
+
     private func primarySessionKey() -> String {
         // Prefer canonical main session; fall back to most recent.
         let storePath = SessionLoader.defaultStorePath
@@ -182,6 +266,12 @@ private struct MenuContent: View {
             if let first = sorted.first { return first.key }
         }
         return "+1003"
+    }
+
+    private struct AudioInputDevice: Identifiable, Equatable {
+        let uid: String
+        let name: String
+        var id: String { self.uid }
     }
 }
 

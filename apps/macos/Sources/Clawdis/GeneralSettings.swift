@@ -71,19 +71,23 @@ struct GeneralSettings: View {
     }
 
     private var connectionSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("Clawdis runs", selection: self.$state.connectionMode) {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Clawdis runs")
+                .font(.title3.weight(.semibold))
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            Picker("", selection: self.$state.connectionMode) {
                 Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                 Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
             }
             .pickerStyle(.segmented)
-            .frame(width: 360)
+            .frame(width: 380, alignment: .leading)
+
+            self.healthRow
 
             if self.state.connectionMode == .remote {
                 self.remoteCard
             }
-
-            self.healthRow
         }
     }
 
@@ -92,10 +96,10 @@ struct GeneralSettings: View {
             HStack(alignment: .center, spacing: 10) {
                 Text("SSH")
                     .font(.callout.weight(.semibold))
-                    .frame(width: 44, alignment: .leading)
+                    .frame(width: 48, alignment: .leading)
                 TextField("user@host[:22]", text: self.$state.remoteTarget)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 260)
+                    .frame(width: 280)
             }
 
             DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
@@ -103,12 +107,12 @@ struct GeneralSettings: View {
                     LabeledContent("Identity file") {
                         TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 260)
+                            .frame(width: 280)
                     }
                     LabeledContent("Project root") {
                         TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
                             .textFieldStyle(.roundedBorder)
-                            .frame(width: 260)
+                            .frame(width: 280)
                     }
                 }
                 .padding(.top, 4)
@@ -148,14 +152,11 @@ struct GeneralSettings: View {
                 }
             }
 
-            Text("Tip: use Tailscale so your remote Clawdis stays reachable.")
+            Text("Tip: enable Tailscale for stable remote access.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
         }
-        .padding(12)
-        .background(Color.gray.opacity(0.08))
-        .cornerRadius(10)
         .transition(.opacity)
     }
 
@@ -304,6 +305,8 @@ extension GeneralSettings {
                 .frame(width: 10, height: 10)
             Text(self.healthStore.summaryLine)
                 .font(.callout)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
@@ -314,10 +317,21 @@ extension GeneralSettings {
         let response = await ShellRunner.run(command: command, cwd: nil, env: nil, timeout: 10)
         if response.ok {
             self.remoteStatus = .ok
-        } else {
-            let msg = response.message ?? "test failed"
-            self.remoteStatus = .failed(msg)
+            return
         }
+
+        let msg: String
+        if let payload = response.payload,
+           let text = String(data: payload, encoding: .utf8),
+           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            msg = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        } else if let message = response.message, !message.isEmpty {
+            msg = message
+        } else {
+            msg = "Remote status failed (is clawdis on PATH on the remote host?)"
+        }
+        self.remoteStatus = .failed(msg)
     }
 
     private func revealLogs() {

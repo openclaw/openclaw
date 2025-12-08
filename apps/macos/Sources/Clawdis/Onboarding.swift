@@ -49,8 +49,8 @@ struct OnboardingView: View {
     @ObservedObject private var state = AppStateStore.shared
     @ObservedObject private var permissionMonitor = PermissionMonitor.shared
 
-    private let pageWidth: CGFloat = 640
-    private let contentHeight: CGFloat = 340
+    private let pageWidth: CGFloat = 680
+    private let contentHeight: CGFloat = 520
     private let permissionsPageIndex = 2
     private var pageCount: Int { 6 }
     private var buttonTitle: String { self.currentPage == self.pageCount - 1 ? "Finish" : "Next" }
@@ -59,9 +59,9 @@ struct OnboardingView: View {
     var body: some View {
         VStack(spacing: 0) {
             GlowingClawdisIcon(size: 156)
-                .padding(.top, 20)
-                .padding(.bottom, 8)
-                .frame(height: 200)
+                .padding(.top, 10)
+                .padding(.bottom, 2)
+                .frame(height: 176)
 
             GeometryReader { _ in
                 HStack(spacing: 0) {
@@ -79,11 +79,11 @@ struct OnboardingView: View {
                 .frame(height: self.contentHeight, alignment: .top)
                 .clipped()
             }
-            .frame(height: 260)
+            .frame(height: self.contentHeight)
 
             self.navigationBar
         }
-        .frame(width: self.pageWidth, height: 560)
+        .frame(width: self.pageWidth, height: 720)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.currentPage = 0
@@ -129,20 +129,20 @@ struct OnboardingView: View {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(spacing: 10, padding: 12) {
-                Picker("Mode", selection: self.$state.connectionMode) {
+            self.onboardingCard(spacing: 12, padding: 14) {
+                Picker("Clawdis runs", selection: self.$state.connectionMode) {
                     Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                     Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
                 }
                 .pickerStyle(.segmented)
-                .frame(width: 320)
+                .frame(width: 360)
 
                 if self.state.connectionMode == .remote {
                     VStack(alignment: .leading, spacing: 8) {
                         LabeledContent("SSH target") {
                             TextField("user@host[:22]", text: self.$state.remoteTarget)
                                 .textFieldStyle(.roundedBorder)
-                                .frame(width: 260)
+                                .frame(width: 300)
                         }
 
                         DisclosureGroup("Advanced") {
@@ -150,20 +150,21 @@ struct OnboardingView: View {
                                 LabeledContent("Identity file") {
                                     TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
                                         .textFieldStyle(.roundedBorder)
-                                        .frame(width: 260)
+                                        .frame(width: 300)
                                 }
                                 LabeledContent("Project root") {
                                     TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
                                         .textFieldStyle(.roundedBorder)
-                                        .frame(width: 260)
+                                        .frame(width: 300)
                                 }
                             }
                             .padding(.top, 4)
                         }
 
-                        Text("Tip: keep a Tailscale IP here so the agent stays reachable off-LAN.")
+                        Text("Tip: enable Tailscale so your remote Clawdis stays reachable.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                            .lineLimit(1)
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
                 }
