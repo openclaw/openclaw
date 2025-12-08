@@ -137,7 +137,7 @@ final class VoiceWakeOverlayController: ObservableObject {
             defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.level = .statusBar
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
@@ -242,7 +242,6 @@ private struct VoiceWakeOverlayView: View {
         .padding(.horizontal, 10)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .shadow(color: .black.opacity(0.15), radius: 12, y: 6)
         .onAppear { self.focused = false }
         .onChange(of: self.controller.model.text) { _, _ in
             self.focused = false
