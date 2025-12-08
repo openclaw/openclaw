@@ -348,6 +348,7 @@ enum CommandResolver {
         let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
         let scriptBody = """
         PATH=\(exportedPath);
+        CLI="";
         \(prjVar)
         if command -v clawdis >/dev/null 2>&1; then
           \(cdPrefix)clawdis \(quotedArgs);

@@ -17,17 +17,16 @@ import {
   setHeartbeatsEnabled,
   type WebMonitorTuning,
 } from "../provider-web.js";
-import {
-  startWebChatServer,
-  getWebChatServer,
-  ensureWebChatServerFromConfig,
-} from "../webchat/server.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
 import {
   resolveHeartbeatSeconds,
   resolveReconnectPolicy,
 } from "../web/reconnect.js";
+import {
+  ensureWebChatServerFromConfig,
+  startWebChatServer,
+} from "../webchat/server.js";
 import { createDefaultDeps, logWebSelfId } from "./deps.js";
 
 export function buildProgram() {
@@ -36,10 +35,7 @@ export function buildProgram() {
   const TAGLINE =
     "Send, receive, and auto-reply on WhatsApp (web) and Telegram (bot).";
 
-  program
-    .name("clawdis")
-    .description("")
-    .version(PROGRAM_VERSION);
+  program.name("clawdis").description("").version(PROGRAM_VERSION);
 
   const formatIntroLine = (version: string, rich = true) => {
     const base = `📡 clawdis ${version} — ${TAGLINE}`;
@@ -428,7 +424,11 @@ Examples:
       "Run a heartbeat immediately when relay starts",
       false,
     )
-    .option("--webhook", "Run Telegram webhook server instead of long-poll", false)
+    .option(
+      "--webhook",
+      "Run Telegram webhook server instead of long-poll",
+      false,
+    )
     .option(
       "--webhook-path <path>",
       "Telegram webhook path (default /telegram-webhook when webhook enabled)",
@@ -478,7 +478,6 @@ Examples:
           startWeb = true;
           startTelegram = true;
           break;
-        case "auto":
         default:
           startWeb = true;
           startTelegram = Boolean(telegramToken);
@@ -581,7 +580,10 @@ Examples:
           cfg,
           webTuning.heartbeatSeconds,
         );
-        const effectivePolicy = resolveReconnectPolicy(cfg, webTuning.reconnect);
+        const effectivePolicy = resolveReconnectPolicy(
+          cfg,
+          webTuning.reconnect,
+        );
         defaultRuntime.log(
           info(
             `Web relay health: heartbeat ${effectiveHeartbeat}s, retries ${effectivePolicy.maxAttempts || "∞"}, backoff ${effectivePolicy.initialMs}→${effectivePolicy.maxMs}ms x${effectivePolicy.factor} (jitter ${Math.round(effectivePolicy.jitter * 100)}%)`,
@@ -745,7 +747,9 @@ Shows token usage per session when the agent reports it; set inbound.reply.agent
     .option("--port <port>", "Port to bind (default 18788)")
     .option("--json", "Return JSON", false)
     .action(async (opts) => {
-      const port = opts.port ? Number.parseInt(String(opts.port), 10) : undefined;
+      const port = opts.port
+        ? Number.parseInt(String(opts.port), 10)
+        : undefined;
       const server = await startWebChatServer(port);
       const payload = {
         port: server.port,
@@ -755,7 +759,9 @@ Shows token usage per session when the agent reports it; set inbound.reply.agent
       if (opts.json) {
         defaultRuntime.log(JSON.stringify(payload));
       } else {
-        defaultRuntime.log(info(`webchat listening on http://127.0.0.1:${server.port}/webchat/`));
+        defaultRuntime.log(
+          info(`webchat listening on http://127.0.0.1:${server.port}/webchat/`),
+        );
       }
     });
 

@@ -150,7 +150,10 @@ const readUsageFromSessionLog = (
       if (!line.trim()) continue;
       try {
         const parsed = JSON.parse(line) as {
-          message?: { usage?: { input?: number; output?: number; total?: number }; model?: string };
+          message?: {
+            usage?: { input?: number; output?: number; total?: number };
+            model?: string;
+          };
           usage?: { input?: number; output?: number; total?: number };
           model?: string;
         };

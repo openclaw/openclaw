@@ -57,7 +57,14 @@ describe("cli program", () => {
     monitorWebProvider.mockResolvedValue(undefined);
     const program = buildProgram();
     await program.parseAsync(
-      ["relay", "--web-heartbeat", "90", "--heartbeat-now", "--provider", "web"],
+      [
+        "relay",
+        "--web-heartbeat",
+        "90",
+        "--heartbeat-now",
+        "--provider",
+        "web",
+      ],
       {
         from: "user",
       },
