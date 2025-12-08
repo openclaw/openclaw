@@ -164,6 +164,7 @@ final class VoiceWakeOverlayController: ObservableObject {
             return .zero
         }
         host.layoutSubtreeIfNeeded()
+        host.invalidateIntrinsicContentSize()
         let fit = host.fittingSize
         let height = max(42, min(fit.height, 180))
         let size = NSSize(width: self.width, height: height)
@@ -174,7 +175,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         return NSRect(origin: origin, size: size)
     }
 
-    private func updateWindowFrame(animate: Bool = false) {
+    func updateWindowFrame(animate: Bool = false) {
         guard let window else { return }
         let frame = self.targetFrame()
         if animate {
@@ -232,7 +233,7 @@ private struct VoiceWakeOverlayView: View {
                     self.controller.sendNow()
                 })
                 .focused(self.$focused)
-                .frame(minHeight: 32, maxHeight: 80)
+                .frame(minHeight: 32)
 
             Button {
                 self.controller.sendNow()
@@ -268,6 +269,9 @@ private struct VoiceWakeOverlayView: View {
         }
         .onChange(of: self.controller.model.isVisible) { _, visible in
             if visible { self.focused = false }
+        }
+        .onChange(of: self.controller.model.attributed) { _, _ in
+            self.controller.updateWindowFrame(animate: true)
         }
     }
 }
