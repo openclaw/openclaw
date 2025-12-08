@@ -14,7 +14,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { logDebug } from "../logger.js";
+import { logDebug, logError } from "../logger.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 const WEBCHAT_DEFAULT_PORT = 18788;
@@ -421,6 +421,12 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(port, "127.0.0.1", () => resolve());
+  }).catch((err) => {
+    const code = (err as NodeJS.ErrnoException).code;
+    const msg = code ? `${code}: ${String(err)}` : String(err);
+    logError(
+      `webchat server failed to bind 127.0.0.1:${port} (${msg}); continuing without webchat`,
+    );
   });
 
   // WebSocket setup for live session updates.
