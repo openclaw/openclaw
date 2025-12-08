@@ -9,6 +9,10 @@ import { loadConfig } from "../config/config.js";
 import { danger, info, setVerbose } from "../globals.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import {
+  readLatestHeartbeat,
+  tailHeartbeatEvents,
+} from "../process/heartbeat-events.js";
+import {
   loginWeb,
   logoutWeb,
   monitorWebProvider,
@@ -23,10 +27,6 @@ import {
   resolveHeartbeatSeconds,
   resolveReconnectPolicy,
 } from "../web/reconnect.js";
-import {
-  readLatestHeartbeat,
-  tailHeartbeatEvents,
-} from "../process/heartbeat-events.js";
 import {
   ensureWebChatServerFromConfig,
   startWebChatServer,

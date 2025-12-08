@@ -6,12 +6,7 @@ import readline from "node:readline";
 export type HeartbeatEvent = {
   type: "heartbeat";
   ts: number; // epoch ms
-  status:
-    | "sent"
-    | "ok-empty"
-    | "ok-token"
-    | "skipped"
-    | "failed";
+  status: "sent" | "ok-empty" | "ok-token" | "skipped" | "failed";
   to?: string;
   preview?: string;
   durationMs?: number;

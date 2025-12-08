@@ -65,6 +65,13 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isEditing = true
     }
 
+    func cancelEditingAndDismiss() {
+        self.autoSendTask?.cancel()
+        self.model.isSending = false
+        self.model.isEditing = false
+        self.dismiss(reason: .explicit)
+    }
+
     func endEditing() {
         self.model.isEditing = false
     }
@@ -277,6 +284,9 @@ private struct VoiceWakeOverlayView: View {
                     onBeginEditing: {
                         self.controller.userBeganEditing()
                     },
+                    onEscape: {
+                        self.controller.cancelEditingAndDismiss()
+                    },
                     onEndEditing: {
                         self.controller.endEditing()
                     },
@@ -348,6 +358,7 @@ private struct TranscriptTextView: NSViewRepresentable {
     var isFinal: Bool
     var isOverflowing: Bool
     var onBeginEditing: () -> Void
+    var onEscape: () -> Void
     var onEndEditing: () -> Void
     var onSend: () -> Void
 
@@ -380,11 +391,12 @@ private struct TranscriptTextView: NSViewRepresentable {
             .font: NSFont.systemFont(ofSize: 13, weight: .regular),
         ]
         textView.focusRingType = .none
-            textView.onSend = { [weak textView] in
-                textView?.window?.makeFirstResponder(nil)
-                self.onSend()
-            }
-            textView.onBeginEditing = self.onBeginEditing
+        textView.onSend = { [weak textView] in
+            textView?.window?.makeFirstResponder(nil)
+            self.onSend()
+        }
+        textView.onBeginEditing = self.onBeginEditing
+        textView.onEscape = self.onEscape
         textView.onEndEditing = self.onEndEditing
 
         let scroll = NSScrollView()
@@ -504,6 +516,7 @@ private final class TranscriptNSTextView: NSTextView {
     var onSend: (() -> Void)?
     var onBeginEditing: (() -> Void)?
     var onEndEditing: (() -> Void)?
+    var onEscape: (() -> Void)?
 
     override func becomeFirstResponder() -> Bool {
         self.onBeginEditing?()
@@ -518,6 +531,11 @@ private final class TranscriptNSTextView: NSTextView {
 
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36
+        let isEscape = event.keyCode == 53
+        if isEscape {
+            self.onEscape?()
+            return
+        }
         if isReturn && event.modifierFlags.contains(.command) {
             self.onSend?()
             return
