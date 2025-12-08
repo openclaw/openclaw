@@ -12,6 +12,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     private var tunnel: WebChatTunnel?
     private var baseEndpoint: URL?
     private let remotePort: Int
+    private var reachabilityTask: Task<Void, Never>?
 
     init(sessionKey: String) {
         webChatLogger.debug("init WebChatWindowController sessionKey=\(sessionKey, privacy: .public)")
@@ -42,6 +43,11 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
+    deinit {
+        self.reachabilityTask?.cancel()
+        self.tunnel?.terminate()
+    }
+
     private func loadPlaceholder() {
         let html = """
         <html><body style='font-family:-apple-system;padding:24px;color:#888'>Connecting to web chat…</body></html>
@@ -63,13 +69,14 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
             }
             let endpoint = try await self.prepareEndpoint(remotePort: self.remotePort)
             self.baseEndpoint = endpoint
-            await MainActor.run {
-                var comps = URLComponents(url: endpoint.appendingPathComponent("webchat/"), resolvingAgainstBaseURL: false)
-                comps?.queryItems = [URLQueryItem(name: "session", value: self.sessionKey)]
-                if let url = comps?.url {
-                    self.loadPage(baseURL: url)
-                } else {
-                    self.showError("invalid webchat url")
+            self.reachabilityTask?.cancel()
+            self.reachabilityTask = Task { [endpoint, weak self] in
+                guard let self else { return }
+                do {
+                    try await self.verifyReachable(endpoint: endpoint)
+                    await MainActor.run { self.loadWebChat(baseEndpoint: endpoint) }
+                } catch {
+                    await MainActor.run { self.showError(error.localizedDescription) }
                 }
             }
         } catch {
@@ -83,8 +90,36 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
         if CommandResolver.connectionModeIsRemote() {
             return try await self.startOrRestartTunnel()
         } else {
-            return URL(string: "http://127.0.0.1:\(remotePort)/")!
+        return URL(string: "http://127.0.0.1:\(remotePort)/")!
+    }
+
+    private func loadWebChat(baseEndpoint: URL) {
+        var comps = URLComponents(url: baseEndpoint.appendingPathComponent("webchat/"), resolvingAgainstBaseURL: false)
+        comps?.queryItems = [URLQueryItem(name: "session", value: self.sessionKey)]
+        guard let url = comps?.url else {
+            self.showError("invalid webchat url")
+            return
         }
+        self.loadPage(baseURL: url)
+    }
+
+    private func verifyReachable(endpoint: URL) async throws {
+        var request = URLRequest(url: endpoint, cachePolicy: .reloadIgnoringLocalAndRemoteCacheData, timeoutInterval: 3)
+        request.httpMethod = "HEAD"
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.waitsForConnectivity = false
+        let session = URLSession(configuration: sessionConfig)
+        do {
+            let (_, response) = try await session.data(for: request)
+            if let http = response as? HTTPURLResponse {
+                guard (200..<500).contains(http.statusCode) else {
+                    throw NSError(domain: "WebChat", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "webchat returned HTTP \(http.statusCode)"])
+                }
+            }
+        } catch {
+            throw NSError(domain: "WebChat", code: 7, userInfo: [NSLocalizedDescriptionKey: "webchat unreachable: \(error.localizedDescription)"])
+        }
+    }
     }
 
     private func startOrRestartTunnel() async throws -> URL {
@@ -124,6 +159,16 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         webChatLogger.debug("didFinish navigation url=\(webView.url?.absoluteString ?? "nil", privacy: .public)")
+    }
+
+    func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        webChatLogger.error("webchat navigation failed (provisional): \(error.localizedDescription, privacy: .public)")
+        self.showError(error.localizedDescription)
+    }
+
+    func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        webChatLogger.error("webchat navigation failed: \(error.localizedDescription, privacy: .public)")
+        self.showError(error.localizedDescription)
     }
 }
 
