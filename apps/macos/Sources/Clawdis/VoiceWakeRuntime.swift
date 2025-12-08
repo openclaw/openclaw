@@ -234,7 +234,7 @@ actor VoiceWakeRuntime {
         self.heardBeyondTrigger = !trimmed.isEmpty
         self.triggerChimePlayed = false
 
-        if config.triggerChime != .none {
+        if config.triggerChime != .none, !self.triggerChimePlayed {
             self.triggerChimePlayed = true
             await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
         }
