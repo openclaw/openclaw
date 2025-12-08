@@ -31,6 +31,7 @@ type AgentCommandOpts = {
   to?: string;
   sessionId?: string;
   thinking?: string;
+  thinkingOnce?: string;
   verbose?: string;
   json?: boolean;
   timeout?: string;
