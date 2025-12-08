@@ -35,7 +35,7 @@
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
 
 ## Agent-Specific Notes
-- Relay is managed by launchctl (label `com.steipete.clawdis`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.clawdis` and verify via `launchctl list | grep clawdis`. Use tmux only if you spin up a temporary relay yourself and clean it up afterward.
+- Relay is managed by launchctl (label `com.steipete.clawdis`). After code changes restart with `launchctl kickstart -k gui/$UID/com.steipete.clawdis` and verify via `launchctl list | grep clawdis`. **When debugging on macOS, start/stop the relay via the Clawdis Mac app (or its launchd helper), not ad-hoc tmux sessions. Avoid tmux relays unless explicitly requested, and kill any temporary tunnels before handoff.**
 - macOS logs: use `./scripts/clawlog.sh` (aka `vtlog`) to query unified logs for subsystem `com.steipete.clawdis`; it supports follow/tail/category filters and expects passwordless sudo for `/usr/bin/log`.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
 - When asked to open a “session” file, open the Pi/Tau session logs under `~/.tau/agent/sessions/clawdis/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`.
