@@ -244,7 +244,7 @@ actor VoicePushToTalk {
             .font: NSFont.systemFont(ofSize: 13, weight: .regular),
         ]
         full.append(NSAttributedString(string: committed, attributes: committedAttr))
-        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.labelColor.withAlphaComponent(0.55)
+        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.tertiaryLabelColor
         let volatileAttr: [NSAttributedString.Key: Any] = [
             .foregroundColor: volatileColor,
             .font: NSFont.systemFont(ofSize: 13, weight: .regular),
