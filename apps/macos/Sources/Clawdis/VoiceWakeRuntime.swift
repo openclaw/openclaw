@@ -10,6 +10,8 @@ import AppKit
 actor VoiceWakeRuntime {
     static let shared = VoiceWakeRuntime()
 
+    enum ListeningState { case idle, voiceWake, pushToTalk }
+
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.runtime")
 
     private var recognizer: SFSpeechRecognizer?
@@ -28,6 +30,7 @@ actor VoiceWakeRuntime {
     private var volatileTranscript: String = ""
     private var cooldownUntil: Date?
     private var currentConfig: RuntimeConfig?
+    private var listeningState: ListeningState = .idle
 
     // Tunables
     // Silence threshold once we've captured user speech (post-trigger).
@@ -152,6 +155,7 @@ actor VoiceWakeRuntime {
         self.audioEngine.inputNode.removeTap(onBus: 0)
         self.audioEngine.stop()
         self.currentConfig = nil
+        self.listeningState = .idle
         self.logger.debug("voicewake runtime stopped")
 
         guard dismissOverlay else { return }
@@ -224,6 +228,7 @@ actor VoiceWakeRuntime {
     }
 
     private func beginCapture(transcript: String, config: RuntimeConfig) async {
+        self.listeningState = .voiceWake
         self.isCapturing = true
         let trimmed = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
         self.capturedTranscript = trimmed
@@ -360,7 +365,8 @@ actor VoiceWakeRuntime {
     }
 
     func pauseForPushToTalk() {
-        self.stop()
+        self.listeningState = .pushToTalk
+        self.stop(dismissOverlay: false)
     }
 
     private func updateHeardBeyondTrigger(withTrimmed trimmed: String) {
