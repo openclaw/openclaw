@@ -307,12 +307,6 @@ private struct VoiceWakeOverlayView: View {
     var body: some View {
         ZStack(alignment: .topLeading) {
             HStack(alignment: .top, spacing: 8) {
-                if self.controller.model.isVisible {
-                    LevelBars(level: self.controller.model.level)
-                        .frame(width: 36, height: 26)
-                        .padding(.top, 2)
-                }
-
                 if self.controller.model.isEditing {
                     TranscriptTextView(
                         text: Binding(
@@ -599,35 +593,25 @@ private struct CloseButtonOverlay: View {
     var body: some View {
         Group {
             if isVisible {
-                CloseHoverButton(onClose: onClose)
-                    .onHover { self.onHover($0) }
-                    .offset(x: -9, y: -9)
-                    .transition(.opacity)
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundColor(Color.white.opacity(0.9))
+                        .frame(width: 22, height: 22)
+                        .background(Color.black.opacity(0.4))
+                        .clipShape(Circle())
+                        .shadow(color: Color.black.opacity(0.35), radius: 6, y: 2)
+                }
+                .buttonStyle(.plain)
+                .focusable(false)
+                .contentShape(Circle())
+                .padding(6)
+                .onHover { self.onHover($0) }
+                .offset(x: -9, y: -9)
+                .transition(.opacity)
             }
         }
         .allowsHitTesting(isVisible)
-    }
-}
-
-private struct LevelBars: View {
-    var level: Double
-
-    private let barCount = 14
-
-    var body: some View {
-        let capped = max(0, min(1, level))
-        let active = Int(Double(barCount) * capped.rounded(.up))
-        HStack(alignment: .bottom, spacing: 2) {
-            ForEach(0..<barCount, id: \.self) { idx in
-                let norm = Double(idx) / Double(barCount - 1)
-                let height = 6 + (norm * 16)
-                RoundedRectangle(cornerRadius: 3, style: .continuous)
-                    .fill(idx < active ? Color.accentColor : Color.primary.opacity(0.35))
-                    .frame(width: 3, height: height)
-            }
-        }
-        .animation(.easeOut(duration: 0.08), value: active)
-        .accessibilityHidden(true)
     }
 }
 
