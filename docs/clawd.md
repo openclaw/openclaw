@@ -330,6 +330,7 @@ These make your AI much more capable:
 | Tool | What It Does | Install |
 |------|--------------|---------|
 | **[spotify-player](https://github.com/aome510/spotify-player)** | Control Spotify from CLI - play, pause, search, queue | `brew install spotify-player` |
+| **[sag](https://github.com/steipete/sag)** | ElevenLabs TTS with macOS `say`-style flags; stream or save audio | `brew install steipete/tap/sag` |
 | **[browser-tools](https://github.com/steipete/agent-scripts)** | Chrome DevTools CLI - navigate, screenshot, eval JS, extract DOM | Clone repo |
 | **say** | macOS text-to-speech | Built-in |
 | **afplay** | Play audio files | Built-in |

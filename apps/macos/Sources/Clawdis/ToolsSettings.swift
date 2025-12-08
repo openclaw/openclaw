@@ -102,6 +102,13 @@ struct ToolsSettings: View {
             method: .brew(formula: "spotify_player", binary: "spotify_player"),
             kind: .tool),
         ToolEntry(
+            id: "sag",
+            name: "sag",
+            url: URL(string: "https://github.com/steipete/sag")!,
+            description: "ElevenLabs TTS with mac-style flags; stream to speakers or save audio.",
+            method: .brew(formula: "steipete/tap/sag", binary: "sag"),
+            kind: .tool),
+        ToolEntry(
             id: "openhue-cli",
             name: "OpenHue CLI",
             url: URL(string: "https://github.com/openhue/openhue-cli")!,
