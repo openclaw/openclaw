@@ -256,13 +256,14 @@ actor VoiceWakeRuntime {
         self.capturedTranscript = ""
         self.captureStartedAt = nil
         self.lastHeard = nil
-        let heardBeyondTrigger = self.heardBeyondTrigger
         self.heardBeyondTrigger = false
 
         await MainActor.run { AppStateStore.shared.stopVoiceEars() }
 
         let forwardConfig = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
-        let delay: TimeInterval = (heardBeyondTrigger && !finalTranscript.isEmpty) ? 1.0 : 3.0
+        // Auto-send should fire as soon as the silence threshold is satisfied (2s after speech, 5s after trigger-only).
+        // Keep the overlay visible during capture; once we finalize, we dispatch immediately.
+        let delay: TimeInterval = 0.0
         let finalAttributed = Self.makeAttributed(
             committed: finalTranscript,
             volatile: "",
@@ -339,10 +340,16 @@ actor VoiceWakeRuntime {
 
     private static func makeAttributed(committed: String, volatile: String, isFinal: Bool) -> NSAttributedString {
         let full = NSMutableAttributedString()
-        let committedAttr: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.labelColor]
+        let committedAttr: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.labelColor,
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+        ]
         full.append(NSAttributedString(string: committed, attributes: committedAttr))
-        let volatileColor: NSColor = isFinal ? .labelColor : .secondaryLabelColor
-        let volatileAttr: [NSAttributedString.Key: Any] = [.foregroundColor: volatileColor]
+        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.labelColor.withAlphaComponent(0.55)
+        let volatileAttr: [NSAttributedString.Key: Any] = [
+            .foregroundColor: volatileColor,
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+        ]
         full.append(NSAttributedString(string: volatile, attributes: volatileAttr))
         return full
     }

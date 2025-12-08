@@ -6,6 +6,7 @@ import WebKit
 
 private let webChatLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
 
+@MainActor
 final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     private let webView: WKWebView
     private let sessionKey: String
@@ -43,7 +44,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
 
-    deinit {
+    @MainActor deinit {
         self.reachabilityTask?.cancel()
         self.tunnel?.terminate()
     }
@@ -90,7 +91,8 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
         if CommandResolver.connectionModeIsRemote() {
             return try await self.startOrRestartTunnel()
         } else {
-        return URL(string: "http://127.0.0.1:\(remotePort)/")!
+            return URL(string: "http://127.0.0.1:\(remotePort)/")!
+        }
     }
 
     private func loadWebChat(baseEndpoint: URL) {
@@ -119,7 +121,6 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
         } catch {
             throw NSError(domain: "WebChat", code: 7, userInfo: [NSLocalizedDescriptionKey: "webchat unreachable: \(error.localizedDescription)"])
         }
-    }
     }
 
     private func startOrRestartTunnel() async throws -> URL {

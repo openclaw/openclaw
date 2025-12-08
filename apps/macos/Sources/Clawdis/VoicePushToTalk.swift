@@ -239,10 +239,16 @@ actor VoicePushToTalk {
 
     private static func makeAttributed(committed: String, volatile: String, isFinal: Bool) -> NSAttributedString {
         let full = NSMutableAttributedString()
-        let committedAttr: [NSAttributedString.Key: Any] = [.foregroundColor: NSColor.labelColor]
+        let committedAttr: [NSAttributedString.Key: Any] = [
+            .foregroundColor: NSColor.labelColor,
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+        ]
         full.append(NSAttributedString(string: committed, attributes: committedAttr))
-        let volatileColor: NSColor = isFinal ? .labelColor : .secondaryLabelColor
-        let volatileAttr: [NSAttributedString.Key: Any] = [.foregroundColor: volatileColor]
+        let volatileColor: NSColor = isFinal ? .labelColor : NSColor.labelColor.withAlphaComponent(0.55)
+        let volatileAttr: [NSAttributedString.Key: Any] = [
+            .foregroundColor: volatileColor,
+            .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+        ]
         full.append(NSAttributedString(string: volatile, attributes: volatileAttr))
         return full
     }

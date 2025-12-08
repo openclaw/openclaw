@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import sharp from "sharp";
-import { WebSocketServer, WebSocket } from "ws";
+import { type WebSocket, WebSocketServer } from "ws";
 
 import { agentCommand } from "../commands/agent.js";
 import { loadConfig } from "../config/config.js";
@@ -40,10 +40,16 @@ const wsSessions: Map<string, Set<WebSocket>> = new Map();
 function resolveWebRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
 
-  const packagedRoot = path.resolve(path.dirname(process.execPath), "../WebChat");
+  const packagedRoot = path.resolve(
+    path.dirname(process.execPath),
+    "../WebChat",
+  );
   if (fs.existsSync(packagedRoot)) return packagedRoot;
 
-  return path.resolve(here, "../../apps/macos/Sources/Clawdis/Resources/WebChat");
+  return path.resolve(
+    here,
+    "../../apps/macos/Sources/Clawdis/Resources/WebChat",
+  );
 }
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
@@ -56,17 +62,27 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
   });
 }
 
-function pickSessionId(sessionKey: string, store: Record<string, SessionEntry>): string | null {
+function pickSessionId(
+  sessionKey: string,
+  store: Record<string, SessionEntry>,
+): string | null {
   if (store[sessionKey]?.sessionId) return store[sessionKey].sessionId;
   const first = Object.values(store)[0]?.sessionId;
   return first ?? null;
 }
 
-function readSessionMessages(sessionId: string, storePath: string): ChatMessage[] {
+function readSessionMessages(
+  sessionId: string,
+  storePath: string,
+): ChatMessage[] {
   const dir = path.dirname(storePath);
   const candidates = [
     path.join(dir, `${sessionId}.jsonl`),
-    path.join(os.homedir(), ".tau/agent/sessions/clawdis", `${sessionId}.jsonl`),
+    path.join(
+      os.homedir(),
+      ".tau/agent/sessions/clawdis",
+      `${sessionId}.jsonl`,
+    ),
   ];
   let content: string | null = null;
   for (const p of candidates) {
@@ -96,7 +112,7 @@ function readSessionMessages(sessionId: string, storePath: string): ChatMessage[
   return messages;
 }
 
-function broadcastSession(sessionKey: string, payload: any) {
+function broadcastSession(sessionKey: string, payload: unknown) {
   const conns = wsSessions.get(sessionKey);
   if (!conns || conns.size === 0) return;
   const msg = JSON.stringify(payload);
@@ -116,7 +132,12 @@ async function persistAttachments(
   const out: { placeholder: string; path: string }[] = [];
   if (!attachments?.length) return out;
 
-  const root = path.join(os.homedir(), ".clawdis", "webchat-uploads", sessionId);
+  const root = path.join(
+    os.homedir(),
+    ".clawdis",
+    "webchat-uploads",
+    sessionId,
+  );
   await fs.promises.mkdir(root, { recursive: true });
 
   let idx = 1;
@@ -124,9 +145,13 @@ async function persistAttachments(
     try {
       if (!att?.content || typeof att.content !== "string") continue;
       const mime =
-        typeof att.mimeType === "string" ? att.mimeType : "application/octet-stream";
+        typeof att.mimeType === "string"
+          ? att.mimeType
+          : "application/octet-stream";
       const baseName = att.fileName || `${att.type || "attachment"}-${idx}`;
-      const ext = mime.startsWith("image/") ? mime.split("/")[1] || "bin" : "bin";
+      const ext = mime.startsWith("image/")
+        ? mime.split("/")[1] || "bin"
+        : "bin";
       const fileName = `${baseName}.${ext}`.replace(/[^a-zA-Z0-9._-]/g, "_");
       const buf = Buffer.from(att.content, "base64");
 
@@ -137,7 +162,8 @@ async function persistAttachments(
         const image = sharp(buf, { failOn: "none" });
         meta = await image.metadata();
         const needsResize =
-          (meta.width && meta.width > 2000) || (meta.height && meta.height > 2000);
+          (meta.width && meta.width > 2000) ||
+          (meta.height && meta.height > 2000);
         if (needsResize) {
           const resized = await image
             .resize({ width: 2000, height: 2000, fit: "inside" })
@@ -160,7 +186,8 @@ async function persistAttachments(
       await fs.promises.writeFile(dest, finalBuf);
 
       const sizeLabel = `${(finalBuf.length / 1024).toFixed(0)} KB`;
-      const dimLabel = meta?.width && meta?.height ? `, ${meta.width}x${meta.height}` : "";
+      const dimLabel =
+        meta?.width && meta?.height ? `, ${meta.width}x${meta.height}` : "";
       const placeholder = `[Attachment saved: ${dest} (${mime}${dimLabel}, ${sizeLabel})]`;
       out.push({ placeholder, path: dest });
     } catch (err) {
@@ -198,7 +225,8 @@ async function handleRpc(
   const attachments = Array.isArray(payload.attachments)
     ? (payload.attachments as AttachmentInput[])
     : [];
-  const thinking = typeof payload.thinking === "string" ? payload.thinking : undefined;
+  const thinking =
+    typeof payload.thinking === "string" ? payload.thinking : undefined;
   const to = typeof payload.to === "string" ? payload.to : undefined;
   const deliver = Boolean(payload.deliver);
 
@@ -262,7 +290,7 @@ async function handleRpc(
       thinkingLevel:
         typeof persistedThinking === "string"
           ? persistedThinking
-          : cfg.inbound?.reply?.thinkingDefault ?? "off",
+          : (cfg.inbound?.reply?.thinkingDefault ?? "off"),
     });
   } catch {
     // best-effort; ignore broadcast errors
@@ -297,7 +325,10 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
 
   const server = http.createServer(async (req, res) => {
     if (!req.url) return notFound(res);
-    if (req.socket.remoteAddress && !req.socket.remoteAddress.startsWith("127.")) {
+    if (
+      req.socket.remoteAddress &&
+      !req.socket.remoteAddress.startsWith("127.")
+    ) {
       res.statusCode = 403;
       res.end("loopback only");
       return;
@@ -336,7 +367,8 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
       } catch {
         // ignore
       }
-      const sessionKey = typeof body.session === "string" ? body.session : "main";
+      const sessionKey =
+        typeof body.session === "string" ? body.session : "main";
       const result = await handleRpc(body, sessionKey);
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify(result));
@@ -400,12 +432,19 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
         socket.destroy();
         return;
       }
-      if (req.socket.remoteAddress && !req.socket.remoteAddress.startsWith("127.")) {
+      if (
+        req.socket.remoteAddress &&
+        !req.socket.remoteAddress.startsWith("127.")
+      ) {
         socket.destroy();
         return;
       }
       const sessionKey = url.searchParams.get("session") ?? "main";
-      wss!.handleUpgrade(req, socket, head, (ws: WebSocket) => {
+      if (!wss) {
+        socket.destroy();
+        return;
+      }
+      wss.handleUpgrade(req, socket, head, (ws: WebSocket) => {
         ws.on("close", () => {
           const set = wsSessions.get(sessionKey);
           if (set) {
@@ -413,13 +452,18 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
             if (set.size === 0) wsSessions.delete(sessionKey);
           }
         });
-        wsSessions.set(sessionKey, (wsSessions.get(sessionKey) ?? new Set()).add(ws));
+        wsSessions.set(
+          sessionKey,
+          (wsSessions.get(sessionKey) ?? new Set()).add(ws),
+        );
         // Send initial snapshot
         const store = loadSessionStore(storePath);
         const sessionId = pickSessionId(sessionKey, store);
         const sessionEntry = sessionKey ? store[sessionKey] : undefined;
         const persistedThinking = sessionEntry?.thinkingLevel;
-        const messages = sessionId ? readSessionMessages(sessionId, storePath) : [];
+        const messages = sessionId
+          ? readSessionMessages(sessionId, storePath)
+          : [];
         ws.send(
           JSON.stringify({
             type: "session",
@@ -428,11 +472,11 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
             thinkingLevel:
               typeof persistedThinking === "string"
                 ? persistedThinking
-                : cfg.inbound?.reply?.thinkingDefault ?? "off",
+                : (cfg.inbound?.reply?.thinkingDefault ?? "off"),
           }),
         );
       });
-    } catch (err) {
+    } catch (_err) {
       socket.destroy();
     }
   });
@@ -440,7 +484,7 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
   // Watch for session/message file changes and push updates.
   try {
     if (fs.existsSync(storeDir)) {
-      fs.watch(storeDir, { persistent: false }, (event, filename) => {
+      fs.watch(storeDir, { persistent: false }, (_event, filename) => {
         if (!filename) return;
         // On any file change, refresh for active sessions.
         for (const sessionKey of wsSessions.keys()) {
@@ -449,7 +493,9 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
             const sessionId = pickSessionId(sessionKey, store);
             const sessionEntry = sessionKey ? store[sessionKey] : undefined;
             const persistedThinking = sessionEntry?.thinkingLevel;
-            const messages = sessionId ? readSessionMessages(sessionId, storePath) : [];
+            const messages = sessionId
+              ? readSessionMessages(sessionId, storePath)
+              : [];
             broadcastSession(sessionKey, {
               type: "session",
               sessionKey,
@@ -457,7 +503,7 @@ export async function startWebChatServer(port = WEBCHAT_DEFAULT_PORT) {
               thinkingLevel:
                 typeof persistedThinking === "string"
                   ? persistedThinking
-                  : cfg.inbound?.reply?.thinkingDefault ?? "off",
+                  : (cfg.inbound?.reply?.thinkingDefault ?? "off"),
             });
           } catch {
             // ignore

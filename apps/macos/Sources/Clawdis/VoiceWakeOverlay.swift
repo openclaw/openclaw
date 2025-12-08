@@ -25,6 +25,9 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     private let width: CGFloat = 360
     private let padding: CGFloat = 10
+    private let buttonWidth: CGFloat = 36
+    private let spacing: CGFloat = 8
+    private let verticalPadding: CGFloat = 8
 
     func showPartial(transcript: String, attributed: NSAttributedString? = nil) {
         self.autoSendTask?.cancel()
@@ -33,7 +36,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isFinal = false
         self.model.forwardEnabled = false
         self.model.isSending = false
-        self.model.attributed = attributed ?? NSAttributedString(string: transcript)
+        self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.present()
         self.updateWindowFrame(animate: true)
     }
@@ -45,7 +48,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isFinal = true
         self.model.forwardEnabled = forwardConfig.enabled
         self.model.isSending = false
-        self.model.attributed = attributed ?? NSAttributedString(string: transcript)
+        self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.present()
         self.scheduleAutoSend(after: delay)
     }
@@ -58,7 +61,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     func updateText(_ text: String) {
         self.model.text = text
         self.model.isSending = false
-        self.model.attributed = NSAttributedString(string: text)
+        self.model.attributed = self.makeAttributed(from: text)
         self.updateWindowFrame(animate: true)
     }
 
@@ -160,13 +163,8 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 
     private func targetFrame() -> NSRect {
-        guard let screen = NSScreen.main, let host = self.hostingView else {
-            return .zero
-        }
-        host.layoutSubtreeIfNeeded()
-        host.invalidateIntrinsicContentSize()
-        let fit = host.fittingSize
-        let height = max(42, min(fit.height, 180))
+        guard let screen = NSScreen.main else { return .zero }
+        let height = self.measuredHeight()
         let size = NSSize(width: self.width, height: height)
         let visible = screen.visibleFrame
         let origin = CGPoint(
@@ -187,6 +185,18 @@ final class VoiceWakeOverlayController: ObservableObject {
         } else {
             window.setFrame(frame, display: true)
         }
+    }
+
+    private func measuredHeight() -> CGFloat {
+        let attributed = self.model.attributed.length > 0 ? self.model.attributed : self.makeAttributed(from: self.model.text)
+        let maxWidth = self.width - (self.padding * 2) - self.spacing - self.buttonWidth
+        let rect = attributed.boundingRect(
+            with: CGSize(width: maxWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            context: nil)
+        let contentHeight = ceil(rect.height)
+        let total = contentHeight + self.verticalPadding * 2
+        return max(42, min(total, 220))
     }
 
     private func dismissTargetFrame(for frame: NSRect, reason: DismissReason, outcome: SendOutcome) -> NSRect? {
@@ -211,6 +221,15 @@ final class VoiceWakeOverlayController: ObservableObject {
             try? await Task.sleep(nanoseconds: nanos)
             self?.sendNow()
         }
+    }
+
+    private func makeAttributed(from text: String) -> NSAttributedString {
+        NSAttributedString(
+            string: text,
+            attributes: [
+                .foregroundColor: NSColor.labelColor,
+                .font: NSFont.systemFont(ofSize: 13, weight: .regular),
+            ])
     }
 }
 
@@ -289,7 +308,7 @@ private struct TranscriptTextView: NSViewRepresentable {
         let textView = TranscriptNSTextView()
         textView.delegate = context.coordinator
         textView.drawsBackground = false
-        textView.isRichText = false
+        textView.isRichText = true
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
         textView.font = .systemFont(ofSize: 13, weight: .regular)
@@ -299,6 +318,8 @@ private struct TranscriptTextView: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
         textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.string = self.text
+        textView.textStorage?.setAttributedString(self.attributed)
+        textView.focusRingType = .none
         textView.onSend = { [weak textView] in
             textView?.window?.makeFirstResponder(nil)
             self.onSend()
