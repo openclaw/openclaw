@@ -19,7 +19,9 @@ type TelegramSendResult = {
 function resolveToken(explicit?: string): string {
   const token = explicit ?? process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
-    throw new Error("TELEGRAM_BOT_TOKEN is required for Telegram sends (Bot API)");
+    throw new Error(
+      "TELEGRAM_BOT_TOKEN is required for Telegram sends (Bot API)",
+    );
   }
   return token.trim();
 }
@@ -39,7 +41,7 @@ export async function sendMessageTelegram(
   const token = resolveToken(opts.token);
   const chatId = normalizeChatId(to);
   const bot = opts.api ? null : new Bot(token);
-  const api = opts.api ?? bot!.api;
+  const api = opts.api ?? bot?.api;
   const mediaUrl = opts.mediaUrl?.trim();
 
   if (mediaUrl) {
@@ -50,7 +52,11 @@ export async function sendMessageTelegram(
       media.fileName ?? inferFilename(kind) ?? "file",
     );
     const caption = text?.trim() || undefined;
-    let result;
+    let result:
+      | Awaited<ReturnType<typeof api.sendPhoto>>
+      | Awaited<ReturnType<typeof api.sendVideo>>
+      | Awaited<ReturnType<typeof api.sendAudio>>
+      | Awaited<ReturnType<typeof api.sendDocument>>;
     if (kind === "image") {
       result = await api.sendPhoto(chatId, file, { caption });
     } else if (kind === "video") {

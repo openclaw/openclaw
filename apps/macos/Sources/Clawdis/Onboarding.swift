@@ -257,7 +257,8 @@ struct OnboardingView: View {
         self.onboardingPage {
             Text("Link WhatsApp")
                 .font(.largeTitle.weight(.semibold))
-            Text("Run `clawdis login` where the relay runs (local if local mode, remote if remote). Scan the QR to pair your account.")
+            Text(
+                "Run `clawdis login` where the relay runs (local if local mode, remote if remote). Scan the QR to pair your account.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -367,7 +368,11 @@ struct OnboardingView: View {
         .frame(width: self.pageWidth, alignment: .top)
     }
 
-    private func onboardingCard(spacing: CGFloat = 12, padding: CGFloat = 16, @ViewBuilder _ content: () -> some View) -> some View {
+    private func onboardingCard(
+        spacing: CGFloat = 12,
+        padding: CGFloat = 16,
+        @ViewBuilder _ content: () -> some View) -> some View
+    {
         VStack(alignment: .leading, spacing: spacing) {
             content()
         }

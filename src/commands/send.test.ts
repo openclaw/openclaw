@@ -1,4 +1,4 @@
-import { beforeEach, afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -66,9 +66,7 @@ describe("sendCommand", () => {
   it("falls back to direct send when IPC fails", async () => {
     sendViaIpcMock.mockResolvedValueOnce({ success: false, error: "nope" });
     const deps = makeDeps({
-      sendMessageWhatsApp: vi
-        .fn()
-        .mockResolvedValue({ messageId: "direct1" }),
+      sendMessageWhatsApp: vi.fn().mockResolvedValue({ messageId: "direct1" }),
     });
     await sendCommand(
       {
@@ -104,9 +102,7 @@ describe("sendCommand", () => {
   it("emits json output", async () => {
     sendViaIpcMock.mockResolvedValueOnce(null);
     const deps = makeDeps({
-      sendMessageWhatsApp: vi
-        .fn()
-        .mockResolvedValue({ messageId: "direct2" }),
+      sendMessageWhatsApp: vi.fn().mockResolvedValue({ messageId: "direct2" }),
     });
     await sendCommand(
       {

@@ -3,11 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 const useSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
-const apiStub = { config: { use: useSpy } };
+type ApiStub = { config: { use: (arg: unknown) => void } };
+const apiStub: ApiStub = { config: { use: useSpy } };
 
 vi.mock("grammy", () => ({
   Bot: class {
-    api = apiStub as any;
+    api = apiStub;
     on = onSpy;
     stop = stopSpy;
     constructor(public token: string) {}

@@ -60,7 +60,6 @@ struct VoiceWakeSettings: View {
                 self.micPicker
                 self.levelMeter
 
-
                 VoiceWakeTestCard(
                     testState: self.$testState,
                     isTesting: self.$isTesting,
@@ -267,7 +266,7 @@ struct VoiceWakeSettings: View {
                                     }
                                 }
                                 .labelsHidden()
-                                .frame(width: 220)
+                                    .frame(width: 220)
 
                             Button {
                                 guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }

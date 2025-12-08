@@ -32,7 +32,7 @@ export type LoggerSettings = {
   file?: string;
 };
 
-type LogObj = Record<string, unknown>;
+type LogObj = { date?: Date } & Record<string, unknown>;
 
 type ResolvedSettings = {
   level: Level;
@@ -48,7 +48,9 @@ let consolePatched = false;
 function normalizeLevel(level?: string): Level {
   if (isVerbose()) return "trace";
   const candidate = level ?? "info";
-  return ALLOWED_LEVELS.includes(candidate as Level) ? (candidate as Level) : "info";
+  return ALLOWED_LEVELS.includes(candidate as Level)
+    ? (candidate as Level)
+    : "info";
 }
 
 function resolveSettings(): ResolvedSettings {
@@ -90,17 +92,15 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     type: "hidden", // no ansi formatting
   });
 
-  logger.attachTransport(
-    (logObj) => {
-      try {
-        const time = (logObj as any)?.date?.toISOString?.() ?? new Date().toISOString();
-        const line = JSON.stringify({ ...logObj, time });
-        fs.appendFileSync(settings.file, line + "\n", { encoding: "utf8" });
-      } catch {
-        // never block on logging failures
-      }
+  logger.attachTransport((logObj: LogObj) => {
+    try {
+      const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
+      const line = JSON.stringify({ ...logObj, time });
+      fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
+    } catch {
+      // never block on logging failures
     }
-  );
+  });
 
   return logger;
 }
@@ -137,7 +137,9 @@ export function toPinoLikeLogger(
 ): PinoLikeLogger {
   const buildChild = (bindings?: Record<string, unknown>) =>
     toPinoLikeLogger(
-      logger.getSubLogger({ name: bindings ? JSON.stringify(bindings) : undefined }),
+      logger.getSubLogger({
+        name: bindings ? JSON.stringify(bindings) : undefined,
+      }),
       level,
     );
 

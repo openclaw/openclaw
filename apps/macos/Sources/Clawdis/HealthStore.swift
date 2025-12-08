@@ -1,6 +1,6 @@
 import Foundation
-import SwiftUI
 import OSLog
+import SwiftUI
 
 struct HealthSnapshot: Codable, Sendable {
     struct Web: Codable, Sendable {
