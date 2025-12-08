@@ -142,6 +142,8 @@ final class VoiceWakeOverlayController: ObservableObject {
                 self.model.level = 0
                 if outcome == .empty {
                     AppStateStore.shared.blinkOnce()
+                } else if outcome == .sent {
+                    AppStateStore.shared.celebrateSend()
                 }
                 AppStateStore.shared.stopVoiceEars()
             }

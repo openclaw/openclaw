@@ -27,6 +27,7 @@ struct ClawdisApp: App {
                 isWorking: self.state.isWorking,
                 earBoostActive: self.state.earBoostActive,
                 blinkTick: self.state.blinkTick,
+                sendCelebrationTick: self.state.sendCelebrationTick,
                 relayStatus: self.relayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled)
         }
@@ -346,6 +347,7 @@ private struct CritterStatusLabel: View {
     var isWorking: Bool
     var earBoostActive: Bool
     var blinkTick: Int
+    var sendCelebrationTick: Int
     var relayStatus: RelayProcessManager.Status
     var animationsEnabled: Bool
 
@@ -377,7 +379,7 @@ private struct CritterStatusLabel: View {
                         .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
                         .offset(x: self.wiggleOffset)
                         .onReceive(self.ticker) { now in
-                            guard self.animationsEnabled else {
+                            guard self.animationsEnabled, !self.earBoostActive else {
                                 self.resetMotion()
                                 return
                             }
@@ -402,17 +404,31 @@ private struct CritterStatusLabel: View {
                                 self.nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0...14.0))
                             }
 
-                        if self.isWorking {
-                            self.scurry()
+                            if self.isWorking {
+                                self.scurry()
+                            }
                         }
-                    }
-                    .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
-                    .onChange(of: self.blinkTick) { _, _ in self.blink() }
-                    .onChange(of: self.animationsEnabled) { _, enabled in
-                        if enabled {
-                            self.scheduleRandomTimers(from: Date())
-                        } else {
-                            self.resetMotion()
+                        .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
+                        .onChange(of: self.blinkTick) { _, _ in
+                            guard !self.earBoostActive else { return }
+                            self.blink()
+                        }
+                        .onChange(of: self.sendCelebrationTick) { _, _ in
+                            guard !self.earBoostActive else { return }
+                            self.wiggleLegs()
+                        }
+                        .onChange(of: self.animationsEnabled) { _, enabled in
+                            if enabled {
+                                self.scheduleRandomTimers(from: Date())
+                            } else {
+                                self.resetMotion()
+                            }
+                        }
+                        .onChange(of: self.earBoostActive) { _, active in
+                            if active {
+                                self.resetMotion()
+                            } else if self.animationsEnabled {
+                                self.scheduleRandomTimers(from: Date())
                             }
                         }
                 }
