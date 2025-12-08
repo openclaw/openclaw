@@ -1,6 +1,8 @@
+import AppKit
 import AVFoundation
 import Speech
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct VoiceWakeSettings: View {
     @ObservedObject var state: AppState
@@ -70,6 +72,8 @@ struct VoiceWakeSettings: View {
                     testState: self.$testState,
                     isTesting: self.$isTesting,
                     onToggle: self.toggleTest)
+
+                self.chimeSection
 
                 self.triggerTable
 
@@ -141,6 +145,35 @@ struct VoiceWakeSettings: View {
         }
     }
 
+    private var chimeSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Toggle(isOn: self.$state.voiceWakeChimeEnabled) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Play sounds")
+                            .font(.callout.weight(.semibold))
+                        Text("Chimes for wake-word and push-to-talk events.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .toggleStyle(.switch)
+                Spacer()
+            }
+
+            self.chimeRow(
+                title: "Trigger sound",
+                selection: self.$state.voiceWakeTriggerChime)
+                .disabled(!self.state.voiceWakeChimeEnabled)
+
+            self.chimeRow(
+                title: "Send sound",
+                selection: self.$state.voiceWakeSendChime)
+                .disabled(!self.state.voiceWakeChimeEnabled)
+        }
+        .padding(.top, 4)
+    }
+
     private func addWord() {
         self.state.swabbleTriggerWords.append("")
     }
@@ -200,6 +233,73 @@ struct VoiceWakeSettings: View {
                 self.tester.stop()
                 self.testState = .failed(error.localizedDescription)
                 self.isTesting = false
+            }
+        }
+    }
+
+    private func chimeRow(title: String, selection: Binding<VoiceWakeChime>) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+
+                Menu {
+                    ForEach(VoiceWakeChimeCatalog.systemOptions, id: \.self) { option in
+                        Button(VoiceWakeChimeCatalog.displayName(for: option)) {
+                            selection.wrappedValue = .system(name: option)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(selection.wrappedValue.displayLabel)
+                        Image(systemName: "chevron.down")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(width: self.controlWidth, alignment: .leading)
+                    .padding(6)
+                    .background(Color(nsColor: .windowBackgroundColor))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6)
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+
+                Button("Choose file…") {
+                    self.chooseCustomChime(for: selection)
+                }
+
+                Button("Test") {
+                    VoiceWakeChimePlayer.play(selection.wrappedValue)
+                }
+                .keyboardShortcut(.space, modifiers: [.command])
+            }
+
+            if case let .custom(displayName, _) = selection.wrappedValue {
+                Text("Custom: \(displayName)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func chooseCustomChime(for selection: Binding<VoiceWakeChime>) {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.audio]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.resolvesAliases = true
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                let bookmark = try url.bookmarkData(
+                    options: [.withSecurityScope],
+                    includingResourceValuesForKeys: nil,
+                    relativeTo: nil)
+                selection.wrappedValue = .custom(displayName: url.lastPathComponent, bookmark: bookmark)
+            } catch {
+                // Ignore failures; user can retry.
             }
         }
     }

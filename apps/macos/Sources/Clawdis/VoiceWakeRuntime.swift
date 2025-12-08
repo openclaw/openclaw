@@ -40,6 +40,9 @@ actor VoiceWakeRuntime {
         let triggers: [String]
         let micID: String?
         let localeID: String?
+        let chimeEnabled: Bool
+        let triggerChime: VoiceWakeChime
+        let sendChime: VoiceWakeChime
     }
 
     func refresh(state: AppState) async {
@@ -48,7 +51,10 @@ actor VoiceWakeRuntime {
             let config = RuntimeConfig(
                 triggers: sanitizeVoiceWakeTriggers(state.swabbleTriggerWords),
                 micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
-                localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID)
+                localeID: state.voiceWakeLocaleID.isEmpty ? nil : state.voiceWakeLocaleID,
+                chimeEnabled: state.voiceWakeChimeEnabled,
+                triggerChime: state.voiceWakeTriggerChime,
+                sendChime: state.voiceWakeSendChime)
             return (enabled, config)
         }
 
@@ -199,6 +205,9 @@ actor VoiceWakeRuntime {
 
     private func beginCapture(transcript: String, config: RuntimeConfig) async {
         self.isCapturing = true
+        if config.chimeEnabled {
+            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
+        }
         let trimmed = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
         self.capturedTranscript = trimmed
         self.committedTranscript = ""
@@ -268,6 +277,9 @@ actor VoiceWakeRuntime {
             committed: finalTranscript,
             volatile: "",
             isFinal: true)
+        if config.chimeEnabled {
+            await MainActor.run { VoiceWakeChimePlayer.play(config.sendChime) }
+        }
         await MainActor.run {
             VoiceWakeOverlayController.shared.presentFinal(
                 transcript: finalTranscript,

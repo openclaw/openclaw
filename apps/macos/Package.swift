@@ -37,6 +37,7 @@ let package = Package(
             ],
             resources: [
                 .copy("Resources/Clawdis.icns"),
+                .copy("Resources/Sounds"),
                 .copy("Resources/WebChat"),
             ],
             swiftSettings: [

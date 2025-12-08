@@ -43,6 +43,18 @@ final class AppState: ObservableObject {
         }
     }
 
+    @Published var voiceWakeChimeEnabled: Bool {
+        didSet { UserDefaults.standard.set(self.voiceWakeChimeEnabled, forKey: voiceWakeChimeEnabledKey) }
+    }
+
+    @Published var voiceWakeTriggerChime: VoiceWakeChime {
+        didSet { self.storeChime(self.voiceWakeTriggerChime, key: voiceWakeTriggerChimeKey) }
+    }
+
+    @Published var voiceWakeSendChime: VoiceWakeChime {
+        didSet { self.storeChime(self.voiceWakeSendChime, key: voiceWakeSendChimeKey) }
+    }
+
     @Published var iconAnimationsEnabled: Bool {
         didSet { UserDefaults.standard.set(self.iconAnimationsEnabled, forKey: iconAnimationsEnabledKey) }
     }
@@ -140,6 +152,14 @@ final class AppState: ObservableObject {
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
         self.swabbleTriggerWords = UserDefaults.standard
             .stringArray(forKey: swabbleTriggersKey) ?? defaultVoiceWakeTriggers
+        self.voiceWakeChimeEnabled = UserDefaults.standard
+            .object(forKey: voiceWakeChimeEnabledKey) as? Bool ?? true
+        self.voiceWakeTriggerChime = Self.loadChime(
+            key: voiceWakeTriggerChimeKey,
+            fallback: .system(name: defaultVoiceWakeChimeName))
+        self.voiceWakeSendChime = Self.loadChime(
+            key: voiceWakeSendChimeKey,
+            fallback: .system(name: defaultVoiceWakeChimeName))
         if let storedIconAnimations = UserDefaults.standard.object(forKey: iconAnimationsEnabledKey) as? Bool {
             self.iconAnimationsEnabled = storedIconAnimations
         } else {
@@ -239,6 +259,21 @@ final class AppState: ObservableObject {
 
     func setWorking(_ working: Bool) {
         self.isWorking = working
+    }
+
+    // MARK: - Chime persistence
+
+    private static func loadChime(key: String, fallback: VoiceWakeChime) -> VoiceWakeChime {
+        guard let data = UserDefaults.standard.data(forKey: key) else { return fallback }
+        if let decoded = try? JSONDecoder().decode(VoiceWakeChime.self, from: data) {
+            return decoded
+        }
+        return fallback
+    }
+
+    private func storeChime(_ chime: VoiceWakeChime, key: String) {
+        guard let data = try? JSONEncoder().encode(chime) else { return }
+        UserDefaults.standard.set(data, forKey: key)
     }
 }
 

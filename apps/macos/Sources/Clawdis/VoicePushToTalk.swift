@@ -84,6 +84,9 @@ actor VoicePushToTalk {
         let micID: String?
         let localeID: String?
         let forwardConfig: VoiceWakeForwardConfig
+        let chimeEnabled: Bool
+        let triggerChime: VoiceWakeChime
+        let sendChime: VoiceWakeChime
     }
 
     func begin() async {
@@ -97,6 +100,9 @@ actor VoicePushToTalk {
         let config = await MainActor.run { self.makeConfig() }
         self.activeConfig = config
         self.isCapturing = true
+        if config.chimeEnabled {
+            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
+        }
         await VoiceWakeRuntime.shared.pauseForPushToTalk()
         await MainActor.run {
             VoiceWakeOverlayController.shared.showPartial(transcript: "")
@@ -130,6 +136,10 @@ actor VoicePushToTalk {
             forward = cached
         } else {
             forward = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
+        }
+
+        if self.activeConfig?.chimeEnabled == true, let chime = self.activeConfig?.sendChime {
+            await MainActor.run { VoiceWakeChimePlayer.play(chime) }
         }
 
         await MainActor.run {
@@ -213,7 +223,10 @@ actor VoicePushToTalk {
         return Config(
             micID: state.voiceWakeMicID.isEmpty ? nil : state.voiceWakeMicID,
             localeID: state.voiceWakeLocaleID,
-            forwardConfig: state.voiceWakeForwardConfig)
+            forwardConfig: state.voiceWakeForwardConfig,
+            chimeEnabled: state.voiceWakeChimeEnabled,
+            triggerChime: state.voiceWakeTriggerChime,
+            sendChime: state.voiceWakeSendChime)
     }
 
     // MARK: - Test helpers
