@@ -35,6 +35,13 @@ async function fetchBootstrap() {
   };
 }
 
+function latestTimestamp(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return 0;
+  const withTs = messages.filter((m) => typeof m?.timestamp === "number");
+  if (withTs.length === 0) return messages.length; // best-effort monotonic fallback
+  return withTs[withTs.length - 1].timestamp;
+}
+
 class NativeTransport {
   constructor(sessionKey) {
     this.sessionKey = sessionKey;
@@ -190,6 +197,43 @@ const startChat = async () => {
   mount.textContent = "";
   mount.appendChild(panel);
   logStatus("boot: ready");
+
+  // Periodically sync messages + thinking from the session store so webchat stays
+  // in lock-step with other transports (e.g., WhatsApp or CLI).
+  let lastSyncedTs = latestTimestamp(initialMessages);
+  const syncIntervalMs = 3000;
+  async function syncFromSession() {
+    if (agent.state.isStreaming) return; // avoid stomping in-flight turns
+    try {
+      const infoUrl = new URL(`./info?session=${encodeURIComponent(sessionKey)}`, window.location.href);
+      const resp = await fetch(infoUrl, { credentials: "omit" });
+      if (!resp.ok) return;
+      const info = await resp.json();
+      const messages = Array.isArray(info.initialMessages) ? info.initialMessages : [];
+      const ts = latestTimestamp(messages);
+      const thinking = typeof info.thinkingLevel === "string" ? info.thinkingLevel : "off";
+
+      if (ts && ts !== lastSyncedTs) {
+        agent.replaceMessages(messages);
+        lastSyncedTs = ts;
+      }
+
+      if (thinking && thinking !== agent.state.thinkingLevel) {
+        agent.setThinkingLevel(thinking);
+        if (panel?.agentInterface) {
+          panel.agentInterface.sessionThinkingLevel = thinking;
+          panel.agentInterface.pendingThinkingLevel = null;
+          if (panel.agentInterface._messageEditor) {
+            panel.agentInterface._messageEditor.thinkingLevel = thinking;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("session sync failed", err);
+    }
+  }
+
+  setInterval(syncFromSession, syncIntervalMs);
 };
 
 startChat().catch((err) => {
