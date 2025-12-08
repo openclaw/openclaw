@@ -1,9 +1,10 @@
 import http from "node:http";
 import path from "node:path";
-import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import sharp from "sharp";
 
 import { loadConfig } from "../config/config.js";
 import {
@@ -85,19 +86,72 @@ function readSessionMessages(sessionId: string, storePath: string): any[] {
   return messages;
 }
 
-function formatMessageWithAttachments(text: string, attachments: any[]): string {
-  if (!attachments || attachments.length === 0) return text;
-  const parts: string[] = [text];
+async function persistAttachments(
+  attachments: any[],
+  sessionId: string,
+): Promise<{ placeholder: string; path: string }[]> {
+  const out: { placeholder: string; path: string }[] = [];
+  if (!attachments?.length) return out;
+
+  const root = path.join(os.homedir(), ".clawdis", "webchat-uploads", sessionId);
+  await fs.promises.mkdir(root, { recursive: true });
+
   let idx = 1;
   for (const att of attachments) {
-    const label = att.fileName || att.mimeType || `attachment ${idx}`;
-    if (att.type === "image" && att.content && att.mimeType) {
-      parts.push(`\n\n[Image ${label}: data:${att.mimeType};base64,${att.content}]`);
-    } else {
-      parts.push(`\n\n[Attachment ${label}]`);
+    try {
+      if (!att?.content || typeof att.content !== "string") continue;
+      const mime = typeof att.mimeType === "string" ? att.mimeType : "application/octet-stream";
+      const baseName = att.fileName || `${att.type || "attachment"}-${idx}`;
+      const ext = mime.startsWith("image/") ? mime.split("/")[1] || "bin" : "bin";
+      const fileName = `${baseName}.${ext}`.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const buf = Buffer.from(att.content, "base64");
+
+      let finalBuf: Buffer = buf;
+      let meta: { width?: number; height?: number } = {};
+
+      if (att.type === "image") {
+        const image = sharp(buf, { failOn: "none" });
+        meta = await image.metadata();
+        const needsResize =
+          (meta.width && meta.width > 2000) || (meta.height && meta.height > 2000);
+        if (needsResize) {
+          const resized = await image
+            .resize({ width: 2000, height: 2000, fit: "inside" })
+            .toBuffer({ resolveWithObject: true });
+          finalBuf = resized.data as Buffer;
+          meta = { width: resized.info.width, height: resized.info.height };
+        }
+      }
+
+      // Hard cap ~6MB after processing
+      if (finalBuf.length > 6 * 1024 * 1024) {
+        out.push({
+          placeholder: `[Attachment too large: ${baseName} (${(finalBuf.length / 1024 / 1024).toFixed(1)} MB)]`,
+          path: "",
+        });
+        idx += 1;
+        continue;
+      }
+
+      const dest = path.join(root, fileName);
+      await fs.promises.writeFile(dest, finalBuf);
+
+      const sizeLabel = `${(finalBuf.length / 1024).toFixed(0)} KB`;
+      const dimLabel = meta?.width && meta?.height ? `, ${meta.width}x${meta.height}` : "";
+      const placeholder = `[Attachment saved: ${dest} (${mime}${dimLabel}, ${sizeLabel})]`;
+      out.push({ placeholder, path: dest });
+    } catch (err) {
+      out.push({ placeholder: `[Attachment error: ${String(err)}]`, path: "" });
     }
     idx += 1;
   }
+
+  return out;
+}
+
+function formatMessageWithAttachments(text: string, saved: { placeholder: string }[]): string {
+  if (!saved || saved.length === 0) return text;
+  const parts = [text, ...saved.map((s) => `\n\n${s.placeholder}`)];
   return parts.join("");
 }
 
@@ -129,9 +183,11 @@ async function handleRpc(body: any, sessionKey: string): Promise<{ ok: boolean; 
   };
 
   try {
+    const savedAttachments = await persistAttachments(attachments, sessionId);
+
     await agentCommand(
       {
-        message: formatMessageWithAttachments(text, attachments),
+        message: formatMessageWithAttachments(text, savedAttachments),
         sessionId,
         thinking: body?.thinking,
         deliver: Boolean(body?.deliver),
