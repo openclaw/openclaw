@@ -8,7 +8,9 @@ import {
 
 describe("telegram download", () => {
   it("fetches file info", async () => {
-    const json = vi.fn().mockResolvedValue({ ok: true, result: { file_path: "photos/1.jpg" } });
+    const json = vi
+      .fn()
+      .mockResolvedValue({ ok: true, result: { file_path: "photos/1.jpg" } });
     vi.spyOn(global, "fetch" as never).mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -20,7 +22,10 @@ describe("telegram download", () => {
   });
 
   it("downloads and saves", async () => {
-    const info: TelegramFileInfo = { file_id: "fid", file_path: "photos/1.jpg" };
+    const info: TelegramFileInfo = {
+      file_id: "fid",
+      file_path: "photos/1.jpg",
+    };
     const arrayBuffer = async () => new Uint8Array([1, 2, 3, 4]).buffer;
     vi.spyOn(global, "fetch" as never).mockResolvedValueOnce({
       ok: true,

@@ -1,4 +1,4 @@
-import { beforeEach, afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { sendMessageTelegram } from "./send.js";
 
@@ -60,9 +60,9 @@ describe("sendMessageTelegram", () => {
   it("throws on api error", async () => {
     apiMock.sendMessage.mockRejectedValueOnce(new Error("bad token"));
 
-    await expect(sendMessageTelegram("1", "hi", { api: apiMock as never })).rejects.toThrow(
-      /bad token/i,
-    );
+    await expect(
+      sendMessageTelegram("1", "hi", { api: apiMock as never }),
+    ).rejects.toThrow(/bad token/i);
   });
 
   it("sends media via appropriate method", async () => {

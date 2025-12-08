@@ -579,10 +579,7 @@ Examples:
       "--webhook-secret <secret>",
       "Secret token to verify Telegram webhook requests",
     )
-    .option(
-      "--port <port>",
-      "Port for webhook server (default 8787)",
-    )
+    .option("--port <port>", "Port for webhook server (default 8787)")
     .option(
       "--webhook-url <url>",
       "Public webhook URL to register (overrides localhost autodetect)",
@@ -602,7 +599,9 @@ Examples:
         process.env.TELEGRAM_BOT_TOKEN ?? loadConfig().telegram?.botToken;
       if (!token) {
         defaultRuntime.error(
-          danger("Set TELEGRAM_BOT_TOKEN or telegram.botToken to use telegram relay"),
+          danger(
+            "Set TELEGRAM_BOT_TOKEN or telegram.botToken to use telegram relay",
+          ),
         );
         defaultRuntime.exit(1);
         return;
@@ -612,7 +611,9 @@ Examples:
         const port = opts.port ? Number.parseInt(String(opts.port), 10) : 8787;
         const path = opts.webhookPath ?? "/telegram-webhook";
         try {
-          const { monitorTelegramProvider } = await import("../telegram/monitor.js");
+          const { monitorTelegramProvider } = await import(
+            "../telegram/monitor.js"
+          );
           await monitorTelegramProvider({
             token,
             useWebhook: true,

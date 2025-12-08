@@ -2,8 +2,18 @@ import { describe, expect, it, vi } from "vitest";
 
 import { monitorTelegramProvider } from "./monitor.js";
 
+type MockCtx = {
+  message: {
+    chat: { id: number; type: string; title?: string };
+    text?: string;
+    caption?: string;
+  };
+  me?: { username: string };
+  getFile: () => Promise<unknown>;
+};
+
 // Fake bot to capture handler and API calls
-const handlers: Record<string, (ctx: any) => Promise<void> | void> = {};
+const handlers: Record<string, (ctx: MockCtx) => Promise<void> | void> = {};
 const api = {
   sendMessage: vi.fn(),
   sendPhoto: vi.fn(),
@@ -16,7 +26,7 @@ const api = {
 
 vi.mock("./bot.js", () => ({
   createTelegramBot: () => {
-    handlers.message = async (ctx: any) => {
+    handlers.message = async (ctx: MockCtx) => {
       const chatId = ctx.message.chat.id;
       const isGroup = ctx.message.chat.type !== "private";
       const text = ctx.message.text ?? ctx.message.caption ?? "";
@@ -36,12 +46,16 @@ vi.mock("./bot.js", () => ({
 }));
 
 vi.mock("../auto-reply/reply.js", () => ({
-  getReplyFromConfig: async (ctx: any) => ({ text: `echo:${ctx.Body}` }),
+  getReplyFromConfig: async (ctx: { Body?: string }) => ({
+    text: `echo:${ctx.Body}`,
+  }),
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
   it("processes a DM and sends reply", async () => {
-    Object.values(api).forEach((fn) => fn?.mockReset?.());
+    Object.values(api).forEach((fn) => {
+      fn?.mockReset?.();
+    });
     await monitorTelegramProvider({ token: "tok" });
     expect(handlers.message).toBeDefined();
     await handlers.message?.({
@@ -51,7 +65,7 @@ describe("monitorTelegramProvider (grammY)", () => {
         text: "hi",
       },
       me: { username: "mybot" },
-      getFile: vi.fn(),
+      getFile: vi.fn(async () => ({})),
     });
     expect(api.sendMessage).toHaveBeenCalledWith(123, "echo:hi", {
       parse_mode: "Markdown",
@@ -59,7 +73,9 @@ describe("monitorTelegramProvider (grammY)", () => {
   });
 
   it("requires mention in groups by default", async () => {
-    Object.values(api).forEach((fn) => fn?.mockReset?.());
+    Object.values(api).forEach((fn) => {
+      fn?.mockReset?.();
+    });
     await monitorTelegramProvider({ token: "tok" });
     await handlers.message?.({
       message: {
@@ -68,7 +84,7 @@ describe("monitorTelegramProvider (grammY)", () => {
         text: "hello all",
       },
       me: { username: "mybot" },
-      getFile: vi.fn(),
+      getFile: vi.fn(async () => ({})),
     });
     expect(api.sendMessage).not.toHaveBeenCalled();
   });

@@ -11,7 +11,7 @@ struct GeneralSettings: View {
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
 
-var body: some View {
+    var body: some View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 18) {
                 if !self.state.onboardingSeen {
@@ -128,7 +128,8 @@ var body: some View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || self.state.remoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(self.remoteStatus == .checking || self.state.remoteTarget
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
                 switch self.remoteStatus {
                 case .idle:
@@ -307,7 +308,7 @@ extension GeneralSettings {
     }
 
     @MainActor
-    fileprivate func testRemote() async {
+    private func testRemote() async {
         self.remoteStatus = .checking
         let command = CommandResolver.clawdisCommand(subcommand: "status", extraArgs: ["--json"])
         let response = await ShellRunner.run(command: command, cwd: nil, env: nil, timeout: 10)

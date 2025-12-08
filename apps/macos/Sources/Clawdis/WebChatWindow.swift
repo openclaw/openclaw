@@ -9,6 +9,7 @@ final class WebChatWindowController: NSWindowController, WKScriptMessageHandler,
     private let webView: WKWebView
     private let sessionKey: String
     private let initialMessagesJSON: String
+    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
 
     init(sessionKey: String) {
         webChatLogger.debug("init WebChatWindowController sessionKey=\(sessionKey, privacy: .public)")

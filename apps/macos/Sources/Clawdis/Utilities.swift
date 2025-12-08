@@ -282,7 +282,11 @@ enum CommandResolver {
 
     static func clawdisCommand(subcommand: String, extraArgs: [String] = []) -> [String] {
         let settings = self.connectionSettings()
-        if settings.mode == .remote, let ssh = self.sshCommand(subcommand: subcommand, extraArgs: extraArgs, settings: settings) {
+        if settings.mode == .remote, let ssh = self.sshCommand(
+            subcommand: subcommand,
+            extraArgs: extraArgs,
+            settings: settings)
+        {
             return ssh
         }
         if let bundled = self.bundledRelayCommand(subcommand: subcommand, extraArgs: extraArgs) {
@@ -337,7 +341,11 @@ enum CommandResolver {
         let target = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         let identity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         let projectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
-        return RemoteSettings(mode: mode, target: self.sanitizedTarget(target), identity: identity, projectRoot: projectRoot)
+        return RemoteSettings(
+            mode: mode,
+            target: self.sanitizedTarget(target),
+            identity: identity,
+            projectRoot: projectRoot)
     }
 
     private static func sanitizedTarget(_ raw: String) -> String {

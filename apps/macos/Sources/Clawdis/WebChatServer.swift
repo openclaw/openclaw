@@ -162,27 +162,27 @@ final class WebChatServer: @unchecked Sendable {
 
     private func statusText(_ code: Int) -> String {
         switch code {
-        case 200: return "OK"
-        case 403: return "Forbidden"
-        case 404: return "Not Found"
-        default: return "Error"
+        case 200: "OK"
+        case 403: "Forbidden"
+        case 404: "Not Found"
+        default: "Error"
         }
     }
 
     private func mimeType(forExtension ext: String) -> String {
         switch ext.lowercased() {
-        case "html", "htm": return "text/html; charset=utf-8"
-        case "js", "mjs": return "application/javascript; charset=utf-8"
-        case "css": return "text/css; charset=utf-8"
-        case "json", "map": return "application/json; charset=utf-8"
-        case "svg": return "image/svg+xml"
-        case "png": return "image/png"
-        case "jpg", "jpeg": return "image/jpeg"
-        case "gif": return "image/gif"
-        case "woff2": return "font/woff2"
-        case "woff": return "font/woff"
-        case "ttf": return "font/ttf"
-        default: return "application/octet-stream"
+        case "html", "htm": "text/html; charset=utf-8"
+        case "js", "mjs": "application/javascript; charset=utf-8"
+        case "css": "text/css; charset=utf-8"
+        case "json", "map": "application/json; charset=utf-8"
+        case "svg": "image/svg+xml"
+        case "png": "image/png"
+        case "jpg", "jpeg": "image/jpeg"
+        case "gif": "image/gif"
+        case "woff2": "font/woff2"
+        case "woff": "font/woff"
+        case "ttf": "font/ttf"
+        default: "application/octet-stream"
         }
     }
 }

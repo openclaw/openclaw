@@ -1,8 +1,7 @@
 import { Buffer } from "node:buffer";
-
-import { Bot, InputFile, webhookCallback } from "grammy";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
-import type { ApiClientOptions } from "grammy";
+import type { ApiClientOptions, Message } from "grammy";
+import { Bot, InputFile, webhookCallback } from "grammy";
 
 import { chunkText } from "../auto-reply/chunk.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
@@ -16,6 +15,19 @@ import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 
+type TelegramMessage = Message.CommonMessage;
+
+type TelegramContext = {
+  message: TelegramMessage;
+  me?: { username?: string; token?: string };
+  api?: { token?: string };
+  getFile: () => Promise<{
+    getUrl?: (token?: string) => string | Promise<string>;
+    download: () => Promise<Uint8Array | ArrayBuffer>;
+    file_path?: string;
+  }>;
+};
+
 export type TelegramBotOptions = {
   token: string;
   runtime?: RuntimeEnv;
@@ -26,14 +38,13 @@ export type TelegramBotOptions = {
 };
 
 export function createTelegramBot(opts: TelegramBotOptions) {
-  const runtime: RuntimeEnv =
-    opts.runtime ?? {
-      log: console.log,
-      error: console.error,
-      exit: (code: number): never => {
-        throw new Error(`exit ${code}`);
-      },
-    };
+  const runtime: RuntimeEnv = opts.runtime ?? {
+    log: console.log,
+    error: console.error,
+    exit: (code: number): never => {
+      throw new Error(`exit ${code}`);
+    },
+  };
   const client: ApiClientOptions | undefined = opts.proxyFetch
     ? { fetch: opts.proxyFetch as unknown as ApiClientOptions["fetch"] }
     : undefined;
@@ -94,7 +105,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         From: isGroup ? `group:${chatId}` : `telegram:${chatId}`,
         To: `telegram:${chatId}`,
         ChatType: isGroup ? "group" : "direct",
-        GroupSubject: isGroup ? msg.chat.title ?? undefined : undefined,
+        GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
         SenderName: buildSenderName(msg),
         Surface: "telegram",
         MessageSid: String(msg.message_id),
@@ -164,7 +175,7 @@ async function deliverReplies(params: {
       const media = await loadWebMedia(mediaUrl);
       const kind = mediaKindFromMime(media.contentType ?? undefined);
       const file = new InputFile(media.buffer, media.fileName ?? "file");
-      const caption = first ? reply.text ?? undefined : undefined;
+      const caption = first ? (reply.text ?? undefined) : undefined;
       first = false;
       if (kind === "image") {
         await bot.api.sendPhoto(chatId, file, { caption });
@@ -179,14 +190,16 @@ async function deliverReplies(params: {
   }
 }
 
-function buildSenderName(msg: any) {
+function buildSenderName(msg: TelegramMessage) {
   const name =
-    [msg.from?.first_name, msg.from?.last_name].filter(Boolean).join(" ").trim() ||
-    msg.from?.username;
+    [msg.from?.first_name, msg.from?.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || msg.from?.username;
   return name || undefined;
 }
 
-function hasBotMention(msg: any, botUsername: string) {
+function hasBotMention(msg: TelegramMessage, botUsername: string) {
   const text = (msg.text ?? msg.caption ?? "").toLowerCase();
   if (text.includes(`@${botUsername}`)) return true;
   const entities = msg.entities ?? msg.caption_entities ?? [];
@@ -202,7 +215,7 @@ function hasBotMention(msg: any, botUsername: string) {
 }
 
 async function resolveMedia(
-  ctx: any,
+  ctx: TelegramContext,
   maxBytes: number,
 ): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
   const msg = ctx.message;
