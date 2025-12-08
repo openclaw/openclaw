@@ -17,6 +17,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         var isSending: Bool = false
         var attributed: NSAttributedString = NSAttributedString(string: "")
         var isOverflowing: Bool = false
+        var isEditing: Bool = false
     }
 
     private var window: NSPanel?
@@ -39,6 +40,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isFinal = false
         self.model.forwardEnabled = false
         self.model.isSending = false
+        self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.present()
         self.updateWindowFrame(animate: true)
@@ -51,6 +53,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.isFinal = true
         self.model.forwardEnabled = forwardConfig.enabled
         self.model.isSending = false
+        self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.present()
         self.scheduleAutoSend(after: delay)
@@ -59,6 +62,11 @@ final class VoiceWakeOverlayController: ObservableObject {
     func userBeganEditing() {
         self.autoSendTask?.cancel()
         self.model.isSending = false
+        self.model.isEditing = true
+    }
+
+    func endEditing() {
+        self.model.isEditing = false
     }
 
     func updateText(_ text: String) {
@@ -70,6 +78,7 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     func sendNow() {
         self.autoSendTask?.cancel()
+        self.model.isEditing = false
         guard let forwardConfig, forwardConfig.enabled else {
             self.dismiss(reason: .explicit)
             return
@@ -93,6 +102,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     func dismiss(reason: DismissReason = .explicit, outcome: SendOutcome = .empty) {
         self.autoSendTask?.cancel()
         self.model.isSending = false
+        self.model.isEditing = false
         guard let window else { return }
         let target = self.dismissTargetFrame(for: window.frame, reason: reason, outcome: outcome)
         NSAnimationContext.runAnimationGroup { context in
@@ -252,25 +262,40 @@ final class VoiceWakeOverlayController: ObservableObject {
 
 private struct VoiceWakeOverlayView: View {
     @ObservedObject var controller: VoiceWakeOverlayController
-    @FocusState private var focused: Bool
+    @FocusState private var textFocused: Bool
 
     var body: some View {
         HStack(spacing: 8) {
-            TranscriptTextView(
-                text: Binding(
-                    get: { self.controller.model.text },
-                    set: { self.controller.updateText($0) }),
-                attributed: self.controller.model.attributed,
-                isFinal: self.controller.model.isFinal,
-                isOverflowing: self.controller.model.isOverflowing,
-                onBeginEditing: {
-                    self.controller.userBeganEditing()
-                },
-                onSend: {
-                    self.controller.sendNow()
-                })
-                .focused(self.$focused)
-                .frame(minHeight: 32, maxHeight: .infinity)
+            if self.controller.model.isEditing {
+                TranscriptTextView(
+                    text: Binding(
+                        get: { self.controller.model.text },
+                        set: { self.controller.updateText($0) }),
+                    attributed: self.controller.model.attributed,
+                    isFinal: self.controller.model.isFinal,
+                    isOverflowing: self.controller.model.isOverflowing,
+                    onBeginEditing: {
+                        self.controller.userBeganEditing()
+                    },
+                    onEndEditing: {
+                        self.controller.endEditing()
+                    },
+                    onSend: {
+                        self.controller.sendNow()
+                    })
+                    .focused(self.$textFocused)
+                    .frame(minHeight: 32, maxHeight: .infinity)
+                    .id("editing")
+            } else {
+                VibrantLabelView(
+                    attributed: self.controller.model.attributed,
+                    onTap: {
+                        self.controller.userBeganEditing()
+                        self.textFocused = true
+                    })
+                    .frame(minHeight: 32, maxHeight: .infinity)
+                    .id("display")
+            }
 
             Button {
                 self.controller.sendNow()
@@ -301,12 +326,15 @@ private struct VoiceWakeOverlayView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onAppear { self.focused = false }
+        .onAppear { self.textFocused = false }
         .onChange(of: self.controller.model.text) { _, _ in
-            self.focused = false
+            self.textFocused = self.controller.model.isEditing
         }
         .onChange(of: self.controller.model.isVisible) { _, visible in
-            if visible { self.focused = false }
+            if visible { self.textFocused = self.controller.model.isEditing }
+        }
+        .onChange(of: self.controller.model.isEditing) { _, editing in
+            self.textFocused = editing
         }
         .onChange(of: self.controller.model.attributed) { _, _ in
             self.controller.updateWindowFrame(animate: true)
@@ -320,6 +348,7 @@ private struct TranscriptTextView: NSViewRepresentable {
     var isFinal: Bool
     var isOverflowing: Bool
     var onBeginEditing: () -> Void
+    var onEndEditing: () -> Void
     var onSend: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -351,11 +380,12 @@ private struct TranscriptTextView: NSViewRepresentable {
             .font: NSFont.systemFont(ofSize: 13, weight: .regular),
         ]
         textView.focusRingType = .none
-        textView.onSend = { [weak textView] in
-            textView?.window?.makeFirstResponder(nil)
-            self.onSend()
-        }
-        textView.onBeginEditing = self.onBeginEditing
+            textView.onSend = { [weak textView] in
+                textView?.window?.makeFirstResponder(nil)
+                self.onSend()
+            }
+            textView.onBeginEditing = self.onBeginEditing
+        textView.onEndEditing = self.onEndEditing
 
         let scroll = NSScrollView()
         scroll.drawsBackground = false
@@ -392,6 +422,10 @@ private struct TranscriptTextView: NSViewRepresentable {
             self.parent.onBeginEditing()
         }
 
+        func textDidEndEditing(_ notification: Notification) {
+            self.parent.onEndEditing()
+        }
+
         func textDidChange(_ notification: Notification) {
             guard !self.isProgrammaticUpdate else { return }
             guard let view = notification.object as? NSTextView else { return }
@@ -401,13 +435,83 @@ private struct TranscriptTextView: NSViewRepresentable {
     }
 }
 
+// MARK: - Vibrant display label
+
+private struct VibrantLabelView: NSViewRepresentable {
+    var attributed: NSAttributedString
+    var onTap: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let label = NSTextField(labelWithAttributedString: self.attributed)
+        label.isEditable = false
+        label.isBordered = false
+        label.drawsBackground = false
+        label.lineBreakMode = .byWordWrapping
+        label.maximumNumberOfLines = 0
+        label.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        label.allowsDefaultTighteningForTruncation = false
+
+        let effect = NSVisualEffectView()
+        effect.material = .hudWindow
+        effect.blendingMode = .withinWindow
+        effect.state = .active
+        effect.translatesAutoresizingMaskIntoConstraints = false
+        effect.addSubview(label)
+
+        label.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
+            label.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
+            label.topAnchor.constraint(equalTo: effect.topAnchor),
+            label.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
+        ])
+
+        let container = ClickCatcher(onTap: onTap)
+        container.addSubview(effect)
+        effect.frame = container.bounds
+        effect.autoresizingMask = [.width, .height]
+        return container
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let container = nsView as? ClickCatcher,
+              let effect = container.subviews.first as? NSVisualEffectView,
+              let label = effect.subviews.first as? NSTextField else { return }
+        label.attributedStringValue = self.attributed
+    }
+
+    private final class ClickCatcher: NSView {
+        let onTap: () -> Void
+        init(onTap: @escaping () -> Void) {
+            self.onTap = onTap
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+        override func mouseDown(with event: NSEvent) {
+            super.mouseDown(with: event)
+            self.onTap()
+        }
+    }
+}
+
 private final class TranscriptNSTextView: NSTextView {
     var onSend: (() -> Void)?
     var onBeginEditing: (() -> Void)?
+    var onEndEditing: (() -> Void)?
 
     override func becomeFirstResponder() -> Bool {
         self.onBeginEditing?()
         return super.becomeFirstResponder()
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let result = super.resignFirstResponder()
+        self.onEndEditing?()
+        return result
     }
 
     override func keyDown(with event: NSEvent) {
