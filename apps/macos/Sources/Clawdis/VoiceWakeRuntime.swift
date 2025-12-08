@@ -144,8 +144,9 @@ actor VoiceWakeRuntime {
         if !transcript.isEmpty {
             self.lastHeard = now
             if self.isCapturing {
-                self.capturedTranscript = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
-                self.updateHeardBeyondTrigger(with: transcript)
+                let trimmed = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
+                self.capturedTranscript = trimmed
+                self.updateHeardBeyondTrigger(withTrimmed: trimmed)
                 let snapshot = self.capturedTranscript
                 await MainActor.run {
                     VoiceWakeOverlayController.shared.showPartial(transcript: snapshot)
@@ -176,10 +177,11 @@ actor VoiceWakeRuntime {
 
     private func beginCapture(transcript: String, config: RuntimeConfig) async {
         self.isCapturing = true
-        self.capturedTranscript = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
+        let trimmed = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
+        self.capturedTranscript = trimmed
         self.captureStartedAt = Date()
         self.cooldownUntil = nil
-        self.heardBeyondTrigger = self.textHasBeyondTriggerContent(transcript)
+        self.heardBeyondTrigger = !trimmed.isEmpty
 
         let snapshot = self.capturedTranscript
         await MainActor.run {
@@ -236,15 +238,8 @@ actor VoiceWakeRuntime {
 
         await MainActor.run { AppStateStore.shared.stopVoiceEars() }
 
-        guard !finalTranscript.isEmpty else {
-            await MainActor.run { VoiceWakeOverlayController.shared.dismiss(reason: .empty) }
-            self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
-            self.restartRecognizer()
-            return
-        }
-
         let forwardConfig = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
-        let delay: TimeInterval = heardBeyondTrigger ? 1.0 : 3.0
+        let delay: TimeInterval = (heardBeyondTrigger && !finalTranscript.isEmpty) ? 1.0 : 3.0
         await MainActor.run {
             VoiceWakeOverlayController.shared.presentFinal(
                 transcript: finalTranscript,
@@ -265,13 +260,8 @@ actor VoiceWakeRuntime {
         }
     }
 
-    private func textHasBeyondTriggerContent(_ text: String) -> Bool {
-        let words = text.split(whereSeparator: { $0.isWhitespace })
-        return words.count > 1
-    }
-
-    private func updateHeardBeyondTrigger(with transcript: String) {
-        if !self.heardBeyondTrigger, self.textHasBeyondTriggerContent(transcript) {
+    private func updateHeardBeyondTrigger(withTrimmed trimmed: String) {
+        if !self.heardBeyondTrigger, !trimmed.isEmpty {
             self.heardBeyondTrigger = true
         }
     }
@@ -291,6 +281,10 @@ actor VoiceWakeRuntime {
     #if DEBUG
     static func _testTrimmedAfterTrigger(_ text: String, triggers: [String]) -> String {
         self.trimmedAfterTrigger(text, triggers: triggers)
+    }
+
+    static func _testHasContentAfterTrigger(_ text: String, triggers: [String]) -> Bool {
+        !self.trimmedAfterTrigger(text, triggers: triggers).isEmpty
     }
     #endif
 

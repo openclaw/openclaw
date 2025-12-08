@@ -35,4 +35,16 @@ import Testing
         let text = "hello buddy this is after trigger claude also here"
         #expect(VoiceWakeRuntime._testTrimmedAfterTrigger(text, triggers: triggers) == "this is after trigger claude also here")
     }
+
+    @Test func hasContentAfterTriggerFalseWhenOnlyTrigger() {
+        let triggers = ["clawd"]
+        let text = "hey clawd"
+        #expect(!VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
+    }
+
+    @Test func hasContentAfterTriggerTrueWhenSpeechContinues() {
+        let triggers = ["claude"]
+        let text = "claude write a note"
+        #expect(VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
+    }
 }
