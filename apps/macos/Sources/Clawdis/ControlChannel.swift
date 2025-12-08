@@ -159,7 +159,11 @@ final class ControlChannel: ObservableObject {
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
         try await self.ensureConnected()
-        let payload = try await self.request(method: "health", params: timeout.map { ["timeoutMs": Int($0 * 1000)] })
+        let payload = try await self.request(
+            method: "health",
+            params: timeout.map { ["timeoutMs": Int($0 * 1000)] },
+            timeout: timeout.map { $0 + 1 } // small cushion over server-side timeout
+        )
         return payload
     }
 
@@ -170,7 +174,7 @@ final class ControlChannel: ObservableObject {
         return try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data)
     }
 
-    private func request(method: String, params: [String: Any]? = nil) async throws -> Data {
+    private func request(method: String, params: [String: Any]? = nil, timeout: TimeInterval? = nil) async throws -> Data {
         try await self.ensureConnected()
         let id = UUID().uuidString
         var frame: [String: Any] = ["type": "request", "id": id, "method": method]
@@ -179,6 +183,15 @@ final class ControlChannel: ObservableObject {
         try await self.send(data)
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
             self.pending[id] = cont
+            if let timeout {
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                    guard let self else { return }
+                    if let pending = self.pending.removeValue(forKey: id) {
+                        pending.resume(throwing: ControlChannelError.badResponse("timeout after \(Int(timeout))s"))
+                    }
+                }
+            }
         }
     }
 
