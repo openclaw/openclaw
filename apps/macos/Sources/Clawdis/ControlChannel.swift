@@ -186,6 +186,7 @@ final class ControlChannel: ObservableObject {
     private var mode: Mode = .local
     private var localPort: UInt16 = 18789
     private var pingTask: Task<Void, Never>?
+    private var activeJobs: Int = 0
 
     @Published private(set) var state: ConnectionState = .disconnected
     @Published private(set) var lastPingMs: Double?
@@ -430,7 +431,15 @@ final class ControlChannel: ObservableObject {
     private func handleAgentEvent(_ event: ControlAgentEvent) {
         if event.stream == "job" {
             if let state = event.data["state"]?.value as? String {
-                let working = state.lowercased() == "started" || state.lowercased() == "streaming"
+                switch state.lowercased() {
+                case "started", "streaming":
+                    self.activeJobs &+= 1
+                case "done", "error":
+                    self.activeJobs = max(0, self.activeJobs - 1)
+                default:
+                    break
+                }
+                let working = self.activeJobs > 0
                 Task { @MainActor in
                     AppStateStore.shared.setWorking(working)
                 }

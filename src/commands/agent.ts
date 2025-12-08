@@ -320,6 +320,7 @@ export async function agentCommand(
       commandRunner: runCommandWithTimeout,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
+      runId: sessionId,
     });
     emitAgentEvent({
       runId: sessionId,
