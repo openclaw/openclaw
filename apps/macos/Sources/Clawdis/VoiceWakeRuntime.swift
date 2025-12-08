@@ -14,8 +14,17 @@ actor VoiceWakeRuntime {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var lastHeard: Date?
+    private var captureStartedAt: Date?
+    private var captureTask: Task<Void, Never>?
+    private var capturedTranscript: String = ""
+    private var isCapturing: Bool = false
     private var cooldownUntil: Date?
     private var currentConfig: RuntimeConfig?
+
+    // Tunables
+    private let silenceWindow: TimeInterval = 1.0
+    private let captureHardStop: TimeInterval = 8.0
+    private let debounceAfterSend: TimeInterval = 0.35
 
     struct RuntimeConfig: Equatable {
         let triggers: [String]
@@ -95,6 +104,11 @@ actor VoiceWakeRuntime {
     }
 
     private func stop() {
+        self.captureTask?.cancel()
+        self.captureTask = nil
+        self.isCapturing = false
+        self.capturedTranscript = ""
+        self.captureStartedAt = nil
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -120,21 +134,22 @@ actor VoiceWakeRuntime {
         }
 
         guard let transcript else { return }
-        if !transcript.isEmpty { self.lastHeard = Date() }
+
+        let now = Date()
+        if !transcript.isEmpty {
+            self.lastHeard = now
+            if self.isCapturing {
+                self.capturedTranscript = transcript
+            }
+        }
+
+        if self.isCapturing { return }
 
         if Self.matches(text: transcript, triggers: config.triggers) {
-            let now = Date()
             if let cooldown = cooldownUntil, now < cooldown {
                 return
             }
-            self.cooldownUntil = now.addingTimeInterval(2.5)
-            await MainActor.run { AppStateStore.shared.triggerVoiceEars() }
-            let forwardConfig = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
-            if forwardConfig.enabled {
-                Task.detached {
-                    await VoiceWakeForwarder.forward(transcript: transcript, config: forwardConfig)
-                }
-            }
+            await self.beginCapture(transcript: transcript, config: config)
         }
     }
 
@@ -147,6 +162,77 @@ actor VoiceWakeRuntime {
             if normalized.contains(t) { return true }
         }
         return false
+    }
+
+    private func beginCapture(transcript: String, config: RuntimeConfig) async {
+        self.isCapturing = true
+        self.capturedTranscript = transcript
+        self.captureStartedAt = Date()
+        self.cooldownUntil = nil
+
+        await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
+
+        self.captureTask?.cancel()
+        self.captureTask = Task { [weak self] in
+            guard let self else { return }
+            await self.monitorCapture(config: config)
+        }
+    }
+
+    private func monitorCapture(config: RuntimeConfig) async {
+        let start = self.captureStartedAt ?? Date()
+        let hardStop = start.addingTimeInterval(self.captureHardStop)
+
+        while self.isCapturing {
+            let now = Date()
+            if now >= hardStop {
+                await self.finalizeCapture(config: config)
+                return
+            }
+
+            if let last = self.lastHeard, now.timeIntervalSince(last) >= self.silenceWindow {
+                await self.finalizeCapture(config: config)
+                return
+            }
+
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+    }
+
+    private func finalizeCapture(config: RuntimeConfig) async {
+        guard self.isCapturing else { return }
+        self.isCapturing = false
+        self.captureTask?.cancel()
+        self.captureTask = nil
+
+        let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.capturedTranscript = ""
+        self.captureStartedAt = nil
+        self.lastHeard = nil
+
+        await MainActor.run { AppStateStore.shared.stopVoiceEars() }
+
+        if !finalTranscript.isEmpty {
+            await self.send(transcript: finalTranscript, config: config)
+        }
+
+        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
+
+        // Restart the recognizer so we listen for the next trigger with a clean buffer.
+        let current = self.currentConfig
+        self.stop()
+        if let current { await self.start(with: current) }
+    }
+
+    private func send(transcript: String, config: RuntimeConfig) async {
+        let forwardConfig = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
+        guard forwardConfig.enabled else { return }
+
+        let payload = VoiceWakeForwarder.prefixedTranscript(transcript)
+
+        Task.detached {
+            await VoiceWakeForwarder.forward(transcript: payload, config: forwardConfig)
+        }
     }
 
     #if DEBUG

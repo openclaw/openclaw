@@ -178,13 +178,22 @@ final class AppState: ObservableObject {
         Task { await VoiceWakeRuntime.shared.refresh(state: self) }
     }
 
-    func triggerVoiceEars(ttl: TimeInterval = 5) {
+    func triggerVoiceEars(ttl: TimeInterval? = 5) {
         self.earBoostTask?.cancel()
         self.earBoostActive = true
+
+        guard let ttl else { return }
+
         self.earBoostTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: UInt64(ttl * 1_000_000_000))
             await MainActor.run { [weak self] in self?.earBoostActive = false }
         }
+    }
+
+    func stopVoiceEars() {
+        self.earBoostTask?.cancel()
+        self.earBoostTask = nil
+        self.earBoostActive = false
     }
 
     func setVoiceWakeEnabled(_ enabled: Bool) async {

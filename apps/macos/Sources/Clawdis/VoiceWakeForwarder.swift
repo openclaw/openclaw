@@ -28,6 +28,19 @@ enum VoiceWakeForwarder {
     private static let cliSearchCandidates = ["clawdis-mac"] + cliHelperSearchPaths.map { "\($0)/clawdis-mac" }
     private static let cliCache = CLICache()
 
+    static func prefixedTranscript(_ transcript: String, machineName: String? = nil) -> String {
+        let resolvedMachine = machineName
+            .flatMap { name -> String? in
+                let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            ?? Host.current().localizedName
+            ?? ProcessInfo.processInfo.hostName
+
+        let safeMachine = resolvedMachine.isEmpty ? "this Mac" : resolvedMachine
+        return "User talked via voice recognition on \(safeMachine) - repeat prompt first + remember some words might be incorrectly transcribed.\n\n\(transcript)"
+    }
+
     static func clearCliCache() {
         self.cliCache.set(nil)
     }

@@ -23,6 +23,7 @@ final class VoiceWakeTester {
     private var holdingAfterDetect = false
     private var detectedText: String?
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake")
+    private let silenceWindow: TimeInterval = 1.0
 
     init(locale: Locale = .current) {
         self.recognizer = SFSpeechRecognizer(locale: locale)
@@ -132,10 +133,11 @@ final class VoiceWakeTester {
             self.holdingAfterDetect = true
             self.detectedText = text
             self.logger.info("voice wake detected; forwarding (len=\(text.count))")
-            await MainActor.run { AppStateStore.shared.triggerVoiceEars() }
+            await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
             let config = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
             Task.detached {
-                await VoiceWakeForwarder.forward(transcript: text, config: config)
+                let payload = VoiceWakeForwarder.prefixedTranscript(text)
+                await VoiceWakeForwarder.forward(transcript: payload, config: config)
             }
             Task { @MainActor in onUpdate(.detected(text)) }
             self.holdUntilSilence(onUpdate: onUpdate)
@@ -162,8 +164,7 @@ final class VoiceWakeTester {
         Task { [weak self] in
             guard let self else { return }
             let detectedAt = Date()
-            let hardStop = detectedAt.addingTimeInterval(3) // cap overall listen after trigger
-            let silenceWindow: TimeInterval = 0.8
+            let hardStop = detectedAt.addingTimeInterval(6) // cap overall listen after trigger
 
             while !self.isStopping {
                 let now = Date()
@@ -175,6 +176,7 @@ final class VoiceWakeTester {
             }
             if !self.isStopping {
                 self.stop()
+                await MainActor.run { AppStateStore.shared.stopVoiceEars() }
                 if let detectedText {
                     self.logger.info("voice wake hold finished; len=\(detectedText.count)")
                     Task { @MainActor in onUpdate(.detected(detectedText)) }

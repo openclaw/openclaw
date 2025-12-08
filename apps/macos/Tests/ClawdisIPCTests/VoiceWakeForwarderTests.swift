@@ -73,4 +73,13 @@ import Testing
         let escapedQuote = VoiceWakeForwarder.shellEscape(textWithQuote)
         #expect(escapedQuote == "'Debug test works (and a funny pun)'\\'''")
     }
+
+    @Test func prefixedTranscriptUsesMachineName() {
+        let transcript = "hello world"
+        let prefixed = VoiceWakeForwarder.prefixedTranscript(transcript, machineName: "My-Mac")
+
+        #expect(prefixed.starts(with: "User talked via voice recognition on"))
+        #expect(prefixed.contains("My-Mac"))
+        #expect(prefixed.hasSuffix("\n\nhello world"))
+    }
 }
