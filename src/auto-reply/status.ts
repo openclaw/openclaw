@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
 
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
@@ -94,26 +95,109 @@ const probeAgentCommand = (command?: string[]): AgentProbe => {
   }
 };
 
-const formatTokens = (total: number, contextTokens: number | null) => {
+const formatTokens = (
+  total: number | null | undefined,
+  contextTokens: number | null,
+) => {
   const ctx = contextTokens ?? null;
+  if (total == null) {
+    const ctxLabel = ctx ? formatKTokens(ctx) : "?";
+    return `unknown/${ctxLabel}`;
+  }
   const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
   const totalLabel = formatKTokens(total);
   const ctxLabel = ctx ? formatKTokens(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 
+const readUsageFromSessionLog = (
+  sessionId?: string,
+  storePath?: string,
+):
+  | {
+      input: number;
+      output: number;
+      total: number;
+      model?: string;
+    }
+  | undefined => {
+  // Prefer the coding-agent session log (pi-mono) if present.
+  // Path resolution rules (priority):
+  // 1) Store directory sibling file <sessionId>.jsonl
+  // 2) PI coding agent dir: ~/.pi/agent/sessions/<sessionId>.jsonl
+  if (!sessionId) return undefined;
+
+  const candidatePaths: string[] = [];
+
+  if (storePath) {
+    const dir = path.dirname(storePath);
+    candidatePaths.push(path.join(dir, `${sessionId}.jsonl`));
+  }
+
+  const piDir = path.join(os.homedir(), ".pi", "agent", "sessions");
+  candidatePaths.push(path.join(piDir, `${sessionId}.jsonl`));
+
+  const logPath = candidatePaths.find((p) => fs.existsSync(p));
+  if (!logPath) return undefined;
+
+  try {
+    const lines = fs.readFileSync(logPath, "utf-8").split(/\n+/);
+    let input = 0;
+    let output = 0;
+    let model: string | undefined;
+
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line) as {
+          message?: { usage?: { input?: number; output?: number; total?: number }; model?: string };
+          usage?: { input?: number; output?: number; total?: number };
+          model?: string;
+        };
+        const usage = parsed.message?.usage ?? parsed.usage;
+        if (usage) {
+          input += usage.input ?? 0;
+          output += usage.output ?? 0;
+        }
+        model = parsed.message?.model ?? parsed.model ?? model;
+      } catch {
+        // ignore bad lines
+      }
+    }
+
+    const total = input + output;
+    if (total === 0) return undefined;
+    return { input, output, total, model };
+  } catch {
+    return undefined;
+  }
+};
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
-  const model = entry?.model ?? args.reply?.agent?.model ?? DEFAULT_MODEL;
-  const contextTokens =
+  let model = entry?.model ?? args.reply?.agent?.model ?? DEFAULT_MODEL;
+  let contextTokens =
     entry?.contextTokens ??
     args.reply?.agent?.contextTokens ??
     lookupContextTokens(model) ??
     DEFAULT_CONTEXT_TOKENS;
-  const totalTokens =
+
+  let totalTokens =
     entry?.totalTokens ??
     (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
+
+  // Fallback: derive usage from the session transcript if the store lacks it
+  if (!totalTokens || totalTokens === 0) {
+    const logUsage = readUsageFromSessionLog(entry?.sessionId, args.storePath);
+    if (logUsage) {
+      totalTokens = logUsage.total;
+      if (!model) model = logUsage.model ?? model;
+      if (!contextTokens && logUsage.model) {
+        contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
+      }
+    }
+  }
   const agentProbe = probeAgentCommand(args.reply?.command);
 
   const thinkLevel =
