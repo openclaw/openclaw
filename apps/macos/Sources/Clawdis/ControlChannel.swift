@@ -261,7 +261,14 @@ final class ControlChannel: ObservableObject {
         let localPort = Self.pickAvailablePort()
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        var args: [String] = ["-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-L", "\(localPort):127.0.0.1:18789", target]
+        var args: [String] = [
+            "-o", "BatchMode=yes",
+            "-o", "ExitOnForwardFailure=yes",
+            "-N", // don't run a remote shell; keep the tunnel open
+            "-T", // no pseudo-tty
+            "-L", "\(localPort):127.0.0.1:18789",
+            target,
+        ]
         if !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             args.insert(contentsOf: ["-i", identity], at: 2)
         }

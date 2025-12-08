@@ -83,7 +83,9 @@ struct GeneralSettings: View {
             .pickerStyle(.segmented)
             .frame(width: 380, alignment: .leading)
 
-            self.healthRow
+            if self.state.connectionMode == .local {
+                self.healthRow
+            }
 
             if self.state.connectionMode == .remote {
                 self.remoteCard
