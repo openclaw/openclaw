@@ -137,6 +137,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 do {
+                    // Recreate the tunnel silently so the window keeps working without user intervention.
                     let base = try await self.startOrRestartTunnel()
                     self.loadPage(baseURL: base)
                 } catch {

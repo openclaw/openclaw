@@ -20,6 +20,8 @@ actor ConnectionWaiter {
     private var pendingResult: Result<Void, Error>?
 
     func wait() async throws {
+        // Acts like a one-shot Future; if the connection resolves before wait() is called,
+        // stash the result so the waiter resumes immediately.
         try await withCheckedThrowingContinuation { (c: CheckedContinuation<Void, Error>) in
             if let pending = pendingResult {
                 pendingResult = nil
@@ -292,7 +294,7 @@ final class ControlChannel: ObservableObject {
         proc.standardOutput = outPipe
         proc.standardError = errPipe
         try proc.run()
-        // Give ssh a brief moment; if it exits immediately, surface the error.
+        // Give ssh a brief moment; if it exits immediately we surface stderr instead of silently failing.
         Thread.sleep(forTimeInterval: 0.2) // 200ms
         if !proc.isRunning {
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -381,6 +383,7 @@ final class ControlChannel: ObservableObject {
         getsockname(socket, withUnsafeMutablePointer(to: &addr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { $0 }
         }, &len)
+        // Asking the kernel for port 0 yields an ephemeral free port; reuse it for the SSH tunnel.
         port = UInt16(bigEndian: addr.sin_port)
         return port
     }

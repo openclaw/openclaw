@@ -125,7 +125,7 @@ actor VoiceWakeRuntime {
 
             self.currentConfig = config
             self.lastHeard = Date()
-            self.cooldownUntil = nil
+            // Preserve any existing cooldownUntil so the debounce after send isn't wiped by a restart.
 
             self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 guard let self else { return }
@@ -253,6 +253,7 @@ actor VoiceWakeRuntime {
             VoiceWakeOverlayController.shared.showPartial(transcript: snapshot, attributed: attributed)
         }
 
+        // Keep the "ears" boosted for the capture window so the status icon animates while recording.
         await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
 
         self.captureTask?.cancel()
@@ -269,6 +270,7 @@ actor VoiceWakeRuntime {
         while self.isCapturing {
             let now = Date()
             if now >= hardStop {
+                // Hard-stop after a maximum duration so we never leave the recognizer pinned open.
                 await self.finalizeCapture(config: config)
                 return
             }
@@ -337,6 +339,7 @@ actor VoiceWakeRuntime {
             self.lastHeard = Date()
         }
 
+        // Normalize against the adaptive threshold so the UI meter stays roughly 0...1 across devices.
         let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
         Task { @MainActor in
             VoiceWakeOverlayController.shared.updateLevel(clamped)

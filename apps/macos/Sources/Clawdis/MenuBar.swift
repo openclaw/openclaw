@@ -654,6 +654,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     private var state: AppState?
     private let xpcLogger = Logger(subsystem: "com.steipete.clawdis", category: "xpc")
     private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
+    // Only clients signed with this team ID may talk to the XPC service (hard-fails if mismatched).
     private let allowedTeamIDs: Set<String> = ["Y5PE65HELJ"]
     let updaterController: UpdaterProviding = makeUpdaterController()
 

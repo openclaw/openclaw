@@ -41,6 +41,7 @@ enum ShellRunner {
                     _ = await waitTask.value // drain pipes after termination
                     return Response(ok: false, message: "timeout")
                 }
+                // Whichever completes first (process exit or timeout) wins; cancel the other branch.
                 let first = await group.next()!
                 group.cancelAll()
                 return first

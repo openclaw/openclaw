@@ -97,6 +97,7 @@ final class RelayProcessManager: ObservableObject {
                 workingDirectory: FilePath(cwd))
             { execution, stdin, stdout, stderr in
                 self.didStart(execution)
+                // Consume stdout/stderr eagerly so the relay can't block on full pipes.
                 async let out: Void = self.stream(output: stdout, label: "stdout")
                 async let err: Void = self.stream(output: stderr, label: "stderr")
                 try await stdin.finish()
@@ -143,6 +144,7 @@ final class RelayProcessManager: ObservableObject {
 
         self.status = .restarting
         self.logger.warning("relay crashed (code \(code)); restarting")
+        // Slight backoff to avoid hammering the system in case of immediate crash-on-start.
         try? await Task.sleep(nanoseconds: 750_000_000)
         self.startIfNeeded()
     }

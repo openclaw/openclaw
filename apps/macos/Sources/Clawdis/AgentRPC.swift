@@ -162,6 +162,7 @@ actor AgentRPC {
         }
 
         Task.detached { [weak self] in
+            // Ensure all waiters are failed if the worker dies (e.g., crash or SIGTERM).
             process.waitUntilExit()
             await self?.stop()
         }
@@ -188,7 +189,7 @@ actor AgentRPC {
             self.buffer.removeSubrange(self.buffer.startIndex...range.lowerBound)
             guard let line = String(data: lineData, encoding: .utf8) else { continue }
 
-            // Handle event envelopes (unsolicited)
+            // Event frames are pushed without request/response pairing (e.g., heartbeats).
             if let event = self.parseHeartbeatEvent(from: line) {
                 DispatchQueue.main.async {
                     NotificationCenter.default.post(name: Self.heartbeatNotification, object: event)

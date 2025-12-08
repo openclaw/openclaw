@@ -98,6 +98,7 @@ actor VoicePushToTalk {
             self.triggerChimePlayed = true
             await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
         }
+        // Pause the always-on wake word recognizer so both pipelines don't fight over the mic tap.
         await VoiceWakeRuntime.shared.pauseForPushToTalk()
         await MainActor.run {
             VoiceWakeOverlayController.shared.showPartial(transcript: "")
@@ -189,6 +190,7 @@ actor VoicePushToTalk {
             }
             let transcript = result?.bestTranscription.formattedString
             let isFinal = result?.isFinal ?? false
+            // Hop to a Task so UI updates stay off the Speech callback thread.
             Task.detached { [weak self, transcript, isFinal] in
                 guard let self else { return }
                 await self.handle(transcript: transcript, isFinal: isFinal)

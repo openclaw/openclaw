@@ -135,6 +135,7 @@ final class WebChatServer: @unchecked Sendable {
         }
         let fileURL = root.appendingPathComponent(path)
         webChatServerLogger.debug("WebChatServer resolved file=\(fileURL.path, privacy: .public)")
+        // Simple directory traversal guard: served files must live under the bundled web root.
         guard fileURL.path.hasPrefix(root.path) else {
             self.send(status: 403, mime: "text/plain", body: Data("Forbidden".utf8), over: connection)
             return

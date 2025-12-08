@@ -290,6 +290,7 @@ enum VoiceWakeForwarder {
                 let nanos = UInt64(max(timeout, 0.1) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nanos)
                 if process.isRunning {
+                    // SIGTERM is enough to stop ssh; keeps stdout/stderr readable for diagnostics.
                     process.terminate()
                 }
             }

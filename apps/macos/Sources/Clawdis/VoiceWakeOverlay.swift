@@ -165,6 +165,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         guard let window else { return }
         if !self.model.isVisible {
             self.model.isVisible = true
+            // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
             AppStateStore.shared.triggerVoiceEars(ttl: nil)
             let start = target.offsetBy(dx: 0, dy: -6)
             window.setFrame(start, display: true)
@@ -276,7 +277,6 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 
     private func scheduleAutoSend(after delay: TimeInterval, sendChime: VoiceWakeChime) {
-        guard let forwardConfig, forwardConfig.enabled else { return }
         self.autoSendTask?.cancel()
         self.autoSendTask = Task<Void, Never> { [weak self, sendChime] in
             let nanos = UInt64(max(0, delay) * 1_000_000_000)

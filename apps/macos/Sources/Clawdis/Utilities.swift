@@ -257,6 +257,7 @@ enum CommandResolver {
             extras.insert(relay.appendingPathComponent("node_modules/.bin").path, at: 0)
         }
         var seen = Set<String>()
+        // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
     }
 
