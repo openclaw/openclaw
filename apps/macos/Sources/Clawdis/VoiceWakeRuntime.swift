@@ -111,7 +111,9 @@ actor VoiceWakeRuntime {
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
                 request?.append(buffer)
                 if let rms = Self.rmsLevel(buffer: buffer) {
-                    Task { await self?.noteAudioLevel(rms: rms) }
+                    Task.detached { [weak self] in
+                        await self?.noteAudioLevel(rms: rms)
+                    }
                 }
             }
 
@@ -313,6 +315,33 @@ actor VoiceWakeRuntime {
 
         self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
         self.restartRecognizer()
+    }
+
+    // MARK: - Audio level handling
+
+    private func noteAudioLevel(rms: Double) {
+        guard self.isCapturing else { return }
+
+        // Update adaptive noise floor: faster when lower energy (quiet), slower when loud.
+        let alpha: Double = rms < self.noiseFloorRMS ? 0.08 : 0.01
+        self.noiseFloorRMS = max(1e-7, self.noiseFloorRMS + (rms - self.noiseFloorRMS) * alpha)
+
+        let threshold = max(self.minSpeechRMS, self.noiseFloorRMS * self.speechBoostFactor)
+        if rms >= threshold {
+            self.lastHeard = Date()
+        }
+    }
+
+    private static func rmsLevel(buffer: AVAudioPCMBuffer) -> Double? {
+        guard let channelData = buffer.floatChannelData?.pointee else { return nil }
+        let frameCount = Int(buffer.frameLength)
+        guard frameCount > 0 else { return nil }
+        var sum: Double = 0
+        for i in 0..<frameCount {
+            let sample = Double(channelData[i])
+            sum += sample * sample
+        }
+        return sqrt(sum / Double(frameCount))
     }
 
     private func restartRecognizer() {
