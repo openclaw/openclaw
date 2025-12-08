@@ -68,6 +68,7 @@ clawdis relay --verbose
 ## macOS Companion App (Clawdis.app)
 
 - **On-device Voice Wake:** listens for wake words (e.g. “Claude”) using Apple’s on-device speech recognizer (macOS 26+). macOS still shows the standard Speech/Mic permissions prompt, but audio stays on device.
+- **Push-to-talk (Cmd+Fn):** hold the hotkey to speak; the voice overlay shows live partials and sends when you release.
 - **Config tab:** pick the model from your local Pi model catalog (`pi-mono/packages/ai/src/models.generated.ts`), or enter a custom model ID; edit session store path and context tokens.
 - **Voice settings:** language + additional languages, mic picker, live level meter, trigger-word table, and a built-in test harness.
 - **Menu bar toggle:** enable/disable Voice Wake from the menu bar; respects Dock-icon preference.
