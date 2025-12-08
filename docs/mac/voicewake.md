@@ -25,7 +25,7 @@ Updated: 2025-12-08 · Owners: mac app
 - **Voice Wake** toggle: enables wake-word runtime.
 - **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
 - Language & mic pickers, live level meter, trigger-word table, tester, forward target/command all remain unchanged.
-- **Sounds**: optional chimes on trigger detect and on send; defaults to a bundled `startrek-computer.wav`. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event.
+- **Sounds**: chimes on trigger detect and on send; defaults to the macOS “Glass” system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
 
 ## Forwarding payload
 - `VoiceWakeForwarder.prefixedTranscript(_:)` prepends the machine hint before sending. Shared between wake-word and push-to-talk paths.

@@ -148,28 +148,18 @@ struct VoiceWakeSettings: View {
     private var chimeSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Toggle(isOn: self.$state.voiceWakeChimeEnabled) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Play sounds")
-                            .font(.callout.weight(.semibold))
-                        Text("Chimes for wake-word and push-to-talk events.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .toggleStyle(.switch)
+                Text("Sounds")
+                    .font(.callout.weight(.semibold))
                 Spacer()
             }
 
             self.chimeRow(
                 title: "Trigger sound",
                 selection: self.$state.voiceWakeTriggerChime)
-                .disabled(!self.state.voiceWakeChimeEnabled)
 
             self.chimeRow(
                 title: "Send sound",
                 selection: self.$state.voiceWakeSendChime)
-                .disabled(!self.state.voiceWakeChimeEnabled)
         }
         .padding(.top, 4)
     }
@@ -245,14 +235,19 @@ struct VoiceWakeSettings: View {
                     .frame(width: self.fieldLabelWidth, alignment: .leading)
 
                 Menu {
+                    Button("No Sound") { selection.wrappedValue = .none }
+                    Divider()
                     ForEach(VoiceWakeChimeCatalog.systemOptions, id: \.self) { option in
                         Button(VoiceWakeChimeCatalog.displayName(for: option)) {
                             selection.wrappedValue = .system(name: option)
                         }
                     }
+                    Divider()
+                    Button("Choose file…") { self.chooseCustomChime(for: selection) }
                 } label: {
                     HStack(spacing: 6) {
                         Text(selection.wrappedValue.displayLabel)
+                        Spacer()
                         Image(systemName: "chevron.down")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -266,11 +261,7 @@ struct VoiceWakeSettings: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
                 }
 
-                Button("Choose file…") {
-                    self.chooseCustomChime(for: selection)
-                }
-
-                Button("Test") {
+                Button("Play") {
                     VoiceWakeChimePlayer.play(selection.wrappedValue)
                 }
                 .keyboardShortcut(.space, modifiers: [.command])

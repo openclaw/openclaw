@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 
 enum VoiceWakeChime: Codable, Equatable {
+    case none
     case system(name: String)
     case custom(displayName: String, bookmark: Data)
 
@@ -14,6 +15,8 @@ enum VoiceWakeChime: Codable, Equatable {
 
     var displayLabel: String {
         switch self {
+        case .none:
+            return "No Sound"
         case let .system(name):
             return VoiceWakeChimeCatalog.displayName(for: name)
         case let .custom(displayName, _):
@@ -23,12 +26,11 @@ enum VoiceWakeChime: Codable, Equatable {
 }
 
 struct VoiceWakeChimeCatalog {
-    /// Options shown in the picker; first entry is the default bundled tone.
+    /// Options shown in the picker.
     static let systemOptions: [String] = [
-        defaultVoiceWakeChimeName,
+        "Glass", // default
         "Ping",
         "Pop",
-        "Glass",
         "Frog",
         "Submarine",
         "Funk",
@@ -36,7 +38,6 @@ struct VoiceWakeChimeCatalog {
     ]
 
     static func displayName(for raw: String) -> String {
-        if raw == defaultVoiceWakeChimeName { return "Startrek Computer" }
         return raw
     }
 }
@@ -50,11 +51,9 @@ enum VoiceWakeChimePlayer {
 
     private static func sound(for chime: VoiceWakeChime) -> NSSound? {
         switch chime {
+        case .none:
+            return nil
         case let .system(name):
-            // Prefer bundled tone if present.
-            if let bundled = bundledSound(named: name) {
-                return bundled
-            }
             return NSSound(named: NSSound.Name(name))
 
         case let .custom(_, bookmark):
@@ -69,14 +68,5 @@ enum VoiceWakeChimePlayer {
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             return NSSound(contentsOf: url, byReference: false)
         }
-    }
-
-    private static func bundledSound(named name: String) -> NSSound? {
-        guard let url = Bundle.main.url(
-            forResource: name,
-            withExtension: defaultVoiceWakeChimeExtension,
-            subdirectory: "Resources/Sounds")
-        else { return nil }
-        return NSSound(contentsOf: url, byReference: false)
     }
 }
