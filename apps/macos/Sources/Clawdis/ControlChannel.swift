@@ -273,7 +273,7 @@ final class ControlChannel: ObservableObject {
         proc.standardError = errPipe
         try proc.run()
         // Give ssh a brief moment; if it exits immediately, surface the error.
-        try? Task.sleep(nanoseconds: 200_000_000) // 200ms
+        Thread.sleep(forTimeInterval: 0.2) // 200ms
         if !proc.isRunning {
             let err = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
             throw ControlChannelError.sshFailed(err ?? "ssh exited")

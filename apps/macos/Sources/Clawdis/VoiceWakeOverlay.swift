@@ -184,8 +184,9 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     private func ensureWindow() {
         if self.window != nil { return }
+        let borderPad = self.closeOverflow
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: self.width + self.closeOverflow, height: 60 + self.closeOverflow),
+            contentRect: NSRect(x: 0, y: 0, width: self.width + borderPad * 2, height: 60 + borderPad * 2),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false)
@@ -211,7 +212,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     private func targetFrame() -> NSRect {
         guard let screen = NSScreen.main else { return .zero }
         let height = self.measuredHeight()
-        let size = NSSize(width: self.width + self.closeOverflow, height: height + self.closeOverflow)
+        let size = NSSize(width: self.width + self.closeOverflow * 2, height: height + self.closeOverflow * 2)
         let visible = screen.visibleFrame
         let origin = CGPoint(
             x: visible.maxX - size.width - self.padding,
@@ -395,6 +396,8 @@ private struct VoiceWakeOverlayView: View {
         }
         .padding(.top, self.controller.closeOverflow)
         .padding(.leading, self.controller.closeOverflow)
+        .padding(.trailing, self.controller.closeOverflow)
+        .padding(.bottom, self.controller.closeOverflow)
         .onAppear { self.textFocused = false }
         .onChange(of: self.controller.model.text) { _, _ in
             self.textFocused = self.controller.model.isEditing
