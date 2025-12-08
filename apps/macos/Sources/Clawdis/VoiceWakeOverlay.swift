@@ -65,12 +65,12 @@ final class VoiceWakeOverlayController: ObservableObject {
     func sendNow() {
         self.autoSendTask?.cancel()
         guard let forwardConfig, forwardConfig.enabled else {
-            self.dismiss()
+            self.dismiss(reason: .explicit)
             return
         }
         let text = self.model.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
-            self.dismiss()
+            self.dismiss(reason: .empty)
             return
         }
 
@@ -80,17 +80,21 @@ final class VoiceWakeOverlayController: ObservableObject {
             await VoiceWakeForwarder.forward(transcript: payload, config: forwardConfig)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-            self.dismiss()
+            self.dismiss(reason: .explicit, outcome: .sent)
         }
     }
 
-    func dismiss(reason: DismissReason = .explicit) {
+    func dismiss(reason: DismissReason = .explicit, outcome: SendOutcome = .empty) {
         self.autoSendTask?.cancel()
         self.model.isSending = false
         guard let window else { return }
+        let target = self.dismissTargetFrame(for: window.frame, reason: reason, outcome: outcome)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            if let target {
+                window.animator().setFrame(target, display: true)
+            }
             window.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in
@@ -101,6 +105,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 
     enum DismissReason { case explicit, empty }
+    enum SendOutcome { case sent, empty }
 
     // MARK: - Private
 
@@ -180,6 +185,21 @@ final class VoiceWakeOverlayController: ObservableObject {
             }
         } else {
             window.setFrame(frame, display: true)
+        }
+    }
+
+    private func dismissTargetFrame(for frame: NSRect, reason: DismissReason, outcome: SendOutcome) -> NSRect? {
+        switch (reason, outcome) {
+        case (.empty, _):
+            let scale: CGFloat = 0.95
+            let newSize = NSSize(width: frame.size.width * scale, height: frame.size.height * scale)
+            let dx = (frame.size.width - newSize.width) / 2
+            let dy = (frame.size.height - newSize.height) / 2
+            return NSRect(x: frame.origin.x + dx, y: frame.origin.y + dy, width: newSize.width, height: newSize.height)
+        case (.explicit, .sent):
+            return frame.offsetBy(dx: 8, dy: 6)
+        default:
+            return frame
         }
     }
 
