@@ -372,45 +372,52 @@ extension WebChatWindowController {
 @MainActor
 final class WebChatManager {
     static let shared = WebChatManager()
-    private var controller: WebChatWindowController?
+    private var windowController: WebChatWindowController?
+    private var panelController: WebChatWindowController?
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     func show(sessionKey: String) {
-        if self.controller == nil {
-            self.controller = WebChatWindowController(sessionKey: sessionKey)
+        self.closePanel()
+        if let controller = self.windowController {
+            controller.showWindow(nil)
+            controller.window?.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
         }
-        self.onPanelVisibilityChanged?(false)
-        self.controller?.showWindow(nil)
-        self.controller?.window?.makeKeyAndOrderFront(nil)
+
+        let controller = WebChatWindowController(sessionKey: sessionKey)
+        self.windowController = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func togglePanel(sessionKey: String, anchorProvider: @escaping () -> NSRect?) {
-        if let controller, controller.window?.isVisible == true, controller.presentation.isPanel {
-            controller.shutdown()
-            controller.closePanel()
-            self.controller = nil
+        if let controller = self.panelController {
+            if controller.window?.isVisible == true {
+                controller.closePanel()
+                self.onPanelVisibilityChanged?(false)
+            } else {
+                controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+                self.onPanelVisibilityChanged?(true)
+            }
             return
         }
-        if let existing = self.controller {
-            existing.shutdown()
-            existing.close()
-        }
 
-        let controller = WebChatWindowController(sessionKey: sessionKey, presentation: .panel(anchorProvider: anchorProvider))
-        self.controller = controller
+        let controller = WebChatWindowController(
+            sessionKey: sessionKey,
+            presentation: .panel(anchorProvider: anchorProvider))
+        self.panelController = controller
         controller.onPanelClosed = { [weak self] in
-            self?.panelClosed()
+            self?.panelHidden()
         }
         controller.presentAnchoredPanel(anchorProvider: anchorProvider)
         self.onPanelVisibilityChanged?(true)
     }
 
     func closePanel() {
-        guard let controller, controller.presentation.isPanel else { return }
-        controller.shutdown()
+        guard let controller = self.panelController else { return }
         controller.closePanel()
-        self.controller = nil
         self.onPanelVisibilityChanged?(false)
     }
 
@@ -433,14 +440,17 @@ final class WebChatManager {
     }
 
     func close() {
-        self.controller?.shutdown()
-        self.controller?.close()
-        self.controller = nil
+        self.windowController?.shutdown()
+        self.windowController?.close()
+        self.windowController = nil
+
+        self.panelController?.shutdown()
+        self.panelController?.close()
+        self.panelController = nil
     }
 
-    private func panelClosed() {
+    private func panelHidden() {
         self.onPanelVisibilityChanged?(false)
-        self.controller = nil
     }
 }
 
