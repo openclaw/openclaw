@@ -470,8 +470,12 @@ final class WebChatManager {
         if let controller = self.panelController {
             if controller.window?.isVisible == true {
                 controller.closePanel()
+                self.isPanelVisible = false
+                self.onPanelVisibilityChanged?(false)
             } else {
                 controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+                self.isPanelVisible = true
+                self.onPanelVisibilityChanged?(true)
             }
             return
         }
@@ -490,6 +494,8 @@ final class WebChatManager {
         }
         controller.presentAnchoredPanel(anchorProvider: anchorProvider)
         // visibility will be reported by the controller callback
+        self.isPanelVisible = true
+        self.onPanelVisibilityChanged?(true)
     }
 
     func closePanel() {
