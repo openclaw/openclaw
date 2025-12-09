@@ -62,7 +62,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
       thinkLevel: "medium",
     });
@@ -100,7 +99,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -142,7 +140,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -183,7 +180,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -240,7 +236,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
       onAgentEvent: (evt) => events.push(evt),
     });
@@ -281,7 +276,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: true,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -311,7 +305,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 10,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -344,7 +337,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -379,7 +371,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -411,7 +402,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
       onPartialReply: onPartial,
       verboseLevel: "off",
@@ -445,7 +435,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 1000,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 
@@ -475,7 +464,6 @@ describe("runCommandReply (pi)", () => {
       systemSent: false,
       timeoutMs: 100,
       timeoutSeconds: 1,
-      commandRunner: vi.fn(),
       enqueue: enqueueImmediate,
     });
 

@@ -45,7 +45,7 @@ First Clawdis release after the Warelay rebrand. This is a semver-major because 
 - Removed Twilio support and all related commands/options (webhook/up/provider flags/wait-poll); CLAWDIS is Baileys Web-only.
 
 ### Changes
-- Default agent handling now favors Pi RPC while falling back to the plain command runner for non-Pi invocations, keeping heartbeat/session plumbing intact.
+- Default agent handling now favors Pi RPC while falling back to plain command execution for non-Pi invocations, keeping heartbeat/session plumbing intact.
 - Documentation updated to reflect Pi-only support and to mark legacy Claude paths as historical.
 - Status command reports web session health + session recipients; config paths are locked to `~/.clawdis` with session metadata stored under `~/.clawdis/sessions/`.
 - Simplified send/agent/relay/heartbeat to web-only delivery; removed Twilio mocks/tests and dead code.

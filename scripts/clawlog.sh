@@ -66,7 +66,7 @@ LOG CATEGORIES (examples):
     • xpc                 - XPC service calls
     • notifications       - Notification helper
     • screenshot          - Screenshotter
-    • shell               - ShellRunner
+    • shell               - ShellExecutor
 
 QUICK START:
     vtlog -n 100             Show last 100 lines from all components

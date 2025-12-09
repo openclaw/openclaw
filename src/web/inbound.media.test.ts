@@ -101,7 +101,7 @@ describe("web inbound media saves with extension", () => {
 
     realSock.ev.emit("messages.upsert", upsert);
 
-    // Allow a brief window for the async handler to fire on slower runners.
+    // Allow a brief window for the async handler to fire on slower hosts.
     for (let i = 0; i < 10; i++) {
       if (onMessage.mock.calls.length > 0) break;
       await new Promise((resolve) => setTimeout(resolve, 5));

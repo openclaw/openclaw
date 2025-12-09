@@ -70,7 +70,7 @@ final class ClawdisXPCService: NSObject, ClawdisXPCProtocol {
                     .ensure([.screenRecording], interactive: false)[.screenRecording] ?? false
                 guard authorized else { return Response(ok: false, message: "screen recording permission missing") }
             }
-            return await ShellRunner.run(command: command, cwd: cwd, env: env, timeout: timeoutSec)
+            return await ShellExecutor.run(command: command, cwd: cwd, env: env, timeout: timeoutSec)
 
         case let .agent(message, thinking, session, deliver, to):
             let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)

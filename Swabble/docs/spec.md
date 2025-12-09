@@ -18,7 +18,7 @@ Goal: brabble-style always-on voice hook for macOS 26 using Apple Speech.framewo
 - **Config**: `SwabbleConfig` Codable. Fields: audio device name/index, wake (enabled/word/aliases/sensitivity placeholder), hook (command/args/prefix/cooldown/min_chars/timeout/env), logging (level, format), transcripts (enabled, max kept), speech (locale, enableEtiquetteReplacements flag). Stored JSON; default written by `setup`.
 - **Audio + Speech pipeline**: `SpeechPipeline` wraps `AVAudioEngine` input → `SpeechAnalyzer` with `SpeechTranscriber` module. Emits partial/final transcripts via async stream. Requests `.audioTimeRange` when transcripts enabled. Handles Speech permission and asset download prompts ahead of capture.
 - **Wake gate**: text-based keyword match against latest partial/final; strips wake term before hook dispatch. `--no-wake` disables.
-- **Hook runner**: async `HookRunner` spawns `Process` with configured args, prefix substitution `${hostname}`. Enforces cooldown + timeout; injects env `SWABBLE_TEXT`, `SWABBLE_PREFIX` plus user env map.
+- **Hook executor**: async `HookExecutor` spawns `Process` with configured args, prefix substitution `${hostname}`. Enforces cooldown + timeout; injects env `SWABBLE_TEXT`, `SWABBLE_PREFIX` plus user env map.
 - **Transcripts store**: in-memory ring buffer; optional persisted JSON lines under `~/Library/Application Support/swabble/transcripts.log`.
 - **Logging**: simple structured logger to stderr; respects log level.
 

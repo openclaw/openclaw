@@ -17,7 +17,6 @@ import { isVerbose, logVerbose } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { triggerWarelayRestart } from "../infra/restart.js";
 import { drainSystemEvents } from "../infra/system-events.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
@@ -163,7 +162,6 @@ export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
   configOverride?: WarelayConfig,
-  commandRunner: typeof runCommandWithTimeout = runCommandWithTimeout,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   // Choose reply from config: static text or external command stdout.
   const cfg = configOverride ?? loadConfig();
@@ -737,7 +735,6 @@ export async function getReplyFromConfig(
         systemSent,
         timeoutMs,
         timeoutSeconds,
-        commandRunner,
         thinkLevel: resolvedThinkLevel,
         verboseLevel: resolvedVerboseLevel,
         onPartialReply: opts?.onPartialReply,

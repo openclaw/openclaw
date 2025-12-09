@@ -129,7 +129,7 @@ enum RelayEnvironment {
         let cmd = [pnpm, "add", "-g", "clawdis@\(target)"]
 
         statusHandler("Installing clawdis@\(target) via pnpm…")
-        let response = await ShellRunner.run(command: cmd, cwd: nil, env: ["PATH": preferred], timeout: 300)
+        let response = await ShellExecutor.run(command: cmd, cwd: nil, env: ["PATH": preferred], timeout: 300)
         if response.ok {
             statusHandler("Installed clawdis@\(target)")
         } else {

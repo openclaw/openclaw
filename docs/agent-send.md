@@ -1,6 +1,6 @@
 # Plan: `clawdis agent` (direct-to-agent invocation)
 
-Goal: Add a CLI subcommand that talks directly to the configured agent/command runner (no WhatsApp send), while reusing the same session handling and config clawdis already uses for auto-replies.
+Goal: Add a CLI subcommand that talks directly to the configured agent command (no WhatsApp send), while reusing the same session handling and config clawdis already uses for auto-replies.
 
 ## Why
 - Sometimes we want to poke the agent directly (same prompt templates/sessions) without sending a WhatsApp message.

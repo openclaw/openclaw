@@ -15,7 +15,7 @@ How to see whether the WhatsApp Web/Baileys bridge is healthy from the menu bar 
 - Uses a cached snapshot so the UI loads instantly and falls back gracefully when offline.
 
 ## How the probe works
-- App runs `clawdis health --json` via `ShellRunner` every ~60s and on demand. The probe loads creds, attempts a short Baileys connect, and reports status without sending messages.
+- App runs `clawdis health --json` via `ShellExecutor` every ~60s and on demand. The probe loads creds, attempts a short Baileys connect, and reports status without sending messages.
 - Cache the last good snapshot and the last error separately to avoid flicker; show the timestamp of each.
 
 ## When in doubt

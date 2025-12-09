@@ -22,7 +22,6 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 
@@ -319,7 +318,6 @@ export async function agentCommand(
       systemSent,
       timeoutMs,
       timeoutSeconds,
-      commandRunner: runCommandWithTimeout,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       runId: sessionId,

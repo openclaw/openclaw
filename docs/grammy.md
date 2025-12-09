@@ -3,7 +3,7 @@
 Updated: 2025-12-07
 
 # Why grammY
-- TS-first Bot API client with built-in long-poll + webhook runners, middleware, error handling, rate limiter.
+- TS-first Bot API client with built-in long-poll + webhook helpers, middleware, error handling, rate limiter.
 - Cleaner media helpers than hand-rolling fetch + FormData; supports all Bot API methods.
 - Extensible: proxy support via custom fetch, session middleware (optional), type-safe context.
 

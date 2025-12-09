@@ -466,7 +466,7 @@ extension GeneralSettings {
         }
 
         // Step 1: basic SSH reachability check
-        let sshResult = await ShellRunner.run(
+        let sshResult = await ShellExecutor.run(
             command: Self.sshCheckCommand(target: settings.target, identity: settings.identity),
             cwd: nil,
             env: nil,

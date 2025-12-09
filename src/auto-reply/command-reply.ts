@@ -15,7 +15,6 @@ import { logError } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { enqueueCommand } from "../process/command-queue.js";
-import type { runCommandWithTimeout } from "../process/exec.js";
 import { runPiRpc } from "../process/tau-rpc.js";
 import { applyTemplate, type TemplateContext } from "./templating.js";
 import {
@@ -146,7 +145,7 @@ type CommandReplyConfig = NonNullable<WarelayConfig["inbound"]>["reply"] & {
   mode: "command";
 };
 
-type EnqueueRunner = typeof enqueueCommand;
+type EnqueueCommandFn = typeof enqueueCommand;
 
 type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
 
@@ -159,8 +158,7 @@ type CommandReplyParams = {
   systemSent: boolean;
   timeoutMs: number;
   timeoutSeconds: number;
-  commandRunner: typeof runCommandWithTimeout;
-  enqueue?: EnqueueRunner;
+  enqueue?: EnqueueCommandFn;
   thinkLevel?: ThinkLevel;
   verboseLevel?: "off" | "on";
   onPartialReply?: (payload: ReplyPayload) => Promise<void> | void;
@@ -347,7 +345,6 @@ export async function runCommandReply(
     systemSent,
     timeoutMs,
     timeoutSeconds,
-    commandRunner: _commandRunner,
     enqueue = enqueueCommand,
     thinkLevel,
     verboseLevel,

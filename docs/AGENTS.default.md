@@ -9,7 +9,7 @@
 - **mcporter** — MCP runtime/CLI to list, call, and sync Model Context Protocol servers.
 - **Peekaboo** — Fast macOS screenshots with optional AI vision analysis.
 - **camsnap** — Capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
-- **oracle** — OpenAI-ready agent runner with session replay and browser control.
+- **oracle** — OpenAI-ready agent CLI with session replay and browser control.
 - **eightctl** — Control Eight Sleep Pod temperature, alarms, schedules, and metrics.
 - **imsg** — macOS Messages CLI to read/tail chats and send iMessage/SMS.
 - **spotify-player** — Terminal Spotify client to search/queue/control playback.

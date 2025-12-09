@@ -21,8 +21,8 @@ struct TestHookCommand: ParsableCommand {
 
     mutating func run() async throws {
         let cfg = try ConfigLoader.load(at: configURL)
-        let runner = HookRunner(config: cfg)
-        try await runner.run(job: HookJob(text: text, timestamp: Date()))
+        let executor = HookExecutor(config: cfg)
+        try await executor.run(job: HookJob(text: text, timestamp: Date()))
         print("hook invoked")
     }
 

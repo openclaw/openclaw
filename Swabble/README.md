@@ -30,7 +30,7 @@ swift run swabble transcribe /path/to/audio.m4a --format srt --output out.srt
 ```
 
 ## Use as a library
-Add swabble as a SwiftPM dependency and import the `Swabble` product to reuse the Speech pipeline, config loader, hook runner, and transcript store in your own app:
+Add swabble as a SwiftPM dependency and import the `Swabble` product to reuse the Speech pipeline, config loader, hook executor, and transcript store in your own app:
 
 ```swift
 // Package.swift

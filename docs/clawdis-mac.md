@@ -53,7 +53,7 @@ struct Response { ok: Bool; message?: String; payload?: Data }
 - NotificationManager: UNUserNotificationCenter primary; AppleScript `display notification` fallback; respects the `--sound` value on each request.
 - PermissionManager: checks/requests Notifications, Accessibility (AX), Screen Recording (capture probe); publishes changes for UI.
 - ScreenCaptureManager: window/display PNG capture; gated on permission.
-- ShellRunner: executes `Process` with timeout; rejects when `needsScreenRecording` and permission missing; returns stdout/stderr in payload.
+- ShellExecutor: executes `Process` with timeout; rejects when `needsScreenRecording` and permission missing; returns stdout/stderr in payload.
 - XPCListener actor: routes Request → managers; logs via OSLog.
 
 ## CLI (`clawdis-mac`)

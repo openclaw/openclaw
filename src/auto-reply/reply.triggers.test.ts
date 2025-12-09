@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as tauRpc from "../process/tau-rpc.js";
+import * as commandReply from "./command-reply.js";
 import { getReplyFromConfig } from "./reply.js";
 
 const webMocks = vi.hoisted(() => ({
@@ -27,7 +28,7 @@ afterEach(() => {
 
 describe("trigger handling", () => {
   it("aborts even with timestamp prefix", async () => {
-    const runner = vi.fn();
+    const commandSpy = vi.spyOn(commandReply, "runCommandReply");
     const res = await getReplyFromConfig(
       {
         Body: "[Dec 5 10:00] stop",
@@ -36,15 +37,14 @@ describe("trigger handling", () => {
       },
       {},
       baseCfg,
-      runner,
     );
     const text = Array.isArray(res) ? res[0]?.text : res?.text;
     expect(text).toBe("⚙️ Agent was aborted.");
-    expect(runner).not.toHaveBeenCalled();
+    expect(commandSpy).not.toHaveBeenCalled();
   });
 
   it("restarts even with prefix/whitespace", async () => {
-    const runner = vi.fn();
+    const commandSpy = vi.spyOn(commandReply, "runCommandReply");
     const res = await getReplyFromConfig(
       {
         Body: "  [Dec 5] /restart",
@@ -53,15 +53,14 @@ describe("trigger handling", () => {
       },
       {},
       baseCfg,
-      runner,
     );
     const text = Array.isArray(res) ? res[0]?.text : res?.text;
     expect(text?.startsWith("⚙️ Restarting" ?? "")).toBe(true);
-    expect(runner).not.toHaveBeenCalled();
+    expect(commandSpy).not.toHaveBeenCalled();
   });
 
   it("reports status without invoking the agent", async () => {
-    const runner = vi.fn();
+    const commandSpy = vi.spyOn(commandReply, "runCommandReply");
     const res = await getReplyFromConfig(
       {
         Body: "/status",
@@ -70,11 +69,10 @@ describe("trigger handling", () => {
       },
       {},
       baseCfg,
-      runner,
     );
     const text = Array.isArray(res) ? res[0]?.text : res?.text;
     expect(text).toContain("Status");
-    expect(runner).not.toHaveBeenCalled();
+    expect(commandSpy).not.toHaveBeenCalled();
   });
 
   it("ignores think directives that only appear in the context wrapper", async () => {

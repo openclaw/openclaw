@@ -10,7 +10,7 @@ public struct HookJob: Sendable {
     }
 }
 
-public actor HookRunner {
+public actor HookExecutor {
     private let config: SwabbleConfig
     private var lastRun: Date?
     private let hostname: String

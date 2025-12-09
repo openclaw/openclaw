@@ -46,8 +46,8 @@ struct ServeCommand: ParsableCommand {
                 }
                 let stripped = Self.stripWake(text: seg.text, cfg: cfg)
                 let job = HookJob(text: stripped, timestamp: Date())
-                let runner = HookRunner(config: cfg)
-                try await runner.run(job: job)
+                let executor = HookExecutor(config: cfg)
+                try await executor.run(job: job)
                 if cfg.transcripts.enabled {
                     await TranscriptsStore.shared.append(text: stripped)
                 }

@@ -1,7 +1,7 @@
 import ClawdisIPC
 import Foundation
 
-enum ShellRunner {
+enum ShellExecutor {
     static func run(command: [String], cwd: String?, env: [String: String]?, timeout: Double?) async -> Response {
         guard !command.isEmpty else { return Response(ok: false, message: "empty command") }
 
