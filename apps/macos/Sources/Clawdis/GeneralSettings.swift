@@ -35,6 +35,8 @@ struct GeneralSettings: View {
 
                     self.connectionSection
 
+                    Divider()
+
                     SettingsToggleRow(
                         title: "Launch at login",
                         subtitle: "Automatically start Clawdis after you sign in.",
