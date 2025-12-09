@@ -9,7 +9,18 @@ vi.mock("../commands/health.js", () => ({
 }));
 
 vi.mock("../commands/status.js", () => ({
-  getStatusSummary: vi.fn(async () => ({ providerSummary: "ok" })),
+  getStatusSummary: vi.fn(async () => ({
+    web: { linked: true, authAgeMs: 0 },
+    heartbeatSeconds: 60,
+    providerSummary: "ok",
+    queuedSystemEvents: [],
+    sessions: {
+      path: "/tmp/sessions.json",
+      count: 0,
+      defaults: { model: "claude-opus-4-5", contextTokens: 200_000 },
+      recent: [],
+    },
+  })),
 }));
 
 vi.mock("../infra/heartbeat-events.js", () => ({

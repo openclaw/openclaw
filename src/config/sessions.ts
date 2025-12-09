@@ -20,6 +20,8 @@ export type SessionEntry = {
   totalTokens?: number;
   model?: string;
   contextTokens?: number;
+  // Optional flag to mirror Mac app UI and future sync states.
+  syncing?: boolean | string;
 };
 
 export const SESSION_STORE_DEFAULT = path.join(

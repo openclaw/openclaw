@@ -26,7 +26,12 @@ vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn(async () => ({
     web: { linked: true, authAgeMs: 1000 },
     heartbeatSeconds: 60,
-    sessions: { path: "/tmp/sessions.json", count: 1, recent: [] },
+    sessions: {
+      path: "/tmp/sessions.json",
+      count: 1,
+      defaults: { model: "claude-opus-4-5", contextTokens: 200_000 },
+      recent: [],
+    },
   })),
 }));
 
