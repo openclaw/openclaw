@@ -211,7 +211,7 @@ export async function statusCommand(
   }
   runtime.log(info("System:"));
   for (const line of summary.providerSummary) {
-    runtime.log(info(`  ${line}`));
+    runtime.log(`  ${line}`);
   }
   if (health) {
     const waLine = health.web.connect

@@ -1,3 +1,4 @@
+import chalk from "chalk";
 import { loadConfig, type WarelayConfig } from "../config/config.js";
 import { normalizeE164 } from "../utils.js";
 import {
@@ -20,28 +21,30 @@ export async function buildProviderSummary(
   const { e164 } = readWebSelfId();
   lines.push(
     webLinked
-      ? `WhatsApp: linked${e164 ? ` as ${e164}` : ""} (auth ${authAge})`
-      : "WhatsApp: not linked",
+      ? chalk.green(`WhatsApp: linked${e164 ? ` as ${e164}` : ""} (auth ${authAge})`)
+      : chalk.red("WhatsApp: not linked"),
   );
 
   const telegramToken =
     process.env.TELEGRAM_BOT_TOKEN ?? effective.telegram?.botToken;
   lines.push(
-    telegramToken ? "Telegram: configured" : "Telegram: not configured",
+    telegramToken
+      ? chalk.green("Telegram: configured")
+      : chalk.cyan("Telegram: not configured"),
   );
 
   if (effective.webchat?.enabled === false) {
-    lines.push("WebChat: disabled");
+    lines.push(chalk.yellow("WebChat: disabled"));
   } else {
     const port = effective.webchat?.port ?? DEFAULT_WEBCHAT_PORT;
-    lines.push(`WebChat: enabled (port ${port})`);
+    lines.push(chalk.green(`WebChat: enabled (port ${port})`));
   }
 
   const allowFrom = effective.inbound?.allowFrom?.length
     ? effective.inbound.allowFrom.map(normalizeE164).filter(Boolean)
     : [];
   if (allowFrom.length) {
-    lines.push(`AllowFrom: ${allowFrom.join(", ")}`);
+    lines.push(chalk.cyan(`AllowFrom: ${allowFrom.join(", ")}`));
   }
 
   return lines;
