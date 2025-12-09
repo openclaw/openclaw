@@ -41,6 +41,20 @@ struct MenuContent: View {
             if let updater, updater.isAvailable {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }
             }
+            if self.state.debugPaneEnabled {
+                Menu("Debug") {
+                    Button("Open Agent Events…") { DebugActions.openAgentEventsWindow() }
+                    Button("Open Log") { DebugActions.openLog() }
+                    Button("Send Debug Voice Text") {
+                        Task { _ = await DebugActions.sendDebugVoice() }
+                    }
+                    Button("Send Test Notification") {
+                        Task { await DebugActions.sendTestNotification() }
+                    }
+                    Divider()
+                    Button("Restart Gateway") { DebugActions.restartGateway() }
+                }
+            }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .task(id: self.state.swabbleEnabled) {

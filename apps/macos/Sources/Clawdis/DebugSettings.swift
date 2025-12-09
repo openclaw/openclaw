@@ -154,22 +154,11 @@ struct DebugSettings: View {
                     }
                 }
                 Button("Send Test Notification") {
-                    Task {
-                        _ = await NotificationManager().send(title: "Clawdis", body: "Test notification", sound: nil)
-                    }
+                    Task { await DebugActions.sendTestNotification() }
                 }
                 .buttonStyle(.bordered)
                 Button("Open Agent Events") {
-                    let window = NSWindow(
-                        contentRect: NSRect(x: 0, y: 0, width: 620, height: 420),
-                        styleMask: [.titled, .closable, .miniaturizable, .resizable],
-                        backing: .buffered,
-                        defer: false)
-                    window.title = "Agent Events"
-                    window.isReleasedWhenClosed = false
-                    window.contentView = NSHostingView(rootView: AgentEventsWindow())
-                    window.center()
-                    window.makeKeyAndOrderFront(nil)
+                    DebugActions.openAgentEventsWindow()
                 }
                 .buttonStyle(.borderedProminent)
                 VStack(alignment: .leading, spacing: 6) {
@@ -206,7 +195,7 @@ struct DebugSettings: View {
                 HStack {
                     Button("Restart app") { self.relaunch() }
                     Button("Reveal app in Finder") { self.revealApp() }
-                    Button("Restart Gateway") { self.restartRelay() }
+                    Button("Restart Gateway") { DebugActions.restartGateway() }
                 }
                 .buttonStyle(.bordered)
                 Spacer(minLength: 8)
@@ -218,39 +207,6 @@ struct DebugSettings: View {
         .task {
             await self.reloadModels()
             self.loadSessionStorePath()
-        }
-    }
-
-    private var pinoLogPath: String {
-        let df = DateFormatter()
-        df.calendar = Calendar(identifier: .iso8601)
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "yyyy-MM-dd"
-        let today = df.string(from: Date())
-        // Prefer rolling log; fall back to legacy single-file path.
-        let rolling = URL(fileURLWithPath: "/tmp/clawdis/clawdis-\(today).log").path
-        if FileManager.default.fileExists(atPath: rolling) { return rolling }
-        return "/tmp/clawdis.log"
-    }
-
-    private func openLog() {
-        let path = self.pinoLogPath
-        let url = URL(fileURLWithPath: path)
-        if !FileManager.default.fileExists(atPath: path) {
-            let alert = NSAlert()
-            alert.messageText = "Log file not found"
-            alert.informativeText = path
-            alert.runModal()
-            return
-        }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-
-    private func restartRelay() {
-        Task { @MainActor in
-            self.relayManager.stop()
-            try? await Task.sleep(nanoseconds: 300_000_000)
-            self.relayManager.setActive(true)
         }
     }
 
@@ -292,62 +248,16 @@ struct DebugSettings: View {
             self.debugSendStatus = nil
         }
 
-        let message = """
-        This is a debug test from the Mac app. Reply with "Debug test works (and a funny pun)" \
-        if you received that.
-        """
-        let config = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
-        let shouldForward = config.enabled
+        let result = await DebugActions.sendDebugVoice()
 
-        if shouldForward {
-            let result = await VoiceWakeForwarder.forward(transcript: message, config: config)
-            await MainActor.run {
-                self.debugSendInFlight = false
-                switch result {
-                case .success:
-                    self.debugSendStatus = "Forwarded. Await reply."
-                    self.debugSendError = nil
-                case let .failure(error):
-                    let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-                    self.debugSendStatus = "Forward failed: \(detail)"
-                    self.debugSendError = nil
-                }
-            }
-            return
-        }
-
-        do {
-            let status = await AgentRPC.shared.status()
-            if !status.ok {
-                try await AgentRPC.shared.start()
-            }
-
-            let rpcResult = await AgentRPC.shared.send(
-                text: message,
-                thinking: "low",
-                session: "main",
-                deliver: true,
-                to: nil)
-
-            await MainActor.run {
-                self.debugSendInFlight = false
-                if rpcResult.ok {
-                    self.debugSendStatus = "Sent locally via voice wake path."
-                    self.debugSendError = nil
-                } else {
-                    let reason = rpcResult.error?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let detail = (reason?.isEmpty == false)
-                        ? reason!
-                        : "No error returned. Check /tmp/clawdis.log or rpc output."
-                    self.debugSendStatus = "Local send failed: \(detail)"
-                    self.debugSendError = nil
-                }
-            }
-        } catch {
-            await MainActor.run {
-                self.debugSendInFlight = false
-                let detail = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-                self.debugSendStatus = "Local send failed: \(detail)"
+        await MainActor.run {
+            self.debugSendInFlight = false
+            switch result {
+            case let .success(message):
+                self.debugSendStatus = message
+                self.debugSendError = nil
+            case let .failure(message):
+                self.debugSendStatus = message
                 self.debugSendError = nil
             }
         }
