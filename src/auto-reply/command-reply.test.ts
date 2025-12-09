@@ -193,6 +193,68 @@ describe("runCommandReply (pi)", () => {
     expect(payloads?.[0]?.text).not.toContain("example.com");
   });
 
+  it("forwards tool events even when verbose is off", async () => {
+    const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+
+    vi.spyOn(tauRpc, "runPiRpc").mockImplementation(
+      async (opts: Parameters<typeof tauRpc.runPiRpc>[0]) => {
+        opts.onEvent?.(
+          JSON.stringify({
+            type: "tool_execution_start",
+            toolName: "bash",
+            toolCallId: "call-1",
+            args: { cmd: "echo 1" },
+          }),
+        );
+        opts.onEvent?.(
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "tool_result",
+              toolCallId: "call-1",
+              content: [{ type: "text", text: "ok" }],
+            },
+          }),
+        );
+        return {
+          stdout:
+            '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}',
+          stderr: "",
+          code: 0,
+          killed: false,
+          signal: null,
+        };
+      },
+    );
+
+    await runCommandReply({
+      reply: {
+        mode: "command",
+        command: ["pi", "{{Body}}"],
+        agent: { kind: "pi" },
+      },
+      templatingCtx: noopTemplateCtx,
+      sendSystemOnce: false,
+      isNewSession: true,
+      isFirstTurnInSession: true,
+      systemSent: false,
+      timeoutMs: 1000,
+      timeoutSeconds: 1,
+      commandRunner: vi.fn(),
+      enqueue: enqueueImmediate,
+      onAgentEvent: (evt) => events.push(evt),
+    });
+
+    expect(events).toContainEqual({
+      stream: "tool",
+      data: expect.objectContaining({ phase: "start", name: "bash", toolCallId: "call-1" }),
+    });
+    expect(events).toContainEqual({
+      stream: "tool",
+      data: expect.objectContaining({ phase: "result", toolCallId: "call-1" }),
+    });
+  });
+
   it("adds session args and --continue when resuming", async () => {
     const rpcMock = mockPiRpc({
       stdout:
