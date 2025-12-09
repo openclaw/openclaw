@@ -29,8 +29,13 @@ export function buildMessageWithAttachments(
     }
 
     let sizeBytes = 0;
+    const b64 = content.trim();
+    // Basic base64 sanity: length multiple of 4 and charset check.
+    if (b64.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(b64)) {
+      throw new Error(`attachment ${label}: invalid base64 content`);
+    }
     try {
-      sizeBytes = Buffer.from(content, "base64").byteLength;
+      sizeBytes = Buffer.from(b64, "base64").byteLength;
     } catch {
       throw new Error(`attachment ${label}: invalid base64 content`);
     }
