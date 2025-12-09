@@ -45,6 +45,10 @@ struct VoiceWakeChimeCatalog {
             "Morse",
             "Purr",
             "Sosumi",
+            "Mail Sent",
+            "New Mail",
+            "Mail Scheduled",
+            "Mail Fetch Error",
         ]
 
         // Keep Glass first, then present the rest alphabetically without duplicates.
