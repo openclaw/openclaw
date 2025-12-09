@@ -9,10 +9,13 @@ Last updated: 2025-12-09
 
 ## How to run (local)
 ```bash
-clawdis gateway --port 18789
+pnpm clawdis gateway --port 18789
+# for full debug/trace logs in stdio:
+pnpm clawdis gateway --port 18789 --verbose
 ```
 - Binds WebSocket control plane to `127.0.0.1:<port>` (default 18789).
 - Logs to stdout; use launchd/systemd to keep it alive and rotate logs.
+- Pass `--verbose` to mirror debug logging from the log file into stdio when troubleshooting.
 - Optional shared secret: pass `--token <value>` or set `CLAWDIS_GATEWAY_TOKEN` to require clients to send `hello.auth.token`.
 
 ## Remote access

@@ -227,7 +227,9 @@ Examples:
       "--token <token>",
       "Shared token required in hello.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
     )
+    .option("--verbose", "Verbose logging to stdout/stderr", false)
     .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
       const port = Number.parseInt(String(opts.port ?? "18789"), 10);
       if (Number.isNaN(port) || port <= 0) {
         defaultRuntime.error("Invalid port");

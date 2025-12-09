@@ -7,7 +7,6 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { info } from "../globals.js";
-import { getHealthSnapshot, type HealthSummary } from "./health.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -17,6 +16,7 @@ import {
   logWebSelfId,
   webAuthExists,
 } from "../web/session.js";
+import { getHealthSnapshot, type HealthSummary } from "./health.js";
 
 export type SessionStatus = {
   key: string;
@@ -198,11 +198,7 @@ export async function statusCommand(
 
   if (opts.json) {
     runtime.log(
-      JSON.stringify(
-        health ? { ...summary, health } : summary,
-        null,
-        2,
-      ),
+      JSON.stringify(health ? { ...summary, health } : summary, null, 2),
     );
     return;
   }

@@ -4,8 +4,8 @@ import path from "node:path";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { info } from "../globals.js";
-import { makeProxyFetch } from "../telegram/proxy.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { makeProxyFetch } from "../telegram/proxy.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import {
   createWaSocket,
