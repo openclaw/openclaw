@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { GatewayClient } from "./client.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 
 export type CallGatewayOptions = {
   url?: string;
@@ -39,8 +40,8 @@ export async function callGateway<T = unknown>(
       clientVersion: opts.clientVersion ?? "dev",
       platform: opts.platform,
       mode: opts.mode ?? "cli",
-      minProtocol: opts.minProtocol ?? 1,
-      maxProtocol: opts.maxProtocol ?? 1,
+      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async () => {
         try {
           const result = await client.request<T>(opts.method, opts.params, {

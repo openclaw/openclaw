@@ -6,13 +6,16 @@ export type AgentEventPayload = {
   data: Record<string, unknown>;
 };
 
-let seq = 0;
+// Keep per-run counters so streams stay strictly monotonic per runId.
+const seqByRun = new Map<string, number>();
 const listeners = new Set<(evt: AgentEventPayload) => void>();
 
 export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
+  const nextSeq = (seqByRun.get(event.runId) ?? 0) + 1;
+  seqByRun.set(event.runId, nextSeq);
   const enriched: AgentEventPayload = {
     ...event,
-    seq: ++seq,
+    seq: nextSeq,
     ts: Date.now(),
   };
   for (const listener of listeners) {

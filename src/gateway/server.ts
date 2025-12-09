@@ -40,7 +40,6 @@ const METHODS = [
   "status",
   "system-presence",
   "system-event",
-  "set-heartbeats",
   "send",
   "agent",
 ];
@@ -54,6 +53,8 @@ export type GatewayServer = {
 let presenceVersion = 1;
 let healthVersion = 1;
 let seq = 0;
+// Track per-run sequence to detect out-of-order/lost agent events.
+const agentRunSeq = new Map<string, number>();
 
 function buildSnapshot(): Snapshot {
   const presence = listSystemPresence();
@@ -147,6 +148,21 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   }, 60_000);
 
   const agentUnsub = onAgentEvent((evt) => {
+    const last = agentRunSeq.get(evt.runId) ?? 0;
+    if (evt.seq !== last + 1) {
+      // Fan out an error event so clients can refresh the stream on gaps.
+      broadcast("agent", {
+        runId: evt.runId,
+        stream: "error",
+        ts: Date.now(),
+        data: {
+          reason: "seq gap",
+          expected: last + 1,
+          received: evt.seq,
+        },
+      });
+    }
+    agentRunSeq.set(evt.runId, evt.seq);
     broadcast("agent", evt);
   });
 
@@ -247,14 +263,15 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
 
           client = { socket, hello, connId };
           clients.add(client);
-          // synthesize presence entry for this connection
+          // synthesize presence entry for this connection (client fingerprint)
           const presenceKey = hello.client.instanceId || connId;
+          const remoteAddr = (
+            socket as WebSocket & { _socket?: { remoteAddress?: string } }
+          )._socket?.remoteAddress;
           upsertPresence(presenceKey, {
-            host: os.hostname(),
-            version:
-              process.env.CLAWDIS_VERSION ??
-              process.env.npm_package_version ??
-              "dev",
+            host: hello.client.name || os.hostname(),
+            ip: remoteAddr,
+            version: hello.client.version,
             mode: hello.client.mode,
             instanceId: hello.client.instanceId,
             reason: "connect",
@@ -349,10 +366,6 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                 },
               },
             );
-            respond(true, { ok: true }, undefined);
-            break;
-          }
-          case "set-heartbeats": {
             respond(true, { ok: true }, undefined);
             break;
           }

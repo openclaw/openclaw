@@ -26,6 +26,8 @@ private actor GatewayChannelActor {
     private var backoffMs: Double = 500
     private var shouldReconnect = true
     private var lastSeq: Int?
+    private var lastTick: Date?
+    private var tickIntervalMs: Double = 30_000
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -49,8 +51,8 @@ private actor GatewayChannelActor {
     private func sendHello() async throws {
         let hello: [String: Any] = [
             "type": "hello",
-            "minProtocol": 1,
-            "maxProtocol": 1,
+            "minProtocol": GATEWAY_PROTOCOL_VERSION,
+            "maxProtocol": GATEWAY_PROTOCOL_VERSION,
             "client": [
                 "name": "clawdis-mac",
                 "version": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev",
@@ -80,6 +82,12 @@ private actor GatewayChannelActor {
         guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let type = obj["type"] as? String else { return false }
         if type == "hello-ok" {
+            if let policy = obj["policy"] as? [String: Any],
+               let tick = policy["tickIntervalMs"] as? Double {
+                self.tickIntervalMs = tick
+            }
+            self.lastTick = Date()
+            Task { await self.watchTicks() }
             NotificationCenter.default.post(name: .gatewaySnapshot, object: nil, userInfo: obj)
             return true
         }
@@ -134,11 +142,30 @@ private actor GatewayChannelActor {
                 }
                 self.lastSeq = seq
             }
+            if evt.event == "tick" { self.lastTick = Date() }
             NotificationCenter.default.post(name: .gatewayEvent, object: frame)
         case .helloOk:
+            self.lastTick = Date()
             NotificationCenter.default.post(name: .gatewaySnapshot, object: frame)
         default:
             break
+        }
+    }
+
+    private func watchTicks() async {
+        let tolerance = self.tickIntervalMs * 2
+        while self.connected {
+            try? await Task.sleep(nanoseconds: UInt64(tolerance * 1_000_000))
+            guard self.connected else { return }
+            if let last = self.lastTick {
+                let delta = Date().timeIntervalSince(last) * 1000
+                if delta > tolerance {
+                    self.logger.error("gateway tick missed; reconnecting")
+                    self.connected = false
+                    await self.scheduleReconnect()
+                    return
+                }
+            }
         }
     }
 

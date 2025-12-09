@@ -39,6 +39,10 @@ export class GatewayClient {
   private backoffMs = 1000;
   private closed = false;
   private lastSeq: number | null = null;
+  // Track last tick to detect silent stalls.
+  private lastTick: number | null = null;
+  private tickIntervalMs = 30_000;
+  private tickTimer: NodeJS.Timeout | null = null;
 
   constructor(opts: GatewayClientOptions) {
     this.opts = opts;
@@ -66,6 +70,10 @@ export class GatewayClient {
 
   stop() {
     this.closed = true;
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.flushPendingErrors(new Error("gateway client stopped"));
@@ -94,6 +102,12 @@ export class GatewayClient {
       const parsed = JSON.parse(raw);
       if (parsed?.type === "hello-ok") {
         this.backoffMs = 1000;
+        this.tickIntervalMs =
+          typeof parsed.policy?.tickIntervalMs === "number"
+            ? parsed.policy.tickIntervalMs
+            : 30_000;
+        this.lastTick = Date.now();
+        this.startTickWatch();
         this.opts.onHelloOk?.(parsed as HelloOk);
         return;
       }
@@ -110,6 +124,9 @@ export class GatewayClient {
             this.opts.onGap?.({ expected: this.lastSeq + 1, received: seq });
           }
           this.lastSeq = seq;
+        }
+        if (evt.event === "tick") {
+          this.lastTick = Date.now();
         }
         this.opts.onEvent?.(evt);
         return;
@@ -134,6 +151,10 @@ export class GatewayClient {
 
   private scheduleReconnect() {
     if (this.closed) return;
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
+    }
     const delay = this.backoffMs;
     this.backoffMs = Math.min(this.backoffMs * 2, 30_000);
     setTimeout(() => this.start(), delay).unref();
@@ -144,6 +165,19 @@ export class GatewayClient {
       p.reject(err);
     }
     this.pending.clear();
+  }
+
+  private startTickWatch() {
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    const interval = Math.max(this.tickIntervalMs, 1000);
+    this.tickTimer = setInterval(() => {
+      if (this.closed) return;
+      if (!this.lastTick) return;
+      const gap = Date.now() - this.lastTick;
+      if (gap > this.tickIntervalMs * 2) {
+        this.ws?.close(4000, "tick timeout");
+      }
+    }, interval);
   }
 
   async request<T = unknown>(

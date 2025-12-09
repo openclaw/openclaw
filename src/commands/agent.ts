@@ -25,7 +25,6 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
-import { sendViaIpc } from "../web/ipc.js";
 
 type AgentCommandOpts = {
   message: string;
@@ -420,30 +419,19 @@ export async function agentCommand(
     if (deliver && targetTo) {
       const text = payload.text ?? "";
       const media = mediaList;
-      // Prefer IPC to reuse the running relay; fall back to direct web send.
-      let sentViaIpc = false;
-      const ipcResult = await sendViaIpc(targetTo, text, media[0]);
-      if (ipcResult) {
-        sentViaIpc = ipcResult.success;
-        if (ipcResult.success && media.length > 1) {
-          for (const extra of media.slice(1)) {
-            await sendViaIpc(targetTo, "", extra);
-          }
-        }
-      }
-      if (!sentViaIpc) {
-        if (text || media.length === 0) {
-          await deps.sendMessageWhatsApp(targetTo, text, {
-            verbose: false,
-            mediaUrl: media[0],
-          });
-        }
-        for (const extra of media.slice(1)) {
-          await deps.sendMessageWhatsApp(targetTo, "", {
-            verbose: false,
-            mediaUrl: extra,
-          });
-        }
+      if (!text && media.length === 0) continue;
+
+      const primaryMedia = media[0];
+      await deps.sendMessageWhatsApp(targetTo, text, {
+        verbose: false,
+        mediaUrl: primaryMedia,
+      });
+
+      for (const extra of media.slice(1)) {
+        await deps.sendMessageWhatsApp(targetTo, "", {
+          verbose: false,
+          mediaUrl: extra,
+        });
       }
     }
   }
