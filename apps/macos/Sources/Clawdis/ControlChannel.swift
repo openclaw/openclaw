@@ -134,6 +134,18 @@ final class ControlChannel: ObservableObject {
             return desc
         }
 
+        // Common misfire: we connected to localhost:18789 but the port is occupied
+        // by some other process (e.g. a local dev gateway or a stuck SSH forward).
+        // The gateway handshake returns something we can't parse, which currently
+        // surfaces as "hello failed (unexpected response)". Give the user a pointer
+        // to free the port instead of a vague message.
+        let nsError = error as NSError
+        if nsError.domain == "Gateway",
+           nsError.localizedDescription.contains("hello failed (unexpected response)") {
+            let port = GatewayEnvironment.gatewayPort()
+            return "Gateway handshake got non-gateway data on localhost:\(port). Another process is using that port or the SSH forward failed. Stop the local gateway/port-forward on \(port) and retry Remote mode."
+        }
+
         if let urlError = error as? URLError {
             let port = GatewayEnvironment.gatewayPort()
             switch urlError.code {
@@ -152,7 +164,6 @@ final class ControlChannel: ObservableObject {
             }
         }
 
-        let nsError = error as NSError
         if nsError.domain == "Gateway", nsError.code == 5 {
             return "Gateway request timed out; check the gateway process on localhost:\(GatewayEnvironment.gatewayPort())."
         }

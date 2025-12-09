@@ -18,6 +18,9 @@ struct DebugSettings: View {
     @State private var debugSendInFlight = false
     @State private var debugSendStatus: String?
     @State private var debugSendError: String?
+    @State private var portCheckInFlight = false
+    @State private var portReports: [DebugActions.PortReport] = []
+    @State private var portKillStatus: String?
 
     var body: some View {
         ScrollView(.vertical) {
@@ -72,6 +75,56 @@ struct DebugSettings: View {
                     }
                     .frame(height: 180)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                }
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text("Port diagnostics")
+                            .font(.caption.weight(.semibold))
+                        if self.portCheckInFlight { ProgressView().controlSize(.small) }
+                        Spacer()
+                        Button("Check gateway ports") {
+                            Task { await self.runPortCheck() }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.portCheckInFlight)
+                    }
+                    if let portKillStatus {
+                        Text(portKillStatus)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    if self.portReports.isEmpty && !self.portCheckInFlight {
+                        Text("Check which process owns 18788/18789 and suggest fixes.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(self.portReports) { report in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("Port \(report.port)")
+                                    .font(.footnote.weight(.semibold))
+                                Text(report.summary)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                if !report.offenders.isEmpty {
+                                    ForEach(report.offenders) { offender in
+                                        HStack(spacing: 8) {
+                                            Text("\(offender.command) (\(offender.pid))")
+                                                .font(.caption.monospaced())
+                                                .lineLimit(1)
+                                            Spacer()
+                                            Button("Kill") {
+                                                Task { await self.kill(offender.pid) }
+                                            }
+                                            .buttonStyle(.bordered)
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(8)
+                            .background(Color.secondary.opacity(0.08))
+                            .cornerRadius(6)
+                        }
+                    }
                 }
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Clawdis project root")
@@ -210,6 +263,27 @@ struct DebugSettings: View {
             guard !self.isPreview else { return }
             await self.reloadModels()
             self.loadSessionStorePath()
+        }
+    }
+
+    @MainActor
+    private func runPortCheck() async {
+        self.portCheckInFlight = true
+        self.portKillStatus = nil
+        let reports = await DebugActions.checkGatewayPorts()
+        self.portReports = reports
+        self.portCheckInFlight = false
+    }
+
+    @MainActor
+    private func kill(_ pid: Int) async {
+        let result = await DebugActions.killProcess(pid)
+        switch result {
+        case .success:
+            self.portKillStatus = "Sent kill to \(pid)."
+            await self.runPortCheck()
+        case let .failure(err):
+            self.portKillStatus = "Kill \(pid) failed: \(err.localizedDescription)"
         }
     }
 
