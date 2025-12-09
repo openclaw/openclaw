@@ -322,6 +322,11 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
         self.notifyPanelClosedOnce()
     }
 
+    func windowWillClose(_ notification: Notification) {
+        guard case .panel = self.presentation else { return }
+        self.notifyPanelClosedOnce()
+    }
+
     private func notifyPanelClosedOnce() {
         guard !self.panelCloseNotified else { return }
         self.panelCloseNotified = true
