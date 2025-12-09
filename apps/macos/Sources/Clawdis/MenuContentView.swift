@@ -44,7 +44,7 @@ struct MenuContent: View {
             }
             if self.state.debugPaneEnabled {
                 Menu("Debug") {
-                    Menu("Sessions") {
+                    Menu {
                         ForEach(self.sessionMenu) { row in
                             Menu(row.key) {
                                 Menu("Thinking") {
@@ -86,7 +86,11 @@ struct MenuContent: View {
                                 }
                             }
                         }
+                        Divider()
+                    } label: {
+                        Label("Sessions", systemImage: "clock.arrow.circlepath")
                     }
+                    Divider()
                     Button {
                         DebugActions.openConfigFolder()
                     } label: {
