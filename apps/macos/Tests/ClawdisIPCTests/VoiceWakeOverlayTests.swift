@@ -5,7 +5,7 @@ import Testing
 @Suite struct VoiceWakeOverlayTests {
     @Test func guardTokenDropsWhenNoActive() {
         let outcome = VoiceWakeOverlayController.evaluateToken(active: nil, incoming: UUID())
-        #expect(outcome == .drop)
+        #expect(outcome == .dropNoActive)
     }
 
     @Test func guardTokenAcceptsMatching() {
@@ -14,8 +14,8 @@ import Testing
         #expect(outcome == .accept)
     }
 
-    @Test func guardTokenDismissesMismatch() {
+    @Test func guardTokenDropsMismatchWithoutDismissing() {
         let outcome = VoiceWakeOverlayController.evaluateToken(active: UUID(), incoming: UUID())
-        #expect(outcome == .dismiss)
+        #expect(outcome == .dropMismatch)
     }
 }

@@ -262,7 +262,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         switch Self.evaluateToken(active: self.activeToken, incoming: token) {
         case .accept:
             return true
-        case .dismiss:
+        case .dropMismatch:
             self.logger.log(
                 level: .info,
                 """
@@ -270,19 +270,18 @@ final class VoiceWakeOverlayController: ObservableObject {
                 active=\(self.activeToken?.uuidString ?? "nil", privacy: .public) \
                 got=\(token?.uuidString ?? "nil", privacy: .public)
                 """)
-            self.dismiss(reason: .explicit, outcome: .empty)
             return false
-        case .drop:
+        case .dropNoActive:
             self.logger.log(level: .info, "overlay drop \(context, privacy: .public) no_active")
             return false
         }
     }
 
-    enum GuardOutcome { case accept, dismiss, drop }
+    enum GuardOutcome { case accept, dropMismatch, dropNoActive }
 
     nonisolated static func evaluateToken(active: UUID?, incoming: UUID?) -> GuardOutcome {
-        guard let active else { return .drop }
-        if let incoming, incoming != active { return .dismiss }
+        guard let active else { return .dropNoActive }
+        if let incoming, incoming != active { return .dropMismatch }
         return .accept
     }
 
