@@ -27,6 +27,7 @@ struct GeneralSettings: View {
                 }
 
                 VStack(alignment: .leading, spacing: 12) {
+                    Divider()
                     SettingsToggleRow(
                         title: "Clawdis active",
                         subtitle: "Pause to stop the Clawdis gateway; no messages will be processed.",
