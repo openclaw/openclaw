@@ -544,6 +544,54 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("chat.send accepts image attachment", { timeout: 12000 }, async () => {
+    const { server, ws } = await startServerWithClient();
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { name: "test", version: "1", platform: "test", mode: "test" },
+        caps: [],
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "hello-ok");
+
+    const reqId = "chat-img";
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: reqId,
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "see image",
+          idempotencyKey: "idem-img",
+          attachments: [
+            {
+              type: "image",
+              mimeType: "image/png",
+              fileName: "dot.png",
+              content:
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+            },
+          ],
+        },
+      }),
+    );
+
+    const res = await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === reqId,
+      8000,
+    );
+    expect(res.ok).toBe(true);
+    expect(res.payload?.runId).toBeDefined();
+
+    ws.close();
+    await server.close();
+  });
+
   test("presence includes client fingerprint", async () => {
     const { server, ws } = await startServerWithClient();
     ws.send(

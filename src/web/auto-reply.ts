@@ -1,4 +1,5 @@
 import { chunkText } from "../auto-reply/chunk.js";
+import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
@@ -10,7 +11,7 @@ import {
   resolveStorePath,
   saveSessionStore,
 } from "../config/sessions.js";
-import { danger, info, isVerbose, logVerbose, success } from "../globals.js";
+import { danger, isVerbose, logVerbose, success } from "../globals.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { logInfo } from "../logger.js";
@@ -18,10 +19,10 @@ import { getChildLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { jidToE164, normalizeE164 } from "../utils.js";
+import { setActiveWebListener } from "./active-listener.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
 import { sendMessageWhatsApp } from "./outbound.js";
-import { setActiveWebListener } from "./active-listener.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -31,7 +32,6 @@ import {
   sleepWithAbort,
 } from "./reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "./session.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 
 const WEB_TEXT_LIMIT = 4000;
 const DEFAULT_GROUP_HISTORY_LIMIT = 50;
@@ -494,7 +494,8 @@ async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
 
   const sendWithRetry = async (
     fn: () => Promise<unknown>,
@@ -1401,11 +1402,11 @@ export async function monitorWebProvider(
       },
       "web reconnect: scheduling retry",
     );
-      runtime.error(
-        danger(
-          `WhatsApp Web connection closed (status ${status}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDuration(delay)}… (${errorStr})`,
-        ),
-      );
+    runtime.error(
+      danger(
+        `WhatsApp Web connection closed (status ${status}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDuration(delay)}… (${errorStr})`,
+      ),
+    );
     await closeListener();
     try {
       await sleep(delay, abortSignal);

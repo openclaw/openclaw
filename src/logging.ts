@@ -3,7 +3,7 @@ import path from "node:path";
 import util from "node:util";
 
 import { Logger as TsLogger } from "tslog";
-import { loadConfig, type ClawdisConfig } from "./config/config.js";
+import { type ClawdisConfig, loadConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user

@@ -6,8 +6,8 @@ import { logVerbose } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { toWhatsappJid } from "../utils.js";
-import { loadWebMedia } from "./media.js";
 import { getActiveWebListener } from "./active-listener.js";
+import { loadWebMedia } from "./media.js";
 import { createWaSocket, waitForWaConnection } from "./session.js";
 
 export async function sendMessageWhatsApp(
@@ -18,7 +18,9 @@ export async function sendMessageWhatsApp(
   const correlationId = randomUUID();
   const active = getActiveWebListener();
   const usingActive = Boolean(active);
-  const sock = usingActive ? null : await createWaSocket(false, options.verbose);
+  const sock = usingActive
+    ? null
+    : await createWaSocket(false, options.verbose);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
@@ -29,9 +31,12 @@ export async function sendMessageWhatsApp(
     if (!usingActive) {
       logInfo("🔌 Connecting to WhatsApp Web…");
       logger.info("connecting to whatsapp web");
-      await waitForWaConnection(sock!);
+      if (!sock) {
+        throw new Error("WhatsApp socket unavailable");
+      }
+      await waitForWaConnection(sock);
       try {
-        await sock!.sendPresenceUpdate("composing", jid);
+        await sock.sendPresenceUpdate("composing", jid);
       } catch (err) {
         logVerbose(`Presence update skipped: ${String(err)}`);
       }
@@ -82,6 +87,7 @@ export async function sendMessageWhatsApp(
     );
     const result = usingActive
       ? await (async () => {
+          if (!active) throw new Error("Active web listener missing");
           let mediaBuffer: Buffer | undefined;
           let mediaType: string | undefined;
           if (options.mediaUrl) {
@@ -89,13 +95,17 @@ export async function sendMessageWhatsApp(
             mediaBuffer = media.buffer;
             mediaType = media.contentType;
           }
-          await active!.sendComposingTo(to);
-          return active!.sendMessage(to, body, mediaBuffer, mediaType);
+          await active.sendComposingTo(to);
+          return active.sendMessage(to, body, mediaBuffer, mediaType);
         })()
-      : await sock!.sendMessage(jid, payload);
+      : await (async () => {
+          if (!sock) throw new Error("WhatsApp socket unavailable");
+          return sock.sendMessage(jid, payload);
+        })();
     const messageId = usingActive
-      ? (result as { messageId?: string })?.messageId ?? "unknown"
-      : (result as any)?.key?.id ?? "unknown";
+      ? ((result as { messageId?: string })?.messageId ?? "unknown")
+      : ((result as { key?: { id?: string } } | undefined)?.key?.id ??
+        "unknown");
     logInfo(
       `✅ Sent via web session. Message ID: ${messageId} -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
     );

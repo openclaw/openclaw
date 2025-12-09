@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
 import { resolveBundledPiBinary } from "../agents/pi-path.js";
-import { loadConfig, type ClawdisConfig } from "../config/config.js";
+import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGER,

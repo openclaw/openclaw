@@ -1,11 +1,7 @@
+import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { describe, expect, test } from "vitest";
-import { WebSocket } from "ws";
-import {
-  __forceWebChatSnapshotForTests,
-  startWebChatServer,
-  stopWebChatServer,
-} from "./server.js";
+import { startWebChatServer, stopWebChatServer } from "./server.js";
 
 async function getFreePort(): Promise<number> {
   const { createServer } = await import("node:net");
@@ -19,76 +15,30 @@ async function getFreePort(): Promise<number> {
   });
 }
 
-type SnapshotMessage = {
-  type?: string;
-  snapshot?: { stateVersion?: { presence?: number } };
-};
-type SessionMessage = { type?: string };
+const fetchText = (url: string) =>
+  new Promise<string>((resolve, reject) => {
+    http
+      .get(url, (res) => {
+        const chunks: Buffer[] = [];
+        res
+          .on("data", (c) =>
+            chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)),
+          )
+          .on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")))
+          .on("error", reject);
+      })
+      .on("error", reject);
+  });
 
-describe("webchat server", () => {
-  test(
-    "hydrates snapshot to new sockets (offline mock)",
-    { timeout: 8000 },
-    async () => {
-      const wPort = await getFreePort();
-      await startWebChatServer(wPort, undefined, { disableGateway: true });
-      const ws = new WebSocket(
-        `ws://127.0.0.1:${wPort}/webchat/socket?session=test`,
-      );
-      const messages: unknown[] = [];
-      ws.on("message", (data) => {
-        try {
-          messages.push(JSON.parse(String(data)));
-        } catch {
-          /* ignore */
-        }
-      });
-
-      try {
-        await new Promise<void>((resolve) => ws.once("open", resolve));
-
-        __forceWebChatSnapshotForTests({
-          presence: [],
-          health: {},
-          stateVersion: { presence: 1, health: 1 },
-          uptimeMs: 0,
-        });
-
-        const waitFor = async <T>(
-          pred: (m: unknown) => m is T,
-          label: string,
-        ): Promise<T> => {
-          const start = Date.now();
-          while (Date.now() - start < 3000) {
-            const found = messages.find((m): m is T => {
-              try {
-                return pred(m);
-              } catch {
-                return false;
-              }
-            });
-            if (found) return found;
-            await new Promise((resolve) => setTimeout(resolve, 10));
-          }
-          throw new Error(`timeout waiting for ${label}`);
-        };
-
-        const isSessionMessage = (m: unknown): m is SessionMessage =>
-          typeof m === "object" &&
-          m !== null &&
-          (m as SessionMessage).type === "session";
-        const isSnapshotMessage = (m: unknown): m is SnapshotMessage =>
-          typeof m === "object" &&
-          m !== null &&
-          (m as SnapshotMessage).type === "gateway-snapshot";
-
-        await waitFor(isSessionMessage, "session");
-        const snap = await waitFor(isSnapshotMessage, "snapshot");
-        expect(snap.snapshot?.stateVersion?.presence).toBe(1);
-      } finally {
-        ws.close();
-        await stopWebChatServer();
-      }
-    },
-  );
+describe("webchat server (static only)", () => {
+  test("serves index.html over loopback", { timeout: 8000 }, async () => {
+    const port = await getFreePort();
+    await startWebChatServer(port);
+    try {
+      const body = await fetchText(`http://127.0.0.1:${port}/`);
+      expect(body.toLowerCase()).toContain("<html");
+    } finally {
+      await stopWebChatServer();
+    }
+  });
 });

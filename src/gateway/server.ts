@@ -1,15 +1,23 @@
-import chalk from "chalk";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
-import { GatewayLockError, acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot } from "../commands/health.js";
 import { getStatusSummary } from "../commands/status.js";
 import { loadConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  type SessionEntry,
+  saveSessionStore,
+} from "../config/sessions.js";
 import { isVerbose } from "../globals.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   listSystemPresence,
@@ -23,6 +31,7 @@ import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { sendMessageTelegram } from "../telegram/send.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { ensureWebChatServerFromConfig } from "../webchat/server.js";
+import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -33,6 +42,8 @@ import {
   type RequestFrame,
   type Snapshot,
   validateAgentParams,
+  validateChatHistoryParams,
+  validateChatSendParams,
   validateHello,
   validateRequestFrame,
   validateSendParams,
@@ -51,9 +62,12 @@ const METHODS = [
   "system-event",
   "send",
   "agent",
+  // WebChat WebSocket-native chat methods
+  "chat.history",
+  "chat.send",
 ];
 
-const EVENTS = ["agent", "presence", "tick", "shutdown"];
+const EVENTS = ["agent", "chat", "presence", "tick", "shutdown"];
 
 export type GatewayServer = {
   close: () => Promise<void>;
@@ -93,6 +107,9 @@ type DedupeEntry = {
   error?: ErrorShape;
 };
 const dedupe = new Map<string, DedupeEntry>();
+// Map runId -> sessionKey for chat events (WS WebChat clients).
+const chatRunSessions = new Map<string, string>();
+const chatRunBuffers = new Map<string, string[]>();
 
 const getGatewayToken = () => process.env.CLAWDIS_GATEWAY_TOKEN;
 
@@ -103,10 +120,71 @@ function formatForLog(value: unknown): string {
         ? String(value)
         : JSON.stringify(value);
     if (!str) return "";
-    return str.length > LOG_VALUE_LIMIT ? `${str.slice(0, LOG_VALUE_LIMIT)}...` : str;
+    return str.length > LOG_VALUE_LIMIT
+      ? `${str.slice(0, LOG_VALUE_LIMIT)}...`
+      : str;
   } catch {
     return String(value);
   }
+}
+
+function readSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+): unknown[] {
+  const candidates: string[] = [];
+  if (storePath) {
+    const dir = path.dirname(storePath);
+    candidates.push(path.join(dir, `${sessionId}.jsonl`));
+  }
+  candidates.push(
+    path.join(os.homedir(), ".clawdis", "sessions", `${sessionId}.jsonl`),
+  );
+  candidates.push(
+    path.join(os.homedir(), ".pi", "agent", "sessions", `${sessionId}.jsonl`),
+  );
+  candidates.push(
+    path.join(
+      os.homedir(),
+      ".tau",
+      "agent",
+      "sessions",
+      "clawdis",
+      `${sessionId}.jsonl`,
+    ),
+  );
+
+  const filePath = candidates.find((p) => fs.existsSync(p));
+  if (!filePath) return [];
+
+  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  const messages: unknown[] = [];
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      // pi/tau logs either raw message or wrapper { message }
+      if (parsed?.message) {
+        messages.push(parsed.message);
+      } else if (parsed?.role && parsed?.content) {
+        messages.push(parsed);
+      }
+    } catch {
+      // ignore bad lines
+    }
+  }
+  return messages;
+}
+
+function loadSessionEntry(sessionKey: string) {
+  const cfg = loadConfig();
+  const sessionCfg = cfg.inbound?.reply?.session;
+  const storePath = sessionCfg?.store
+    ? resolveStorePath(sessionCfg.store)
+    : resolveStorePath(undefined);
+  const store = loadSessionStore(storePath);
+  const entry = store[sessionKey];
+  return { cfg, storePath, store, entry };
 }
 
 function logWs(
@@ -134,7 +212,9 @@ function logWs(
       coloredMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
     }
   }
-  const line = coloredMeta.length ? `${prefix} ${coloredMeta.join(" ")}` : prefix;
+  const line = coloredMeta.length
+    ? `${prefix} ${coloredMeta.join(" ")}`
+    : prefix;
   console.log(line);
 }
 
@@ -143,7 +223,8 @@ function formatError(err: unknown): string {
   if (typeof err === "string") return err;
   const status = (err as { status?: unknown })?.status;
   const code = (err as { code?: unknown })?.code;
-  if (status || code) return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
+  if (status || code)
+    return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
   return JSON.stringify(err, null, 2);
 }
 
@@ -287,6 +368,48 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
     }
     agentRunSeq.set(evt.runId, evt.seq);
     broadcast("agent", evt);
+
+    const sessionKey = chatRunSessions.get(evt.runId);
+    if (sessionKey) {
+      // Map agent bus events to chat events for WS WebChat clients.
+      const base = {
+        runId: evt.runId,
+        sessionKey,
+        seq: evt.seq,
+      };
+      if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
+        const buf = chatRunBuffers.get(evt.runId) ?? [];
+        buf.push(evt.data.text);
+        chatRunBuffers.set(evt.runId, buf);
+      } else if (
+        evt.stream === "job" &&
+        typeof evt.data?.state === "string" &&
+        (evt.data.state === "done" || evt.data.state === "error")
+      ) {
+        const text = chatRunBuffers.get(evt.runId)?.join("\n").trim() ?? "";
+        chatRunBuffers.delete(evt.runId);
+        if (evt.data.state === "done") {
+          broadcast("chat", {
+            ...base,
+            state: "final",
+            message: text
+              ? {
+                  role: "assistant",
+                  content: [{ type: "text", text }],
+                  timestamp: Date.now(),
+                }
+              : undefined,
+          });
+        } else {
+          broadcast("chat", {
+            ...base,
+            state: "error",
+            errorMessage: evt.data.error ? String(evt.data.error) : undefined,
+          });
+        }
+        chatRunSessions.delete(evt.runId);
+      }
+    }
   });
 
   wss.on("connection", (socket) => {
@@ -500,6 +623,163 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             respond(true, health, undefined);
             break;
           }
+          case "chat.history": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateChatHistoryParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid chat.history params: ${formatValidationErrors(validateChatHistoryParams.errors)}`,
+                ),
+              );
+              break;
+            }
+            const { sessionKey } = params as { sessionKey: string };
+            const { storePath, entry } = loadSessionEntry(sessionKey);
+            const sessionId = entry?.sessionId;
+            const messages =
+              sessionId && storePath
+                ? readSessionMessages(sessionId, storePath)
+                : [];
+            const thinkingLevel =
+              entry?.thinkingLevel ??
+              loadConfig().inbound?.reply?.thinkingDefault ??
+              "off";
+            respond(true, { sessionKey, sessionId, messages, thinkingLevel });
+            break;
+          }
+          case "chat.send": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateChatSendParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
+                ),
+              );
+              break;
+            }
+            const p = params as {
+              sessionKey: string;
+              message: string;
+              thinking?: string;
+              deliver?: boolean;
+              attachments?: Array<{
+                type?: string;
+                mimeType?: string;
+                fileName?: string;
+                content?: unknown;
+              }>;
+              timeoutMs?: number;
+              idempotencyKey: string;
+            };
+            const timeoutMs = Math.min(
+              Math.max(p.timeoutMs ?? 30_000, 0),
+              30_000,
+            );
+            const normalizedAttachments =
+              p.attachments?.map((a) => ({
+                type: typeof a?.type === "string" ? a.type : undefined,
+                mimeType:
+                  typeof a?.mimeType === "string" ? a.mimeType : undefined,
+                fileName:
+                  typeof a?.fileName === "string" ? a.fileName : undefined,
+                content:
+                  typeof a?.content === "string"
+                    ? a.content
+                    : ArrayBuffer.isView(a?.content)
+                      ? Buffer.from(a.content as ArrayBufferLike).toString(
+                          "base64",
+                        )
+                      : undefined,
+              })) ?? [];
+            let messageWithAttachments = p.message;
+            if (normalizedAttachments.length > 0) {
+              try {
+                messageWithAttachments = buildMessageWithAttachments(
+                  p.message,
+                  normalizedAttachments,
+                  { maxBytes: 5_000_000 },
+                );
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, String(err)),
+                );
+                break;
+              }
+            }
+            const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
+            const now = Date.now();
+            const sessionId = entry?.sessionId ?? randomUUID();
+            const sessionEntry: SessionEntry = {
+              sessionId,
+              updatedAt: now,
+              thinkingLevel: entry?.thinkingLevel,
+              verboseLevel: entry?.verboseLevel,
+              systemSent: entry?.systemSent,
+            };
+            if (store) {
+              store[p.sessionKey] = sessionEntry;
+              if (storePath) {
+                await saveSessionStore(storePath, store);
+              }
+            }
+            chatRunSessions.set(sessionId, p.sessionKey);
+
+            const idem = p.idempotencyKey;
+            const cached = dedupe.get(`chat:${idem}`);
+            if (cached) {
+              respond(cached.ok, cached.payload, cached.error, {
+                cached: true,
+              });
+              break;
+            }
+
+            try {
+              await agentCommand(
+                {
+                  message: messageWithAttachments,
+                  sessionId,
+                  thinking: p.thinking,
+                  deliver: p.deliver,
+                  timeout: Math.ceil(timeoutMs / 1000).toString(),
+                  surface: "WebChat",
+                },
+                defaultRuntime,
+                deps,
+              );
+              const payload = {
+                runId: sessionId,
+                status: "ok" as const,
+              };
+              dedupe.set(`chat:${idem}`, { ts: Date.now(), ok: true, payload });
+              respond(true, payload, undefined, { runId: sessionId });
+            } catch (err) {
+              const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+              const payload = {
+                runId: sessionId,
+                status: "error" as const,
+                summary: String(err),
+              };
+              dedupe.set(`chat:${idem}`, {
+                ts: Date.now(),
+                ok: false,
+                payload,
+                error,
+              });
+              respond(false, payload, error, {
+                runId: sessionId,
+                error: formatForLog(err),
+              });
+            }
+            break;
+          }
           case "status": {
             const status = await getStatusSummary();
             respond(true, status, undefined);
@@ -640,7 +920,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             const idem = params.idempotencyKey;
             const cached = dedupe.get(`agent:${idem}`);
             if (cached) {
-              respond(cached.ok, cached.payload, cached.error, { cached: true });
+              respond(cached.ok, cached.payload, cached.error, {
+                cached: true,
+              });
               break;
             }
             const message = params.message.trim();
@@ -773,6 +1055,8 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           /* ignore */
         }
       }
+      chatRunSessions.clear();
+      chatRunBuffers.clear();
       for (const c of clients) {
         try {
           c.socket.close(1012, "service restart");

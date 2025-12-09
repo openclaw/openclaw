@@ -14,12 +14,7 @@ import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { startWebChatServer } from "../webchat/server.js";
 import { createDefaultDeps } from "./deps.js";
-import {
-  forceFreePort,
-  listPortListeners,
-  PortProcess,
-  parseLsofOutput,
-} from "./ports.js";
+import { forceFreePort, listPortListeners } from "./ports.js";
 
 export function buildProgram() {
   const program = new Command();
@@ -217,7 +212,7 @@ Examples:
       }
     });
 
-  program
+  program;
   const gateway = program
     .command("gateway")
     .description("Run the WebSocket Gateway")

@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { loadConfig, type ClawdisConfig } from "../config/config.js";
+import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import { normalizeE164 } from "../utils.js";
 import {
   getWebAuthAgeMs,

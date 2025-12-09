@@ -3,6 +3,10 @@ import {
   type AgentEvent,
   AgentEventSchema,
   AgentParamsSchema,
+  type ChatEvent,
+  ChatEventSchema,
+  ChatHistoryParamsSchema,
+  ChatSendParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -51,6 +55,9 @@ export const validateRequestFrame =
   ajv.compile<RequestFrame>(RequestFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
+export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
+export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
+export const validateChatEvent = ajv.compile(ChatEventSchema);
 
 export function formatValidationErrors(
   errors: ErrorObject[] | null | undefined,
@@ -72,8 +79,11 @@ export {
   ErrorShapeSchema,
   StateVersionSchema,
   AgentEventSchema,
+  ChatEventSchema,
   SendParamsSchema,
   AgentParamsSchema,
+  ChatHistoryParamsSchema,
+  ChatSendParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
@@ -95,6 +105,7 @@ export type {
   ErrorShape,
   StateVersion,
   AgentEvent,
+  ChatEvent,
   TickEvent,
   ShutdownEvent,
 };

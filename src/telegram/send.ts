@@ -45,7 +45,8 @@ export async function sendMessageTelegram(
   const api = opts.api ?? bot?.api;
   const mediaUrl = opts.mediaUrl?.trim();
 
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
   const sendWithRetry = async <T>(fn: () => Promise<T>, label: string) => {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -53,12 +54,17 @@ export async function sendMessageTelegram(
         return await fn();
       } catch (err) {
         lastErr = err;
-        const terminal = attempt === 3 ||
-          !/429|timeout|connect|reset|closed|unavailable|temporarily/i.test(String(err ?? ""));
+        const terminal =
+          attempt === 3 ||
+          !/429|timeout|connect|reset|closed|unavailable|temporarily/i.test(
+            String(err ?? ""),
+          );
         if (terminal) break;
         const backoff = 400 * attempt;
         if (opts.verbose) {
-          console.warn(`telegram send retry ${attempt}/2 for ${label} in ${backoff}ms: ${String(err)}`);
+          console.warn(
+            `telegram send retry ${attempt}/2 for ${label} in ${backoff}ms: ${String(err)}`,
+          );
         }
         await sleep(backoff);
       }
@@ -80,13 +86,25 @@ export async function sendMessageTelegram(
       | Awaited<ReturnType<typeof api.sendAudio>>
       | Awaited<ReturnType<typeof api.sendDocument>>;
     if (kind === "image") {
-      result = await sendWithRetry(() => api.sendPhoto(chatId, file, { caption }), "photo");
+      result = await sendWithRetry(
+        () => api.sendPhoto(chatId, file, { caption }),
+        "photo",
+      );
     } else if (kind === "video") {
-      result = await sendWithRetry(() => api.sendVideo(chatId, file, { caption }), "video");
+      result = await sendWithRetry(
+        () => api.sendVideo(chatId, file, { caption }),
+        "video",
+      );
     } else if (kind === "audio") {
-      result = await sendWithRetry(() => api.sendAudio(chatId, file, { caption }), "audio");
+      result = await sendWithRetry(
+        () => api.sendAudio(chatId, file, { caption }),
+        "audio",
+      );
     } else {
-      result = await sendWithRetry(() => api.sendDocument(chatId, file, { caption }), "document");
+      result = await sendWithRetry(
+        () => api.sendDocument(chatId, file, { caption }),
+        "document",
+      );
     }
     const messageId = String(result?.message_id ?? "unknown");
     return { messageId, chatId: String(result?.chat?.id ?? chatId) };

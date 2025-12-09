@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { info } from "../globals.js";

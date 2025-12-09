@@ -680,8 +680,12 @@ describe("web auto-reply", () => {
 
     expect(resolver).toHaveBeenCalledTimes(1);
     const args = resolver.mock.calls[0][0];
-    expect(args.Body).toContain("[WhatsApp +1 2025-01-01 00:00] [clawdis] first");
-    expect(args.Body).toContain("[WhatsApp +1 2025-01-01 01:00] [clawdis] second");
+    expect(args.Body).toContain(
+      "[WhatsApp +1 2025-01-01 00:00] [clawdis] first",
+    );
+    expect(args.Body).toContain(
+      "[WhatsApp +1 2025-01-01 01:00] [clawdis] second",
+    );
 
     // Max listeners bumped to avoid warnings in multi-instance test runs
     expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);

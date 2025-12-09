@@ -14,8 +14,8 @@ The macOS menu bar app opens the gateway’s loopback web chat server in a WKWeb
 - WK logs: navigation lifecycle, readyState, js location, and JS errors/unhandled rejections are mirrored to OSLog for easier diagnosis.
 
 ## How it’s wired
-- Assets: `apps/macos/Sources/Clawdis/Resources/WebChat/` contains the `pi-web-ui` dist plus a local import map pointing at bundled vendor modules and a tiny `pi-ai` stub. Everything is served from the gateway at `/` (legacy `/webchat/*` still works).
-- Bridge: none. The web UI calls `/webchat/rpc` directly; Swift no longer proxies messages. RPC is handled in-process inside the gateway (no CLI spawn/PATH dependency).
+- Assets: `apps/macos/Sources/Clawdis/Resources/WebChat/` contains the `pi-web-ui` dist plus a local import map pointing at bundled vendor modules and a tiny `pi-ai` stub. Everything is served from the static host at `/` (legacy `/webchat/*` still works).
+- Bridge: none. The web UI connects directly to the Gateway WebSocket (default 18789) and uses `chat.history`/`chat.send` plus `chat/presence/tick/health` events. No `/rpc` or file-watcher socket path remains.
 - Session: always primary; multiple transports (WhatsApp/Telegram/Desktop) share the same session key so context is unified.
 
 ## Security / surface area

@@ -12,7 +12,7 @@ import {
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig, type ClawdisConfig } from "../config/config.js";
+import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,

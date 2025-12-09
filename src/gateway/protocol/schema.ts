@@ -219,6 +219,45 @@ export const AgentParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+// WebChat/WebSocket-native chat methods
+export const ChatHistoryParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ChatSendParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    message: NonEmptyString,
+    thinking: Type.Optional(Type.String()),
+    deliver: Type.Optional(Type.Boolean()),
+    attachments: Type.Optional(Type.Array(Type.Unknown())),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ChatEventSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    sessionKey: NonEmptyString,
+    seq: Type.Integer({ minimum: 0 }),
+    state: Type.Union([
+      Type.Literal("delta"),
+      Type.Literal("final"),
+      Type.Literal("error"),
+    ]),
+    message: Type.Optional(Type.Unknown()),
+    errorMessage: Type.Optional(Type.String()),
+    usage: Type.Optional(Type.Unknown()),
+    stopReason: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const ProtocolSchemas: Record<string, TSchema> = {
   Hello: HelloSchema,
   HelloOk: HelloOkSchema,
@@ -234,6 +273,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   AgentEvent: AgentEventSchema,
   SendParams: SendParamsSchema,
   AgentParams: AgentParamsSchema,
+  ChatHistoryParams: ChatHistoryParamsSchema,
+  ChatSendParams: ChatSendParamsSchema,
+  ChatEvent: ChatEventSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
 };
@@ -252,6 +294,7 @@ export type PresenceEntry = Static<typeof PresenceEntrySchema>;
 export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type StateVersion = Static<typeof StateVersionSchema>;
 export type AgentEvent = Static<typeof AgentEventSchema>;
+export type ChatEvent = Static<typeof ChatEventSchema>;
 export type TickEvent = Static<typeof TickEventSchema>;
 export type ShutdownEvent = Static<typeof ShutdownEventSchema>;
 

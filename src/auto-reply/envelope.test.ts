@@ -13,7 +13,9 @@ describe("formatAgentEnvelope", () => {
       timestamp: ts,
       body: "hello",
     });
-    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 2025-01-02 03:04] hello");
+    expect(body).toBe(
+      "[WebChat user1 mac-mini 10.0.0.5 2025-01-02 03:04] hello",
+    );
   });
 
   it("handles missing optional fields", () => {

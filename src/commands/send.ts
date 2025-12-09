@@ -1,9 +1,9 @@
 import type { CliDeps } from "../cli/deps.js";
 import { listPortListeners } from "../cli/ports.js";
-import { info, success } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
+import { success } from "../globals.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export async function sendCommand(
   opts: {
@@ -91,7 +91,9 @@ export async function sendCommand(
   }
 
   runtime.log(
-    success(`✅ Sent via gateway. Message ID: ${result.messageId ?? "unknown"}`),
+    success(
+      `✅ Sent via gateway. Message ID: ${result.messageId ?? "unknown"}`,
+    ),
   );
   if (opts.json) {
     runtime.log(
