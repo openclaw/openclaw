@@ -500,7 +500,12 @@ public enum GatewayFrame: Codable {
     }
 
     private static func decodePayload<T: Decodable>(_ type: T.Type, from raw: [String: AnyCodable]) throws -> T {
-        let data = try JSONSerialization.data(withJSONObject: raw)
+        // Re-encode the already-decoded map using `JSONEncoder` instead of
+        // `JSONSerialization` because `AnyCodable` values are not bridged to
+        // Objective-C types and `JSONSerialization` throws an ObjC exception,
+        // crashing the app (seen on macOS 26.1). `JSONEncoder` understands
+        // `Encodable` values and stays in Swift land.
+        let data = try JSONEncoder().encode(raw)
         let decoder = JSONDecoder()
         return try decoder.decode(T.self, from: data)
     }

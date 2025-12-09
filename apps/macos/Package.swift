@@ -62,7 +62,7 @@ let package = Package(
             ]),
         .testTarget(
             name: "ClawdisIPCTests",
-            dependencies: ["ClawdisIPC", "Clawdis"],
+            dependencies: ["ClawdisIPC", "Clawdis", "ClawdisProtocol"],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),
