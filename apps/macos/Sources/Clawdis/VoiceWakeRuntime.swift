@@ -316,7 +316,7 @@ actor VoiceWakeRuntime {
             VoiceWakeOverlayController.shared.presentFinal(
                 transcript: finalTranscript,
                 forwardConfig: forwardConfig,
-                delay: delay,
+                autoSendAfter: delay,
                 sendChime: sendChime,
                 attributed: finalAttributed)
         }

@@ -137,12 +137,17 @@ actor VoicePushToTalk {
         let chime = finalText.isEmpty ? .none : (self.activeConfig?.sendChime ?? .none)
 
         await MainActor.run {
-            VoiceWakeOverlayController.shared.presentFinal(
-                transcript: finalText,
-                forwardConfig: forward,
-                delay: finalText.isEmpty ? 0.0 : 0.8,
-                sendChime: chime,
-                attributed: attributed)
+            if finalText.isEmpty {
+                VoiceWakeOverlayController.shared.dismiss(reason: .empty)
+            } else {
+                VoiceWakeOverlayController.shared.presentFinal(
+                    transcript: finalText,
+                    forwardConfig: forward,
+                    autoSendAfter: nil,
+                    sendChime: chime,
+                    attributed: attributed)
+                VoiceWakeOverlayController.shared.sendNow(sendChime: chime)
+            }
         }
 
         self.committed = ""

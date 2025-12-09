@@ -52,7 +52,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     func presentFinal(
         transcript: String,
         forwardConfig: VoiceWakeForwardConfig,
-        delay: TimeInterval,
+        autoSendAfter delay: TimeInterval?,
         sendChime: VoiceWakeChime = .none,
         attributed: NSAttributedString? = nil)
     {
@@ -66,7 +66,9 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.model.level = 0
         self.present()
-        self.scheduleAutoSend(after: delay, sendChime: sendChime)
+        if let delay {
+            self.scheduleAutoSend(after: delay, sendChime: sendChime)
+        }
     }
 
     func userBeganEditing() {
