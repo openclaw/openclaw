@@ -4,7 +4,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_BUNDLE="${ROOT_DIR}/dist/Clawdis.app"
+APP_BUNDLE="${CLAWDIS_APP_BUNDLE:-}"
 APP_PROCESS_PATTERN="Clawdis.app/Contents/MacOS/Clawdis"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Clawdis"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Clawdis"
@@ -59,13 +59,36 @@ run_step "bundle webchat" bash -lc "cd '${ROOT_DIR}' && pnpm webchat:bundle"
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
 run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Clawdis"
 
-# 3) Package + relaunch the app (script also stops any stragglers).
-run_step "package app" "${ROOT_DIR}/scripts/package-mac-app.sh"
+# 3) Package app (skip TS + relay staging; rely on global/custom install for relay JS).
+run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=1 SKIP_RELAY_PACKAGE=1 '${ROOT_DIR}/scripts/package-mac-app.sh'"
 
-# 4) Launch the packaged app in the foreground so the menu bar extra appears.
+choose_app_bundle() {
+  if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then
+    return 0
+  fi
+
+  if [[ -d "/Applications/Clawdis.app" ]]; then
+    APP_BUNDLE="/Applications/Clawdis.app"
+    return 0
+  fi
+
+  if [[ -d "${ROOT_DIR}/dist/Clawdis.app" ]]; then
+    APP_BUNDLE="${ROOT_DIR}/dist/Clawdis.app"
+    if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
+      fail "dist/Clawdis.app missing Sparkle after packaging"
+    fi
+    return 0
+  fi
+
+  fail "App bundle not found. Set CLAWDIS_APP_BUNDLE to your installed Clawdis.app"
+}
+
+choose_app_bundle
+
+# 4) Launch the installed app in the foreground so the menu bar extra appears.
 run_step "launch app" open "${APP_BUNDLE}"
 
-# 5) Verify the packaged app is alive.
+# 5) Verify the app is alive.
 sleep 1.5
 if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
   log "OK: Clawdis is running."

@@ -25,8 +25,12 @@ fi
 
 echo "📦 Ensuring deps (pnpm install)"
 (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
-echo "📦 Building JS (pnpm exec tsc)"
-(cd "$ROOT_DIR" && pnpm exec tsc -p tsconfig.json)
+if [[ "${SKIP_TSC:-0}" != "1" ]]; then
+  echo "📦 Building JS (pnpm exec tsc)"
+  (cd "$ROOT_DIR" && pnpm exec tsc -p tsconfig.json)
+else
+  echo "📦 Skipping TS build (SKIP_TSC=1)"
+fi
 
 cd "$ROOT_DIR/apps/macos"
 
@@ -114,56 +118,60 @@ rm -rf "$APP_ROOT/Contents/Resources/WebChat/vendor/pdfjs-dist/legacy"
 
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
-echo "🧰 Staging relay payload (dist + node_modules; expects system Node ≥22)"
-rsync -a --delete --exclude "Clawdis.app" "$ROOT_DIR/dist/" "$RELAY_DIR/dist/"
-cp "$ROOT_DIR/package.json" "$RELAY_DIR/"
-cp "$ROOT_DIR/pnpm-lock.yaml" "$RELAY_DIR/"
-if [ -f "$ROOT_DIR/.npmrc" ]; then
-  cp "$ROOT_DIR/.npmrc" "$RELAY_DIR/"
+if [[ "${SKIP_RELAY_PACKAGE:-0}" != "1" ]]; then
+  echo "🧰 Staging relay payload (dist + node_modules; expects system Node ≥22)"
+  rsync -a --delete --exclude "Clawdis.app" "$ROOT_DIR/dist/" "$RELAY_DIR/dist/"
+  cp "$ROOT_DIR/package.json" "$RELAY_DIR/"
+  cp "$ROOT_DIR/pnpm-lock.yaml" "$RELAY_DIR/"
+  if [ -f "$ROOT_DIR/.npmrc" ]; then
+    cp "$ROOT_DIR/.npmrc" "$RELAY_DIR/"
+  fi
+
+  echo "📦 Installing prod node_modules into bundle via temp project"
+  TMP_DEPLOY=$(mktemp -d /tmp/clawdis-deps.XXXXXX)
+  cp "$ROOT_DIR/package.json" "$TMP_DEPLOY/"
+  cp "$ROOT_DIR/pnpm-lock.yaml" "$TMP_DEPLOY/"
+  [ -f "$ROOT_DIR/.npmrc" ] && cp "$ROOT_DIR/.npmrc" "$TMP_DEPLOY/"
+  PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
+  PNPM_HOME="$HOME/Library/pnpm" \
+  pnpm install \
+    --prod \
+    --force \
+    --no-frozen-lockfile \
+    --ignore-scripts=false \
+    --config.enable-pre-post-scripts=true \
+    --config.ignore-workspace-root-check=true \
+    --config.shared-workspace-lockfile=false \
+    --config.node-linker=hoisted \
+    --lockfile-dir "$TMP_DEPLOY" \
+    --dir "$TMP_DEPLOY"
+  PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
+  PNPM_HOME="$HOME/Library/pnpm" \
+  pnpm rebuild sharp --config.ignore-workspace-root-check=true --dir "$TMP_DEPLOY"
+  rsync -a "$TMP_DEPLOY/node_modules/" "$RELAY_DIR/node_modules/"
+
+  # Keep only the arm64 macOS sharp vendor payloads to shrink the bundle
+  SHARP_VENDOR_DIR="$RELAY_DIR/node_modules/@img"
+  if [ -d "$SHARP_VENDOR_DIR" ]; then
+    find "$SHARP_VENDOR_DIR" -maxdepth 1 -type d -name "sharp-*" \
+      ! -name "sharp-darwin-arm64" \
+      ! -name "sharp-libvips-darwin-arm64" -exec rm -rf {} +
+  fi
+
+  # Prune obvious dev/build tooling to keep size down
+  rm -rf \
+    "$RELAY_DIR/node_modules/.bin"/vite \
+    "$RELAY_DIR/node_modules/.bin"/rolldown \
+    "$RELAY_DIR/node_modules/.bin"/biome \
+    "$RELAY_DIR/node_modules/.bin"/vitest \
+    "$RELAY_DIR/node_modules/.bin"/tsc \
+    "$RELAY_DIR/node_modules/.bin"/tsx 2>/dev/null || true
+  rm -rf \
+    "$RELAY_DIR/node_modules"/{vite,rolldown,vitest,ts-node,ts-node-dev,typescript,@types,docx-preview,jszip,lucide,ollama} 2>/dev/null || true
+  rm -rf "$TMP_DEPLOY"
+else
+  echo "🧰 Skipping relay payload packaging (SKIP_RELAY_PACKAGE=1)"
 fi
-
-echo "📦 Installing prod node_modules into bundle via temp project"
-TMP_DEPLOY=$(mktemp -d /tmp/clawdis-deps.XXXXXX)
-cp "$ROOT_DIR/package.json" "$TMP_DEPLOY/"
-cp "$ROOT_DIR/pnpm-lock.yaml" "$TMP_DEPLOY/"
-[ -f "$ROOT_DIR/.npmrc" ] && cp "$ROOT_DIR/.npmrc" "$TMP_DEPLOY/"
-PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
-PNPM_HOME="$HOME/Library/pnpm" \
-pnpm install \
-  --prod \
-  --force \
-  --no-frozen-lockfile \
-  --ignore-scripts=false \
-  --config.enable-pre-post-scripts=true \
-  --config.ignore-workspace-root-check=true \
-  --config.shared-workspace-lockfile=false \
-  --config.node-linker=hoisted \
-  --lockfile-dir "$TMP_DEPLOY" \
-  --dir "$TMP_DEPLOY"
-PNPM_STORE_DIR="$TMP_DEPLOY/.pnpm-store" \
-PNPM_HOME="$HOME/Library/pnpm" \
-pnpm rebuild sharp --config.ignore-workspace-root-check=true --dir "$TMP_DEPLOY"
-rsync -a "$TMP_DEPLOY/node_modules/" "$RELAY_DIR/node_modules/"
-
-# Keep only the arm64 macOS sharp vendor payloads to shrink the bundle
-SHARP_VENDOR_DIR="$RELAY_DIR/node_modules/@img"
-if [ -d "$SHARP_VENDOR_DIR" ]; then
-  find "$SHARP_VENDOR_DIR" -maxdepth 1 -type d -name "sharp-*" \
-    ! -name "sharp-darwin-arm64" \
-    ! -name "sharp-libvips-darwin-arm64" -exec rm -rf {} +
-fi
-
-# Prune obvious dev/build tooling to keep size down
-rm -rf \
-  "$RELAY_DIR/node_modules/.bin"/vite \
-  "$RELAY_DIR/node_modules/.bin"/rolldown \
-  "$RELAY_DIR/node_modules/.bin"/biome \
-  "$RELAY_DIR/node_modules/.bin"/vitest \
-  "$RELAY_DIR/node_modules/.bin"/tsc \
-  "$RELAY_DIR/node_modules/.bin"/tsx 2>/dev/null || true
-rm -rf \
-  "$RELAY_DIR/node_modules"/{vite,rolldown,vitest,ts-node,ts-node-dev,typescript,@types,docx-preview,jszip,lucide,ollama} 2>/dev/null || true
-rm -rf "$TMP_DEPLOY"
 
 if [ -f "$CLI_BIN" ]; then
   echo "🔧 Copying CLI helper"
