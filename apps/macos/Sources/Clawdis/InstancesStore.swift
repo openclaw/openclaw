@@ -40,6 +40,10 @@ final class InstancesStore: ObservableObject {
     private let interval: TimeInterval = 30
     private var observers: [NSObjectProtocol] = []
 
+    private struct PresenceEventPayload: Codable {
+        let presence: [PresenceEntry]
+    }
+
     init(isPreview: Bool = false) {
         self.isPreview = isPreview
     }
@@ -77,11 +81,8 @@ final class InstancesStore: ObservableObject {
                   let frame = note.object as? GatewayFrame else { return }
             switch frame {
             case let .event(evt) where evt.event == "presence":
-                if let payload = evt.payload?.value as? [String: Any],
-                   let presence = payload["presence"],
-                   let presenceData = try? JSONSerialization.data(withJSONObject: presence)
-                {
-                    Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(presenceData) }
+                if let payload = evt.payload {
+                    Task { @MainActor [weak self] in self?.handlePresenceEventPayload(payload) }
                 }
             default:
                 break
@@ -133,20 +134,8 @@ final class InstancesStore: ObservableObject {
                 await self.probeHealthIfNeeded(reason: "no payload")
                 return
             }
-            let decoded = try JSONDecoder().decode([InstanceInfo].self, from: data)
-            let withIDs = decoded.map { entry -> InstanceInfo in
-                let key = entry.host ?? entry.ip ?? entry.text
-                return InstanceInfo(
-                    id: key,
-                    host: entry.host,
-                    ip: entry.ip,
-                    version: entry.version,
-                    lastInputSeconds: entry.lastInputSeconds,
-                    mode: entry.mode,
-                    reason: entry.reason,
-                    text: entry.text,
-                    ts: entry.ts)
-            }
+            let decoded = try JSONDecoder().decode([PresenceEntry].self, from: data)
+            let withIDs = self.normalizePresence(decoded)
             if withIDs.isEmpty {
                 self.instances = [self.localFallbackInstance(reason: "no presence entries")]
                 self.lastError = nil
@@ -280,27 +269,46 @@ final class InstancesStore: ObservableObject {
 
     private func decodeAndApplyPresenceData(_ data: Data) {
         do {
-            let decoded = try JSONDecoder().decode([InstanceInfo].self, from: data)
-            let withIDs = decoded.map { entry -> InstanceInfo in
-                let key = entry.host ?? entry.ip ?? entry.text
-                return InstanceInfo(
-                    id: key,
-                    host: entry.host,
-                    ip: entry.ip,
-                    version: entry.version,
-                    lastInputSeconds: entry.lastInputSeconds,
-                    mode: entry.mode,
-                    reason: entry.reason,
-                    text: entry.text,
-                    ts: entry.ts)
-            }
-            self.instances = withIDs
-            self.statusMessage = nil
-            self.lastError = nil
+            let decoded = try JSONDecoder().decode([PresenceEntry].self, from: data)
+            self.applyPresence(decoded)
         } catch {
             self.logger.error("presence decode from event failed: \(error.localizedDescription, privacy: .public)")
             self.lastError = error.localizedDescription
         }
+    }
+
+    func handlePresenceEventPayload(_ payload: ClawdisProtocol.AnyCodable) {
+        do {
+            let payloadData = try JSONEncoder().encode(payload)
+            let wrapper = try JSONDecoder().decode(PresenceEventPayload.self, from: payloadData)
+            self.applyPresence(wrapper.presence)
+        } catch {
+            self.logger.error("presence event decode failed: \(error.localizedDescription, privacy: .public)")
+            self.lastError = error.localizedDescription
+        }
+    }
+
+    private func normalizePresence(_ entries: [PresenceEntry]) -> [InstanceInfo] {
+        entries.map { entry -> InstanceInfo in
+            let key = entry.host ?? entry.ip ?? entry.text ?? entry.instanceid ?? "entry-\(entry.ts)"
+            return InstanceInfo(
+                id: key,
+                host: entry.host,
+                ip: entry.ip,
+                version: entry.version,
+                lastInputSeconds: entry.lastinputseconds,
+                mode: entry.mode,
+                reason: entry.reason,
+                text: entry.text ?? "Unnamed node",
+                ts: Double(entry.ts))
+        }
+    }
+
+    private func applyPresence(_ entries: [PresenceEntry]) {
+        let withIDs = self.normalizePresence(entries)
+        self.instances = withIDs
+        self.statusMessage = nil
+        self.lastError = nil
     }
 }
 

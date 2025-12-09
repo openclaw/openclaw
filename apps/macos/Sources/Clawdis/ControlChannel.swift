@@ -157,7 +157,6 @@ final class ControlChannel: ObservableObject {
             return "Gateway request timed out; check the gateway process on localhost:\(GatewayEnvironment.gatewayPort())."
         }
 
-        let nsError = error as NSError
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
         return "Gateway error: \(detail)"
     }
