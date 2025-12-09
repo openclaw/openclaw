@@ -58,12 +58,13 @@ final class InstancesStore: ObservableObject {
         self.isLoading = true
         defer { self.isLoading = false }
         do {
+            PresenceReporter.shared.sendImmediate(reason: "instances-refresh")
             let data = try await ControlChannel.shared.request(method: "system-presence")
             self.lastPayload = data
             if data.isEmpty {
                 self.logger.error("instances fetch returned empty payload")
-                self.instances = [self.localFallbackInstance()]
-                self.lastError = "No presence data returned from relay yet."
+                self.instances = [self.localFallbackInstance(reason: "no presence payload")]
+                self.lastError = nil
                 await self.probeHealthIfNeeded()
                 return
             }
@@ -82,7 +83,7 @@ final class InstancesStore: ObservableObject {
                     ts: entry.ts)
             }
             if withIDs.isEmpty {
-                self.instances = [self.localFallbackInstance()]
+                self.instances = [self.localFallbackInstance(reason: "no presence entries")]
                 self.lastError = nil
                 await self.probeHealthIfNeeded()
             } else {
@@ -96,13 +97,13 @@ final class InstancesStore: ObservableObject {
                 len=\(self.lastPayload?.count ?? 0, privacy: .public) \
                 utf8=\(self.snippet(self.lastPayload), privacy: .public)
                 """)
-            self.instances = [self.localFallbackInstance()]
-            self.lastError = "Decode failed: \(error.localizedDescription)"
+            self.instances = [self.localFallbackInstance(reason: "presence decode failed")]
+            self.lastError = nil
             await self.probeHealthIfNeeded()
         }
     }
 
-    private func localFallbackInstance() -> InstanceInfo {
+    private func localFallbackInstance(reason: String) -> InstanceInfo {
         let host = Host.current().localizedName ?? "this-mac"
         let ip = Self.primaryIPv4Address()
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
@@ -115,7 +116,7 @@ final class InstancesStore: ObservableObject {
             version: version,
             lastInputSeconds: Self.lastInputSeconds(),
             mode: "local",
-            reason: "fallback",
+            reason: reason,
             text: text,
             ts: ts)
     }
