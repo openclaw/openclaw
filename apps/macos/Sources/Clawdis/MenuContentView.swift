@@ -180,52 +180,39 @@ struct MenuContent: View {
     }
 
     private var statusRow: some View {
-        if let activity = self.activityStore.current {
-            let color: Color = activity.role == .main ? .accentColor : .gray
-            let roleLabel = activity.role == .main ? "Main" : "Other"
-            let text = "\(roleLabel) · \(activity.label)"
-            return HStack(spacing: 8) {
-                Circle()
-                    .fill(color)
-                    .frame(width: 8, height: 8)
-                Text(text)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.primary)
+        let (label, color): (String, Color) = {
+            if let activity = self.activityStore.current {
+                let color: Color = activity.role == .main ? .accentColor : .gray
+                let roleLabel = activity.role == .main ? "Main" : "Other"
+                let text = "\(roleLabel) · \(activity.label)"
+                return (text, color)
             }
-            .padding(.vertical, 4)
-            .disabled(true)
-        } else {
+
             let health = self.healthStore.state
             let isRefreshing = self.healthStore.isRefreshing
             let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
 
-            let label: String
-            let color: Color
-
             if isRefreshing {
-                label = "Health check running…"
-                color = health.tint
-            } else {
-                switch health {
-                case .ok:
-                    let ageText = lastAge.map { " · checked \($0)" } ?? ""
-                    label = "Health ok\(ageText)"
-                    color = .green
-                case .linkingNeeded:
-                    label = "Health: login required"
-                    color = .red
-                case let .degraded(reason):
-                    let detail = HealthStore.shared.degradedSummary ?? reason
-                    let ageText = lastAge.map { " · checked \($0)" } ?? ""
-                    label = "\(detail)\(ageText)"
-                    color = .orange
-                case .unknown:
-                    label = "Health pending"
-                    color = .secondary
-                }
+                return ("Health check running…", health.tint)
             }
 
-            return HStack(spacing: 8) {
+            switch health {
+            case .ok:
+                let ageText = lastAge.map { " · checked \($0)" } ?? ""
+                return ("Health ok\(ageText)", .green)
+            case .linkingNeeded:
+                return ("Health: login required", .red)
+            case let .degraded(reason):
+                let detail = HealthStore.shared.degradedSummary ?? reason
+                let ageText = lastAge.map { " · checked \($0)" } ?? ""
+                return ("\(detail)\(ageText)", .orange)
+            case .unknown:
+                return ("Health pending", .secondary)
+            }
+        }()
+
+        return Button(action: {}) {
+            HStack(spacing: 8) {
                 Circle()
                     .fill(color)
                     .frame(width: 8, height: 8)
@@ -234,50 +221,46 @@ struct MenuContent: View {
                     .foregroundStyle(.primary)
             }
             .padding(.vertical, 4)
-            .disabled(true)
         }
+        .buttonStyle(.plain)
+        .disabled(true)
     }
 
     private var heartbeatStatusRow: some View {
-        let label: String
-        let color: Color
-
-        if case .degraded = self.controlChannel.state {
-            label = "Control channel disconnected"
-            color = .red
-        } else if let evt = self.heartbeatStore.lastEvent {
-            let ageText = age(from: Date(timeIntervalSince1970: evt.ts / 1000))
-            switch evt.status {
-            case "sent":
-                label = "Last heartbeat sent · \(ageText)"
-                color = .blue
-            case "ok-empty", "ok-token":
-                label = "Heartbeat ok · \(ageText)"
-                color = .green
-            case "skipped":
-                label = "Heartbeat skipped · \(ageText)"
-                color = .secondary
-            case "failed":
-                label = "Heartbeat failed · \(ageText)"
-                color = .red
-            default:
-                label = "Heartbeat · \(ageText)"
-                color = .secondary
+        let (label, color): (String, Color) = {
+            if case .degraded = self.controlChannel.state {
+                return ("Control channel disconnected", .red)
+            } else if let evt = self.heartbeatStore.lastEvent {
+                let ageText = age(from: Date(timeIntervalSince1970: evt.ts / 1000))
+                switch evt.status {
+                case "sent":
+                    return ("Last heartbeat sent · \(ageText)", .blue)
+                case "ok-empty", "ok-token":
+                    return ("Heartbeat ok · \(ageText)", .green)
+                case "skipped":
+                    return ("Heartbeat skipped · \(ageText)", .secondary)
+                case "failed":
+                    return ("Heartbeat failed · \(ageText)", .red)
+                default:
+                    return ("Heartbeat · \(ageText)", .secondary)
+                }
+            } else {
+                return ("No heartbeat yet", .secondary)
             }
-        } else {
-            label = "No heartbeat yet"
-            color = .secondary
-        }
+        }()
 
-        return HStack(spacing: 8) {
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
+        return Button(action: {}) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .padding(.vertical, 2)
         }
-        .padding(.vertical, 2)
+        .buttonStyle(.plain)
         .disabled(true)
     }
 
