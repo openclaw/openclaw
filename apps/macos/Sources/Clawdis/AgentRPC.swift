@@ -234,9 +234,15 @@ actor AgentRPC {
         }
     }
 
+    func shutdown() async {
+        await self.stop()
+    }
+
     private func stop() async {
         self.stdoutHandle?.readabilityHandler = nil
-        self.process?.terminate()
+        let proc = self.process
+        proc?.terminate()
+        proc?.waitUntilExit()
         self.process = nil
         self.stdinHandle = nil
         self.stdoutHandle = nil

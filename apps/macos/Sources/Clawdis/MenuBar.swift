@@ -111,6 +111,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     func applicationWillTerminate(_ notification: Notification) {
         RelayProcessManager.shared.stop()
         PresenceReporter.shared.stop()
+        WebChatManager.shared.close()
+        Task { await AgentRPC.shared.shutdown() }
     }
 
     @MainActor

@@ -14,6 +14,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     private var baseEndpoint: URL?
     private let remotePort: Int
     private var reachabilityTask: Task<Void, Never>?
+    private var tunnelRestartEnabled = false
 
     init(sessionKey: String) {
         webChatLogger.debug("init WebChatWindowController sessionKey=\(sessionKey, privacy: .public)")
@@ -46,7 +47,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     @MainActor deinit {
         self.reachabilityTask?.cancel()
-        self.tunnel?.terminate()
+        self.stopTunnel(allowRestart: false)
     }
 
     private func loadPlaceholder() {
@@ -125,14 +126,16 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     private func startOrRestartTunnel() async throws -> URL {
         // Kill existing tunnel if any
-        self.tunnel?.terminate()
+        self.stopTunnel(allowRestart: false)
 
         let tunnel = try await WebChatTunnel.create(remotePort: self.remotePort, preferredLocalPort: 18_788)
         self.tunnel = tunnel
+        self.tunnelRestartEnabled = true
 
         // Auto-restart on unexpected termination while window lives
         tunnel.process.terminationHandler = { [weak self] _ in
             guard let self else { return }
+            guard self.tunnelRestartEnabled else { return }
             webChatLogger.error("webchat tunnel terminated; restarting")
             Task { @MainActor [weak self] in
                 guard let self else { return }
@@ -152,11 +155,22 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
         return URL(string: "http://127.0.0.1:\(port)/")!
     }
 
+    private func stopTunnel(allowRestart: Bool) {
+        self.tunnelRestartEnabled = allowRestart
+        self.tunnel?.terminate()
+        self.tunnel = nil
+    }
+
     private func showError(_ text: String) {
         let html = """
         <html><body style='font-family:-apple-system;padding:24px;color:#c00'>Web chat failed to connect.<br><br>\(text)</body></html>
         """
         self.webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    func shutdown() {
+        self.reachabilityTask?.cancel()
+        self.stopTunnel(allowRestart: false)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -189,6 +203,12 @@ final class WebChatManager {
         self.controller?.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    func close() {
+        self.controller?.shutdown()
+        self.controller?.close()
+        self.controller = nil
+    }
 }
 
 // MARK: - Port forwarding tunnel
@@ -209,6 +229,7 @@ final class WebChatTunnel {
     func terminate() {
         if self.process.isRunning {
             self.process.terminate()
+            self.process.waitUntilExit()
         }
     }
 
