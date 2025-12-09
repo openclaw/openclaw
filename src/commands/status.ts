@@ -218,7 +218,9 @@ export async function statusCommand(
   const defaultCtx = defaults.contextTokens
     ? ` (${formatKTokens(defaults.contextTokens)} ctx)`
     : "";
-  runtime.log(info(`Default model: ${defaults.model ?? "unknown"}${defaultCtx}`));
+  runtime.log(
+    info(`Default model: ${defaults.model ?? "unknown"}${defaultCtx}`),
+  );
   runtime.log(info(`Active sessions: ${summary.sessions.count}`));
   if (summary.sessions.recent.length > 0) {
     runtime.log("Recent sessions:");

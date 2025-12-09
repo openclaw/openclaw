@@ -16,7 +16,9 @@ type ReleaseFn = () => Promise<void>;
  * the next start will detect ECONNREFUSED when connecting and clean the stale path
  * before retrying. This keeps the lock self-healing without manual pidfile cleanup.
  */
-export async function acquireRelayLock(lockPath = DEFAULT_LOCK_PATH): Promise<ReleaseFn> {
+export async function acquireRelayLock(
+  lockPath = DEFAULT_LOCK_PATH,
+): Promise<ReleaseFn> {
   // Fast path: try to listen on the lock path.
   const attemptListen = (): Promise<net.Server> =>
     new Promise((resolve, reject) => {
@@ -33,7 +35,9 @@ export async function acquireRelayLock(lockPath = DEFAULT_LOCK_PATH): Promise<Re
 
         client.once("connect", () => {
           client.destroy();
-          reject(new RelayLockError("another relay instance is already running"));
+          reject(
+            new RelayLockError("another relay instance is already running"),
+          );
         });
 
         client.once("error", (connErr: NodeJS.ErrnoException) => {
@@ -84,7 +88,11 @@ export async function acquireRelayLock(lockPath = DEFAULT_LOCK_PATH): Promise<Re
     process.exit(0);
   };
 
-  cleanupSignals.forEach((sig) => process.once(sig, handleSignal));
+  for (const sig of cleanupSignals) {
+    process.once(sig, () => {
+      void handleSignal();
+    });
+  }
   process.once("exit", () => {
     // Exit handler must be sync-safe; release is async but close+rm are fast.
     void release();

@@ -7,7 +7,10 @@ import { describe, expect, it } from "vitest";
 import { acquireRelayLock, RelayLockError } from "./relay-lock.js";
 
 const newLockPath = () =>
-  path.join(os.tmpdir(), `clawdis-relay-lock-test-${process.pid}-${Math.random().toString(16).slice(2)}.sock`);
+  path.join(
+    os.tmpdir(),
+    `clawdis-relay-lock-test-${process.pid}-${Math.random().toString(16).slice(2)}.sock`,
+  );
 
 describe("relay-lock", () => {
   it("prevents concurrent relay instances and releases cleanly", async () => {
@@ -16,7 +19,9 @@ describe("relay-lock", () => {
     const release1 = await acquireRelayLock(lockPath);
     expect(fs.existsSync(lockPath)).toBe(true);
 
-    await expect(acquireRelayLock(lockPath)).rejects.toBeInstanceOf(RelayLockError);
+    await expect(acquireRelayLock(lockPath)).rejects.toBeInstanceOf(
+      RelayLockError,
+    );
 
     await release1();
     expect(fs.existsSync(lockPath)).toBe(false);

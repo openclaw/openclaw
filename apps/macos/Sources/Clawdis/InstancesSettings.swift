@@ -9,6 +9,9 @@ struct InstancesSettings: View {
             if let err = store.lastError {
                 Text("Error: \(err)")
                     .foregroundStyle(.red)
+            } else if let info = store.statusMessage {
+                Text(info)
+                    .foregroundStyle(.secondary)
             }
             if self.store.instances.isEmpty {
                 Text("No instances reported yet.")

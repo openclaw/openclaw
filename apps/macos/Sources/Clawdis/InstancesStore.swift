@@ -30,6 +30,7 @@ final class InstancesStore: ObservableObject {
 
     @Published var instances: [InstanceInfo] = []
     @Published var lastError: String?
+    @Published var statusMessage: String?
     @Published var isLoading = false
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "instances")
@@ -55,6 +56,7 @@ final class InstancesStore: ObservableObject {
 
     func refresh() async {
         if self.isLoading { return }
+        self.statusMessage = nil
         self.isLoading = true
         defer { self.isLoading = false }
         do {
@@ -65,7 +67,8 @@ final class InstancesStore: ObservableObject {
                 self.logger.error("instances fetch returned empty payload")
                 self.instances = [self.localFallbackInstance(reason: "no presence payload")]
                 self.lastError = nil
-                await self.probeHealthIfNeeded()
+                self.statusMessage = "No presence payload from relay; showing local fallback + health probe."
+                await self.probeHealthIfNeeded(reason: "no payload")
                 return
             }
             let decoded = try JSONDecoder().decode([InstanceInfo].self, from: data)
@@ -85,10 +88,12 @@ final class InstancesStore: ObservableObject {
             if withIDs.isEmpty {
                 self.instances = [self.localFallbackInstance(reason: "no presence entries")]
                 self.lastError = nil
-                await self.probeHealthIfNeeded()
+                self.statusMessage = "Presence list was empty; showing local fallback + health probe."
+                await self.probeHealthIfNeeded(reason: "empty list")
             } else {
                 self.instances = withIDs
                 self.lastError = nil
+                self.statusMessage = nil
             }
         } catch {
             self.logger.error(
@@ -99,7 +104,8 @@ final class InstancesStore: ObservableObject {
                 """)
             self.instances = [self.localFallbackInstance(reason: "presence decode failed")]
             self.lastError = nil
-            await self.probeHealthIfNeeded()
+            self.statusMessage = "Presence data invalid; showing local fallback + health probe."
+            await self.probeHealthIfNeeded(reason: "decode failed")
         }
     }
 
@@ -181,7 +187,7 @@ final class InstancesStore: ObservableObject {
         return "<\(data.count) bytes non-utf8>"
     }
 
-    private func probeHealthIfNeeded() async {
+    private func probeHealthIfNeeded(reason: String? = nil) async {
         do {
             let data = try await ControlChannel.shared.health(timeout: 8)
             guard let snap = decodeHealthSnapshot(from: data) else { return }
@@ -199,8 +205,12 @@ final class InstancesStore: ObservableObject {
                 self.instances.insert(entry, at: 0)
             }
             self.lastError = nil
+            self.statusMessage = "Presence unavailable (\(reason ?? "refresh")); showing health probe + local fallback."
         } catch {
             self.logger.error("instances health probe failed: \(error.localizedDescription, privacy: .public)")
+            if let reason {
+                self.statusMessage = "Presence unavailable (\(reason)), health probe failed: \(error.localizedDescription)"
+            }
         }
     }
 }

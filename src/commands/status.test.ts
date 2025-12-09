@@ -67,9 +67,9 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("Active sessions"))).toBe(true);
     expect(logs.some((l) => l.includes("Default model"))).toBe(true);
     expect(logs.some((l) => l.includes("tokens:"))).toBe(true);
-    expect(logs.some((l) => l.includes("flags:") && l.includes("verbose:on"))).toBe(
-      true,
-    );
+    expect(
+      logs.some((l) => l.includes("flags:") && l.includes("verbose:on")),
+    ).toBe(true);
     expect(mocks.logWebSelfId).toHaveBeenCalled();
   });
 });

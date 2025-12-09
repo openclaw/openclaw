@@ -59,6 +59,17 @@ function ensureSelfPresence() {
   }
 }
 
+function touchSelfPresence() {
+  const host = os.hostname();
+  const key = host.toLowerCase();
+  const existing = entries.get(key);
+  if (existing) {
+    entries.set(key, { ...existing, ts: Date.now() });
+  } else {
+    initSelfPresence();
+  }
+}
+
 initSelfPresence();
 
 function parsePresence(text: string): SystemPresence {
@@ -96,5 +107,6 @@ export function updateSystemPresence(text: string) {
 
 export function listSystemPresence(): SystemPresence[] {
   ensureSelfPresence();
+  touchSelfPresence();
   return [...entries.values()].sort((a, b) => b.ts - a.ts);
 }
