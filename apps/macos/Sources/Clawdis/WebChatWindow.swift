@@ -114,7 +114,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
 
     private func loadPlaceholder() {
         let html = """
-        <html><body style='font-family:-apple-system;padding:24px;color:#888'>Connecting to web chat…</body></html>
+        <html><body style='font-family:-apple-system;margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;color:#888'>Connecting to web chat…</body></html>
         """
         self.webView.loadHTMLString(html, baseURL: nil)
     }
@@ -290,7 +290,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
     private func showError(_ text: String) {
         self.bootWatchTask?.cancel()
         let html = """
-        <html><body style='font-family:-apple-system;padding:24px;color:#c00'>Web chat failed to connect.<br><br>\(
+        <html><body style='font-family:-apple-system;margin:0;padding:0;display:flex;align-items:center;justify-content:center;height:100vh;color:#c00'>Web chat failed to connect.<br><br>\(
             text)</body></html>
         """
         self.webView.loadHTMLString(html, baseURL: nil)
