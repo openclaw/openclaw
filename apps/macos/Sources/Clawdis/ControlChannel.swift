@@ -253,7 +253,13 @@ final class ControlChannel: ObservableObject {
         return try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data)
     }
 
-    private func request(method: String, params: [String: Any]? = nil, timeout: TimeInterval? = nil) async throws -> Data {
+    func sendSystemEvent(_ text: String) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        _ = try await self.request(method: "system-event", params: ["text": trimmed], timeout: 5)
+    }
+
+    func request(method: String, params: [String: Any]? = nil, timeout: TimeInterval? = nil) async throws -> Data {
         try await self.ensureConnected()
         let id = UUID().uuidString
         var frame: [String: Any] = ["type": "request", "id": id, "method": method]

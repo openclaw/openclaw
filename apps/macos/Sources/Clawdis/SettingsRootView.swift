@@ -21,6 +21,10 @@ struct SettingsRootView: View {
                 .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
                 .tag(SettingsTab.config)
 
+            InstancesSettings()
+                .tabItem { Label("Instances", systemImage: "network") }
+                .tag(SettingsTab.instances)
+
             PermissionsSettings(
                 status: self.permissionMonitor.status,
                 refresh: self.refreshPerms,
@@ -104,15 +108,16 @@ struct SettingsRootView: View {
 }
 
 enum SettingsTab: CaseIterable {
-    case general, tools, sessions, config, voiceWake, permissions, debug, about
-    static let windowWidth: CGFloat = 520
-    static let windowHeight: CGFloat = 624
+    case general, tools, sessions, config, instances, voiceWake, permissions, debug, about
+    static let windowWidth: CGFloat = 598 // +15%
+    static let windowHeight: CGFloat = 718 // +15%
     var title: String {
         switch self {
         case .general: "General"
         case .tools: "Tools"
         case .sessions: "Sessions"
         case .config: "Config"
+        case .instances: "Instances"
         case .voiceWake: "Voice Wake"
         case .permissions: "Permissions"
         case .debug: "Debug"

@@ -95,6 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
             try? await ControlChannel.shared.configure(mode: controlMode)
             try? await AgentRPC.shared.start()
             _ = await AgentRPC.shared.setHeartbeatsEnabled(AppStateStore.shared.heartbeatsEnabled)
+            PresenceReporter.shared.start()
         }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         self.startListener()
@@ -109,6 +110,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
 
     func applicationWillTerminate(_ notification: Notification) {
         RelayProcessManager.shared.stop()
+        PresenceReporter.shared.stop()
     }
 
     @MainActor
