@@ -120,7 +120,8 @@ private actor GatewayChannelActor {
         }
         switch frame {
         case let .res(res):
-            if let id = res.id, let waiter = pending.removeValue(forKey: id) {
+            let id = res.id
+            if let waiter = pending.removeValue(forKey: id) {
                 waiter.resume(returning: .res(res))
             }
         case let .event(evt):
@@ -182,12 +183,14 @@ private actor GatewayChannelActor {
             throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
         }
         if res.ok == false {
-            let msg = (res.error?.message) ?? "gateway error"
+            let msg = (res.error?["message"]?.value as? String) ?? "gateway error"
             throw NSError(domain: "Gateway", code: 3, userInfo: [NSLocalizedDescriptionKey: msg])
         }
         if let payload = res.payload?.value {
-            let payloadData = try JSONSerialization.data(withJSONObject: payload)
-            return payloadData
+            if JSONSerialization.isValidJSONObject(payload) {
+                let payloadData = try JSONSerialization.data(withJSONObject: payload)
+                return payloadData
+            }
         }
         return Data()
     }

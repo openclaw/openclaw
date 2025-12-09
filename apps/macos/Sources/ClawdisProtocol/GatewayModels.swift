@@ -12,76 +12,100 @@ public enum ErrorCode: String, Codable {
 
 public struct Hello: Codable {
     public let type: String
-    public let minProtocol: Int
-    public let maxProtocol: Int
+    public let minprotocol: Int
+    public let maxprotocol: Int
     public let client: [String: AnyCodable]
     public let caps: [String]?
     public let auth: [String: AnyCodable]?
     public let locale: String?
-    public let userAgent: String?
+    public let useragent: String?
 
     public init(
         type: String,
-        minProtocol: Int,
-        maxProtocol: Int,
+        minprotocol: Int,
+        maxprotocol: Int,
         client: [String: AnyCodable],
         caps: [String]?,
         auth: [String: AnyCodable]?,
         locale: String?,
-        userAgent: String?
+        useragent: String?
     ) {
         self.type = type
-        self.minProtocol = minProtocol
-        self.maxProtocol = maxProtocol
+        self.minprotocol = minprotocol
+        self.maxprotocol = maxprotocol
         self.client = client
         self.caps = caps
         self.auth = auth
         self.locale = locale
-        self.userAgent = userAgent
+        self.useragent = useragent
+    }
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case minprotocol = "minProtocol"
+        case maxprotocol = "maxProtocol"
+        case client
+        case caps
+        case auth
+        case locale
+        case useragent = "userAgent"
     }
 }
 
 public struct HelloOk: Codable {
     public let type: String
-    public let protocol: Int
+    public let _protocol: Int
     public let server: [String: AnyCodable]
     public let features: [String: AnyCodable]
-    public let snapshot: [String: AnyCodable]
+    public let snapshot: Snapshot
     public let policy: [String: AnyCodable]
 
     public init(
         type: String,
-        protocol: Int,
+        _protocol: Int,
         server: [String: AnyCodable],
         features: [String: AnyCodable],
-        snapshot: [String: AnyCodable],
+        snapshot: Snapshot,
         policy: [String: AnyCodable]
     ) {
         self.type = type
-        self.protocol = protocol
+        self._protocol = _protocol
         self.server = server
         self.features = features
         self.snapshot = snapshot
         self.policy = policy
+    }
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case _protocol = "protocol"
+        case server
+        case features
+        case snapshot
+        case policy
     }
 }
 
 public struct HelloError: Codable {
     public let type: String
     public let reason: String
-    public let expectedProtocol: Int?
-    public let minClient: String?
+    public let expectedprotocol: Int?
+    public let minclient: String?
 
     public init(
         type: String,
         reason: String,
-        expectedProtocol: Int?,
-        minClient: String?
+        expectedprotocol: Int?,
+        minclient: String?
     ) {
         self.type = type
         self.reason = reason
-        self.expectedProtocol = expectedProtocol
-        self.minClient = minClient
+        self.expectedprotocol = expectedprotocol
+        self.minclient = minclient
+    }
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case reason
+        case expectedprotocol = "expectedProtocol"
+        case minclient = "minClient"
     }
 }
 
@@ -101,6 +125,12 @@ public struct RequestFrame: Codable {
         self.id = id
         self.method = method
         self.params = params
+    }
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case method
+        case params
     }
 }
 
@@ -124,6 +154,13 @@ public struct ResponseFrame: Codable {
         self.payload = payload
         self.error = error
     }
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case id
+        case ok
+        case payload
+        case error
+    }
 }
 
 public struct EventFrame: Codable {
@@ -131,20 +168,27 @@ public struct EventFrame: Codable {
     public let event: String
     public let payload: AnyCodable?
     public let seq: Int?
-    public let stateVersion: [String: AnyCodable]?
+    public let stateversion: [String: AnyCodable]?
 
     public init(
         type: String,
         event: String,
         payload: AnyCodable?,
         seq: Int?,
-        stateVersion: [String: AnyCodable]?
+        stateversion: [String: AnyCodable]?
     ) {
         self.type = type
         self.event = event
         self.payload = payload
         self.seq = seq
-        self.stateVersion = stateVersion
+        self.stateversion = stateversion
+    }
+    private enum CodingKeys: String, CodingKey {
+        case type
+        case event
+        case payload
+        case seq
+        case stateversion = "stateVersion"
     }
 }
 
@@ -153,35 +197,47 @@ public struct PresenceEntry: Codable {
     public let ip: String?
     public let version: String?
     public let mode: String?
-    public let lastInputSeconds: Int?
+    public let lastinputseconds: Int?
     public let reason: String?
     public let tags: [String]?
     public let text: String?
     public let ts: Int
-    public let instanceId: String?
+    public let instanceid: String?
 
     public init(
         host: String?,
         ip: String?,
         version: String?,
         mode: String?,
-        lastInputSeconds: Int?,
+        lastinputseconds: Int?,
         reason: String?,
         tags: [String]?,
         text: String?,
         ts: Int,
-        instanceId: String?
+        instanceid: String?
     ) {
         self.host = host
         self.ip = ip
         self.version = version
         self.mode = mode
-        self.lastInputSeconds = lastInputSeconds
+        self.lastinputseconds = lastinputseconds
         self.reason = reason
         self.tags = tags
         self.text = text
         self.ts = ts
-        self.instanceId = instanceId
+        self.instanceid = instanceid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case host
+        case ip
+        case version
+        case mode
+        case lastinputseconds = "lastInputSeconds"
+        case reason
+        case tags
+        case text
+        case ts
+        case instanceid = "instanceId"
     }
 }
 
@@ -196,24 +252,34 @@ public struct StateVersion: Codable {
         self.presence = presence
         self.health = health
     }
+    private enum CodingKeys: String, CodingKey {
+        case presence
+        case health
+    }
 }
 
 public struct Snapshot: Codable {
-    public let presence: [[String: AnyCodable]]
+    public let presence: [PresenceEntry]
     public let health: AnyCodable
-    public let stateVersion: [String: AnyCodable]
-    public let uptimeMs: Int
+    public let stateversion: StateVersion
+    public let uptimems: Int
 
     public init(
-        presence: [[String: AnyCodable]],
+        presence: [PresenceEntry],
         health: AnyCodable,
-        stateVersion: [String: AnyCodable],
-        uptimeMs: Int
+        stateversion: StateVersion,
+        uptimems: Int
     ) {
         self.presence = presence
         self.health = health
-        self.stateVersion = stateVersion
-        self.uptimeMs = uptimeMs
+        self.stateversion = stateversion
+        self.uptimems = uptimems
+    }
+    private enum CodingKeys: String, CodingKey {
+        case presence
+        case health
+        case stateversion = "stateVersion"
+        case uptimems = "uptimeMs"
     }
 }
 
@@ -222,92 +288,122 @@ public struct ErrorShape: Codable {
     public let message: String
     public let details: AnyCodable?
     public let retryable: Bool?
-    public let retryAfterMs: Int?
+    public let retryafterms: Int?
 
     public init(
         code: String,
         message: String,
         details: AnyCodable?,
         retryable: Bool?,
-        retryAfterMs: Int?
+        retryafterms: Int?
     ) {
         self.code = code
         self.message = message
         self.details = details
         self.retryable = retryable
-        self.retryAfterMs = retryAfterMs
+        self.retryafterms = retryafterms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case message
+        case details
+        case retryable
+        case retryafterms = "retryAfterMs"
     }
 }
 
 public struct AgentEvent: Codable {
-    public let runId: String
+    public let runid: String
     public let seq: Int
     public let stream: String
     public let ts: Int
     public let data: [String: AnyCodable]
 
     public init(
-        runId: String,
+        runid: String,
         seq: Int,
         stream: String,
         ts: Int,
         data: [String: AnyCodable]
     ) {
-        self.runId = runId
+        self.runid = runid
         self.seq = seq
         self.stream = stream
         self.ts = ts
         self.data = data
+    }
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case seq
+        case stream
+        case ts
+        case data
     }
 }
 
 public struct SendParams: Codable {
     public let to: String
     public let message: String
-    public let mediaUrl: String?
+    public let mediaurl: String?
     public let provider: String?
-    public let idempotencyKey: String
+    public let idempotencykey: String
 
     public init(
         to: String,
         message: String,
-        mediaUrl: String?,
+        mediaurl: String?,
         provider: String?,
-        idempotencyKey: String
+        idempotencykey: String
     ) {
         self.to = to
         self.message = message
-        self.mediaUrl = mediaUrl
+        self.mediaurl = mediaurl
         self.provider = provider
-        self.idempotencyKey = idempotencyKey
+        self.idempotencykey = idempotencykey
+    }
+    private enum CodingKeys: String, CodingKey {
+        case to
+        case message
+        case mediaurl = "mediaUrl"
+        case provider
+        case idempotencykey = "idempotencyKey"
     }
 }
 
 public struct AgentParams: Codable {
     public let message: String
     public let to: String?
-    public let sessionId: String?
+    public let sessionid: String?
     public let thinking: String?
     public let deliver: Bool?
     public let timeout: Int?
-    public let idempotencyKey: String
+    public let idempotencykey: String
 
     public init(
         message: String,
         to: String?,
-        sessionId: String?,
+        sessionid: String?,
         thinking: String?,
         deliver: Bool?,
         timeout: Int?,
-        idempotencyKey: String
+        idempotencykey: String
     ) {
         self.message = message
         self.to = to
-        self.sessionId = sessionId
+        self.sessionid = sessionid
         self.thinking = thinking
         self.deliver = deliver
         self.timeout = timeout
-        self.idempotencyKey = idempotencyKey
+        self.idempotencykey = idempotencykey
+    }
+    private enum CodingKeys: String, CodingKey {
+        case message
+        case to
+        case sessionid = "sessionId"
+        case thinking
+        case deliver
+        case timeout
+        case idempotencykey = "idempotencyKey"
     }
 }
 
@@ -319,25 +415,32 @@ public struct TickEvent: Codable {
     ) {
         self.ts = ts
     }
+    private enum CodingKeys: String, CodingKey {
+        case ts
+    }
 }
 
 public struct ShutdownEvent: Codable {
     public let reason: String
-    public let restartExpectedMs: Int?
+    public let restartexpectedms: Int?
 
     public init(
         reason: String,
-        restartExpectedMs: Int?
+        restartexpectedms: Int?
     ) {
         self.reason = reason
-        self.restartExpectedMs = restartExpectedMs
+        self.restartexpectedms = restartexpectedms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case reason
+        case restartexpectedms = "restartExpectedMs"
     }
 }
 
 public enum GatewayFrame: Codable {
     case hello(Hello)
-    case hello-ok(HelloOk)
-    case hello-error(HelloError)
+    case helloOk(HelloOk)
+    case helloError(HelloError)
     case req(RequestFrame)
     case res(ResponseFrame)
     case event(EventFrame)
@@ -351,17 +454,17 @@ public enum GatewayFrame: Codable {
         }
         switch type {
         case "hello":
-            self = .hello(try decodePayload(Hello.self, from: raw))
+            self = .hello(try Self.decodePayload(Hello.self, from: raw))
         case "hello-ok":
-            self = .helloOk(try decodePayload(HelloOk.self, from: raw))
+            self = .helloOk(try Self.decodePayload(HelloOk.self, from: raw))
         case "hello-error":
-            self = .helloError(try decodePayload(HelloError.self, from: raw))
+            self = .helloError(try Self.decodePayload(HelloError.self, from: raw))
         case "req":
-            self = .req(try decodePayload(RequestFrame.self, from: raw))
+            self = .req(try Self.decodePayload(RequestFrame.self, from: raw))
         case "res":
-            self = .res(try decodePayload(ResponseFrame.self, from: raw))
+            self = .res(try Self.decodePayload(ResponseFrame.self, from: raw))
         case "event":
-            self = .event(try decodePayload(EventFrame.self, from: raw))
+            self = .event(try Self.decodePayload(EventFrame.self, from: raw))
         default:
             self = .unknown(type: type, raw: raw)
         }
@@ -382,7 +485,7 @@ public enum GatewayFrame: Codable {
     }
 
 
-    private func decodePayload<T: Decodable>(_ type: T.Type, from raw: [String: AnyCodable]) throws -> T {
+    private static func decodePayload<T: Decodable>(_ type: T.Type, from raw: [String: AnyCodable]) throws -> T {
         let data = try JSONSerialization.data(withJSONObject: raw)
         let decoder = JSONDecoder()
         return try decoder.decode(T.self, from: data)

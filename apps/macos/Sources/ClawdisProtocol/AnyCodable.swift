@@ -2,12 +2,12 @@ import Foundation
 
 /// Lightweight `Codable` wrapper that round-trips heterogeneous JSON payloads.
 /// Marked `@unchecked Sendable` because it can hold reference types.
-struct AnyCodable: Codable, @unchecked Sendable {
-    let value: Any
+public struct AnyCodable: Codable, @unchecked Sendable {
+    public let value: Any
 
-    init(_ value: Any) { self.value = value }
+    public init(_ value: Any) { self.value = value }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if let intVal = try? container.decode(Int.self) { self.value = intVal; return }
         if let doubleVal = try? container.decode(Double.self) { self.value = doubleVal; return }
@@ -21,7 +21,7 @@ struct AnyCodable: Codable, @unchecked Sendable {
             debugDescription: "Unsupported type")
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self.value {
         case let intVal as Int: try container.encode(intVal)

@@ -97,8 +97,8 @@ final class InstancesStore: ObservableObject {
                   let frame = note.object as? GatewayFrame else { return }
             switch frame {
             case let .helloOk(hello):
-                let presence = hello.snapshot.presence
-                if let data = try? JSONEncoder().encode(presence) {
+                if JSONSerialization.isValidJSONObject(hello.snapshot.presence),
+                   let data = try? JSONEncoder().encode(hello.snapshot.presence) {
                     Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(data) }
                 }
             default:

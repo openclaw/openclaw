@@ -21,6 +21,13 @@ let package = Package(
     ],
     targets: [
         .target(
+            name: "ClawdisProtocol",
+            dependencies: [],
+            path: "Sources/ClawdisProtocol",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
+        .target(
             name: "ClawdisIPC",
             dependencies: [],
             swiftSettings: [
@@ -30,6 +37,7 @@ let package = Package(
             name: "Clawdis",
             dependencies: [
                 "ClawdisIPC",
+                "ClawdisProtocol",
                 .product(name: "AsyncXPCConnection", package: "AsyncXPCConnection"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
@@ -46,6 +54,7 @@ let package = Package(
             name: "ClawdisCLI",
             dependencies: [
                 "ClawdisIPC",
+                "ClawdisProtocol",
                 .product(name: "AsyncXPCConnection", package: "AsyncXPCConnection"),
             ],
             swiftSettings: [
