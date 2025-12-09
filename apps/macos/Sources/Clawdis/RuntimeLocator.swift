@@ -1,7 +1,6 @@
 import Foundation
 
 enum RuntimeKind: String {
-    case bun
     case node
 }
 
@@ -40,7 +39,7 @@ struct RuntimeResolution {
 }
 
 enum RuntimeResolutionError: Error {
-    case notFound(searchPaths: [String], preferred: String?)
+    case notFound(searchPaths: [String])
     case unsupported(
         kind: RuntimeKind,
         found: RuntimeVersion,
@@ -52,79 +51,62 @@ enum RuntimeResolutionError: Error {
 
 enum RuntimeLocator {
     private static let minNode = RuntimeVersion(major: 22, minor: 0, patch: 0)
-    private static let minBun = RuntimeVersion(major: 1, minor: 3, patch: 0)
 
     static func resolve(
-        preferred: String? = ProcessInfo.processInfo.environment["CLAWDIS_RUNTIME"],
         searchPaths: [String] = CommandResolver.preferredPaths()) -> Result<RuntimeResolution, RuntimeResolutionError>
     {
-        let order = self.runtimeOrder(preferred: preferred)
         let pathEnv = searchPaths.joined(separator: ":")
+        let runtime: RuntimeKind = .node
 
-        for runtime in order {
-            guard let binary = findExecutable(named: runtime.binaryName, searchPaths: searchPaths) else { continue }
-            guard let rawVersion = readVersion(of: binary, pathEnv: pathEnv) else {
-                return .failure(.versionParse(
-                    kind: runtime,
-                    raw: "(unreadable)",
-                    path: binary,
-                    searchPaths: searchPaths))
-            }
-            guard let parsed = RuntimeVersion.from(string: rawVersion) else {
-                return .failure(.versionParse(kind: runtime, raw: rawVersion, path: binary, searchPaths: searchPaths))
-            }
-            let minimum = runtime == .bun ? self.minBun : self.minNode
-            guard parsed >= minimum else {
-                return .failure(.unsupported(
-                    kind: runtime,
-                    found: parsed,
-                    required: minimum,
-                    path: binary,
-                    searchPaths: searchPaths))
-            }
-            return .success(RuntimeResolution(kind: runtime, path: binary, version: parsed))
+        guard let binary = findExecutable(named: runtime.binaryName, searchPaths: searchPaths) else {
+            return .failure(.notFound(searchPaths: searchPaths))
+        }
+        guard let rawVersion = readVersion(of: binary, pathEnv: pathEnv) else {
+            return .failure(.versionParse(
+                kind: runtime,
+                raw: "(unreadable)",
+                path: binary,
+                searchPaths: searchPaths))
+        }
+        guard let parsed = RuntimeVersion.from(string: rawVersion) else {
+            return .failure(.versionParse(kind: runtime, raw: rawVersion, path: binary, searchPaths: searchPaths))
+        }
+        guard parsed >= self.minNode else {
+            return .failure(.unsupported(
+                kind: runtime,
+                found: parsed,
+                required: self.minNode,
+                path: binary,
+                searchPaths: searchPaths))
         }
 
-        return .failure(.notFound(searchPaths: searchPaths, preferred: preferred?.lowercased()))
+        return .success(RuntimeResolution(kind: runtime, path: binary, version: parsed))
     }
 
     static func describeFailure(_ error: RuntimeResolutionError) -> String {
         switch error {
-        case let .notFound(searchPaths, preferred):
-            let preference = preferred?.isEmpty == false ? "CLAWDIS_RUNTIME=\(preferred!)" : "bun or node"
+        case let .notFound(searchPaths):
             return [
-                "clawdis needs Node >=22.0.0 or Bun >=1.3.0 but found no runtime.",
-                "Tried preference: \(preference)",
+                "clawdis needs Node >=22.0.0 but found no runtime.",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
                 "Install Node: https://nodejs.org/en/download",
-                "Install Bun:  https://bun.sh/docs/installation",
             ].joined(separator: "\n")
         case let .unsupported(kind, found, required, path, searchPaths):
-            let fallbackRuntime = kind == .bun ? "node" : "bun"
             return [
                 "Found \(kind.rawValue) \(found) at \(path) but need >= \(required).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
-                "Upgrade \(kind.rawValue) or set CLAWDIS_RUNTIME=\(fallbackRuntime) to try the other runtime.",
+                "Upgrade Node and rerun clawdis.",
             ].joined(separator: "\n")
         case let .versionParse(kind, raw, path, searchPaths):
             return [
                 "Could not parse \(kind.rawValue) version output \"\(raw)\" from \(path).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
-                "Try reinstalling or pinning a supported version (Node >=22.0.0, Bun >=1.3.0).",
+                "Try reinstalling or pinning a supported version (Node >=22.0.0).",
             ].joined(separator: "\n")
         }
     }
 
     // MARK: - Internals
-
-    private static func runtimeOrder(preferred: String?) -> [RuntimeKind] {
-        let normalized = preferred?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        switch normalized {
-        case "bun": return [.bun]
-        case "node": return [.node]
-        default: return [.bun, .node]
-        }
-    }
 
     private static func findExecutable(named name: String, searchPaths: [String]) -> String? {
         let fm = FileManager.default
@@ -159,5 +141,5 @@ enum RuntimeLocator {
 }
 
 extension RuntimeKind {
-    fileprivate var binaryName: String { self == .bun ? "bun" : "node" }
+    fileprivate var binaryName: String { "node" }
 }

@@ -29,9 +29,9 @@ Run the Node-based Clawdis/clawdis relay as a direct child of the LSUIElement ap
 - Add a small `RelayProcessManager` (Swift) that owns:
   - `execution: Execution?` from `Swift Subprocess` to track the child.
   - `start(config)` called when “Clawdis Active” flips ON:
-    - binary: host Node or Bun running the bundled relay under `Clawdis.app/Contents/Resources/Relay/`
+    - binary: host Node running the bundled relay under `Clawdis.app/Contents/Resources/Relay/`
     - args: current clawdis entrypoint and flags
-    - cwd/env: point to `~/.clawdis` as today; inject the expanded PATH so Homebrew Node/Bun resolve under launchd
+    - cwd/env: point to `~/.clawdis` as today; inject the expanded PATH so Homebrew Node resolves under launchd
     - output: stream stdout/stderr to `/tmp/clawdis-relay.log` (cap buffer via Subprocess OutputLimits)
     - restart: optional linear/backoff restart if exit was non-zero and Active is still true
   - `stop()` called when Active flips OFF or app terminates: cancel the execution and `waitUntilExit`.
@@ -41,7 +41,7 @@ Run the Node-based Clawdis/clawdis relay as a direct child of the LSUIElement ap
 - Keep the existing `LaunchdManager` around so we can switch back if needed; the toggle can choose between launchd or child mode with a flag if we want both.
 
 ## Packaging and signing
-- Bundle the relay payload (dist + production node_modules) under `Contents/Resources/Relay/`; rely on host Node ≥22 or Bun ≥1.3 instead of embedding a runtime.
+- Bundle the relay payload (dist + production node_modules) under `Contents/Resources/Relay/`; rely on host Node ≥22 instead of embedding a runtime.
 - Codesign native addons and dylibs inside the bundle; no nested runtime binary to sign now.
 - Host runtime should not call TCC APIs directly; keep privileged work inside the app/XPC.
 
@@ -57,7 +57,7 @@ Run the Node-based Clawdis/clawdis relay as a direct child of the LSUIElement ap
 
 ## Open questions / follow-ups
 - Do we need dual-mode (launchd for prod, child for dev)? If yes, gate via a setting or build flag.
-- Embedding a runtime is off the table for now; we rely on host Node/Bun for size/simplicity. Revisit only if host PATH drift becomes painful.
+- Embedding a runtime is off the table for now; we rely on host Node for size/simplicity. Revisit only if host PATH drift becomes painful.
 - Do we want a tiny signed helper for rare TCC actions that cannot be brokered via XPC?
 
 ## Decision snapshot (current recommendation)

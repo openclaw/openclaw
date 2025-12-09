@@ -48,7 +48,7 @@ Only the Pi/Tau CLI is supported now; legacy Claude/Codex/Gemini paths have been
 ## Quick Start
 Mac signing tip: set `SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` in your shell profile so `scripts/restart-mac.sh` signs with your cert (defaults to ad-hoc). Debug bundle ID remains `com.steipete.clawdis.debug`.
 
-Runtime requirement: **Node ≥22.0.0 or Bun ≥1.3.0** (not bundled). The macOS app and CLI both use the host runtime; install via Homebrew or official installers before running `clawdis`.
+Runtime requirement: **Node ≥22.0.0** (not bundled). The macOS app and CLI both use the host runtime; install via Homebrew or official installers before running `clawdis`.
 
 ```bash
 # Install

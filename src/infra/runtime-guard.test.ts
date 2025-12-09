@@ -38,15 +38,22 @@ describe("runtime-guard", () => {
   });
 
   it("validates runtime thresholds", () => {
-    const bunOk: RuntimeDetails = {
-      kind: "bun",
-      version: "1.3.0",
-      execPath: "/usr/bin/bun",
+    const nodeOk: RuntimeDetails = {
+      kind: "node",
+      version: "22.0.0",
+      execPath: "/usr/bin/node",
       pathEnv: "/usr/bin",
     };
-    const bunOld: RuntimeDetails = { ...bunOk, version: "1.2.9" };
-    expect(runtimeSatisfies(bunOk)).toBe(true);
-    expect(runtimeSatisfies(bunOld)).toBe(false);
+    const nodeOld: RuntimeDetails = { ...nodeOk, version: "21.9.0" };
+    const unknown: RuntimeDetails = {
+      kind: "unknown",
+      version: null,
+      execPath: null,
+      pathEnv: "/usr/bin",
+    };
+    expect(runtimeSatisfies(nodeOk)).toBe(true);
+    expect(runtimeSatisfies(nodeOld)).toBe(false);
+    expect(runtimeSatisfies(unknown)).toBe(false);
   });
 
   it("throws via exit when runtime is too old", () => {

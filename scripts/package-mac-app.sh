@@ -114,7 +114,7 @@ rm -rf "$APP_ROOT/Contents/Resources/WebChat/vendor/pdfjs-dist/legacy"
 
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
-echo "🧰 Staging relay payload (dist + node_modules; expects system Node ≥22 or Bun ≥1.3)"
+echo "🧰 Staging relay payload (dist + node_modules; expects system Node ≥22)"
 rsync -a --delete --exclude "Clawdis.app" "$ROOT_DIR/dist/" "$RELAY_DIR/dist/"
 cp "$ROOT_DIR/package.json" "$RELAY_DIR/"
 cp "$ROOT_DIR/pnpm-lock.yaml" "$RELAY_DIR/"

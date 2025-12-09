@@ -41,16 +41,6 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
         try self.makeExec(at: scriptPath)
 
-        let previous = getenv("CLAWDIS_RUNTIME").flatMap { String(validatingCString: $0) }
-        setenv("CLAWDIS_RUNTIME", "node", 1)
-        defer {
-            if let previous {
-                setenv("CLAWDIS_RUNTIME", previous, 1)
-            } else {
-                unsetenv("CLAWDIS_RUNTIME")
-            }
-        }
-
         let cmd = CommandResolver.clawdisCommand(subcommand: "rpc")
 
         #expect(cmd.count >= 3)

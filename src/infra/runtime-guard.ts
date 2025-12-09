@@ -2,7 +2,7 @@ import process from "node:process";
 
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 
-export type RuntimeKind = "node" | "bun" | "unknown";
+export type RuntimeKind = "node" | "unknown";
 
 type Semver = {
   major: number;
@@ -11,7 +11,6 @@ type Semver = {
 };
 
 const MIN_NODE: Semver = { major: 22, minor: 0, patch: 0 };
-const MIN_BUN: Semver = { major: 1, minor: 3, patch: 0 };
 
 export type RuntimeDetails = {
   kind: RuntimeKind;
@@ -42,17 +41,8 @@ export function isAtLeast(version: Semver | null, minimum: Semver): boolean {
 }
 
 export function detectRuntime(): RuntimeDetails {
-  const isBun = Boolean(process.versions?.bun);
-  const kind: RuntimeKind = isBun
-    ? "bun"
-    : process.versions?.node
-      ? "node"
-      : "unknown";
-  const bunVersion =
-    (globalThis as { Bun?: { version?: string } })?.Bun?.version ?? null;
-  const version = isBun
-    ? (process.versions?.bun ?? bunVersion)
-    : (process.versions?.node ?? null);
+  const kind: RuntimeKind = process.versions?.node ? "node" : "unknown";
+  const version = process.versions?.node ?? null;
 
   return {
     kind,
@@ -64,7 +54,6 @@ export function detectRuntime(): RuntimeDetails {
 
 export function runtimeSatisfies(details: RuntimeDetails): boolean {
   const parsed = parseSemver(details.version);
-  if (details.kind === "bun") return isAtLeast(parsed, MIN_BUN);
   if (details.kind === "node") return isAtLeast(parsed, MIN_NODE);
   return false;
 }
@@ -84,14 +73,11 @@ export function assertSupportedRuntime(
 
   runtime.error(
     [
-      "clawdis requires Node >=22.0.0 or Bun >=1.3.0.",
+      "clawdis requires Node >=22.0.0.",
       `Detected: ${runtimeLabel} (exec: ${execLabel}).`,
       `PATH searched: ${details.pathEnv}`,
       "Install Node: https://nodejs.org/en/download",
-      "Install Bun:  https://bun.sh/docs/installation",
-      details.kind === "bun"
-        ? "Upgrade Bun or re-run with Node by setting CLAWDIS_RUNTIME=node."
-        : "Upgrade Node or re-run with Bun by setting CLAWDIS_RUNTIME=bun.",
+      "Upgrade Node and re-run clawdis.",
     ].join("\n"),
   );
   runtime.exit(1);
