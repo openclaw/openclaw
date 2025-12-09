@@ -31,7 +31,7 @@ struct CritterStatusLabel: View {
             Group {
                 if self.isPaused {
                     Image(nsImage: CritterIconRenderer.makeIcon(blink: 0))
-                        .frame(width: 18, height: 16)
+                        .frame(width: 18, height: 18)
                 } else {
                     Image(nsImage: CritterIconRenderer.makeIcon(
                         blink: self.blinkAmount,
@@ -39,7 +39,7 @@ struct CritterStatusLabel: View {
                         earWiggle: self.earWiggle,
                         earScale: self.earBoostActive ? 1.9 : 1.0,
                         earHoles: self.earBoostActive))
-                        .frame(width: 18, height: 16)
+                        .frame(width: 18, height: 18)
                         .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
                         .offset(x: self.wiggleOffset)
                         .onReceive(self.ticker) { now in
@@ -211,7 +211,7 @@ struct CritterStatusLabel: View {
 }
 
 enum CritterIconRenderer {
-    private static let size = NSSize(width: 18, height: 16)
+    private static let size = NSSize(width: 18, height: 18)
 
     static func makeIcon(
         blink: CGFloat,
@@ -220,124 +220,157 @@ enum CritterIconRenderer {
         earScale: CGFloat = 1,
         earHoles: Bool = false) -> NSImage
     {
+        // Force a 36×36px backing store (2× for the 18pt logical canvas) so the menu bar icon stays crisp on Retina.
+        let pixelsWide = 36
+        let pixelsHigh = 36
+        guard let rep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelsWide,
+            pixelsHigh: pixelsHigh,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bitmapFormat: [],
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else {
+            return NSImage(size: size)
+        }
+        rep.size = size
+
+        NSGraphicsContext.saveGraphicsState()
+        if let context = NSGraphicsContext(bitmapImageRep: rep) {
+            NSGraphicsContext.current = context
+            defer { NSGraphicsContext.restoreGraphicsState() }
+
+            let w = size.width
+            let h = size.height
+
+            let bodyW = w * 0.78
+            let bodyH = h * 0.58
+            let bodyX = (w - bodyW) / 2
+            let bodyY = h * 0.36
+            let bodyCorner = w * 0.09
+
+            let earW = w * 0.22
+            let earH = bodyH * 0.54 * earScale * (1 - 0.08 * abs(earWiggle))
+            let earCorner = earW * 0.24
+            let leftEarRect = CGRect(
+                x: bodyX - earW * 0.55 + earWiggle,
+                y: bodyY + bodyH * 0.08 + earWiggle * 0.4,
+                width: earW,
+                height: earH)
+            let rightEarRect = CGRect(
+                x: bodyX + bodyW - earW * 0.45 - earWiggle,
+                y: bodyY + bodyH * 0.08 - earWiggle * 0.4,
+                width: earW,
+                height: earH)
+
+            let legW = w * 0.11
+            let legH = h * 0.26
+            let legSpacing = w * 0.085
+            let legsWidth = 4 * legW + 3 * legSpacing
+            let legStartX = (w - legsWidth) / 2
+            let legLift = legH * 0.35 * legWiggle
+            let legYBase = bodyY - legH + h * 0.05
+
+            let eyeOpen = max(0.05, 1 - blink)
+            let eyeW = bodyW * 0.2
+            let eyeH = bodyH * 0.26 * eyeOpen
+            let eyeY = bodyY + bodyH * 0.56
+            let eyeOffset = bodyW * 0.24
+
+            context.cgContext.setFillColor(NSColor.labelColor.cgColor)
+
+            context.cgContext.addPath(CGPath(
+                roundedRect: CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH),
+                cornerWidth: bodyCorner,
+                cornerHeight: bodyCorner,
+                transform: nil))
+            context.cgContext.addPath(CGPath(
+                roundedRect: leftEarRect,
+                cornerWidth: earCorner,
+                cornerHeight: earCorner,
+                transform: nil))
+            context.cgContext.addPath(CGPath(
+                roundedRect: rightEarRect,
+                cornerWidth: earCorner,
+                cornerHeight: earCorner,
+                transform: nil))
+            for i in 0..<4 {
+                let x = legStartX + CGFloat(i) * (legW + legSpacing)
+                let lift = (i % 2 == 0 ? legLift : -legLift)
+                let rect = CGRect(
+                    x: x,
+                    y: legYBase + lift,
+                    width: legW,
+                    height: legH * (1 - 0.12 * legWiggle))
+                context.cgContext.addPath(CGPath(
+                    roundedRect: rect,
+                    cornerWidth: legW * 0.34,
+                    cornerHeight: legW * 0.34,
+                    transform: nil))
+            }
+            context.cgContext.fillPath()
+
+            context.cgContext.saveGState()
+            context.cgContext.setBlendMode(CGBlendMode.clear)
+
+            let leftCenter = CGPoint(x: w / 2 - eyeOffset, y: eyeY)
+            let rightCenter = CGPoint(x: w / 2 + eyeOffset, y: eyeY)
+
+            if earHoles || earScale > 1.05 {
+                let holeW = earW * 0.6
+                let holeH = earH * 0.46
+                let holeCorner = holeW * 0.34
+                let leftHoleRect = CGRect(
+                    x: leftEarRect.midX - holeW / 2,
+                    y: leftEarRect.midY - holeH / 2 + earH * 0.04,
+                    width: holeW,
+                    height: holeH)
+                let rightHoleRect = CGRect(
+                    x: rightEarRect.midX - holeW / 2,
+                    y: rightEarRect.midY - holeH / 2 + earH * 0.04,
+                    width: holeW,
+                    height: holeH)
+
+                context.cgContext.addPath(CGPath(
+                    roundedRect: leftHoleRect,
+                    cornerWidth: holeCorner,
+                    cornerHeight: holeCorner,
+                    transform: nil))
+                context.cgContext.addPath(CGPath(
+                    roundedRect: rightHoleRect,
+                    cornerWidth: holeCorner,
+                    cornerHeight: holeCorner,
+                    transform: nil))
+            }
+
+            let left = CGMutablePath()
+            left.move(to: CGPoint(x: leftCenter.x - eyeW / 2, y: leftCenter.y - eyeH))
+            left.addLine(to: CGPoint(x: leftCenter.x + eyeW / 2, y: leftCenter.y))
+            left.addLine(to: CGPoint(x: leftCenter.x - eyeW / 2, y: leftCenter.y + eyeH))
+            left.closeSubpath()
+
+            let right = CGMutablePath()
+            right.move(to: CGPoint(x: rightCenter.x + eyeW / 2, y: rightCenter.y - eyeH))
+            right.addLine(to: CGPoint(x: rightCenter.x - eyeW / 2, y: rightCenter.y))
+            right.addLine(to: CGPoint(x: rightCenter.x + eyeW / 2, y: rightCenter.y + eyeH))
+            right.closeSubpath()
+
+            context.cgContext.addPath(left)
+            context.cgContext.addPath(right)
+            context.cgContext.fillPath()
+            context.cgContext.restoreGState()
+        } else {
+            NSGraphicsContext.restoreGraphicsState()
+            return NSImage(size: size)
+        }
+
         let image = NSImage(size: size)
-        image.lockFocus()
-        defer { image.unlockFocus() }
-
-        guard let ctx = NSGraphicsContext.current?.cgContext else { return image }
-
-        let w = self.size.width
-        let h = self.size.height
-
-        let bodyW = w * 0.78
-        let bodyH = h * 0.58
-        let bodyX = (w - bodyW) / 2
-        let bodyY = h * 0.36
-        let bodyCorner = w * 0.09
-
-        let earW = w * 0.22
-        let earH = bodyH * 0.66 * earScale * (1 - 0.08 * abs(earWiggle))
-        let earCorner = earW * 0.24
-        let leftEarRect = CGRect(
-            x: bodyX - earW * 0.55 + earWiggle,
-            y: bodyY + bodyH * 0.08 + earWiggle * 0.4,
-            width: earW,
-            height: earH)
-        let rightEarRect = CGRect(
-            x: bodyX + bodyW - earW * 0.45 - earWiggle,
-            y: bodyY + bodyH * 0.08 - earWiggle * 0.4,
-            width: earW,
-            height: earH)
-
-        let legW = w * 0.11
-        let legH = h * 0.26
-        let legSpacing = w * 0.085
-        let legsWidth = 4 * legW + 3 * legSpacing
-        let legStartX = (w - legsWidth) / 2
-        let legLift = legH * 0.35 * legWiggle
-        let legYBase = bodyY - legH + h * 0.05
-
-        let eyeOpen = max(0.05, 1 - blink)
-        let eyeW = bodyW * 0.2
-        let eyeH = bodyH * 0.26 * eyeOpen
-        let eyeY = bodyY + bodyH * 0.56
-        let eyeOffset = bodyW * 0.24
-
-        ctx.setFillColor(NSColor.labelColor.cgColor)
-
-        ctx.addPath(CGPath(
-            roundedRect: CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH),
-            cornerWidth: bodyCorner,
-            cornerHeight: bodyCorner,
-            transform: nil))
-        ctx.addPath(CGPath(
-            roundedRect: leftEarRect,
-            cornerWidth: earCorner,
-            cornerHeight: earCorner,
-            transform: nil))
-        ctx.addPath(CGPath(
-            roundedRect: rightEarRect,
-            cornerWidth: earCorner,
-            cornerHeight: earCorner,
-            transform: nil))
-        for i in 0..<4 {
-            let x = legStartX + CGFloat(i) * (legW + legSpacing)
-            let lift = (i % 2 == 0 ? legLift : -legLift)
-            let rect = CGRect(x: x, y: legYBase + lift, width: legW, height: legH * (1 - 0.12 * legWiggle))
-            ctx.addPath(CGPath(roundedRect: rect, cornerWidth: legW * 0.34, cornerHeight: legW * 0.34, transform: nil))
-        }
-        ctx.fillPath()
-
-        ctx.saveGState()
-        ctx.setBlendMode(.clear)
-
-        let leftCenter = CGPoint(x: w / 2 - eyeOffset, y: eyeY)
-        let rightCenter = CGPoint(x: w / 2 + eyeOffset, y: eyeY)
-
-        if earHoles || earScale > 1.05 {
-            let holeW = earW * 0.6
-            let holeH = earH * 0.46
-            let holeCorner = holeW * 0.34
-            let leftHoleRect = CGRect(
-                x: leftEarRect.midX - holeW / 2,
-                y: leftEarRect.midY - holeH / 2 + earH * 0.04,
-                width: holeW,
-                height: holeH)
-            let rightHoleRect = CGRect(
-                x: rightEarRect.midX - holeW / 2,
-                y: rightEarRect.midY - holeH / 2 + earH * 0.04,
-                width: holeW,
-                height: holeH)
-
-            ctx.addPath(CGPath(
-                roundedRect: leftHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
-            ctx.addPath(CGPath(
-                roundedRect: rightHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
-        }
-
-        let left = CGMutablePath()
-        left.move(to: CGPoint(x: leftCenter.x - eyeW / 2, y: leftCenter.y - eyeH))
-        left.addLine(to: CGPoint(x: leftCenter.x + eyeW / 2, y: leftCenter.y))
-        left.addLine(to: CGPoint(x: leftCenter.x - eyeW / 2, y: leftCenter.y + eyeH))
-        left.closeSubpath()
-
-        let right = CGMutablePath()
-        right.move(to: CGPoint(x: rightCenter.x + eyeW / 2, y: rightCenter.y - eyeH))
-        right.addLine(to: CGPoint(x: rightCenter.x - eyeW / 2, y: rightCenter.y))
-        right.addLine(to: CGPoint(x: rightCenter.x + eyeW / 2, y: rightCenter.y + eyeH))
-        right.closeSubpath()
-
-        ctx.addPath(left)
-        ctx.addPath(right)
-        ctx.fillPath()
-        ctx.restoreGState()
-
+        image.addRepresentation(rep)
         image.isTemplate = true
         return image
     }
