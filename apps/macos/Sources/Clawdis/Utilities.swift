@@ -207,7 +207,7 @@ enum CommandResolver {
         return FileManager.default.fileExists(atPath: relay.path) ? relay : nil
     }
 
-    private static func relayEntrypoint(in root: URL) -> String? {
+    static func relayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
         if FileManager.default.isReadableFile(atPath: distEntry) { return distEntry }
         let binEntry = root.appendingPathComponent("bin/clawdis.js").path
@@ -215,11 +215,11 @@ enum CommandResolver {
         return nil
     }
 
-    private static func runtimeResolution() -> Result<RuntimeResolution, RuntimeResolutionError> {
+    static func runtimeResolution() -> Result<RuntimeResolution, RuntimeResolutionError> {
         RuntimeLocator.resolve(searchPaths: self.preferredPaths())
     }
 
-    private static func makeRuntimeCommand(
+    static func makeRuntimeCommand(
         runtime: RuntimeResolution,
         entrypoint: String,
         subcommand: String,
@@ -228,12 +228,12 @@ enum CommandResolver {
         [runtime.path, entrypoint, subcommand] + extraArgs
     }
 
-    private static func runtimeErrorCommand(_ error: RuntimeResolutionError) -> [String] {
+    static func runtimeErrorCommand(_ error: RuntimeResolutionError) -> [String] {
         let message = RuntimeLocator.describeFailure(error)
         return self.errorCommand(with: message)
     }
 
-    private static func errorCommand(with message: String) -> [String] {
+    static func errorCommand(with message: String) -> [String] {
         let script = """
         cat <<'__CLAWDIS_ERR__' >&2
         \(message)
