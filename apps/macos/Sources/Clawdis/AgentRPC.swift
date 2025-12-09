@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import OSLog
 
 struct ControlRequestParams: @unchecked Sendable {
@@ -242,6 +243,12 @@ actor AgentRPC {
         self.stdoutHandle?.readabilityHandler = nil
         let proc = self.process
         proc?.terminate()
+        if let proc, proc.isRunning {
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if proc.isRunning {
+                kill(proc.processIdentifier, SIGKILL)
+            }
+        }
         proc?.waitUntilExit()
         self.process = nil
         self.stdinHandle = nil
