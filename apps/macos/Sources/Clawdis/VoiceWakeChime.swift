@@ -44,9 +44,13 @@ enum VoiceWakeChimePlayer {
     private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.chime")
     private static var lastSound: NSSound?
 
-    static func play(_ chime: VoiceWakeChime) {
+    static func play(_ chime: VoiceWakeChime, reason: String? = nil) {
         guard let sound = self.sound(for: chime) else { return }
-        self.logger.log(level: .info, "chime play")
+        if let reason {
+            self.logger.log(level: .info, "chime play reason=\(reason, privacy: .public)")
+        } else {
+            self.logger.log(level: .info, "chime play")
+        }
         SoundEffectPlayer.play(sound)
     }
 

@@ -6,7 +6,12 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 - If the overlay is already visible from wake-word and the user presses the hotkey, the hotkey session *adopts* the existing text instead of resetting it. The overlay stays up while the hotkey is held. When the user releases: send if there is trimmed text, otherwise dismiss.
 - Wake-word alone still auto-sends on silence; push-to-talk sends immediately on release.
 
-### Proposed architecture (to implement next)
+### Implemented (Dec 9, 2025)
+- Overlay sessions now carry a token per capture (wake-word or push-to-talk). Partial/final/send/dismiss/level updates are dropped when the token doesn’t match, avoiding stale callbacks.
+- Push-to-talk adopts any visible overlay text as a prefix (so pressing the hotkey while the wake overlay is up keeps the text and appends new speech). It waits up to 1.5s for a final transcript before falling back to the current text.
+- Chime/overlay logging is emitted at `info` in categories `voicewake.overlay`, `voicewake.ptt`, and `voicewake.chime` (session start, partial, final, send, dismiss, chime reason).
+
+### Next steps
 1. **VoiceSessionCoordinator (actor)**
    - Owns exactly one `VoiceSession` at a time.
    - API (token-based): `beginWakeCapture`, `beginPushToTalk`, `updatePartial`, `endCapture`, `cancel`, `applyCooldown`.
@@ -40,4 +45,3 @@ Audience: macOS app contributors. Goal: keep the voice overlay predictable when 
 3. Refactor `VoicePushToTalk` to adopt existing sessions and call `endCapture` on release; apply runtime cooldown.
 4. Wire `VoiceWakeOverlayController` to the publisher; remove direct calls from runtime/PTT.
 5. Add integration tests for session adoption, cooldown, and empty-text dismissal.
-

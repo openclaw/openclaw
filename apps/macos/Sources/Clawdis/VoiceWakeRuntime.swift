@@ -32,6 +32,7 @@ actor VoiceWakeRuntime {
     private var cooldownUntil: Date?
     private var currentConfig: RuntimeConfig?
     private var listeningState: ListeningState = .idle
+    private var overlayToken: UUID?
 
     // Tunables
     // Silence threshold once we've captured user speech (post-trigger).
@@ -162,9 +163,11 @@ actor VoiceWakeRuntime {
         self.listeningState = .idle
         self.logger.debug("voicewake runtime stopped")
 
+        let token = self.overlayToken
+        self.overlayToken = nil
         guard dismissOverlay else { return }
         Task { @MainActor in
-            VoiceWakeOverlayController.shared.dismiss()
+            VoiceWakeOverlayController.shared.dismiss(token: token)
         }
     }
 
@@ -208,8 +211,10 @@ actor VoiceWakeRuntime {
                     volatile: self.volatileTranscript,
                     isFinal: isFinal)
                 let snapshot = self.committedTranscript + self.volatileTranscript
-                await MainActor.run {
-                    VoiceWakeOverlayController.shared.showPartial(transcript: snapshot, attributed: attributed)
+                if let token = self.overlayToken {
+                    await MainActor.run {
+                        VoiceWakeOverlayController.shared.updatePartial(token: token, transcript: snapshot, attributed: attributed)
+                    }
                 }
             }
         }
@@ -249,7 +254,7 @@ actor VoiceWakeRuntime {
 
         if config.triggerChime != .none, !self.triggerChimePlayed {
             self.triggerChimePlayed = true
-            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
+            await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime, reason: "voicewake.trigger") }
         }
 
         let snapshot = self.committedTranscript + self.volatileTranscript
@@ -257,8 +262,11 @@ actor VoiceWakeRuntime {
             committed: self.committedTranscript,
             volatile: self.volatileTranscript,
             isFinal: false)
-        await MainActor.run {
-            VoiceWakeOverlayController.shared.showPartial(transcript: snapshot, attributed: attributed)
+        self.overlayToken = await MainActor.run {
+            VoiceWakeOverlayController.shared.startSession(
+                source: .wakeWord,
+                transcript: snapshot,
+                attributed: attributed)
         }
 
         // Keep the "ears" boosted for the capture window so the status icon animates while recording.
@@ -309,7 +317,9 @@ actor VoiceWakeRuntime {
         self.triggerChimePlayed = false
 
         await MainActor.run { AppStateStore.shared.stopVoiceEars() }
-        await MainActor.run { VoiceWakeOverlayController.shared.updateLevel(0) }
+        if let token = self.overlayToken {
+            await MainActor.run { VoiceWakeOverlayController.shared.updateLevel(token: token, 0) }
+        }
 
         let forwardConfig = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
         // Auto-send should fire as soon as the silence threshold is satisfied (2s after speech, 5s after trigger-only).
@@ -320,14 +330,25 @@ actor VoiceWakeRuntime {
             volatile: "",
             isFinal: true)
         let sendChime = finalTranscript.isEmpty ? .none : config.sendChime
-        await MainActor.run {
-            VoiceWakeOverlayController.shared.presentFinal(
-                transcript: finalTranscript,
+        if let token = self.overlayToken {
+            await MainActor.run {
+                VoiceWakeOverlayController.shared.presentFinal(
+                    token: token,
+                    transcript: finalTranscript,
                 forwardConfig: forwardConfig,
                 autoSendAfter: delay,
                 sendChime: sendChime,
                 attributed: finalAttributed)
+            }
+        } else if forwardConfig.enabled, !finalTranscript.isEmpty {
+            if sendChime != .none {
+                await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
+            }
+            Task.detached {
+                await VoiceWakeForwarder.forward(transcript: finalTranscript, config: forwardConfig)
+            }
         }
+        self.overlayToken = nil
 
         self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
         self.restartRecognizer()
@@ -349,8 +370,10 @@ actor VoiceWakeRuntime {
 
         // Normalize against the adaptive threshold so the UI meter stays roughly 0...1 across devices.
         let clamped = min(1.0, max(0.0, rms / max(self.minSpeechRMS, threshold)))
-        Task { @MainActor in
-            VoiceWakeOverlayController.shared.updateLevel(clamped)
+        if let token = self.overlayToken {
+            Task { @MainActor in
+                VoiceWakeOverlayController.shared.updateLevel(token: token, clamped)
+            }
         }
     }
 
