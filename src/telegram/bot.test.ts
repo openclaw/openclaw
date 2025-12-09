@@ -1,10 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
+import * as replyModule from "../auto-reply/reply.js";
+import { createTelegramBot } from "./bot.js";
 
 const useSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
-type ApiStub = { config: { use: (arg: unknown) => void } };
-const apiStub: ApiStub = { config: { use: useSpy } };
+const sendChatActionSpy = vi.fn();
+type ApiStub = {
+  config: { use: (arg: unknown) => void };
+  sendChatAction: typeof sendChatActionSpy;
+};
+const apiStub: ApiStub = {
+  config: { use: useSpy },
+  sendChatAction: sendChatActionSpy,
+};
 
 vi.mock("grammy", () => ({
   Bot: class {
@@ -24,12 +33,12 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
 }));
 
 vi.mock("../auto-reply/reply.js", () => {
-  const replySpy = vi.fn();
+  const replySpy = vi.fn(async (_ctx, opts) => {
+    await opts?.onReplyStart?.();
+    return undefined;
+  });
   return { getReplyFromConfig: replySpy, __replySpy: replySpy };
 });
-
-import { createTelegramBot } from "./bot.js";
-import * as replyModule from "../auto-reply/reply.js";
 
 describe("createTelegramBot", () => {
   it("installs grammY throttler", () => {
@@ -47,7 +56,9 @@ describe("createTelegramBot", () => {
 
     createTelegramBot({ token: "tok" });
     expect(onSpy).toHaveBeenCalledWith("message", expect.any(Function));
-    const handler = onSpy.mock.calls[0][1] as (ctx: any) => Promise<void>;
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
 
     const message = {
       chat: { id: 1234, type: "private" },
@@ -71,5 +82,22 @@ describe("createTelegramBot", () => {
       /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 2025-01-09 00:00]/,
     );
     expect(payload.Body).toContain("hello world");
+  });
+
+  it("triggers typing cue via onReplyStart", async () => {
+    onSpy.mockReset();
+    sendChatActionSpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    await handler({
+      message: { chat: { id: 42, type: "private" }, text: "hi" },
+      me: { username: "clawdis_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendChatActionSpy).toHaveBeenCalledWith(42, "typing");
   });
 });

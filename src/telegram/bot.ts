@@ -1,13 +1,14 @@
 // @ts-nocheck
 import { Buffer } from "node:buffer";
+
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
 
 import { chunkText } from "../auto-reply/chunk.js";
+import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { loadConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
@@ -70,6 +71,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const isGroup =
         msg.chat.type === "group" || msg.chat.type === "supergroup";
 
+      const sendTyping = async () => {
+        try {
+          await bot.api.sendChatAction(chatId, "typing");
+        } catch (err) {
+          logVerbose(
+            `telegram typing cue failed for chat ${chatId}: ${String(err)}`,
+          );
+        }
+      };
+
       // allowFrom for direct chats
       if (!isGroup && Array.isArray(allowFrom) && allowFrom.length > 0) {
         const candidate = String(chatId);
@@ -99,7 +110,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
 
       const media = await resolveMedia(ctx, mediaMaxBytes);
-      const rawBody = (msg.text ?? msg.caption ?? media?.placeholder ?? "").trim();
+      const rawBody = (
+        msg.text ??
+        msg.caption ??
+        media?.placeholder ??
+        ""
+      ).trim();
       if (!rawBody) return;
 
       const body = formatAgentEnvelope({
@@ -126,7 +142,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         MediaUrl: media?.path,
       };
 
-      const replyResult = await getReplyFromConfig(ctxPayload, {}, cfg);
+      const replyResult = await getReplyFromConfig(
+        ctxPayload,
+        { onReplyStart: sendTyping },
+        cfg,
+      );
       const replies = replyResult
         ? Array.isArray(replyResult)
           ? replyResult
