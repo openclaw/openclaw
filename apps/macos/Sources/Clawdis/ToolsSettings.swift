@@ -1,11 +1,35 @@
 import AppKit
 import SwiftUI
 
+private enum NodePackageManager: String, CaseIterable, Identifiable {
+    case npm
+    case pnpm
+    case yarn
+
+    var id: String { self.rawValue }
+
+    var label: String {
+        switch self {
+        case .npm: "NPM"
+        case .pnpm: "PNPM"
+        case .yarn: "Yarn"
+        }
+    }
+
+    var installCommandPrefix: String {
+        switch self {
+        case .npm: "npm install -g"
+        case .pnpm: "pnpm add -g"
+        case .yarn: "yarn global add"
+        }
+    }
+}
+
 // MARK: - Data models
 
 private enum InstallMethod: Equatable {
     case brew(formula: String, binary: String)
-    case npm(package: String, binary: String)
+    case node(package: String, binary: String)
     case go(module: String, binary: String)
     case pnpm(repoPath: String, script: String, binary: String)
     case gitClone(url: String, destination: String)
@@ -14,7 +38,7 @@ private enum InstallMethod: Equatable {
     var binary: String? {
         switch self {
         case let .brew(_, binary),
-             let .npm(_, binary),
+             let .node(_, binary),
              let .go(_, binary),
              let .pnpm(_, _, binary):
             binary
@@ -57,7 +81,7 @@ struct ToolsSettings: View {
             name: "mcporter",
             url: URL(string: "https://github.com/steipete/mcporter")!,
             description: "MCP runtime/CLI to discover servers, run tools, and sync configs across AI clients.",
-            method: .npm(package: "mcporter", binary: "mcporter"),
+            method: .node(package: "mcporter", binary: "mcporter"),
             kind: .tool),
         ToolEntry(
             id: "peekaboo",
@@ -78,7 +102,14 @@ struct ToolsSettings: View {
             name: "oracle",
             url: URL(string: "https://github.com/steipete/oracle")!,
             description: "Runs OpenAI-ready agent workflows from the CLI with session replay and browser control.",
-            method: .npm(package: "@steipete/oracle", binary: "oracle"),
+            method: .node(package: "@steipete/oracle", binary: "oracle"),
+            kind: .tool),
+        ToolEntry(
+            id: "qmd",
+            name: "qmd",
+            url: URL(string: "https://github.com/tobi/qmd")!,
+            description: "Hybrid markdown search (BM25 + vectors + rerank) with an MCP server for agents.",
+            method: .node(package: "https://github.com/tobi/qmd", binary: "qmd"),
             kind: .tool),
         ToolEntry(
             id: "eightctl",
@@ -170,8 +201,13 @@ struct ToolsSettings: View {
             kind: .mcp),
     ]
 
+    @AppStorage("tools.packageManager") private var packageManagerRaw = NodePackageManager.npm.rawValue
+    @State private var installStates: [String: InstallState] = [:]
+    private let isPreview = ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] != nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            self.packageManagerPicker
             ScrollView {
                 LazyVStack(spacing: 12) {
                     self.section(for: .tool, title: "CLI Tools")
@@ -181,10 +217,34 @@ struct ToolsSettings: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 12)
+        .onChange(of: self.packageManagerRaw) { _, _ in
+            self.refreshAll()
+        }
+        .task { self.refreshAll() }
+    }
+
+    private var packageManager: NodePackageManager {
+        NodePackageManager(rawValue: self.packageManagerRaw) ?? .npm
+    }
+
+    private var packageManagerPicker: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Preferred package manager")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Picker("Preferred package manager", selection: self.$packageManagerRaw) {
+                ForEach(NodePackageManager.allCases) { manager in
+                    Text(manager.label).tag(manager.rawValue)
+                }
+            }
+            .pickerStyle(.segmented)
+            .frame(maxWidth: 340)
+        }
+        .padding(.top, 2)
     }
 
     private func section(for kind: ToolEntry.Kind, title: String) -> some View {
-        let filtered = self.tools.filter { $0.kind == kind }
+        let filtered = self.tools.filter { $0.kind == kind && self.shouldShow(tool: $0) }
         return VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.callout.weight(.semibold))
@@ -192,7 +252,11 @@ struct ToolsSettings: View {
 
             VStack(spacing: 8) {
                 ForEach(filtered) { tool in
-                    ToolRow(tool: tool)
+                    ToolRow(
+                        tool: tool,
+                        state: self.binding(for: tool),
+                        packageManager: self.packageManager,
+                        refreshState: { await self.refresh(tool: tool) })
                         .padding(10)
                         .background(Color(nsColor: .controlBackgroundColor))
                         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -203,15 +267,45 @@ struct ToolsSettings: View {
             }
         }
     }
+
+    private func binding(for tool: ToolEntry) -> Binding<InstallState> {
+        let current = self.installStates[tool.id] ?? .checking
+        return Binding(
+            get: { self.installStates[tool.id] ?? current },
+            set: { self.installStates[tool.id] = $0 }
+        )
+    }
+
+    private func shouldShow(tool: ToolEntry) -> Bool {
+        if self.isPreview { return true }
+        guard let state = self.installStates[tool.id] else { return false }
+        return state == .installed
+    }
+
+    private func refreshAll() {
+        Task {
+            for tool in self.tools {
+                await self.refresh(tool: tool)
+            }
+        }
+    }
+
+    @MainActor
+    private func refresh(tool: ToolEntry) async {
+        let installed = await ToolInstaller.isInstalled(tool.method, packageManager: self.packageManager)
+        self.installStates[tool.id] = installed ? .installed : .notInstalled
+    }
 }
 
 // MARK: - Row
 
 private struct ToolRow: View {
     let tool: ToolEntry
-    @State private var state: InstallState = .checking
+    @Binding var state: InstallState
     @State private var statusMessage: String?
     @State private var linkHovering = false
+    let packageManager: NodePackageManager
+    let refreshState: () async -> Void
 
     private enum Layout {
         // Ensure progress indicators and buttons occupy the same space so the row doesn't shift.
@@ -272,7 +366,7 @@ private struct ToolRow: View {
     private func refresh() {
         Task {
             self.state = .checking
-            let installed = await ToolInstaller.isInstalled(self.tool.method)
+            let installed = await ToolInstaller.isInstalled(self.tool.method, packageManager: self.packageManager)
             await MainActor.run {
                 self.state = installed ? .installed : .notInstalled
             }
@@ -282,10 +376,11 @@ private struct ToolRow: View {
     private func install() {
         Task {
             self.state = .installing
-            let result = await ToolInstaller.install(self.tool.method)
+            let result = await ToolInstaller.install(self.tool.method, packageManager: self.packageManager)
             await MainActor.run {
                 self.statusMessage = result.message
                 self.state = result.installed ? .installed : .failed(result.message)
+                if result.installed { Task { await self.refreshState() } }
             }
         }
     }
@@ -299,11 +394,11 @@ private enum ToolInstaller {
         let message: String
     }
 
-    static func isInstalled(_ method: InstallMethod) async -> Bool {
+    static func isInstalled(_ method: InstallMethod, packageManager: NodePackageManager = .npm) async -> Bool {
         switch method {
         case let .brew(formula, _):
             return await self.shellSucceeds("brew list --versions \(formula)")
-        case let .npm(_, binary),
+        case let .node(_, binary),
              let .go(_, binary),
              let .pnpm(_, _, binary):
             return await self.commandExists(binary)
@@ -315,12 +410,12 @@ private enum ToolInstaller {
         }
     }
 
-    static func install(_ method: InstallMethod) async -> InstallResult {
+    static func install(_ method: InstallMethod, packageManager: NodePackageManager = .npm) async -> InstallResult {
         switch method {
         case let .brew(formula, _):
             return await self.runInstall("brew install \(formula)")
-        case let .npm(package, _):
-            return await self.runInstall("npm install -g \(package)")
+        case let .node(package, _):
+            return await self.runInstall("\(packageManager.installCommandPrefix) \(package)")
         case let .go(module, _):
             return await self.runInstall("GO111MODULE=on go install \(module)")
         case let .pnpm(repoPath, script, _):
