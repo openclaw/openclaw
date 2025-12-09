@@ -1,3 +1,4 @@
+import chalk from "chalk";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { type WebSocket, WebSocketServer } from "ws";
@@ -14,8 +15,8 @@ import {
   listSystemPresence,
   upsertPresence,
 } from "../infra/system-presence.js";
-import { logDebug, logError } from "../logger.js";
-import { getResolvedLoggerSettings } from "../logging.js";
+import { logError } from "../logger.js";
+import { getLogger, getResolvedLoggerSettings } from "../logging.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
@@ -120,7 +121,20 @@ function logWs(
       parts.push(`${key}=${formatForLog(raw)}`);
     }
   }
-  logDebug(parts.join(" "));
+  const raw = parts.join(" ");
+  getLogger().debug(raw);
+
+  const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
+  const prefix = `${chalk.gray("gateway/ws")} ${dirColor(direction)} ${chalk.bold(kind)}`;
+  const coloredMeta: string[] = [];
+  if (meta) {
+    for (const [key, value] of Object.entries(meta)) {
+      if (value === undefined) continue;
+      coloredMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
+    }
+  }
+  const line = coloredMeta.length ? `${prefix} ${coloredMeta.join(" ")}` : prefix;
+  console.log(line);
 }
 
 function formatError(err: unknown): string {
