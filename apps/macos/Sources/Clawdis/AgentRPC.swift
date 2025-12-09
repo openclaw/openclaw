@@ -29,7 +29,6 @@ actor AgentRPC {
     private var waiters: [CheckedContinuation<String, Error>] = []
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "agent.rpc")
     private var starting = false
-    private var activeJobs = 0
 
     private struct RpcError: Error { let message: String }
 
@@ -203,30 +202,12 @@ actor AgentRPC {
                 }
                 continue
             }
-            if let jobEvent = self.parseJobStateEvent(from: line) {
-                Task { await self.updateJobState(jobEvent) }
-                continue
-            }
+            if self.parseJobStateEvent(from: line) != nil { continue }
 
             if let waiter = waiters.first {
                 self.waiters.removeFirst()
                 waiter.resume(returning: line)
             }
-        }
-    }
-
-    private func updateJobState(_ evt: JobStateEvent) async {
-        switch evt.state.lowercased() {
-        case "started", "streaming":
-            self.activeJobs &+= 1
-        case "done", "error":
-            self.activeJobs = max(0, self.activeJobs - 1)
-        default:
-            break
-        }
-        let working = self.activeJobs > 0
-        await MainActor.run {
-            AppStateStore.shared.setWorking(working)
         }
     }
 
