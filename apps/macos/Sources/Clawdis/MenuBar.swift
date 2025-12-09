@@ -90,11 +90,6 @@ struct ClawdisApp: App {
 
     @MainActor
     private func toggleWebChatPanel() {
-        guard AppStateStore.webChatEnabled else {
-            // When web chat is disabled, fall back to normal menu behavior.
-            self.isMenuPresented = true
-            return
-        }
         self.isMenuPresented = false
         WebChatManager.shared.togglePanel(
             sessionKey: WebChatManager.shared.preferredSessionKey(),
