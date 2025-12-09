@@ -77,20 +77,26 @@ final class ControlChannel: ObservableObject {
         case degraded(String)
     }
 
-    enum Mode: Equatable {
-        case local
-        case remote(target: String, identity: String)
-    }
-
     @Published private(set) var state: ConnectionState = .disconnected
     @Published private(set) var lastPingMs: Double?
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
+    private let gateway = GatewayChannel()
+    private var gatewayURL: URL {
+        let port = UserDefaults.standard.integer(forKey: "gatewayPort")
+        let effectivePort = port > 0 ? port : 18789
+        return URL(string: "ws://127.0.0.1:\(effectivePort)")!
+    }
+    private var gatewayToken: String? {
+        ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
+    }
+    private var eventTokens: [NSObjectProtocol] = []
 
     func configure() async {
         do {
             self.state = .connecting
-            try await AgentRPC.shared.start()
+            await gateway.configure(url: gatewayURL, token: gatewayToken)
+            self.startEventStream()
             self.state = .connected
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
@@ -98,16 +104,16 @@ final class ControlChannel: ObservableObject {
         }
     }
 
-    func configure(mode: Mode) async throws {
-        // Mode is retained for API compatibility; transport is always stdio now.
-        await self.configure()
-    }
+    func configure(mode _: Any? = nil) async throws { await self.configure() }
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
-        let params = timeout.map { ControlRequestParams(raw: ["timeoutMs": AnyHashable(Int($0 * 1000))]) }
         do {
             let start = Date()
-            let payload = try await AgentRPC.shared.controlRequest(method: "health", params: params)
+            var params: [String: AnyHashable]? = nil
+            if let timeout {
+                params = ["timeout": AnyHashable(Int(timeout * 1000))]
+            }
+            let payload = try await self.request(method: "health", params: params)
             let ms = Date().timeIntervalSince(start) * 1000
             self.lastPingMs = ms
             self.state = .connected
@@ -119,14 +125,14 @@ final class ControlChannel: ObservableObject {
     }
 
     func lastHeartbeat() async throws -> ControlHeartbeatEvent? {
-        let data = try await AgentRPC.shared.controlRequest(method: "last-heartbeat")
-        if data.isEmpty { return nil }
-        return try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data)
+        // Heartbeat removed in new protocol
+        return nil
     }
 
-    func request(method: String, params: ControlRequestParams? = nil) async throws -> Data {
+    func request(method: String, params: [String: AnyHashable]? = nil) async throws -> Data {
         do {
-            let data = try await AgentRPC.shared.controlRequest(method: method, params: params)
+            let rawParams = params?.reduce(into: [String: Any]()) { $0[$1.key] = $1.value }
+            let data = try await gateway.request(method: method, params: rawParams)
             self.state = .connected
             return data
         } catch {
@@ -136,9 +142,48 @@ final class ControlChannel: ObservableObject {
     }
 
     func sendSystemEvent(_ text: String) async throws {
-        _ = try await self.request(
-            method: "system-event",
-            params: ControlRequestParams(raw: ["text": AnyHashable(text)]))
+        _ = try await self.request(method: "system-event", params: ["text": AnyHashable(text)])
+    }
+
+    private func startEventStream() {
+        for tok in eventTokens { NotificationCenter.default.removeObserver(tok) }
+        eventTokens.removeAll()
+        let ev = NotificationCenter.default.addObserver(
+            forName: .gatewayEvent,
+            object: nil,
+            queue: .main
+        ) { note in
+            guard let obj = note.userInfo as? [String: Any],
+                  let event = obj["event"] as? String else { return }
+            switch event {
+            case "agent":
+                if let payload = obj["payload"] as? [String: Any],
+                   let runId = payload["runId"] as? String,
+                   let seq = payload["seq"] as? Int,
+                   let stream = payload["stream"] as? String,
+                   let ts = payload["ts"] as? Double,
+                   let dataDict = payload["data"] as? [String: Any]
+                {
+                    let wrapped = dataDict.mapValues { AnyCodable($0) }
+                    AgentEventStore.shared.append(ControlAgentEvent(runId: runId, seq: seq, stream: stream, ts: ts, data: wrapped))
+                }
+            case "presence":
+                // InstancesStore listens separately via notification
+                break
+            case "shutdown":
+                self.state = .degraded("gateway shutdown")
+            default:
+                break
+            }
+        }
+        let tick = NotificationCenter.default.addObserver(
+            forName: .gatewaySnapshot,
+            object: nil,
+            queue: .main
+        ) { _ in
+            self.state = .connected
+        }
+        eventTokens = [ev, tick]
     }
 }
 

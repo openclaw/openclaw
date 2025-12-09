@@ -5,9 +5,10 @@ import { healthCommand } from "../commands/health.js";
 import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { statusCommand } from "../commands/status.js";
+import { startGatewayServer } from "../gateway/server.js";
+import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { loadConfig } from "../config/config.js";
 import { danger, info, setVerbose } from "../globals.js";
-import { startControlChannel } from "../infra/control-channel.js";
 import { acquireRelayLock, RelayLockError } from "../infra/relay-lock.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import {
@@ -332,6 +333,178 @@ Examples:
     });
 
   program
+    .command("gateway")
+    .description("Run the WebSocket Gateway (replaces relay)")
+    .option("--port <port>", "Port for the gateway WebSocket", "18789")
+    .option(
+      "--token <token>",
+      "Shared token required in hello.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
+    )
+    .action(async (opts) => {
+      const port = Number.parseInt(String(opts.port ?? "18789"), 10);
+      if (Number.isNaN(port) || port <= 0) {
+        defaultRuntime.error("Invalid port");
+        defaultRuntime.exit(1);
+      }
+      if (opts.token) {
+        process.env.CLAWDIS_GATEWAY_TOKEN = String(opts.token);
+      }
+      try {
+        await startGatewayServer(port);
+      } catch (err) {
+        defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+      // Keep process alive
+      await new Promise<never>(() => {});
+    });
+
+  const gatewayCallOpts = (cmd: Command) =>
+    cmd
+      .option("--url <url>", "Gateway WebSocket URL", "ws://127.0.0.1:18789")
+      .option("--token <token>", "Gateway token (if required)")
+      .option("--timeout <ms>", "Timeout in ms", "10000")
+      .option("--expect-final", "Wait for final response (agent)" , false);
+
+  gatewayCallOpts(
+    program
+      .command("gw:call")
+      .description("Call a Gateway method over WS and print JSON")
+      .argument("<method>", "Method name (health/status/system-presence/send/agent)")
+      .option("--params <json>", "JSON object string for params", "{}")
+      .action(async (method, opts) => {
+        try {
+          const params = JSON.parse(String(opts.params ?? "{}"));
+          const result = await callGateway({
+            url: opts.url,
+            token: opts.token,
+            method,
+            params,
+            expectFinal: Boolean(opts.expectFinal),
+            timeoutMs: Number(opts.timeout ?? 10000),
+            clientName: "cli",
+            mode: "cli",
+          });
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(`Gateway call failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  gatewayCallOpts(
+    program
+      .command("gw:health")
+      .description("Fetch Gateway health over WS")
+      .action(async (opts) => {
+        try {
+          const result = await callGateway({
+            url: opts.url,
+            token: opts.token,
+            method: "health",
+            timeoutMs: Number(opts.timeout ?? 10000),
+          });
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  gatewayCallOpts(
+    program
+      .command("gw:status")
+      .description("Fetch Gateway status over WS")
+      .action(async (opts) => {
+        try {
+          const result = await callGateway({
+            url: opts.url,
+            token: opts.token,
+            method: "status",
+            timeoutMs: Number(opts.timeout ?? 10000),
+          });
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  gatewayCallOpts(
+    program
+      .command("gw:send")
+      .description("Send a message via the Gateway")
+      .requiredOption("--to <jidOrPhone>", "Destination (E.164 or jid)")
+      .requiredOption("--message <text>", "Message text")
+      .option("--media-url <url>", "Optional media URL")
+      .option("--idempotency-key <key>", "Idempotency key")
+      .action(async (opts) => {
+        try {
+          const idempotencyKey = opts.idempotencyKey ?? randomIdempotencyKey();
+          const result = await callGateway({
+            url: opts.url,
+            token: opts.token,
+            method: "send",
+            params: {
+              to: opts.to,
+              message: opts.message,
+              mediaUrl: opts.mediaUrl,
+              idempotencyKey,
+            },
+            timeoutMs: Number(opts.timeout ?? 10000),
+          });
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  gatewayCallOpts(
+    program
+      .command("gw:agent")
+      .description("Run an agent turn via the Gateway (waits for final)")
+      .requiredOption("--message <text>", "User message")
+      .option("--to <jidOrPhone>", "Destination")
+      .option("--session-id <id>", "Session id")
+      .option("--thinking <level>", "Thinking level")
+      .option("--deliver", "Deliver response", false)
+      .option("--timeout-seconds <n>", "Agent timeout seconds")
+      .option("--idempotency-key <key>", "Idempotency key")
+      .action(async (opts) => {
+        try {
+          const idempotencyKey = opts.idempotencyKey ?? randomIdempotencyKey();
+          const result = await callGateway({
+            url: opts.url,
+            token: opts.token,
+            method: "agent",
+            params: {
+              message: opts.message,
+              to: opts.to,
+              sessionId: opts.sessionId,
+              thinking: opts.thinking,
+              deliver: Boolean(opts.deliver),
+              timeout: opts.timeoutSeconds
+                ? Number.parseInt(String(opts.timeoutSeconds), 10)
+                : undefined,
+              idempotencyKey,
+            },
+            expectFinal: true,
+            timeoutMs: Number(opts.timeout ?? 10000),
+          });
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  program
     .command("relay")
     .description(
       "Auto-reply to inbound messages across configured providers (web, Telegram)",
@@ -508,24 +681,6 @@ Examples:
 
       const runners: Array<Promise<unknown>> = [];
 
-      let control = null as Awaited<
-        ReturnType<typeof startControlChannel>
-      > | null;
-      try {
-        control = await startControlChannel(
-          {
-            setHeartbeats: async (enabled: boolean) => {
-              setHeartbeatsEnabled(enabled);
-            },
-          },
-          { runtime: defaultRuntime },
-        );
-      } catch (err) {
-        defaultRuntime.error(
-          danger(`Control channel failed to start: ${String(err)}`),
-        );
-      }
-
       if (startWeb) {
         const webTuning: WebMonitorTuning = {};
         if (webHeartbeat !== undefined)
@@ -613,7 +768,6 @@ Examples:
         defaultRuntime.exit(1);
       } finally {
         if (releaseRelayLock) await releaseRelayLock();
-        if (control) await control.close();
       }
     });
 

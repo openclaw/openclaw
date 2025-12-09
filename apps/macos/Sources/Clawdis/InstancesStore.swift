@@ -36,9 +36,11 @@ final class InstancesStore: ObservableObject {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "instances")
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 30
+    private var observers: [NSObjectProtocol] = []
 
     func start() {
         guard self.task == nil else { return }
+        self.observeGatewayEvents()
         self.task = Task.detached { [weak self] in
             guard let self else { return }
             await self.refresh()
@@ -52,6 +54,45 @@ final class InstancesStore: ObservableObject {
     func stop() {
         self.task?.cancel()
         self.task = nil
+        for token in observers {
+            NotificationCenter.default.removeObserver(token)
+        }
+        observers.removeAll()
+    }
+
+    private func observeGatewayEvents() {
+        let ev = NotificationCenter.default.addObserver(
+            forName: .gatewayEvent,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let obj = note.userInfo as? [String: Any],
+                  let event = obj["event"] as? String else { return }
+            if event == "presence", let payload = obj["payload"] as? [String: Any] {
+                self.handlePresencePayload(payload)
+            }
+        }
+        let gap = NotificationCenter.default.addObserver(
+            forName: .gatewaySeqGap,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { await self.refresh() }
+        }
+        let snap = NotificationCenter.default.addObserver(
+            forName: .gatewaySnapshot,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let self,
+                  let obj = note.userInfo as? [String: Any],
+                  let snapshot = obj["snapshot"] as? [String: Any],
+                  let presence = snapshot["presence"] else { return }
+            self.decodeAndApplyPresence(presence: presence)
+        }
+        observers = [ev, snap, gap]
     }
 
     func refresh() async {
@@ -211,6 +252,37 @@ final class InstancesStore: ObservableObject {
             if let reason {
                 self.statusMessage = "Presence unavailable (\(reason)), health probe failed: \(error.localizedDescription)"
             }
+        }
+    }
+
+    private func handlePresencePayload(_ payload: [String: Any]) {
+        if let presence = payload["presence"] {
+            self.decodeAndApplyPresence(presence: presence)
+        }
+    }
+
+    private func decodeAndApplyPresence(presence: Any) {
+        guard let data = try? JSONSerialization.data(withJSONObject: presence) else { return }
+        do {
+            let decoded = try JSONDecoder().decode([InstanceInfo].self, from: data)
+            let withIDs = decoded.map { entry -> InstanceInfo in
+                let key = entry.host ?? entry.ip ?? entry.text
+                return InstanceInfo(
+                    id: key,
+                    host: entry.host,
+                    ip: entry.ip,
+                    version: entry.version,
+                    lastInputSeconds: entry.lastInputSeconds,
+                    mode: entry.mode,
+                    reason: entry.reason,
+                    text: entry.text,
+                    ts: entry.ts)
+            }
+            self.instances = withIDs
+            self.statusMessage = nil
+            self.lastError = nil
+        } catch {
+            self.logger.error("presence decode from event failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }

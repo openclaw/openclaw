@@ -7,11 +7,14 @@ export type SystemPresence = {
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;
+  instanceId?: string;
   text: string;
   ts: number;
 };
 
 const entries = new Map<string, SystemPresence>();
+const TTL_MS = 5 * 60 * 1000; // 5 minutes
+const MAX_ENTRIES = 200;
 
 function resolvePrimaryIPv4(): string | undefined {
   const nets = os.networkInterfaces();
@@ -36,12 +39,12 @@ function initSelfPresence() {
   const ip = resolvePrimaryIPv4() ?? undefined;
   const version =
     process.env.CLAWDIS_VERSION ?? process.env.npm_package_version ?? "unknown";
-  const text = `Relay: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode relay · reason self`;
+  const text = `Gateway: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode gateway · reason self`;
   const selfEntry: SystemPresence = {
     host,
     ip,
     version,
-    mode: "relay",
+    mode: "gateway",
     reason: "self",
     text,
     ts: Date.now(),
@@ -105,8 +108,41 @@ export function updateSystemPresence(text: string) {
   entries.set(key, parsed);
 }
 
+export function upsertPresence(
+  key: string,
+  presence: Partial<SystemPresence>,
+) {
+  ensureSelfPresence();
+  const existing = entries.get(key) ?? ({} as SystemPresence);
+  const merged: SystemPresence = {
+    ...existing,
+    ...presence,
+    ts: Date.now(),
+    text:
+      presence.text ||
+      existing.text ||
+      `Node: ${presence.host ?? existing.host ?? "unknown"} · mode ${
+        presence.mode ?? existing.mode ?? "unknown"
+      }`,
+  };
+  entries.set(key, merged);
+}
+
 export function listSystemPresence(): SystemPresence[] {
   ensureSelfPresence();
+  // prune expired
+  const now = Date.now();
+  for (const [k, v] of [...entries]) {
+    if (now - v.ts > TTL_MS) entries.delete(k);
+  }
+  // enforce max size (LRU by ts)
+  if (entries.size > MAX_ENTRIES) {
+    const sorted = [...entries.entries()].sort((a, b) => a[1].ts - b[1].ts);
+    const toDrop = entries.size - MAX_ENTRIES;
+    for (let i = 0; i < toDrop; i++) {
+      entries.delete(sorted[i][0]);
+    }
+  }
   touchSelfPresence();
   return [...entries.values()].sort((a, b) => b.ts - a.ts);
 }
