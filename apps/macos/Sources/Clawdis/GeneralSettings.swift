@@ -28,7 +28,7 @@ struct GeneralSettings: View {
                 VStack(alignment: .leading, spacing: 12) {
                     SettingsToggleRow(
                         title: "Clawdis active",
-                        subtitle: "Pause to stop Clawdis background helpers and notifications.",
+                        subtitle: "Pause to stop the Clawdis gateway; no messages will be processed.",
                         binding: self.activeBinding)
 
                     self.connectionSection
