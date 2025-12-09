@@ -8,8 +8,8 @@
 - **Fast nuke:** From an allowed WhatsApp sender you can send `/restart` to kick `com.steipete.clawdis` via launchd; wait a few seconds for it to relink.
 
 ## Helpful commands
-- Start relay web-only: `pnpm clawdis relay --provider web --verbose`
-- Show who is linked: `pnpm clawdis relay --provider web --verbose` (first line prints the linked E.164)
+- Start relay web-only: `pnpm clawdis gateway --provider web --verbose`
+- Show who is linked: `pnpm clawdis gateway --provider web --verbose` (first line prints the linked E.164)
 - Logout (clear creds): `pnpm clawdis logout`
 - Relink: `pnpm clawdis login --provider web`
 - Tail logs (default): `tail -f /tmp/clawdis/clawdis.log`

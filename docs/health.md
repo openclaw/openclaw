@@ -6,7 +6,7 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 - `pnpm clawdis status --json` — confirms creds exist (`web.linked`), shows auth age (`authAgeMs`), heartbeat interval, and where the session store lives.
 - Send `/status` in WhatsApp/WebChat to see agent readiness, session context usage, current thinking/verbose options, and when the web creds were last refreshed (relink if it looks stale) without invoking the agent.
 - `pnpm clawdis heartbeat --verbose --dry-run` — runs the heartbeat path end-to-end (session resolution, message creation) without sending anything. Drop `--dry-run` or add `--message "Ping"` to actually send.
-- `pnpm clawdis relay --verbose --heartbeat-now` — spins the full monitor loop, fires a heartbeat immediately, and will reconnect per `web.reconnect` settings. Good for soak testing.
+- `pnpm clawdis gateway --verbose --heartbeat-now` — spins the full monitor loop, fires a heartbeat immediately, and will reconnect per `web.reconnect` settings. Good for soak testing.
 - Logs: tail `/tmp/clawdis/clawdis.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
 
 ## Deep diagnostics
