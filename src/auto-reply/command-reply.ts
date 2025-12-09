@@ -535,11 +535,12 @@ export async function runCommandReply(
     let lastStreamedAssistant: string | undefined;
     const streamAssistantFinal = (msg?: {
       role?: string;
-      content?: unknown;
+      content?: unknown | unknown[];
     }) => {
       if (!onPartialReply || msg?.role !== "assistant") return;
-      const textBlocks = Array.isArray(msg.content)
-        ? (msg.content as Array<{ type?: string; text?: string }>)
+      const content = msg.content;
+      const textBlocks = Array.isArray(content)
+        ? (content as Array<{ type?: string; text?: string }>)
             .filter((c) => c?.type === "text" && typeof c.text === "string")
             .map((c) => (c.text ?? "").trim())
             .filter(Boolean)
