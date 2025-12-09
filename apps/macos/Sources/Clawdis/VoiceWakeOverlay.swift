@@ -259,23 +259,31 @@ final class VoiceWakeOverlayController: ObservableObject {
     // MARK: - Private
 
     private func guardToken(_ token: UUID?, context: String) -> Bool {
-        guard let active = self.activeToken else {
-            self.logger.log(level: .info, "overlay drop \(context, privacy: .public) no_active")
-            return false
-        }
-        if let token, token != active {
+        switch Self.evaluateToken(active: self.activeToken, incoming: token) {
+        case .accept:
+            return true
+        case .dismiss:
             self.logger.log(
                 level: .info,
                 """
                 overlay drop \(context, privacy: .public) token_mismatch \
-                active=\(active.uuidString, privacy: .public) \
-                got=\(token.uuidString, privacy: .public)
+                active=\(self.activeToken?.uuidString ?? "nil", privacy: .public) \
+                got=\(token?.uuidString ?? "nil", privacy: .public)
                 """)
-            // If tokens diverge, clear the stale overlay so the UI can resync.
             self.dismiss(reason: .explicit, outcome: .empty)
             return false
+        case .drop:
+            self.logger.log(level: .info, "overlay drop \(context, privacy: .public) no_active")
+            return false
         }
-        return true
+    }
+
+    enum GuardOutcome { case accept, dismiss, drop }
+
+    nonisolated static func evaluateToken(active: UUID?, incoming: UUID?) -> GuardOutcome {
+        guard let active else { return .drop }
+        if let incoming, incoming != active { return .dismiss }
+        return .accept
     }
 
     private func present() {
