@@ -12,6 +12,8 @@ import {
   upsertPresence,
 } from "../infra/system-presence.js";
 import { logError } from "../logger.js";
+import { getResolvedLoggerSettings } from "../logging.js";
+import { isVerbose } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import {
@@ -400,7 +402,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             try {
               const result = await sendMessageWhatsApp(to, message, {
                 mediaUrl: params.mediaUrl,
-                verbose: false,
+                verbose: isVerbose(),
               });
               const payload = {
                 runId: idem,
@@ -520,6 +522,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   defaultRuntime.log(
     `gateway listening on ws://127.0.0.1:${port} (PID ${process.pid})`,
   );
+  defaultRuntime.log(`gateway log file: ${getResolvedLoggerSettings().file}`);
 
   return {
     close: async () => {
