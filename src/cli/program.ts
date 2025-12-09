@@ -17,9 +17,9 @@ import { VERSION } from "../version.js";
 import { startWebChatServer } from "../webchat/server.js";
 import { createDefaultDeps } from "./deps.js";
 
-type PortProcess = { pid: number; command?: string };
+export type PortProcess = { pid: number; command?: string };
 
-function parseLsofOutput(output: string): PortProcess[] {
+export function parseLsofOutput(output: string): PortProcess[] {
   const lines = output.split(/\r?\n/).filter(Boolean);
   const results: PortProcess[] = [];
   let current: Partial<PortProcess> = {};
@@ -35,7 +35,7 @@ function parseLsofOutput(output: string): PortProcess[] {
   return results;
 }
 
-function listPortListeners(port: number): PortProcess[] {
+export function listPortListeners(port: number): PortProcess[] {
   try {
     const out = execFileSync(
       "lsof",
@@ -55,7 +55,7 @@ function listPortListeners(port: number): PortProcess[] {
   }
 }
 
-function forceFreePort(port: number): PortProcess[] {
+export function forceFreePort(port: number): PortProcess[] {
   const listeners = listPortListeners(port);
   for (const proc of listeners) {
     try {
