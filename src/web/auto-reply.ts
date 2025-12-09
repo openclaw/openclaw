@@ -503,10 +503,42 @@ async function deliverWebReply(params: {
       ? [replyResult.mediaUrl]
       : [];
 
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  const sendWithRetry = async (
+    fn: () => Promise<unknown>,
+    label: string,
+    maxAttempts = 3,
+  ) => {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (err) {
+        lastErr = err;
+        const isLast = attempt === maxAttempts;
+        const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(
+          String(err ?? ""),
+        );
+        if (!shouldRetry || isLast) {
+          throw err;
+        }
+        const backoffMs = 500 * attempt;
+        logVerbose(
+          `Retrying ${label} to ${msg.from} after failure (${attempt}/${maxAttempts - 1}) in ${backoffMs}ms: ${String(
+            err,
+          )}`,
+        );
+        await sleep(backoffMs);
+      }
+    }
+    throw lastErr;
+  };
+
   // Text-only replies
   if (mediaList.length === 0 && textChunks.length) {
     for (const chunk of textChunks) {
-      await msg.reply(chunk);
+      await sendWithRetry(() => msg.reply(chunk), "text");
     }
     if (!skipLog) {
       logInfo(
@@ -548,33 +580,49 @@ async function deliverWebReply(params: {
         );
       }
       if (media.kind === "image") {
-        await msg.sendMedia({
-          image: media.buffer,
-          caption,
-          mimetype: media.contentType,
-        });
+        await sendWithRetry(
+          () =>
+            msg.sendMedia({
+              image: media.buffer,
+              caption,
+              mimetype: media.contentType,
+            }),
+          "media:image",
+        );
       } else if (media.kind === "audio") {
-        await msg.sendMedia({
-          audio: media.buffer,
-          ptt: true,
-          mimetype: media.contentType,
-          caption,
-        });
+        await sendWithRetry(
+          () =>
+            msg.sendMedia({
+              audio: media.buffer,
+              ptt: true,
+              mimetype: media.contentType,
+              caption,
+            }),
+          "media:audio",
+        );
       } else if (media.kind === "video") {
-        await msg.sendMedia({
-          video: media.buffer,
-          caption,
-          mimetype: media.contentType,
-        });
+        await sendWithRetry(
+          () =>
+            msg.sendMedia({
+              video: media.buffer,
+              caption,
+              mimetype: media.contentType,
+            }),
+          "media:video",
+        );
       } else {
         const fileName = mediaUrl.split("/").pop() ?? "file";
         const mimetype = media.contentType ?? "application/octet-stream";
-        await msg.sendMedia({
-          document: media.buffer,
-          fileName,
-          caption,
-          mimetype,
-        });
+        await sendWithRetry(
+          () =>
+            msg.sendMedia({
+              document: media.buffer,
+              fileName,
+              caption,
+              mimetype,
+            }),
+          "media:document",
+        );
       }
       logInfo(
         `✅ Sent web media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
