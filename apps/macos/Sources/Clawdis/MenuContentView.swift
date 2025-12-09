@@ -41,7 +41,6 @@ struct MenuContent: View {
             if let updater, updater.isAvailable {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }
             }
-            Divider()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
         .task(id: self.state.swabbleEnabled) {
