@@ -14,7 +14,7 @@ import {
   listSystemPresence,
   upsertPresence,
 } from "../infra/system-presence.js";
-import { logError } from "../logger.js";
+import { logDebug, logError } from "../logger.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
@@ -82,6 +82,7 @@ const HANDSHAKE_TIMEOUT_MS = 3000;
 const TICK_INTERVAL_MS = 30_000;
 const DEDUPE_TTL_MS = 5 * 60_000;
 const DEDUPE_MAX = 1000;
+const LOG_VALUE_LIMIT = 240;
 
 type DedupeEntry = {
   ts: number;
@@ -92,6 +93,35 @@ type DedupeEntry = {
 const dedupe = new Map<string, DedupeEntry>();
 
 const getGatewayToken = () => process.env.CLAWDIS_GATEWAY_TOKEN;
+
+function formatForLog(value: unknown): string {
+  try {
+    const str =
+      typeof value === "string" || typeof value === "number"
+        ? String(value)
+        : JSON.stringify(value);
+    if (!str) return "";
+    return str.length > LOG_VALUE_LIMIT ? `${str.slice(0, LOG_VALUE_LIMIT)}...` : str;
+  } catch {
+    return String(value);
+  }
+}
+
+function logWs(
+  direction: "in" | "out",
+  kind: string,
+  meta?: Record<string, unknown>,
+) {
+  if (!isVerbose()) return;
+  const parts = [`gateway/ws ${direction} ${kind}`];
+  if (meta) {
+    for (const [key, raw] of Object.entries(meta)) {
+      if (raw === undefined) continue;
+      parts.push(`${key}=${formatForLog(raw)}`);
+    }
+  }
+  logDebug(parts.join(" "));
+}
 
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -171,12 +201,21 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
       stateVersion?: { presence?: number; health?: number };
     },
   ) => {
+    const eventSeq = ++seq;
     const frame = JSON.stringify({
       type: "event",
       event,
       payload,
-      seq: ++seq,
+      seq: eventSeq,
       stateVersion: opts?.stateVersion,
+    });
+    logWs("out", "event", {
+      event,
+      seq: eventSeq,
+      clients: clients.size,
+      dropIfSlow: opts?.dropIfSlow,
+      presenceVersion: opts?.stateVersion?.presence,
+      healthVersion: opts?.stateVersion?.health,
     });
     for (const c of clients) {
       const slow = c.socket.bufferedAmount > MAX_BUFFERED_BYTES;
@@ -240,6 +279,10 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
     let closed = false;
     const connId = randomUUID();
     const deps = createDefaultDeps();
+    const remoteAddr = (
+      socket as WebSocket & { _socket?: { remoteAddress?: string } }
+    )._socket?.remoteAddress;
+    logWs("in", "connect", { connId, remoteAddr });
 
     const send = (obj: unknown) => {
       try {
@@ -279,6 +322,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           },
         );
       }
+      logWs("out", "close", { connId });
       close();
     });
 
@@ -309,6 +353,13 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             maxProtocol < PROTOCOL_VERSION ||
             minProtocol > PROTOCOL_VERSION
           ) {
+            logWs("out", "hello-error", {
+              connId,
+              reason: "protocol mismatch",
+              minProtocol,
+              maxProtocol,
+              expected: PROTOCOL_VERSION,
+            });
             send({
               type: "hello-error",
               reason: "protocol mismatch",
@@ -321,6 +372,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           // token auth if required
           const token = getGatewayToken();
           if (token && hello.auth?.token !== token) {
+            logWs("out", "hello-error", { connId, reason: "unauthorized" });
             send({
               type: "hello-error",
               reason: "unauthorized",
@@ -332,9 +384,15 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
 
           // synthesize presence entry for this connection (client fingerprint)
           const presenceKey = hello.client.instanceId || connId;
-          const remoteAddr = (
-            socket as WebSocket & { _socket?: { remoteAddress?: string } }
-          )._socket?.remoteAddress;
+          logWs("in", "hello", {
+            connId,
+            client: hello.client.name,
+            version: hello.client.version,
+            mode: hello.client.mode,
+            instanceId: hello.client.instanceId,
+            platform: hello.client.platform,
+            token: hello.auth?.token ? "set" : "none",
+          });
           upsertPresence(presenceKey, {
             host: hello.client.name || os.hostname(),
             ip: remoteAddr,
@@ -373,6 +431,13 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           // Add the client only after the hello response is ready so no tick/presence
           // events reach it before the handshake completes.
           client = { socket, hello, connId };
+          logWs("out", "hello-ok", {
+            connId,
+            methods: METHODS.length,
+            events: EVENTS.length,
+            presence: snapshot.presence.length,
+            stateVersion: snapshot.stateVersion.presence,
+          });
           send(helloOk);
           clients.add(client);
           return;
@@ -392,8 +457,26 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           return;
         }
         const req = parsed as RequestFrame;
-        const respond = (ok: boolean, payload?: unknown, error?: ErrorShape) =>
+        logWs("in", "req", {
+          connId,
+          id: req.id,
+          method: req.method,
+        });
+        const respond = (
+          ok: boolean,
+          payload?: unknown,
+          error?: ErrorShape,
+          meta?: Record<string, unknown>,
+        ) => {
           send({ type: "res", id: req.id, ok, payload, error });
+          logWs("out", "res", {
+            connId,
+            id: req.id,
+            ok,
+            method: req.method,
+            ...meta,
+          });
+        };
 
         switch (req.method) {
           case "health": {
@@ -463,7 +546,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             const idem = params.idempotencyKey;
             const cached = dedupe.get(`send:${idem}`);
             if (cached) {
-              respond(cached.ok, cached.payload, cached.error);
+              respond(cached.ok, cached.payload, cached.error, {
+                cached: true,
+              });
               break;
             }
             const to = params.to.trim();
@@ -486,7 +571,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                   ok: true,
                   payload,
                 });
-                respond(true, payload, undefined);
+                respond(true, payload, undefined, { provider });
               } else {
                 const result = await sendMessageWhatsApp(to, message, {
                   mediaUrl: params.mediaUrl,
@@ -503,12 +588,15 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                   ok: true,
                   payload,
                 });
-                respond(true, payload, undefined);
+                respond(true, payload, undefined, { provider });
               }
             } catch (err) {
               const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
               dedupe.set(`send:${idem}`, { ts: Date.now(), ok: false, error });
-              respond(false, undefined, error);
+              respond(false, undefined, error, {
+                provider,
+                error: formatForLog(err),
+              });
             }
             break;
           }
@@ -537,7 +625,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             const idem = params.idempotencyKey;
             const cached = dedupe.get(`agent:${idem}`);
             if (cached) {
-              respond(cached.ok, cached.payload, cached.error);
+              respond(cached.ok, cached.payload, cached.error, { cached: true });
               break;
             }
             const message = params.message.trim();
@@ -550,6 +638,12 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
               seq: ++seq,
             };
             socket.send(JSON.stringify(ackEvent));
+            logWs("out", "event", {
+              connId,
+              event: "agent",
+              runId,
+              status: "accepted",
+            });
             try {
               await agentCommand(
                 {
@@ -573,7 +667,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                 ok: true,
                 payload,
               });
-              respond(true, payload, undefined);
+              respond(true, payload, undefined, { runId });
             } catch (err) {
               const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
               const payload = {
@@ -587,7 +681,10 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                 payload,
                 error,
               });
-              respond(false, payload, error);
+              respond(false, payload, error, {
+                runId,
+                error: formatForLog(err),
+              });
             }
             break;
           }
@@ -605,6 +702,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
         }
       } catch (err) {
         logError(`gateway: parse/handle error: ${String(err)}`);
+        logWs("out", "parse-error", { connId, error: formatForLog(err) });
         // If still in handshake, close; otherwise respond error
         if (!client) {
           close();

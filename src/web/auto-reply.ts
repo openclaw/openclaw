@@ -32,7 +32,6 @@ import {
 } from "./reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "./session.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 
 const WEB_TEXT_LIMIT = 4000;
 const DEFAULT_GROUP_HISTORY_LIMIT = 50;
