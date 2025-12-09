@@ -96,10 +96,10 @@ enum GatewayEnvironment {
                     message: "clawdis CLI not found in PATH; install the global package.")
             }
 
-            let installedGateway = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
+            let installed = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
                 ?? self.readLocalGatewayVersion(projectRoot: projectRoot)
 
-            if let expected, let installed = installedGateway, !installed.compatible(with: expected) {
+            if let expected, let installed, !installed.compatible(with: expected) {
                 return GatewayEnvironmentStatus(
                     kind: .incompatible(found: installed.description, required: expected.description),
                     nodeVersion: runtime.version.description,
@@ -109,7 +109,7 @@ enum GatewayEnvironment {
             }
 
             let gatewayLabel = gatewayBin != nil ? "global" : "local"
-            let gatewayVersionText = installedGateway?.description ?? "unknown"
+            let gatewayVersionText = installed?.description ?? "unknown"
             return GatewayEnvironmentStatus(
                 kind: .ok,
                 nodeVersion: runtime.version.description,
