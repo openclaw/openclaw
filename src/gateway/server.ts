@@ -92,6 +92,15 @@ const dedupe = new Map<string, DedupeEntry>();
 
 const getGatewayToken = () => process.env.CLAWDIS_GATEWAY_TOKEN;
 
+function formatError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  const status = (err as { status?: unknown })?.status;
+  const code = (err as { code?: unknown })?.code;
+  if (status || code) return `status=${status ?? "unknown"} code=${code ?? "unknown"}`;
+  return JSON.stringify(err, null, 2);
+}
+
 export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   const wss = new WebSocketServer({
     port,
@@ -117,7 +126,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           undefined,
           defaultRuntime,
           providerAbort.signal,
-        ).catch((err) => logError(`web provider exited: ${String(err)}`)),
+        ).catch((err) => logError(`web provider exited: ${formatError(err)}`)),
       );
     } else {
       defaultRuntime.log(
@@ -136,7 +145,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           webhookUrl: cfg.telegram?.webhookUrl,
           webhookSecret: cfg.telegram?.webhookSecret,
           webhookPath: cfg.telegram?.webhookPath,
-        }).catch((err) => logError(`telegram provider exited: ${String(err)}`)),
+        }).catch((err) =>
+          logError(`telegram provider exited: ${formatError(err)}`),
+        ),
       );
     } else {
       defaultRuntime.log(
