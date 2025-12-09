@@ -44,8 +44,8 @@ final class WorkActivityStore: ObservableObject {
         phase: String,
         name: String?,
         meta: String?,
-        args: [String: AnyCodable]?
-    ) {
+        args: [String: AnyCodable]?)
+    {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(kind: toolKind, meta: meta, args: args)
         if phase.lowercased() == "start" {
@@ -124,7 +124,7 @@ final class WorkActivityStore: ObservableObject {
             return
         }
         // Otherwise, pick most recent by lastUpdate.
-        if let next = self.active.values.sorted(by: { $0.lastUpdate > $1.lastUpdate }).first {
+        if let next = self.active.values.max(by: { $0.lastUpdate < $1.lastUpdate }) {
             self.currentSessionKey = next.sessionKey
         } else {
             self.currentSessionKey = nil
@@ -145,20 +145,20 @@ final class WorkActivityStore: ObservableObject {
 
     private static func mapToolKind(_ name: String?) -> ToolKind {
         switch name?.lowercased() {
-        case "bash", "shell": return .bash
-        case "read": return .read
-        case "write": return .write
-        case "edit": return .edit
-        case "attach": return .attach
-        default: return .other
+        case "bash", "shell": .bash
+        case "read": .read
+        case "write": .write
+        case "edit": .edit
+        case "attach": .attach
+        default: .other
         }
     }
 
     private static func buildLabel(
         kind: ToolKind,
         meta: String?,
-        args: [String: AnyCodable]?
-    ) -> String {
+        args: [String: AnyCodable]?) -> String
+    {
         switch kind {
         case .bash:
             if let cmd = args?["command"]?.value as? String {
@@ -166,7 +166,7 @@ final class WorkActivityStore: ObservableObject {
             }
             return "bash"
         case .read, .write, .edit, .attach:
-            if let path = Self.extractPath(args: args, meta: meta) {
+            if let path = extractPath(args: args, meta: meta) {
                 return "\(kind.rawValue): \(path)"
             }
             return kind.rawValue
@@ -179,9 +179,9 @@ final class WorkActivityStore: ObservableObject {
     }
 
     private static func extractPath(args: [String: AnyCodable]?, meta: String?) -> String? {
-        if let p = args?["path"]?.value as? String { return shortenHome(path: p) }
-        if let p = args?["file_path"]?.value as? String { return shortenHome(path: p) }
-        if let meta { return shortenHome(path: meta) }
+        if let p = args?["path"]?.value as? String { return self.shortenHome(path: p) }
+        if let p = args?["file_path"]?.value as? String { return self.shortenHome(path: p) }
+        if let meta { return self.shortenHome(path: meta) }
         return nil
     }
 

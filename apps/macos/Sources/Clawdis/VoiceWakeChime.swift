@@ -17,16 +17,16 @@ enum VoiceWakeChime: Codable, Equatable, Sendable {
     var displayLabel: String {
         switch self {
         case .none:
-            return "No Sound"
+            "No Sound"
         case let .system(name):
-            return VoiceWakeChimeCatalog.displayName(for: name)
+            VoiceWakeChimeCatalog.displayName(for: name)
         case let .custom(displayName, _):
-            return displayName
+            displayName
         }
     }
 }
 
-struct VoiceWakeChimeCatalog {
+enum VoiceWakeChimeCatalog {
     /// Options shown in the picker.
     static var systemOptions: [String] { SoundEffectCatalog.systemOptions }
 
@@ -57,12 +57,13 @@ enum VoiceWakeChimePlayer {
     private static func sound(for chime: VoiceWakeChime) -> NSSound? {
         switch chime {
         case .none:
-            return nil
+            nil
+
         case let .system(name):
-            return SoundEffectPlayer.sound(named: name)
+            SoundEffectPlayer.sound(named: name)
 
         case let .custom(_, bookmark):
-            return SoundEffectPlayer.sound(from: bookmark)
+            SoundEffectPlayer.sound(from: bookmark)
         }
     }
 }

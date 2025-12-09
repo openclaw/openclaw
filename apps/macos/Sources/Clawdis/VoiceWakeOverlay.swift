@@ -20,7 +20,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         var isVisible: Bool = false
         var forwardEnabled: Bool = false
         var isSending: Bool = false
-        var attributed: NSAttributedString = NSAttributedString(string: "")
+        var attributed: NSAttributedString = .init(string: "")
         var isOverflowing: Bool = false
         var isEditing: Bool = false
         var level: Double = 0 // normalized 0...1 speech level for UI
@@ -52,7 +52,11 @@ final class VoiceWakeOverlayController: ObservableObject {
         isFinal: Bool = false) -> UUID
     {
         let token = UUID()
-        self.logger.log(level: .info, "overlay session_start source=\(source.rawValue, privacy: .public) len=\(transcript.count, privacy: .public)")
+        let message = """
+        overlay session_start source=\(source.rawValue, privacy: .public) \
+        len=\(transcript.count, privacy: .public)
+        """
+        self.logger.log(level: .info, "\(message)")
         self.activeToken = token
         self.activeSource = source
         self.forwardConfig = nil
@@ -76,7 +80,11 @@ final class VoiceWakeOverlayController: ObservableObject {
     func updatePartial(token: UUID, transcript: String, attributed: NSAttributedString? = nil) {
         guard self.guardToken(token, context: "partial") else { return }
         guard !self.model.isFinal else { return }
-        self.logger.log(level: .info, "overlay partial token=\(token.uuidString, privacy: .public) len=\(transcript.count, privacy: .public)")
+        let message = """
+        overlay partial token=\(token.uuidString, privacy: .public) \
+        len=\(transcript.count, privacy: .public)
+        """
+        self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel(); self.autoSendTask = nil; self.autoSendToken = nil
         self.forwardConfig = nil
         self.model.text = transcript
@@ -99,7 +107,13 @@ final class VoiceWakeOverlayController: ObservableObject {
         attributed: NSAttributedString? = nil)
     {
         guard self.guardToken(token, context: "final") else { return }
-        self.logger.log(level: .info, "overlay presentFinal token=\(token.uuidString, privacy: .public) len=\(transcript.count, privacy: .public) autoSendAfter=\(delay ?? -1, privacy: .public) forwardEnabled=\(forwardConfig.enabled, privacy: .public)")
+        let message = """
+        overlay presentFinal token=\(token.uuidString, privacy: .public) \
+        len=\(transcript.count, privacy: .public) \
+        autoSendAfter=\(delay ?? -1, privacy: .public) \
+        forwardEnabled=\(forwardConfig.enabled, privacy: .public)
+        """
+        self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel()
         self.autoSendToken = token
         self.forwardConfig = forwardConfig
@@ -142,7 +156,13 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     func sendNow(token: UUID? = nil, sendChime: VoiceWakeChime = .none) {
         guard self.guardToken(token, context: "send") else { return }
-        self.logger.log(level: .info, "overlay sendNow called token=\(self.activeToken?.uuidString ?? "nil", privacy: .public) isSending=\(self.model.isSending, privacy: .public) forwardEnabled=\(self.model.forwardEnabled, privacy: .public) textLen=\(self.model.text.count, privacy: .public)")
+        let message = """
+        overlay sendNow called token=\(self.activeToken?.uuidString ?? "nil", privacy: .public) \
+        isSending=\(self.model.isSending, privacy: .public) \
+        forwardEnabled=\(self.model.forwardEnabled, privacy: .public) \
+        textLen=\(self.model.text.count, privacy: .public)
+        """
+        self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel(); self.autoSendToken = nil
         if self.model.isSending { return }
         self.model.isEditing = false
@@ -159,7 +179,8 @@ final class VoiceWakeOverlayController: ObservableObject {
         }
 
         if sendChime != .none {
-            self.logger.log(level: .info, "overlay sendNow playing sendChime=\(String(describing: sendChime), privacy: .public)")
+            let message = "overlay sendNow playing sendChime=\(String(describing: sendChime), privacy: .public)"
+            self.logger.log(level: .info, "\(message)")
             VoiceWakeChimePlayer.play(sendChime, reason: "overlay.send")
         }
 
@@ -176,7 +197,14 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     func dismiss(token: UUID? = nil, reason: DismissReason = .explicit, outcome: SendOutcome = .empty) {
         guard self.guardToken(token, context: "dismiss") else { return }
-        self.logger.log(level: .info, "overlay dismiss token=\(self.activeToken?.uuidString ?? "nil", privacy: .public) reason=\(String(describing: reason), privacy: .public) outcome=\(String(describing: outcome), privacy: .public) visible=\(self.model.isVisible, privacy: .public) sending=\(self.model.isSending, privacy: .public)")
+        let message = """
+        overlay dismiss token=\(self.activeToken?.uuidString ?? "nil", privacy: .public) \
+        reason=\(String(describing: reason), privacy: .public) \
+        outcome=\(String(describing: outcome), privacy: .public) \
+        visible=\(self.model.isVisible, privacy: .public) \
+        sending=\(self.model.isSending, privacy: .public)
+        """
+        self.logger.log(level: .info, "\(message)")
         self.autoSendTask?.cancel(); self.autoSendToken = nil
         self.model.isSending = false
         self.model.isEditing = false
@@ -237,7 +265,9 @@ final class VoiceWakeOverlayController: ObservableObject {
         guard let window else { return }
         if !self.model.isVisible {
             self.model.isVisible = true
-            self.logger.log(level: .info, "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
+            self.logger.log(
+                level: .info,
+                "overlay present windowShown textLen=\(self.model.text.count, privacy: .public)")
             // Keep the status item in “listening” mode until we explicitly dismiss the overlay.
             AppStateStore.shared.triggerVoiceEars(ttl: nil)
             let start = target.offsetBy(dx: 0, dy: -6)
@@ -309,7 +339,8 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 
     private func measuredHeight() -> CGFloat {
-        let attributed = self.model.attributed.length > 0 ? self.model.attributed : self.makeAttributed(from: self.model.text)
+        let attributed = self.model.attributed.length > 0 ? self.model.attributed : self
+            .makeAttributed(from: self.model.text)
         let maxWidth = self.width - (self.padding * 2) - self.spacing - self.buttonWidth
 
         let textInset = NSSize(width: 2, height: 6)
@@ -350,7 +381,13 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 
     private func scheduleAutoSend(token: UUID, after delay: TimeInterval, sendChime: VoiceWakeChime) {
-        self.logger.log(level: .info, "overlay scheduleAutoSend token=\(token.uuidString, privacy: .public) after=\(delay, privacy: .public) sendChime=\(String(describing: sendChime), privacy: .public)")
+        self.logger.log(
+            level: .info,
+            """
+            overlay scheduleAutoSend token=\(token.uuidString, privacy: .public) \
+            after=\(delay, privacy: .public) \
+            sendChime=\(String(describing: sendChime), privacy: .public)
+            """)
         self.autoSendTask?.cancel()
         self.autoSendToken = token
         self.autoSendTask = Task<Void, Never> { [weak self, sendChime, token] in
@@ -360,7 +397,9 @@ final class VoiceWakeOverlayController: ObservableObject {
             await MainActor.run {
                 guard let self else { return }
                 guard self.guardToken(token, context: "autoSend") else { return }
-                self.logger.log(level: .info, "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
+                self.logger.log(
+                    level: .info,
+                    "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
                 self.sendNow(token: token, sendChime: sendChime)
                 self.autoSendTask = nil
             }
@@ -376,6 +415,7 @@ final class VoiceWakeOverlayController: ObservableObject {
             ])
     }
 }
+
 private struct VoiceWakeOverlayView: View {
     @ObservedObject var controller: VoiceWakeOverlayController
     @FocusState private var textFocused: Bool
@@ -469,9 +509,8 @@ private struct VoiceWakeOverlayView: View {
             // Close button rendered above and outside the clipped bubble
             CloseButtonOverlay(
                 isVisible: self.controller.model.isEditing || self.isHovering || self.closeHovering,
-                onHover: { self.closeHovering = $0 }) {
-                self.controller.cancelEditingAndDismiss()
-            }
+                onHover: { self.closeHovering = $0 },
+                onClose: { self.controller.cancelEditingAndDismiss() })
         }
         .padding(.top, self.controller.closeOverflow)
         .padding(.leading, self.controller.closeOverflow)
@@ -629,7 +668,6 @@ private struct VibrantLabelView: NSViewRepresentable {
         label.attributedStringValue = self.attributed.strippingForegroundColor()
         label.textColor = .labelColor
     }
-
 }
 
 private final class ClickCatcher: NSView {
@@ -675,8 +713,8 @@ private struct CloseButtonOverlay: View {
 
     var body: some View {
         Group {
-            if isVisible {
-                Button(action: onClose) {
+            if self.isVisible {
+                Button(action: self.onClose) {
                     Image(systemName: "xmark")
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(Color.white.opacity(0.9))
@@ -695,7 +733,7 @@ private struct CloseButtonOverlay: View {
                 .transition(.opacity)
             }
         }
-        .allowsHitTesting(isVisible)
+        .allowsHitTesting(self.isVisible)
     }
 }
 
@@ -723,7 +761,7 @@ private final class TranscriptNSTextView: NSTextView {
             self.onEscape?()
             return
         }
-        if isReturn && event.modifierFlags.contains(.command) {
+        if isReturn, event.modifierFlags.contains(.command) {
             self.onSend?()
             return
         }

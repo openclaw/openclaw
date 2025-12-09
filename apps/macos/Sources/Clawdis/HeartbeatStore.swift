@@ -13,12 +13,13 @@ final class HeartbeatStore: ObservableObject {
         self.observer = NotificationCenter.default.addObserver(
             forName: .controlHeartbeat,
             object: nil,
-            queue: .main) { [weak self] note in
-                guard let data = note.object as? Data else { return }
-                if let decoded = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data) {
-                    Task { @MainActor in self?.lastEvent = decoded }
-                }
+            queue: .main)
+        { [weak self] note in
+            guard let data = note.object as? Data else { return }
+            if let decoded = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data) {
+                Task { @MainActor in self?.lastEvent = decoded }
             }
+        }
 
         Task {
             if self.lastEvent == nil {

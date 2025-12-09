@@ -183,7 +183,8 @@ struct ClawdisCLI {
           clawdis-mac run [--cwd <path>] [--env KEY=VAL] [--timeout <sec>] [--needs-screen-recording] <command ...>
           clawdis-mac status
           clawdis-mac rpc-status
-          clawdis-mac agent --message <text> [--thinking <low|default|high>] [--session <key>] [--deliver] [--to <E.164>]
+          clawdis-mac agent --message <text> [--thinking <low|default|high>]
+            [--session <key>] [--deliver] [--to <E.164>]
           clawdis-mac --help
 
         Returns JSON to stdout:

@@ -246,7 +246,10 @@ struct OnboardingView: View {
                         .foregroundStyle(.secondary)
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
-                        "We install into /usr/local/bin and /opt/homebrew/bin. Rerun anytime if you move the build output.")
+                        """
+                        We install into /usr/local/bin and /opt/homebrew/bin.
+                        Rerun anytime if you move the build output.
+                        """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -259,7 +262,10 @@ struct OnboardingView: View {
             Text("Link WhatsApp")
                 .font(.largeTitle.weight(.semibold))
             Text(
-                "Run `clawdis login` where the relay runs (local if local mode, remote if remote). Scan the QR to pair your account.")
+                """
+                Run `clawdis login` where the relay runs (local if local mode, remote if remote).
+                Scan the QR to pair your account.
+                """)
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -273,11 +279,17 @@ struct OnboardingView: View {
                     systemImage: "terminal")
                 self.featureRow(
                     title: "Run `clawdis login --verbose`",
-                    subtitle: "Scan the QR code with WhatsApp on your phone. We only use your personal session; no cloud relay involved.",
+                    subtitle: """
+                    Scan the QR code with WhatsApp on your phone.
+                    We only use your personal session; no cloud relay involved.
+                    """,
                     systemImage: "qrcode.viewfinder")
                 self.featureRow(
                     title: "Re-link after timeouts",
-                    subtitle: "If Baileys auth expires, re-run login on that host. Settings → General shows remote/local mode so you know where to run it.",
+                    subtitle: """
+                    If Baileys auth expires, re-run login on that host.
+                    Settings → General shows remote/local mode so you know where to run it.
+                    """,
                     systemImage: "clock.arrow.circlepath")
             }
         }
@@ -290,8 +302,10 @@ struct OnboardingView: View {
             self.onboardingCard {
                 self.featureRow(
                     title: "Run the dashboard",
-                    subtitle: "Use the CLI helper from your scripts, and reopen onboarding from "
-                        + "Settings if you add a new user.",
+                    subtitle: """
+                    Use the CLI helper from your scripts, and reopen onboarding from Settings
+                    if you add a new user.
+                    """,
                     systemImage: "checkmark.seal")
                 self.featureRow(
                     title: "Test a notification",

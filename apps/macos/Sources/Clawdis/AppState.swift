@@ -182,7 +182,8 @@ final class AppState: ObservableObject {
             UserDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
         }
         if let storedOverride = UserDefaults.standard.string(forKey: iconOverrideKey),
-           let selection = IconOverrideSelection(rawValue: storedOverride) {
+           let selection = IconOverrideSelection(rawValue: storedOverride)
+        {
             self.iconOverride = selection
         } else {
             self.iconOverride = .system

@@ -137,57 +137,57 @@ struct GeneralSettings: View {
                 .disabled(self.remoteStatus == .checking || self.state.remoteTarget
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
-            switch self.remoteStatus {
-            case .idle:
-                EmptyView()
-            case .checking:
-                Text("Checking…").font(.caption).foregroundStyle(.secondary)
+                switch self.remoteStatus {
+                case .idle:
+                    EmptyView()
+                case .checking:
+                    Text("Checking…").font(.caption).foregroundStyle(.secondary)
                 case .ok:
                     Label("Ready", systemImage: "checkmark.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.green)
                 case let .failed(message):
-                Text(message)
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            // Diagnostics
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Control channel")
+                    .font(.caption.weight(.semibold))
+                Text(self.controlStatusLine)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                if let ping = ControlChannel.shared.lastPingMs {
+                    Text("Last ping: \(Int(ping)) ms")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if let hb = HeartbeatStore.shared.lastEvent {
+                    let ageText = age(from: Date(timeIntervalSince1970: hb.ts / 1000))
+                    Text("Last heartbeat: \(hb.status) · \(ageText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-        }
 
-        // Diagnostics
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Control channel")
-                .font(.caption.weight(.semibold))
-            Text(self.controlStatusLine)
-                .font(.caption)
+            Text("Tip: enable Tailscale for stable remote access.")
+                .font(.footnote)
                 .foregroundStyle(.secondary)
-            if let ping = ControlChannel.shared.lastPingMs {
-                Text("Last ping: \(Int(ping)) ms")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let hb = HeartbeatStore.shared.lastEvent {
-                let ageText = age(from: Date(timeIntervalSince1970: hb.ts / 1000))
-                Text("Last heartbeat: \(hb.status) · \(ageText)")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-
-        Text("Tip: enable Tailscale for stable remote access.")
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
+                .lineLimit(1)
         }
         .transition(.opacity)
     }
 
     private var controlStatusLine: String {
         switch ControlChannel.shared.state {
-        case .connected: return "Connected"
-        case .connecting: return "Connecting…"
-        case .disconnected: return "Disconnected"
-        case let .degraded(msg): return "Degraded: \(msg)"
+        case .connected: "Connected"
+        case .connecting: "Connecting…"
+        case .disconnected: "Disconnected"
+        case let .degraded(msg): "Degraded: \(msg)"
         }
     }
 
@@ -276,8 +276,10 @@ struct GeneralSettings: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let recent = snap.sessions.recent.first {
-                    Text(
-                        "Last activity: \(recent.key) \(recent.updatedAt != nil ? relativeAge(from: Date(timeIntervalSince1970: (recent.updatedAt ?? 0) / 1000)) : "unknown")")
+                    let lastActivity = recent.updatedAt != nil
+                        ? relativeAge(from: Date(timeIntervalSince1970: (recent.updatedAt ?? 0) / 1000))
+                        : "unknown"
+                    Text("Last activity: \(recent.key) \(lastActivity)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -386,7 +388,9 @@ extension GeneralSettings {
         // Step 2: control channel health over tunnel
         let originalMode = AppStateStore.shared.connectionMode
         do {
-            try await ControlChannel.shared.configure(mode: .remote(target: settings.target, identity: settings.identity))
+            try await ControlChannel.shared.configure(mode: .remote(
+                target: settings.target,
+                identity: settings.identity))
             let data = try await ControlChannel.shared.health(timeout: 10)
             if decodeHealthSnapshot(from: data) != nil {
                 self.remoteStatus = .ok

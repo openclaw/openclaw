@@ -136,7 +136,12 @@ actor VoiceWakeRuntime {
                 guard let self else { return }
                 let transcript = result?.bestTranscription.formattedString
                 let isFinal = result?.isFinal ?? false
-                Task { await self.handleRecognition(transcript: transcript, isFinal: isFinal, error: error, config: config, generation: generation) }
+                Task { await self.handleRecognition(
+                    transcript: transcript,
+                    isFinal: isFinal,
+                    error: error,
+                    config: config,
+                    generation: generation) }
             }
 
             self.logger.info("voicewake runtime started")
@@ -213,7 +218,10 @@ actor VoiceWakeRuntime {
                 let snapshot = self.committedTranscript + self.volatileTranscript
                 if let token = self.overlayToken {
                     await MainActor.run {
-                        VoiceWakeOverlayController.shared.updatePartial(token: token, transcript: snapshot, attributed: attributed)
+                        VoiceWakeOverlayController.shared.updatePartial(
+                            token: token,
+                            transcript: snapshot,
+                            attributed: attributed)
                     }
                 }
             }
@@ -335,10 +343,10 @@ actor VoiceWakeRuntime {
                 VoiceWakeOverlayController.shared.presentFinal(
                     token: token,
                     transcript: finalTranscript,
-                forwardConfig: forwardConfig,
-                autoSendAfter: delay,
-                sendChime: sendChime,
-                attributed: finalAttributed)
+                    forwardConfig: forwardConfig,
+                    autoSendAfter: delay,
+                    sendChime: sendChime,
+                    attributed: finalAttributed)
             }
         } else if forwardConfig.enabled, !finalTranscript.isEmpty {
             if sendChime != .none {

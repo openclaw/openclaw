@@ -20,7 +20,12 @@ enum VoiceWakeForwarder {
             ?? ProcessInfo.processInfo.hostName
 
         let safeMachine = resolvedMachine.isEmpty ? "this Mac" : resolvedMachine
-        return "User talked via voice recognition on \(safeMachine) - repeat prompt first + remember some words might be incorrectly transcribed.\n\n\(transcript)"
+        return """
+        User talked via voice recognition on \(safeMachine) - repeat prompt first \
+        + remember some words might be incorrectly transcribed.
+
+        \(transcript)
+        """
     }
 
     static func clearCliCache() {
@@ -33,8 +38,8 @@ enum VoiceWakeForwarder {
 
         var errorDescription: String? {
             switch self {
-            case let .rpcFailed(message): return message
-            case .disabled: return "Voice wake forwarding disabled"
+            case let .rpcFailed(message): message
+            case .disabled: "Voice wake forwarding disabled"
             }
         }
     }
@@ -149,7 +154,7 @@ enum VoiceWakeForwarder {
                 }
                 continue
             }
-            if ch.isWhitespace && quote == nil {
+            if ch.isWhitespace, quote == nil {
                 flush()
                 continue
             }

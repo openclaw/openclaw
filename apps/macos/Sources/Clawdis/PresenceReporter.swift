@@ -69,7 +69,7 @@ final class PresenceReporter {
     }
 
     private static func primaryIPv4Address() -> String? {
-        var addrList: UnsafeMutablePointer<ifaddrs>? = nil
+        var addrList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
         defer { freeifaddrs(addrList) }
 
@@ -86,10 +86,18 @@ final class PresenceReporter {
 
             var addr = ptr.pointee.ifa_addr.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(&addr, socklen_t(ptr.pointee.ifa_addr.pointee.sa_len), &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST)
+            let result = getnameinfo(
+                &addr,
+                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST)
             guard result == 0 else { continue }
             let len = buffer.prefix { $0 != 0 }
-            let ip = String(decoding: len.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            let bytes = len.map { UInt8(bitPattern: $0) }
+            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
 
             if name == "en0" { en0 = ip; break }
             if fallback == nil { fallback = ip }

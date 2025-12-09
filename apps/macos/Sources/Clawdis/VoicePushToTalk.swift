@@ -55,14 +55,14 @@ final class VoicePushToTalkHotkey {
         }
 
         let chordActive = self.optionDown
-        if chordActive && !self.active {
+        if chordActive, !self.active {
             self.active = true
             Task {
                 Logger(subsystem: "com.steipete.clawdis", category: "voicewake.ptt")
                     .info("ptt hotkey down")
                 await VoicePushToTalk.shared.begin()
             }
-        } else if !chordActive && self.active {
+        } else if !chordActive, self.active {
             self.active = false
             Task {
                 Logger(subsystem: "com.steipete.clawdis", category: "voicewake.ptt")
@@ -126,7 +126,10 @@ actor VoicePushToTalk {
         // Pause the always-on wake word recognizer so both pipelines don't fight over the mic tap.
         await VoiceWakeRuntime.shared.pauseForPushToTalk()
         let adoptedPrefix = self.adoptedPrefix
-        let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : Self.makeAttributed(committed: adoptedPrefix, volatile: "", isFinal: false)
+        let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : Self.makeAttributed(
+            committed: adoptedPrefix,
+            volatile: "",
+            isFinal: false)
         self.overlayToken = await MainActor.run {
             VoiceWakeOverlayController.shared.startSession(
                 source: .pushToTalk,
@@ -166,7 +169,10 @@ actor VoicePushToTalk {
         let locale = localeID.flatMap { Locale(identifier: $0) } ?? Locale(identifier: Locale.current.identifier)
         self.recognizer = SFSpeechRecognizer(locale: locale)
         guard let recognizer, recognizer.isAvailable else {
-            throw NSError(domain: "VoicePushToTalk", code: 1, userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
+            throw NSError(
+                domain: "VoicePushToTalk",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Recognizer unavailable"])
         }
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
@@ -216,7 +222,10 @@ actor VoicePushToTalk {
         let attributed = Self.makeAttributed(committed: committedWithPrefix, volatile: self.volatile, isFinal: isFinal)
         if let token = self.overlayToken {
             await MainActor.run {
-                VoiceWakeOverlayController.shared.updatePartial(token: token, transcript: snapshot, attributed: attributed)
+                VoiceWakeOverlayController.shared.updatePartial(
+                    token: token,
+                    transcript: snapshot,
+                    attributed: attributed)
             }
         }
     }
@@ -238,11 +247,10 @@ actor VoicePushToTalk {
             committed: Self.join(self.adoptedPrefix, self.committed),
             volatile: self.volatile,
             isFinal: true)
-        let forward: VoiceWakeForwardConfig
-        if let cached = self.activeConfig?.forwardConfig {
-            forward = cached
+        let forward: VoiceWakeForwardConfig = if let cached = self.activeConfig?.forwardConfig {
+            cached
         } else {
-            forward = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
+            await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
         }
         let chime = finalText.isEmpty ? .none : (self.activeConfig?.sendChime ?? .none)
 

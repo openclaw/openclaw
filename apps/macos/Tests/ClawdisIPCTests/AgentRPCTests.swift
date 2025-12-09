@@ -1,5 +1,5 @@
-@testable import Clawdis
 import Testing
+@testable import Clawdis
 @testable import ClawdisIPC
 
 @Suite(.serialized) struct AgentRPCTests {

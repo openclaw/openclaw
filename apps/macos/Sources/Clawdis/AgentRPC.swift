@@ -1,5 +1,5 @@
-import Foundation
 import Darwin
+import Foundation
 import OSLog
 
 struct ControlRequestParams: @unchecked Sendable {

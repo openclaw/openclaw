@@ -194,7 +194,10 @@ struct DebugSettings: View {
                                 .foregroundStyle(.red)
                         } else {
                             Text(
-                                "Uses the Voice Wake path: forwards over SSH when configured, otherwise runs locally via rpc.")
+                                """
+                                Uses the Voice Wake path: forwards over SSH when configured,
+                                otherwise runs locally via rpc.
+                                """)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -289,7 +292,10 @@ struct DebugSettings: View {
             self.debugSendStatus = nil
         }
 
-        let message = "This is a debug test from the Mac app. Reply with \"Debug test works (and a funny pun)\" if you received that."
+        let message = """
+        This is a debug test from the Mac app. Reply with "Debug test works (and a funny pun)" \
+        if you received that.
+        """
         let config = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
         let shouldForward = config.enabled
 

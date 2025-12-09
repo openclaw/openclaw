@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-struct SoundEffectCatalog {
+enum SoundEffectCatalog {
     /// All discoverable system sound names, with "Glass" pinned first.
     static var systemOptions: [String] {
         var names = Set(Self.discoveredSoundMap.keys).union(Self.fallbackNames)
@@ -13,7 +13,7 @@ struct SoundEffectCatalog {
     static func displayName(for raw: String) -> String { raw }
 
     static func url(for name: String) -> URL? {
-        Self.discoveredSoundMap[name]
+        self.discoveredSoundMap[name]
     }
 
     // MARK: - Internals

@@ -64,6 +64,7 @@ final class InstancesStore: ObservableObject {
                 self.logger.error("instances fetch returned empty payload")
                 self.instances = [self.localFallbackInstance()]
                 self.lastError = "No presence data returned from relay yet."
+                await self.probeHealthIfNeeded()
                 return
             }
             let decoded = try JSONDecoder().decode([InstanceInfo].self, from: data)
@@ -83,6 +84,7 @@ final class InstancesStore: ObservableObject {
             if withIDs.isEmpty {
                 self.instances = [self.localFallbackInstance()]
                 self.lastError = nil
+                await self.probeHealthIfNeeded()
             } else {
                 self.instances = withIDs
                 self.lastError = nil
@@ -93,10 +95,10 @@ final class InstancesStore: ObservableObject {
                 instances fetch failed: \(error.localizedDescription, privacy: .public) \
                 len=\(self.lastPayload?.count ?? 0, privacy: .public) \
                 utf8=\(self.snippet(self.lastPayload), privacy: .public)
-                """
-            )
+                """)
             self.instances = [self.localFallbackInstance()]
             self.lastError = "Decode failed: \(error.localizedDescription)"
+            await self.probeHealthIfNeeded()
         }
     }
 
@@ -126,7 +128,7 @@ final class InstancesStore: ObservableObject {
     }
 
     private static func primaryIPv4Address() -> String? {
-        var addrList: UnsafeMutablePointer<ifaddrs>? = nil
+        var addrList: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&addrList) == 0, let first = addrList else { return nil }
         defer { freeifaddrs(addrList) }
 
@@ -143,10 +145,18 @@ final class InstancesStore: ObservableObject {
 
             var addr = ptr.pointee.ifa_addr.pointee
             var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            let result = getnameinfo(&addr, socklen_t(ptr.pointee.ifa_addr.pointee.sa_len), &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST)
+            let result = getnameinfo(
+                &addr,
+                socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                &buffer,
+                socklen_t(buffer.count),
+                nil,
+                0,
+                NI_NUMERICHOST)
             guard result == 0 else { continue }
             let len = buffer.prefix { $0 != 0 }
-            let ip = String(decoding: len.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+            let bytes = len.map { UInt8(bitPattern: $0) }
+            guard let ip = String(bytes: bytes, encoding: .utf8) else { continue }
 
             if name == "en0" { en0 = ip; break }
             if fallback == nil { fallback = ip }
@@ -168,5 +178,28 @@ final class InstancesStore: ObservableObject {
             return asString.replacingOccurrences(of: "\n", with: " ")
         }
         return "<\(data.count) bytes non-utf8>"
+    }
+
+    private func probeHealthIfNeeded() async {
+        do {
+            let data = try await ControlChannel.shared.health(timeout: 8)
+            guard let snap = decodeHealthSnapshot(from: data) else { return }
+            let entry = InstanceInfo(
+                id: "health-\(snap.ts)",
+                host: "relay (health)",
+                ip: nil,
+                version: nil,
+                lastInputSeconds: nil,
+                mode: "health",
+                reason: "health probe",
+                text: "Health ok · linked=\(snap.web.linked) · ipc.exists=\(snap.ipc.exists)",
+                ts: snap.ts)
+            if !self.instances.contains(where: { $0.id == entry.id }) {
+                self.instances.insert(entry, at: 0)
+            }
+            self.lastError = nil
+        } catch {
+            self.logger.error("instances health probe failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 }

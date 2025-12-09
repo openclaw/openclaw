@@ -12,8 +12,9 @@ import Testing
     }
 
     private func makeExec(at path: URL) throws {
-        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(),
-                                                withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: path.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
         FileManager.default.createFile(atPath: path.path, contents: Data("echo ok\n".utf8))
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
     }
@@ -23,7 +24,7 @@ import Testing
         CommandResolver.setProjectRoot(tmp.path)
 
         let clawdisPath = tmp.appendingPathComponent("node_modules/.bin/clawdis")
-        try makeExec(at: clawdisPath)
+        try self.makeExec(at: clawdisPath)
 
         let cmd = CommandResolver.clawdisCommand(subcommand: "relay")
         #expect(cmd.prefix(2).elementsEqual([clawdisPath.path, "relay"]))
@@ -35,10 +36,10 @@ import Testing
 
         let nodePath = tmp.appendingPathComponent("node_modules/.bin/node")
         let scriptPath = tmp.appendingPathComponent("bin/clawdis.js")
-        try makeExec(at: nodePath)
+        try self.makeExec(at: nodePath)
         try "#!/bin/sh\necho v22.0.0\n".write(to: nodePath, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: nodePath.path)
-        try makeExec(at: scriptPath)
+        try self.makeExec(at: scriptPath)
 
         let previous = getenv("CLAWDIS_RUNTIME").flatMap { String(validatingCString: $0) }
         setenv("CLAWDIS_RUNTIME", "node", 1)
@@ -63,7 +64,7 @@ import Testing
         CommandResolver.setProjectRoot(tmp.path)
 
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
-        try makeExec(at: pnpmPath)
+        try self.makeExec(at: pnpmPath)
 
         let cmd = CommandResolver.clawdisCommand(subcommand: "rpc")
 
@@ -75,7 +76,7 @@ import Testing
         CommandResolver.setProjectRoot(tmp.path)
 
         let pnpmPath = tmp.appendingPathComponent("node_modules/.bin/pnpm")
-        try makeExec(at: pnpmPath)
+        try self.makeExec(at: pnpmPath)
 
         let cmd = CommandResolver.clawdisCommand(subcommand: "health", extraArgs: ["--json", "--timeout", "5"])
 

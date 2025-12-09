@@ -225,8 +225,8 @@ enum CommandResolver {
         runtime: RuntimeResolution,
         entrypoint: String,
         subcommand: String,
-        extraArgs: [String]
-    ) -> [String] {
+        extraArgs: [String]) -> [String]
+    {
         [runtime.path, entrypoint, subcommand] + extraArgs
     }
 
@@ -332,11 +332,19 @@ enum CommandResolver {
             if let relay = self.bundledRelayRoot(),
                let entry = self.relayEntrypoint(in: relay)
             {
-                return self.makeRuntimeCommand(runtime: runtime, entrypoint: entry, subcommand: subcommand, extraArgs: extraArgs)
+                return self.makeRuntimeCommand(
+                    runtime: runtime,
+                    entrypoint: entry,
+                    subcommand: subcommand,
+                    extraArgs: extraArgs)
             }
 
             if let entry = self.relayEntrypoint(in: self.projectRoot()) {
-                return self.makeRuntimeCommand(runtime: runtime, entrypoint: entry, subcommand: subcommand, extraArgs: extraArgs)
+                return self.makeRuntimeCommand(
+                    runtime: runtime,
+                    entrypoint: entry,
+                    subcommand: subcommand,
+                    extraArgs: extraArgs)
             }
 
             if let clawdisPath = self.clawdisExecutable() {
@@ -347,7 +355,9 @@ enum CommandResolver {
                 return [pnpm, "--silent", "clawdis", subcommand] + extraArgs
             }
 
-            let missingEntry = "clawdis entrypoint missing (looked for dist/index.js or bin/clawdis.js); run pnpm build."
+            let missingEntry = """
+            clawdis entrypoint missing (looked for dist/index.js or bin/clawdis.js); run pnpm build.
+            """
             return self.errorCommand(with: missingEntry)
 
         case let .failure(error):
@@ -390,24 +400,32 @@ enum CommandResolver {
         args.append(userHost)
 
         // Run the real clawdis CLI on the remote host; do not fall back to clawdis-mac.
-        let exportedPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/Users/steipete/Library/pnpm:$PATH"
+        let exportedPath = [
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            "/Users/steipete/Library/pnpm",
+            "$PATH",
+        ].joined(separator: ":")
         let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
         let userPRJ = settings.projectRoot.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let projectSection: String
-        if userPRJ.isEmpty {
-            projectSection = """
-        DEFAULT_PRJ="$HOME/Projects/clawdis"
-        if [ -d "$DEFAULT_PRJ" ]; then
-          PRJ="$DEFAULT_PRJ"
-          cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
-        fi
-        """
+        let projectSection = if userPRJ.isEmpty {
+            """
+            DEFAULT_PRJ="$HOME/Projects/clawdis"
+            if [ -d "$DEFAULT_PRJ" ]; then
+              PRJ="$DEFAULT_PRJ"
+              cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }
+            fi
+            """
         } else {
-            projectSection = """
-        PRJ=\(self.shellQuote(userPRJ))
-        cd \(self.shellQuote(userPRJ)) || { echo "Project root not found: \(userPRJ)"; exit 127; }
-        """
+            """
+            PRJ=\(self.shellQuote(userPRJ))
+            cd \(self.shellQuote(userPRJ)) || { echo "Project root not found: \(userPRJ)"; exit 127; }
+            """
         }
 
         let scriptBody = """
@@ -448,7 +466,11 @@ enum CommandResolver {
         return ["/usr/bin/ssh"] + args
     }
 
-    private static func sshMacHelperCommand(subcommand: String, extraArgs: [String], settings: RemoteSettings) -> [String]? {
+    private static func sshMacHelperCommand(
+        subcommand: String,
+        extraArgs: [String],
+        settings: RemoteSettings) -> [String]?
+    {
         guard !settings.target.isEmpty else { return nil }
         guard let parsed = self.parseSSHTarget(settings.target) else { return nil }
 

@@ -108,7 +108,11 @@ struct ConfigSettings: View {
                             .frame(width: 100)
                             .disabled(!self.webChatEnabled)
                     }
-                    Text("Mac app connects to the relay’s loopback web chat on this port. Remote mode uses SSH -L to forward it.")
+                    Text(
+                        """
+                        Mac app connects to the relay’s loopback web chat on this port.
+                        Remote mode uses SSH -L to forward it.
+                        """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: 480, alignment: .leading)

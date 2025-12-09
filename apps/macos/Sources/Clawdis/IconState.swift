@@ -23,28 +23,28 @@ enum IconState: Equatable {
 
     var glyph: String {
         switch self.activity {
-        case .tool(.bash): return "💻"
-        case .tool(.read): return "📄"
-        case .tool(.write): return "✍️"
-        case .tool(.edit): return "📝"
-        case .tool(.attach): return "📎"
-        case .tool(.other), .job: return "🛠️"
+        case .tool(.bash): "💻"
+        case .tool(.read): "📄"
+        case .tool(.write): "✍️"
+        case .tool(.edit): "📝"
+        case .tool(.attach): "📎"
+        case .tool(.other), .job: "🛠️"
         }
     }
 
     var tint: Color {
         switch self {
-        case .workingMain: return .accentColor
-        case .workingOther: return .gray
-        case .overridden: return .orange
-        case .idle: return .clear
+        case .workingMain: .accentColor
+        case .workingOther: .gray
+        case .overridden: .orange
+        case .idle: .clear
         }
     }
 
     var isWorking: Bool {
         switch self {
-        case .idle: return false
-        default: return true
+        case .idle: false
+        default: true
         }
     }
 
@@ -53,9 +53,9 @@ enum IconState: Equatable {
         case let .workingMain(kind),
              let .workingOther(kind),
              let .overridden(kind):
-            return kind
+            kind
         case .idle:
-            return .job
+            .job
         }
     }
 }
@@ -70,18 +70,18 @@ enum IconOverrideSelection: String, CaseIterable, Identifiable {
 
     var label: String {
         switch self {
-        case .system: return "System (auto)"
-        case .idle: return "Idle"
-        case .mainBash: return "Working main – bash"
-        case .mainRead: return "Working main – read"
-        case .mainWrite: return "Working main – write"
-        case .mainEdit: return "Working main – edit"
-        case .mainOther: return "Working main – other"
-        case .otherBash: return "Working other – bash"
-        case .otherRead: return "Working other – read"
-        case .otherWrite: return "Working other – write"
-        case .otherEdit: return "Working other – edit"
-        case .otherOther: return "Working other – other"
+        case .system: "System (auto)"
+        case .idle: "Idle"
+        case .mainBash: "Working main – bash"
+        case .mainRead: "Working main – read"
+        case .mainWrite: "Working main – write"
+        case .mainEdit: "Working main – edit"
+        case .mainOther: "Working main – other"
+        case .otherBash: "Working other – bash"
+        case .otherRead: "Working other – read"
+        case .otherWrite: "Working other – write"
+        case .otherEdit: "Working other – edit"
+        case .otherOther: "Working other – other"
         }
     }
 

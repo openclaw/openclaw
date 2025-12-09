@@ -113,8 +113,7 @@ struct CritterStatusLabel: View {
                     .padding(3)
                     .background(
                         Circle()
-                            .fill(self.iconState.tint.opacity(0.9))
-                    )
+                            .fill(self.iconState.tint.opacity(0.9)))
                     .foregroundStyle(Color.white)
                     .offset(x: -4, y: -2)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)

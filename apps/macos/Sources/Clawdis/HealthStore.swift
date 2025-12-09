@@ -1,7 +1,7 @@
 import Foundation
+import Network
 import OSLog
 import SwiftUI
-import Network
 
 struct HealthSnapshot: Codable, Sendable {
     struct Web: Codable, Sendable {

@@ -5,24 +5,24 @@ struct InstancesSettings: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            header
+            self.header
             if let err = store.lastError {
                 Text("Error: \(err)")
                     .foregroundStyle(.red)
             }
-            if store.instances.isEmpty {
+            if self.store.instances.isEmpty {
                 Text("No instances reported yet.")
                     .foregroundStyle(.secondary)
             } else {
-                List(store.instances) { inst in
-                    instanceRow(inst)
+                List(self.store.instances) { inst in
+                    self.instanceRow(inst)
                 }
                 .listStyle(.inset)
             }
             Spacer()
         }
-        .onAppear { store.start() }
-        .onDisappear { store.stop() }
+        .onAppear { self.store.start() }
+        .onDisappear { self.store.stop() }
     }
 
     private var header: some View {
@@ -35,10 +35,10 @@ struct InstancesSettings: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            if store.isLoading {
+            if self.store.isLoading {
                 ProgressView()
             } else {
-                Button("Refresh") { Task { await store.refresh() } }
+                Button("Refresh") { Task { await self.store.refresh() } }
             }
         }
     }
@@ -52,12 +52,12 @@ struct InstancesSettings: View {
             }
             HStack(spacing: 8) {
                 if let version = inst.version {
-                    label(icon: "shippingbox", text: version)
+                    self.label(icon: "shippingbox", text: version)
                 }
-                label(icon: "clock", text: inst.lastInputDescription)
-                if let mode = inst.mode { label(icon: "network", text: mode) }
+                self.label(icon: "clock", text: inst.lastInputDescription)
+                if let mode = inst.mode { self.label(icon: "network", text: mode) }
                 if let reason = inst.reason, !reason.isEmpty {
-                    label(icon: "info.circle", text: reason)
+                    self.label(icon: "info.circle", text: reason)
                 }
             }
             Text(inst.text)

@@ -67,7 +67,10 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     private func bootstrap() async {
         do {
             guard AppStateStore.webChatEnabled else {
-                throw NSError(domain: "WebChat", code: 5, userInfo: [NSLocalizedDescriptionKey: "Web chat disabled in settings"])
+                throw NSError(
+                    domain: "WebChat",
+                    code: 5,
+                    userInfo: [NSLocalizedDescriptionKey: "Web chat disabled in settings"])
             }
             let endpoint = try await self.prepareEndpoint(remotePort: self.remotePort)
             self.baseEndpoint = endpoint
@@ -90,9 +93,9 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     private func prepareEndpoint(remotePort: Int) async throws -> URL {
         if CommandResolver.connectionModeIsRemote() {
-            return try await self.startOrRestartTunnel()
+            try await self.startOrRestartTunnel()
         } else {
-            return URL(string: "http://127.0.0.1:\(remotePort)/")!
+            URL(string: "http://127.0.0.1:\(remotePort)/")!
         }
     }
 
@@ -116,11 +119,17 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
             let (_, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse {
                 guard (200..<500).contains(http.statusCode) else {
-                    throw NSError(domain: "WebChat", code: http.statusCode, userInfo: [NSLocalizedDescriptionKey: "webchat returned HTTP \(http.statusCode)"])
+                    throw NSError(
+                        domain: "WebChat",
+                        code: http.statusCode,
+                        userInfo: [NSLocalizedDescriptionKey: "webchat returned HTTP \(http.statusCode)"])
                 }
             }
         } catch {
-            throw NSError(domain: "WebChat", code: 7, userInfo: [NSLocalizedDescriptionKey: "webchat unreachable: \(error.localizedDescription)"])
+            throw NSError(
+                domain: "WebChat",
+                code: 7,
+                userInfo: [NSLocalizedDescriptionKey: "webchat unreachable: \(error.localizedDescription)"])
         }
     }
 
@@ -128,7 +137,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
         // Kill existing tunnel if any
         self.stopTunnel(allowRestart: false)
 
-        let tunnel = try await WebChatTunnel.create(remotePort: self.remotePort, preferredLocalPort: 18_788)
+        let tunnel = try await WebChatTunnel.create(remotePort: self.remotePort, preferredLocalPort: 18788)
         self.tunnel = tunnel
         self.tunnelRestartEnabled = true
 
@@ -162,7 +171,8 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     private func showError(_ text: String) {
         let html = """
-        <html><body style='font-family:-apple-system;padding:24px;color:#c00'>Web chat failed to connect.<br><br>\(text)</body></html>
+        <html><body style='font-family:-apple-system;padding:24px;color:#c00'>Web chat failed to connect.<br><br>\(
+            text)</body></html>
         """
         self.webView.loadHTMLString(html, baseURL: nil)
     }
@@ -247,7 +257,7 @@ final class WebChatTunnel {
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",
             "-N",
-            "-L", "\(localPort):127.0.0.1:\(remotePort)"
+            "-L", "\(localPort):127.0.0.1:\(remotePort)",
         ]
         if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
         let identity = settings.identity.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -263,7 +273,9 @@ final class WebChatTunnel {
         // Consume stderr so ssh cannot block if it logs
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty, let line = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty else { return }
+            guard !data.isEmpty,
+                  let line = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !line.isEmpty else { return }
             webChatLogger.error("webchat tunnel stderr: \(line, privacy: .public)")
         }
         try process.run()
@@ -272,7 +284,7 @@ final class WebChatTunnel {
     }
 
     private static func findPort(preferred: UInt16?) async throws -> UInt16 {
-        if let preferred, Self.portIsFree(preferred) { return preferred }
+        if let preferred, portIsFree(preferred) { return preferred }
 
         return try await withCheckedThrowingContinuation { cont in
             let queue = DispatchQueue(label: "com.steipete.clawdis.webchat.port", qos: .utility)

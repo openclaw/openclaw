@@ -9,8 +9,8 @@ final class AgentEventStore: ObservableObject {
 
     func append(_ event: ControlAgentEvent) {
         self.events.append(event)
-        if self.events.count > maxEvents {
-            self.events.removeFirst(self.events.count - maxEvents)
+        if self.events.count > self.maxEvents {
+            self.events.removeFirst(self.events.count - self.maxEvents)
         }
     }
 

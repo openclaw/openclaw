@@ -10,14 +10,14 @@ struct AgentEventsWindow: View {
                 Text("Agent Events")
                     .font(.title3.weight(.semibold))
                 Spacer()
-                Button("Clear") { store.clear() }
+                Button("Clear") { self.store.clear() }
                     .buttonStyle(.bordered)
             }
             .padding(.bottom, 4)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 8) {
-                    ForEach(store.events.reversed(), id: \.seq) { evt in
+                    ForEach(self.store.events.reversed(), id: \.seq) { evt in
                         EventRow(event: evt)
                     }
                 }
@@ -34,14 +34,14 @@ private struct EventRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
-                Text(event.stream.uppercased())
+                Text(self.event.stream.uppercased())
                     .font(.caption2.weight(.bold))
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
                     .background(self.tint)
                     .foregroundStyle(Color.white)
                     .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                Text("run " + event.runId)
+                Text("run " + self.event.runId)
                     .font(.caption.monospaced())
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -61,16 +61,15 @@ private struct EventRow: View {
         .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(Color.primary.opacity(0.04))
-        )
+                .fill(Color.primary.opacity(0.04)))
     }
 
     private var tint: Color {
-        switch event.stream {
-        case "job": return .blue
-        case "tool": return .orange
-        case "assistant": return .green
-        default: return .gray
+        switch self.event.stream {
+        case "job": .blue
+        case "tool": .orange
+        case "assistant": .green
+        default: .gray
         }
     }
 
