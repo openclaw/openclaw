@@ -513,10 +513,9 @@ export async function runCommandReply(
     let pendingMetas: string[] = [];
     let pendingTimer: NodeJS.Timeout | null = null;
     let streamedAny = false;
-    const enableToolStreaming = verboseLevel === "on";
     const toolMetaById = new Map<string, string | undefined>();
     const flushPendingTool = () => {
-      if (!onPartialReply || !enableToolStreaming) return;
+      if (!onPartialReply) return;
       if (!pendingToolName && pendingMetas.length === 0) return;
       const text = formatToolAggregate(pendingToolName, pendingMetas);
       const { text: cleanedText, mediaUrls: mediaFound } =
@@ -603,7 +602,7 @@ export async function runCommandReply(
           }
 
           // Forward tool lifecycle events to the agent bus.
-          if (enableToolStreaming && ev.type === "tool_execution_start") {
+          if (ev.type === "tool_execution_start") {
             emitAgentEvent({
               runId,
               stream: "tool",
@@ -625,7 +624,6 @@ export async function runCommandReply(
           }
 
           if (
-            enableToolStreaming &&
             (ev.type === "message" || ev.type === "message_end") &&
             ev.message?.role === "tool_result" &&
             Array.isArray(ev.message.content)
