@@ -341,6 +341,7 @@ public enum GatewayFrame: Codable {
     case req(RequestFrame)
     case res(ResponseFrame)
     case event(EventFrame)
+    case unknown(type: String, raw: [String: AnyCodable])
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -362,7 +363,7 @@ public enum GatewayFrame: Codable {
         case "event":
             self = .event(try decodePayload(EventFrame.self, from: raw))
         default:
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "unknown type (type)")
+            self = .unknown(type: type, raw: raw)
         }
     }
 
@@ -374,6 +375,9 @@ public enum GatewayFrame: Codable {
         case .req(let v): try v.encode(to: encoder)
         case .res(let v): try v.encode(to: encoder)
         case .event(let v): try v.encode(to: encoder)
+        case .unknown(_, let raw):
+            var container = encoder.singleValueContainer()
+            try container.encode(raw)
         }
     }
 

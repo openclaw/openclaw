@@ -1,6 +1,7 @@
 import Foundation
 import OSLog
 import SwiftUI
+import ClawdisProtocol
 
 struct ControlHeartbeatEvent: Codable {
     let ts: Double
@@ -132,7 +133,7 @@ final class ControlChannel: ObservableObject {
             forName: .gatewayEvent,
             object: nil,
             queue: .main)
-        { [weak self] @MainActor note in
+        { [weak self] note in
             guard let self,
                   let obj = note.userInfo as? [String: Any],
                   let event = obj["event"] as? String else { return }
@@ -146,18 +147,20 @@ final class ControlChannel: ObservableObject {
                    let dataDict = payload["data"] as? [String: Any]
                 {
                     let wrapped = dataDict.mapValues { AnyCodable($0) }
-                    AgentEventStore.shared.append(ControlAgentEvent(
-                        runId: runId,
-                        seq: seq,
-                        stream: stream,
-                        ts: ts,
-                        data: wrapped))
+                    Task { @MainActor in
+                        AgentEventStore.shared.append(ControlAgentEvent(
+                            runId: runId,
+                            seq: seq,
+                            stream: stream,
+                            ts: ts,
+                            data: wrapped))
+                    }
                 }
             case "presence":
                 // InstancesStore listens separately via notification
                 break
             case "shutdown":
-                self.state = .degraded("gateway shutdown")
+                Task { @MainActor in self.state = .degraded("gateway shutdown") }
             default:
                 break
             }
@@ -166,8 +169,8 @@ final class ControlChannel: ObservableObject {
             forName: .gatewaySnapshot,
             object: nil,
             queue: .main)
-        { [weak self] @MainActor _ in
-            self?.state = .connected
+        { [weak self] _ in
+            Task { @MainActor [weak self] in self?.state = .connected }
         }
         self.eventTokens = [ev, tick]
     }

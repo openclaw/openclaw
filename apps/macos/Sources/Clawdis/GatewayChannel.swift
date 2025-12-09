@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import ClawdisProtocol
 
 struct GatewayEvent: Codable {
     let type: String
@@ -17,7 +18,7 @@ extension Notification.Name {
 private actor GatewayChannelActor {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway")
     private var task: URLSessionWebSocketTask?
-    private var pending: [String: CheckedContinuation<Data, Error>] = [:]
+    private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false
     private var url: URL
     private var token: String?
@@ -25,6 +26,8 @@ private actor GatewayChannelActor {
     private var backoffMs: Double = 500
     private var shouldReconnect = true
     private var lastSeq: Int?
+    private let decoder = JSONDecoder()
+    private let encoder = JSONEncoder()
 
     init(url: URL, token: String?) {
         self.url = url
@@ -90,8 +93,10 @@ private actor GatewayChannelActor {
             case let .failure(err):
                 Task { await self.handleReceiveFailure(err) }
             case let .success(msg):
-                Task { await self.handle(msg) }
-                self.listen()
+                Task {
+                    await self.handle(msg)
+                    await self.listen()
+                }
             }
         }
     }
@@ -109,26 +114,28 @@ private actor GatewayChannelActor {
         @unknown default: nil
         }
         guard let data else { return }
-        guard let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = obj["type"] as? String else { return }
-        switch type {
-        case "res":
-            if let id = obj["id"] as? String, let waiter = pending.removeValue(forKey: id) {
-                waiter.resume(returning: data)
+        guard let frame = try? self.decoder.decode(GatewayFrame.self, from: data) else {
+            self.logger.error("gateway decode failed")
+            return
+        }
+        switch frame {
+        case let .res(res):
+            if let id = res.id, let waiter = pending.removeValue(forKey: id) {
+                waiter.resume(returning: .res(res))
             }
-        case "event":
-            if let seq = obj["seq"] as? Int {
+        case let .event(evt):
+            if let seq = evt.seq {
                 if let last = lastSeq, seq > last + 1 {
                     NotificationCenter.default.post(
                         name: .gatewaySeqGap,
-                        object: nil,
+                        object: frame,
                         userInfo: ["expected": last + 1, "received": seq])
                 }
                 self.lastSeq = seq
             }
-            NotificationCenter.default.post(name: .gatewayEvent, object: nil, userInfo: obj)
-        case "hello-ok":
-            NotificationCenter.default.post(name: .gatewaySnapshot, object: nil, userInfo: obj)
+            NotificationCenter.default.post(name: .gatewayEvent, object: frame)
+        case .helloOk:
+            NotificationCenter.default.post(name: .gatewaySnapshot, object: frame)
         default:
             break
         }
@@ -160,7 +167,7 @@ private actor GatewayChannelActor {
             "params": paramsObject,
         ]
         let data = try JSONSerialization.data(withJSONObject: frame)
-        let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Data, Error>) in
+        let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
             self.pending[id] = cont
             Task {
                 do {
@@ -171,7 +178,18 @@ private actor GatewayChannelActor {
                 }
             }
         }
-        return response
+        guard case let .res(res) = response else {
+            throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
+        }
+        if res.ok == false {
+            let msg = (res.error?.message) ?? "gateway error"
+            throw NSError(domain: "Gateway", code: 3, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        if let payload = res.payload?.value {
+            let payloadData = try JSONSerialization.data(withJSONObject: payload)
+            return payloadData
+        }
+        return Data()
     }
 }
 

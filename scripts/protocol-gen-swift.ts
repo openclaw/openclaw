@@ -135,7 +135,7 @@ function emitGatewayFrame(): string {
         case "event":
             self = .event(try decodePayload(EventFrame.self, from: raw))
         default:
-            throw DecodingError.dataCorruptedError(in: container, debugDescription: "unknown type \(type)")
+            self = .unknown(type: type, raw: raw)
         }
     }
 
@@ -147,6 +147,9 @@ function emitGatewayFrame(): string {
         case .req(let v): try v.encode(to: encoder)
         case .res(let v): try v.encode(to: encoder)
         case .event(let v): try v.encode(to: encoder)
+        case .unknown(_, let raw):
+            var container = encoder.singleValueContainer()
+            try container.encode(raw)
         }
     }
 `;
@@ -162,6 +165,7 @@ function emitGatewayFrame(): string {
   return [
     "public enum GatewayFrame: Codable {",
     ...caseLines,
+    "    case unknown(type: String, raw: [String: AnyCodable])",
     initLines,
     helper,
     "}",

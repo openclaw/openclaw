@@ -1,6 +1,7 @@
 import Cocoa
 import Foundation
 import OSLog
+import ClawdisProtocol
 
 struct InstanceInfo: Identifiable, Codable {
     let id: String
@@ -65,12 +66,18 @@ final class InstancesStore: ObservableObject {
             forName: .gatewayEvent,
             object: nil,
             queue: .main)
-        { [weak self] @MainActor note in
+        { [weak self] note in
             guard let self,
-                  let obj = note.userInfo as? [String: Any],
-                  let event = obj["event"] as? String else { return }
-            if event == "presence", let payload = obj["payload"] as? [String: Any] {
-                self.handlePresencePayload(payload)
+                  let frame = note.object as? GatewayFrame else { return }
+            switch frame {
+            case let .event(evt) where evt.event == "presence":
+                if let payload = evt.payload?.value as? [String: Any],
+                   let presence = payload["presence"],
+                   let presenceData = try? JSONSerialization.data(withJSONObject: presence) {
+                    Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(presenceData) }
+                }
+            default:
+                break
             }
         }
         let gap = NotificationCenter.default.addObserver(
@@ -85,12 +92,18 @@ final class InstancesStore: ObservableObject {
             forName: .gatewaySnapshot,
             object: nil,
             queue: .main)
-        { [weak self] @MainActor note in
+        { [weak self] note in
             guard let self,
-                  let obj = note.userInfo as? [String: Any],
-                  let snapshot = obj["snapshot"] as? [String: Any],
-                  let presence = snapshot["presence"] else { return }
-            self.decodeAndApplyPresence(presence: presence)
+                  let frame = note.object as? GatewayFrame else { return }
+            switch frame {
+            case let .helloOk(hello):
+                let presence = hello.snapshot.presence
+                if let data = try? JSONEncoder().encode(presence) {
+                    Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(data) }
+                }
+            default:
+                break
+            }
         }
         self.observers = [ev, snap, gap]
     }
@@ -257,14 +270,7 @@ final class InstancesStore: ObservableObject {
         }
     }
 
-    private func handlePresencePayload(_ payload: [String: Any]) {
-        if let presence = payload["presence"] {
-            self.decodeAndApplyPresence(presence: presence)
-        }
-    }
-
-    private func decodeAndApplyPresence(presence: Any) {
-        guard let data = try? JSONSerialization.data(withJSONObject: presence) else { return }
+    private func decodeAndApplyPresenceData(_ data: Data) {
         do {
             let decoded = try JSONDecoder().decode([InstanceInfo].self, from: data)
             let withIDs = decoded.map { entry -> InstanceInfo in
@@ -285,6 +291,7 @@ final class InstancesStore: ObservableObject {
             self.lastError = nil
         } catch {
             self.logger.error("presence decode from event failed: \(error.localizedDescription, privacy: .public)")
+            self.lastError = error.localizedDescription
         }
     }
 }
