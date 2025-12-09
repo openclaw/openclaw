@@ -43,4 +43,17 @@ import Testing
         #expect(opts.deliver == false)
         #expect(opts.to == "+123")
     }
+
+    @Test func parsesCommandTemplateDefaults() {
+        let opts = VoiceWakeForwarder._testParseCommandTemplate("clawdis-mac agent --message \"${text}\"")
+        #expect(opts.session == "main")
+        #expect(opts.thinking == "low")
+        #expect(opts.deliver == true)
+        #expect(opts.to == nil)
+    }
+
+    @Test func sanitizedTargetStripsSshPrefix() {
+        let trimmed = VoiceWakeForwarder.sanitizedTarget("ssh user@box:22  ")
+        #expect(trimmed == "user@box:22")
+    }
 }
