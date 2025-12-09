@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import SwiftUI
 
 struct ControlHeartbeatEvent: Codable {
     let ts: Double
@@ -91,6 +92,7 @@ final class ControlChannel: ObservableObject {
             self.state = .connecting
             try await AgentRPC.shared.start()
             self.state = .connected
+            PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
             self.state = .degraded(error.localizedDescription)
         }

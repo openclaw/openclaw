@@ -39,6 +39,11 @@ final class PresenceReporter {
         }
     }
 
+    /// Fire an immediate presence beacon (e.g., right after connecting).
+    func sendImmediate(reason: String = "connect") {
+        Task { await self.push(reason: reason) }
+    }
+
     private static func composePresenceSummary(mode: String, reason: String) -> String {
         let host = Host.current().localizedName ?? "unknown-host"
         let ip = Self.primaryIPv4Address() ?? "ip-unknown"

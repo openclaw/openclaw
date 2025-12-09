@@ -1,3 +1,5 @@
+import os from "node:os";
+
 export type SystemPresence = {
   host?: string;
   ip?: string;
@@ -10,6 +12,45 @@ export type SystemPresence = {
 };
 
 const entries = new Map<string, SystemPresence>();
+
+function resolvePrimaryIPv4(): string | undefined {
+  const nets = os.networkInterfaces();
+  const prefer = ["en0", "eth0"];
+  const pick = (names: string[]) => {
+    for (const name of names) {
+      const list = nets[name];
+      const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
+      if (entry?.address) return entry.address;
+    }
+    for (const list of Object.values(nets)) {
+      const entry = list?.find((n) => n.family === "IPv4" && !n.internal);
+      if (entry?.address) return entry.address;
+    }
+    return undefined;
+  };
+  return pick(prefer) ?? os.hostname();
+}
+
+function initSelfPresence() {
+  const host = os.hostname();
+  const ip = resolvePrimaryIPv4() ?? undefined;
+  const version =
+    process.env.CLAWDIS_VERSION ?? process.env.npm_package_version ?? "unknown";
+  const text = `Relay: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode relay · reason self`;
+  const selfEntry: SystemPresence = {
+    host,
+    ip,
+    version,
+    mode: "relay",
+    reason: "self",
+    text,
+    ts: Date.now(),
+  };
+  const key = host.toLowerCase();
+  entries.set(key, selfEntry);
+}
+
+initSelfPresence();
 
 function parsePresence(text: string): SystemPresence {
   const trimmed = text.trim();
