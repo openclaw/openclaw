@@ -193,15 +193,26 @@ final class RelayProcessManager: ObservableObject {
     }
 
     private func resolveCommand() -> [String] {
-        // Keep it simple: rely on a system-installed clawdis binary.
-        // Default to `clawdis relay`; users can provide an override via env if needed.
-        if let override = ProcessInfo.processInfo.environment["CLAWDIS_RELAY_CMD"],
-           !override.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        {
-            return override.split(separator: " ").map(String.init)
+        // Force the app-managed relay to use system Node (no bundled runtime, no bun).
+        let runtimeResult = CommandResolver.runtimeResolution()
+        guard case let .success(runtime) = runtimeResult else {
+            if case let .failure(err) = runtimeResult {
+                return CommandResolver.runtimeErrorCommand(err)
+            }
+            return ["/bin/sh", "-c", "echo 'runtime resolution failed' >&2; exit 1"]
         }
 
-        return CommandResolver.clawdisCommand(subcommand: "relay")
+        let relayRoot = CommandResolver.projectRoot()
+        if let entry = CommandResolver.relayEntrypoint(in: relayRoot) {
+            return CommandResolver.makeRuntimeCommand(
+                runtime: runtime,
+                entrypoint: entry,
+                subcommand: "relay",
+                extraArgs: [])
+        }
+
+        return CommandResolver.errorCommand(
+            with: "clawdis entrypoint missing (looked for dist/index.js or bin/clawdis.js); run pnpm build.")
     }
 
     private func makeEnvironment() -> Environment {
