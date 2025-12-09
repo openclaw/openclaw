@@ -193,6 +193,7 @@ struct MenuContent: View {
                     .foregroundStyle(.primary)
             }
             .padding(.vertical, 4)
+            .disabled(true)
         } else {
             let health = self.healthStore.state
             let isRefreshing = self.healthStore.isRefreshing
@@ -233,6 +234,7 @@ struct MenuContent: View {
                     .foregroundStyle(.primary)
             }
             .padding(.vertical, 4)
+            .disabled(true)
         }
     }
 
@@ -276,6 +278,7 @@ struct MenuContent: View {
                 .foregroundStyle(.primary)
         }
         .padding(.vertical, 2)
+        .disabled(true)
     }
 
     private var activeBinding: Binding<Bool> {
