@@ -11,8 +11,8 @@ import {
 } from "./protocol/index.js";
 
 type Pending = {
-  resolve: (value: any) => void;
-  reject: (err: any) => void;
+  resolve: (value: unknown) => void;
+  reject: (err: unknown) => void;
   expectFinal: boolean;
 };
 
@@ -167,7 +167,11 @@ export class GatewayClient {
     }
     const expectFinal = opts?.expectFinal === true;
     const p = new Promise<T>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, expectFinal });
+      this.pending.set(id, {
+        resolve: (value) => resolve(value as T),
+        reject,
+        expectFinal,
+      });
     });
     this.ws.send(JSON.stringify(frame));
     return p;

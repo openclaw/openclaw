@@ -5,7 +5,6 @@ import { healthCommand } from "../commands/health.js";
 import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { statusCommand } from "../commands/status.js";
-import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
 import { danger, info, setVerbose } from "../globals.js";
@@ -13,11 +12,8 @@ import { loginWeb, logoutWeb } from "../provider-web.js";
 import { runRpcLoop } from "../rpc/loop.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import {
-  ensureWebChatServerFromConfig,
-  startWebChatServer,
-} from "../webchat/server.js";
-import { createDefaultDeps, logWebSelfId } from "./deps.js";
+import { startWebChatServer } from "../webchat/server.js";
+import { createDefaultDeps } from "./deps.js";
 
 export function buildProgram() {
   const program = new Command();
@@ -66,14 +62,8 @@ export function buildProgram() {
       'clawdis send --to +15555550123 --message "Hi" --json',
       "Send via your web session and print JSON result.",
     ],
-    [
-      "clawdis gateway --port 18789",
-      "Run the WebSocket Gateway locally.",
-    ],
-    [
-      "clawdis gw:status",
-      "Fetch Gateway status over WS.",
-    ],
+    ["clawdis gateway --port 18789", "Run the WebSocket Gateway locally."],
+    ["clawdis gw:status", "Fetch Gateway status over WS."],
     [
       'clawdis agent --to +15555550123 --message "Run summary" --deliver',
       "Talk directly to the agent using the Gateway; optionally send the WhatsApp reply.",
