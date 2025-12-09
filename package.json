@@ -20,7 +20,8 @@
     "test": "vitest",
     "test:coverage": "vitest run --coverage",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
-    "protocol:check": "pnpm protocol:gen && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdisProtocol/Protocol.swift",
+    "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdisProtocol/GatewayModels.swift",
     "webchat:bundle": "rolldown -c apps/macos/Sources/Clawdis/Resources/WebChat/rolldown.config.mjs"
   },
   "keywords": [],
