@@ -197,6 +197,7 @@ struct DebugSettings: View {
                     Button("Restart app") { self.relaunch() }
                     Button("Reveal app in Finder") { self.revealApp() }
                     Button("Restart Gateway") { DebugActions.restartGateway() }
+                    Button("Clear log") { GatewayProcessManager.shared.clearLog() }
                 }
                 .buttonStyle(.bordered)
                 Spacer(minLength: 8)
@@ -268,10 +269,13 @@ struct DebugSettings: View {
     private func relaunch() {
         let url = Bundle.main.bundleURL
         let task = Process()
-        task.launchPath = "/usr/bin/open"
-        task.arguments = [url.path]
+        task.launchPath = "/bin/sh"
+        task.arguments = ["-c", "sleep 0.3; open -n \"\(url.path)\""]
+        task.standardOutput = nil
+        task.standardError = nil
+        task.standardInput = nil
         try? task.run()
-        task.waitUntilExit()
+        // Terminate current instance; spawned shell re-opens after a short delay.
         NSApp.terminate(nil)
     }
 

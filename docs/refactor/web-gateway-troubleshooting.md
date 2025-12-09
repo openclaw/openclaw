@@ -1,0 +1,37 @@
+---
+summary: "Troubleshooting guide for the web gateway/Baileys stack"
+read_when:
+  - Diagnosing web gateway socket or login issues
+---
+# Web Gateway Troubleshooting (Nov 26, 2025)
+
+## Symptoms & quick fixes
+- **Stream Errored / Conflict / status 409–515:** WhatsApp closed the socket because another session is active or creds went stale. Run `clawdis logout` then `clawdis login --provider web` and restart the gateway.
+- **Logged out:** Console prints “session logged out”; re-link with `clawdis login --provider web`.
+- **Repeated retries then exit:** Reconnects are capped (default 12 attempts). Tune with `--web-retries`, `--web-retry-initial`, `--web-retry-max`, or config `web.reconnect`.
+- **No inbound messages:** Ensure the QR-linked account is online in WhatsApp, and check logs for `web-heartbeat` to confirm auth age/connection.
+- **Fast nuke:** From an allowed WhatsApp sender you can send `/restart` to kick `com.steipete.clawdis` via launchd; wait a few seconds for it to relink.
+
+## Helpful commands
+- Start gateway web-only: `pnpm clawdis gateway --provider web --verbose`
+- Show who is linked: `pnpm clawdis gateway --provider web --verbose` (first line prints the linked E.164)
+- Logout (clear creds): `pnpm clawdis logout`
+- Relink: `pnpm clawdis login --provider web`
+- Tail logs (default): `tail -f /tmp/clawdis/clawdis.log`
+
+## Reading the logs
+- `web-reconnect`: close reasons, retry/backoff, max-attempt exit.
+- `web-heartbeat`: connectionId, messagesHandled, authAgeMs, uptimeMs (every 60s by default).
+- `web-auto-reply`: inbound/outbound message records with correlation IDs.
+
+## When to tweak knobs
+- High churn networks: increase `web.reconnect.maxAttempts` or `--web-retries`.
+- Slow links: raise `--web-retry-max` to give more headroom before bailing.
+- Chatty monitors: increase `--web-heartbeat` interval if log volume is high.
+
+## If it keeps failing
+1) `clawdis logout` → `clawdis login --provider web` (fresh QR link).
+2) Ensure no other device/browser is using the same WA Web session.
+3) Check WhatsApp mobile app is online and not in low-power mode.
+4) If status is 515, let the client restart once after pairing (already handled automatically).
+5) Capture the last `web-reconnect` entry and the status code before escalating.
