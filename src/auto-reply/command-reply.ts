@@ -535,7 +535,7 @@ export async function runCommandReply(
     let lastStreamedAssistant: string | undefined;
     const streamAssistantFinal = (msg?: {
       role?: string;
-      content?: unknown[];
+      content?: unknown;
     }) => {
       if (!onPartialReply || msg?.role !== "assistant") return;
       const textBlocks = Array.isArray(msg.content)

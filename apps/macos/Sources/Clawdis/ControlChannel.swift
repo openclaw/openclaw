@@ -407,7 +407,10 @@ final class ControlChannel: ObservableObject {
                 self.logger.debug("control receive error: \(error.localizedDescription, privacy: .public)")
                 break
             }
-            if isComplete { break }
+            if isComplete {
+                self.logger.debug("control receive complete")
+                break
+            }
             guard let data else { continue }
             self.buffer.append(data)
             while let range = buffer.firstRange(of: Data([0x0A])) {
@@ -416,6 +419,8 @@ final class ControlChannel: ObservableObject {
                 self.handleLine(lineData)
             }
         }
+        // If we exit the loop, drop the connection so the next request reconnects.
+        await self.disconnect()
     }
 
     private func handleLine(_ data: Data) {
