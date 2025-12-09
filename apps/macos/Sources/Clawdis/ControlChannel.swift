@@ -240,11 +240,15 @@ final class ControlChannel: ObservableObject {
 
     func health(timeout: TimeInterval? = nil) async throws -> Data {
         try await self.ensureConnected()
+        let start = Date()
+        self.logger.debug("health probe start timeout=\(timeout?.description ?? "nil", privacy: .public)")
         let payload = try await self.request(
             method: "health",
             params: timeout.map { ["timeoutMs": Int($0 * 1000)] },
             timeout: timeout.map { $0 + 1 } // small cushion over server-side timeout
         )
+        let ms = Int(Date().timeIntervalSince(start) * 1000)
+        self.logger.debug("health probe ok in \(ms)ms")
         return payload
     }
 
@@ -269,6 +273,7 @@ final class ControlChannel: ObservableObject {
                     try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
                     guard let self else { return }
                     if let pending = self.pending.removeValue(forKey: id) {
+                        self.logger.error("control request \(method) timed out after \(Int(timeout))s")
                         pending.resume(throwing: ControlChannelError.badResponse("timeout after \(Int(timeout))s"))
                     }
                 }
