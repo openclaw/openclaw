@@ -312,8 +312,6 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             return;
           }
 
-          client = { socket, hello, connId };
-          clients.add(client);
           // synthesize presence entry for this connection (client fingerprint)
           const presenceKey = hello.client.instanceId || connId;
           const remoteAddr = (
@@ -354,7 +352,11 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             },
           };
           clearTimeout(handshakeTimer);
+          // Add the client only after the hello response is ready so no tick/presence
+          // events reach it before the handshake completes.
+          client = { socket, hello, connId };
           send(helloOk);
+          clients.add(client);
           return;
         }
 

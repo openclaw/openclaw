@@ -202,16 +202,16 @@ private actor GatewayChannelActor {
             throw self.wrap(error, context: "gateway connect")
         }
         let id = UUID().uuidString
-        let paramsObject = params?.reduce(into: [String: Any]()) { dict, entry in
-            dict[entry.key] = entry.value.value
-        } ?? [:]
-        let frame: [String: Any] = [
-            "type": "req",
-            "id": id,
-            "method": method,
-            "params": paramsObject,
-        ]
-        let data = try JSONSerialization.data(withJSONObject: frame)
+        // Encode request using the generated models to avoid JSONSerialization/ObjC bridging pitfalls.
+        let paramsObject = params?.reduce(into: [String: AnyCodable]()) { dict, entry in
+            dict[entry.key] = entry.value
+        }
+        let frame = RequestFrame(
+            type: "req",
+            id: id,
+            method: method,
+            params: paramsObject.map { AnyCodable($0) })
+        let data = try self.encoder.encode(frame)
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
             self.pending[id] = cont
             Task {
@@ -230,13 +230,11 @@ private actor GatewayChannelActor {
             let msg = (res.error?["message"]?.value as? String) ?? "gateway error"
             throw NSError(domain: "Gateway", code: 3, userInfo: [NSLocalizedDescriptionKey: msg])
         }
-        if let payload = res.payload?.value {
-            if JSONSerialization.isValidJSONObject(payload) {
-                let payloadData = try JSONSerialization.data(withJSONObject: payload)
-                return payloadData
-            }
+        if let payload = res.payload {
+            // Encode back to JSON with Swift's encoder to preserve types and avoid ObjC bridging exceptions.
+            return try self.encoder.encode(payload)
         }
-        return Data()
+        return Data() // Should not happen, but tolerate empty payloads.
     }
 
     // Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
