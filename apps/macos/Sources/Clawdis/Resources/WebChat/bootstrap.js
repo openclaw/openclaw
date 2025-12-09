@@ -18,6 +18,28 @@ const logStatus = (msg) => {
   }
 };
 
+// Keep the WebChat UI in lockstep with the host system theme.
+const setupSystemThemeSync = () => {
+  const mql = window.matchMedia?.("(prefers-color-scheme: dark)");
+  if (!mql) return;
+
+  const apply = (isDark) => {
+    document.documentElement.classList.toggle("dark", isDark);
+    document.body?.classList.toggle("dark", isDark);
+  };
+
+  // Set initial theme immediately.
+  apply(mql.matches);
+
+  // React to live theme switches (e.g., macOS Light <-> Dark).
+  const onChange = (event) => apply(event.matches);
+  if (mql.addEventListener) {
+    mql.addEventListener("change", onChange);
+  } else {
+    mql.addListener(onChange); // Safari < 14 fallback
+  }
+};
+
 async function fetchBootstrap() {
   const params = new URLSearchParams(window.location.search);
   const sessionKey = params.get("session") || "main";
@@ -115,6 +137,9 @@ const startChat = async () => {
   const { initialMessages, sessionKey, thinkingLevel } = await fetchBootstrap();
 
   logStatus("boot: starting imports");
+  // Align UI theme with host OS preference and keep it updated.
+  setupSystemThemeSync();
+
   const { Agent } = await import("./agent/agent.js");
   const { ChatPanel } = await import("./ChatPanel.js");
   const { AppStorage, setAppStorage } = await import("./storage/app-storage.js");
