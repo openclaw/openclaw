@@ -57,6 +57,10 @@ private actor GatewayChannelActor {
     }
 
     private func sendHello() async throws {
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
+        let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
+
         let hello = Hello(
             type: "hello",
             minprotocol: GATEWAY_PROTOCOL_VERSION,
@@ -64,14 +68,14 @@ private actor GatewayChannelActor {
             client: [
                 "name": ClawdisProtocol.AnyCodable("clawdis-mac"),
                 "version": ClawdisProtocol.AnyCodable(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
-                "platform": ClawdisProtocol.AnyCodable("macos"),
+                "platform": ClawdisProtocol.AnyCodable(platform),
                 "mode": ClawdisProtocol.AnyCodable("app"),
                 "instanceId": ClawdisProtocol.AnyCodable(Host.current().localizedName ?? UUID().uuidString),
             ],
             caps: [],
             auth: self.token.map { ["token": ClawdisProtocol.AnyCodable($0)] },
-            locale: nil,
-            useragent: nil)
+            locale: primaryLocale,
+            useragent: ProcessInfo.processInfo.operatingSystemVersionString)
         let data = try JSONEncoder().encode(hello)
         try await self.task?.send(.data(data))
         guard let msg = try await task?.receive() else {
