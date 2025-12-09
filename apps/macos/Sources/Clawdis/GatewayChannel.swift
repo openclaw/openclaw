@@ -9,6 +9,9 @@ struct GatewayEvent: Codable {
     let seq: Int?
 }
 
+// Avoid ambiguity with the app's own AnyCodable type.
+private typealias ProtoAnyCodable = ClawdisProtocol.AnyCodable
+
 extension Notification.Name {
     static let gatewaySnapshot = Notification.Name("clawdis.gateway.snapshot")
     static let gatewayEvent = Notification.Name("clawdis.gateway.event")
@@ -203,14 +206,17 @@ private actor GatewayChannelActor {
         }
         let id = UUID().uuidString
         // Encode request using the generated models to avoid JSONSerialization/ObjC bridging pitfalls.
-        let paramsObject = params?.reduce(into: [String: AnyCodable]()) { dict, entry in
-            dict[entry.key] = entry.value
+        let paramsObject: ProtoAnyCodable? = params.map { entries in
+            let dict = entries.reduce(into: [String: ProtoAnyCodable]()) { dict, entry in
+                dict[entry.key] = ProtoAnyCodable(entry.value.value)
+            }
+            return ProtoAnyCodable(dict)
         }
         let frame = RequestFrame(
             type: "req",
             id: id,
             method: method,
-            params: paramsObject.map { AnyCodable($0) })
+            params: paramsObject)
         let data = try self.encoder.encode(frame)
         let response = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<GatewayFrame, Error>) in
             self.pending[id] = cont
