@@ -1,7 +1,7 @@
+import ClawdisProtocol
 import Cocoa
 import Foundation
 import OSLog
-import ClawdisProtocol
 
 struct InstanceInfo: Identifiable, Codable {
     let id: String
@@ -79,7 +79,8 @@ final class InstancesStore: ObservableObject {
             case let .event(evt) where evt.event == "presence":
                 if let payload = evt.payload?.value as? [String: Any],
                    let presence = payload["presence"],
-                   let presenceData = try? JSONSerialization.data(withJSONObject: presence) {
+                   let presenceData = try? JSONSerialization.data(withJSONObject: presence)
+                {
                     Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(presenceData) }
                 }
             default:
@@ -104,7 +105,8 @@ final class InstancesStore: ObservableObject {
             switch frame {
             case let .helloOk(hello):
                 if JSONSerialization.isValidJSONObject(hello.snapshot.presence),
-                   let data = try? JSONEncoder().encode(hello.snapshot.presence) {
+                   let data = try? JSONEncoder().encode(hello.snapshot.presence)
+                {
                     Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(data) }
                 }
             default:
@@ -323,7 +325,7 @@ extension InstancesStore {
             mode: "remote",
             reason: "preview",
             text: "Relay node · tunnel ok",
-            ts: Date().timeIntervalSince1970 * 1000 - 45_000),
+            ts: Date().timeIntervalSince1970 * 1000 - 45000),
     ]) -> InstancesStore {
         let store = InstancesStore(isPreview: true)
         store.instances = instances

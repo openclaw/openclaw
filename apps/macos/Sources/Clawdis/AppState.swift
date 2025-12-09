@@ -26,11 +26,14 @@ final class AppState: ObservableObject {
     }
 
     @Published var onboardingSeen: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.onboardingSeen, forKey: "clawdis.onboardingSeen") } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.onboardingSeen, forKey: "clawdis.onboardingSeen") }
+        }
     }
 
     @Published var debugPaneEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "clawdis.debugPaneEnabled") } }
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "clawdis.debugPaneEnabled") }
+        }
     }
 
     @Published var swabbleEnabled: Bool {
@@ -63,7 +66,9 @@ final class AppState: ObservableObject {
     }
 
     @Published var iconAnimationsEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.iconAnimationsEnabled, forKey: iconAnimationsEnabledKey) } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(
+            self.iconAnimationsEnabled,
+            forKey: iconAnimationsEnabledKey) } }
     }
 
     @Published var showDockIcon: Bool {
@@ -98,19 +103,27 @@ final class AppState: ObservableObject {
     }
 
     @Published var voiceWakeAdditionalLocaleIDs: [String] {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.voiceWakeAdditionalLocaleIDs, forKey: voiceWakeAdditionalLocalesKey) } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(
+            self.voiceWakeAdditionalLocaleIDs,
+            forKey: voiceWakeAdditionalLocalesKey) } }
     }
 
     @Published var voiceWakeForwardEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.voiceWakeForwardEnabled, forKey: voiceWakeForwardEnabledKey) } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(
+            self.voiceWakeForwardEnabled,
+            forKey: voiceWakeForwardEnabledKey) } }
     }
 
     @Published var voiceWakeForwardCommand: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.voiceWakeForwardCommand, forKey: voiceWakeForwardCommandKey) } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(
+            self.voiceWakeForwardCommand,
+            forKey: voiceWakeForwardCommandKey) } }
     }
 
     @Published var voicePushToTalkEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.voicePushToTalkEnabled, forKey: voicePushToTalkEnabledKey) } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(
+            self.voicePushToTalkEnabled,
+            forKey: voicePushToTalkEnabledKey) } }
     }
 
     @Published var iconOverride: IconOverrideSelection {
@@ -131,7 +144,9 @@ final class AppState: ObservableObject {
     }
 
     @Published var connectionMode: ConnectionMode {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) } }
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
+        }
     }
 
     @Published var webChatEnabled: Bool {

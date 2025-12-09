@@ -21,7 +21,9 @@ export async function buildProviderSummary(
   const { e164 } = readWebSelfId();
   lines.push(
     webLinked
-      ? chalk.green(`WhatsApp: linked${e164 ? ` as ${e164}` : ""} (auth ${authAge})`)
+      ? chalk.green(
+          `WhatsApp: linked${e164 ? ` as ${e164}` : ""} (auth ${authAge})`,
+        )
       : chalk.red("WhatsApp: not linked"),
   );
 

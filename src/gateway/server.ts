@@ -15,11 +15,11 @@ import {
 } from "../infra/system-presence.js";
 import { logError } from "../logger.js";
 import { getResolvedLoggerSettings } from "../logging.js";
-import { defaultRuntime } from "../runtime.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
-import { sendMessageWhatsApp } from "../web/outbound.js";
+import { defaultRuntime } from "../runtime.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { sendMessageTelegram } from "../telegram/send.js";
+import { sendMessageWhatsApp } from "../web/outbound.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -450,32 +450,41 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             const message = params.message.trim();
             const provider = (params.provider ?? "whatsapp").toLowerCase();
             try {
-              const result =
-                provider === "telegram"
-                  ? await sendMessageTelegram(to, message, {
-                      mediaUrl: params.mediaUrl,
-                      verbose: isVerbose(),
-                    })
-                  : await sendMessageWhatsApp(to, message, {
-                      mediaUrl: params.mediaUrl,
-                      verbose: isVerbose(),
-                    });
-              const payload =
-                provider === "telegram"
-                  ? {
-                      runId: idem,
-                      messageId: result.messageId,
-                      chatId: result.chatId,
-                      provider,
-                    }
-                  : {
-                      runId: idem,
-                      messageId: result.messageId,
-                      toJid: result.toJid ?? `${to}@s.whatsapp.net`,
-                      provider,
-                    };
-              dedupe.set(`send:${idem}`, { ts: Date.now(), ok: true, payload });
-              respond(true, payload, undefined);
+              if (provider === "telegram") {
+                const result = await sendMessageTelegram(to, message, {
+                  mediaUrl: params.mediaUrl,
+                  verbose: isVerbose(),
+                });
+                const payload = {
+                  runId: idem,
+                  messageId: result.messageId,
+                  chatId: result.chatId,
+                  provider,
+                };
+                dedupe.set(`send:${idem}`, {
+                  ts: Date.now(),
+                  ok: true,
+                  payload,
+                });
+                respond(true, payload, undefined);
+              } else {
+                const result = await sendMessageWhatsApp(to, message, {
+                  mediaUrl: params.mediaUrl,
+                  verbose: isVerbose(),
+                });
+                const payload = {
+                  runId: idem,
+                  messageId: result.messageId,
+                  toJid: result.toJid ?? `${to}@s.whatsapp.net`,
+                  provider,
+                };
+                dedupe.set(`send:${idem}`, {
+                  ts: Date.now(),
+                  ok: true,
+                  payload,
+                });
+                respond(true, payload, undefined);
+              }
             } catch (err) {
               const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
               dedupe.set(`send:${idem}`, { ts: Date.now(), ok: false, error });
@@ -594,7 +603,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   if (process.env.CLAWDIS_SKIP_PROVIDERS !== "1") {
     void startProviders();
   } else {
-    defaultRuntime.log("gateway: skipping provider start (CLAWDIS_SKIP_PROVIDERS=1)");
+    defaultRuntime.log(
+      "gateway: skipping provider start (CLAWDIS_SKIP_PROVIDERS=1)",
+    );
   }
 
   return {

@@ -126,7 +126,7 @@ extension SessionRow {
                 id: "global",
                 key: "global",
                 kind: .global,
-                updatedAt: Date().addingTimeInterval(-86_400),
+                updatedAt: Date().addingTimeInterval(-86400),
                 sessionId: nil,
                 thinkingLevel: nil,
                 verboseLevel: nil,

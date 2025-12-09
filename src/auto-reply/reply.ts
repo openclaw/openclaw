@@ -624,7 +624,7 @@ export async function getReplyFromConfig(
     systemLines.push(...queued);
     if (isNewSession) {
       const summary = await buildProviderSummary(cfg);
-      if (summary) systemLines.unshift(summary);
+      if (summary.length > 0) systemLines.unshift(...summary);
     }
     if (systemLines.length > 0) {
       const block = systemLines.map((l) => `System: ${l}`).join("\n");

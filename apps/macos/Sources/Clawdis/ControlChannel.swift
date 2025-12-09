@@ -1,7 +1,7 @@
+import ClawdisProtocol
 import Foundation
 import OSLog
 import SwiftUI
-import ClawdisProtocol
 
 struct ControlHeartbeatEvent: Codable {
     let ts: Double
@@ -14,7 +14,7 @@ struct ControlHeartbeatEvent: Codable {
 }
 
 struct ControlAgentEvent: Codable, Sendable, Identifiable {
-    var id: String { "\(runId)-\(seq)" }
+    var id: String { "\(self.runId)-\(self.seq)" }
     let runId: String
     let seq: Int
     let stream: String
@@ -173,7 +173,8 @@ final class ControlChannel: ObservableObject {
                 if let data = evt.payload?.value,
                    JSONSerialization.isValidJSONObject(data),
                    let blob = try? JSONSerialization.data(withJSONObject: data),
-                   let agent = try? JSONDecoder().decode(AgentEvent.self, from: blob) {
+                   let agent = try? JSONDecoder().decode(AgentEvent.self, from: blob)
+                {
                     Task { @MainActor in
                         AgentEventStore.shared.append(ControlAgentEvent(
                             runId: agent.runid,

@@ -28,8 +28,8 @@ public struct Hello: Codable {
         caps: [String]?,
         auth: [String: AnyCodable]?,
         locale: String?,
-        useragent: String?
-    ) {
+        useragent: String?)
+    {
         self.type = type
         self.minprotocol = minprotocol
         self.maxprotocol = maxprotocol
@@ -39,6 +39,7 @@ public struct Hello: Codable {
         self.locale = locale
         self.useragent = useragent
     }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case minprotocol = "minProtocol"
@@ -65,8 +66,8 @@ public struct HelloOk: Codable {
         server: [String: AnyCodable],
         features: [String: AnyCodable],
         snapshot: Snapshot,
-        policy: [String: AnyCodable]
-    ) {
+        policy: [String: AnyCodable])
+    {
         self.type = type
         self._protocol = _protocol
         self.server = server
@@ -74,6 +75,7 @@ public struct HelloOk: Codable {
         self.snapshot = snapshot
         self.policy = policy
     }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case _protocol = "protocol"
@@ -94,13 +96,14 @@ public struct HelloError: Codable {
         type: String,
         reason: String,
         expectedprotocol: Int?,
-        minclient: String?
-    ) {
+        minclient: String?)
+    {
         self.type = type
         self.reason = reason
         self.expectedprotocol = expectedprotocol
         self.minclient = minclient
     }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case reason
@@ -119,13 +122,14 @@ public struct RequestFrame: Codable {
         type: String,
         id: String,
         method: String,
-        params: AnyCodable?
-    ) {
+        params: AnyCodable?)
+    {
         self.type = type
         self.id = id
         self.method = method
         self.params = params
     }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case id
@@ -146,14 +150,15 @@ public struct ResponseFrame: Codable {
         id: String,
         ok: Bool,
         payload: AnyCodable?,
-        error: [String: AnyCodable]?
-    ) {
+        error: [String: AnyCodable]?)
+    {
         self.type = type
         self.id = id
         self.ok = ok
         self.payload = payload
         self.error = error
     }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case id
@@ -175,14 +180,15 @@ public struct EventFrame: Codable {
         event: String,
         payload: AnyCodable?,
         seq: Int?,
-        stateversion: [String: AnyCodable]?
-    ) {
+        stateversion: [String: AnyCodable]?)
+    {
         self.type = type
         self.event = event
         self.payload = payload
         self.seq = seq
         self.stateversion = stateversion
     }
+
     private enum CodingKeys: String, CodingKey {
         case type
         case event
@@ -214,8 +220,8 @@ public struct PresenceEntry: Codable {
         tags: [String]?,
         text: String?,
         ts: Int,
-        instanceid: String?
-    ) {
+        instanceid: String?)
+    {
         self.host = host
         self.ip = ip
         self.version = version
@@ -227,6 +233,7 @@ public struct PresenceEntry: Codable {
         self.ts = ts
         self.instanceid = instanceid
     }
+
     private enum CodingKeys: String, CodingKey {
         case host
         case ip
@@ -247,11 +254,12 @@ public struct StateVersion: Codable {
 
     public init(
         presence: Int,
-        health: Int
-    ) {
+        health: Int)
+    {
         self.presence = presence
         self.health = health
     }
+
     private enum CodingKeys: String, CodingKey {
         case presence
         case health
@@ -268,13 +276,14 @@ public struct Snapshot: Codable {
         presence: [PresenceEntry],
         health: AnyCodable,
         stateversion: StateVersion,
-        uptimems: Int
-    ) {
+        uptimems: Int)
+    {
         self.presence = presence
         self.health = health
         self.stateversion = stateversion
         self.uptimems = uptimems
     }
+
     private enum CodingKeys: String, CodingKey {
         case presence
         case health
@@ -295,14 +304,15 @@ public struct ErrorShape: Codable {
         message: String,
         details: AnyCodable?,
         retryable: Bool?,
-        retryafterms: Int?
-    ) {
+        retryafterms: Int?)
+    {
         self.code = code
         self.message = message
         self.details = details
         self.retryable = retryable
         self.retryafterms = retryafterms
     }
+
     private enum CodingKeys: String, CodingKey {
         case code
         case message
@@ -324,14 +334,15 @@ public struct AgentEvent: Codable {
         seq: Int,
         stream: String,
         ts: Int,
-        data: [String: AnyCodable]
-    ) {
+        data: [String: AnyCodable])
+    {
         self.runid = runid
         self.seq = seq
         self.stream = stream
         self.ts = ts
         self.data = data
     }
+
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
         case seq
@@ -353,14 +364,15 @@ public struct SendParams: Codable {
         message: String,
         mediaurl: String?,
         provider: String?,
-        idempotencykey: String
-    ) {
+        idempotencykey: String)
+    {
         self.to = to
         self.message = message
         self.mediaurl = mediaurl
         self.provider = provider
         self.idempotencykey = idempotencykey
     }
+
     private enum CodingKeys: String, CodingKey {
         case to
         case message
@@ -386,8 +398,8 @@ public struct AgentParams: Codable {
         thinking: String?,
         deliver: Bool?,
         timeout: Int?,
-        idempotencykey: String
-    ) {
+        idempotencykey: String)
+    {
         self.message = message
         self.to = to
         self.sessionid = sessionid
@@ -396,6 +408,7 @@ public struct AgentParams: Codable {
         self.timeout = timeout
         self.idempotencykey = idempotencykey
     }
+
     private enum CodingKeys: String, CodingKey {
         case message
         case to
@@ -411,10 +424,11 @@ public struct TickEvent: Codable {
     public let ts: Int
 
     public init(
-        ts: Int
-    ) {
+        ts: Int)
+    {
         self.ts = ts
     }
+
     private enum CodingKeys: String, CodingKey {
         case ts
     }
@@ -426,11 +440,12 @@ public struct ShutdownEvent: Codable {
 
     public init(
         reason: String,
-        restartexpectedms: Int?
-    ) {
+        restartexpectedms: Int?)
+    {
         self.reason = reason
         self.restartexpectedms = restartexpectedms
     }
+
     private enum CodingKeys: String, CodingKey {
         case reason
         case restartexpectedms = "restartExpectedMs"
@@ -454,17 +469,17 @@ public enum GatewayFrame: Codable {
         }
         switch type {
         case "hello":
-            self = .hello(try Self.decodePayload(Hello.self, from: raw))
+            self = try .hello(Self.decodePayload(Hello.self, from: raw))
         case "hello-ok":
-            self = .helloOk(try Self.decodePayload(HelloOk.self, from: raw))
+            self = try .helloOk(Self.decodePayload(HelloOk.self, from: raw))
         case "hello-error":
-            self = .helloError(try Self.decodePayload(HelloError.self, from: raw))
+            self = try .helloError(Self.decodePayload(HelloError.self, from: raw))
         case "req":
-            self = .req(try Self.decodePayload(RequestFrame.self, from: raw))
+            self = try .req(Self.decodePayload(RequestFrame.self, from: raw))
         case "res":
-            self = .res(try Self.decodePayload(ResponseFrame.self, from: raw))
+            self = try .res(Self.decodePayload(ResponseFrame.self, from: raw))
         case "event":
-            self = .event(try Self.decodePayload(EventFrame.self, from: raw))
+            self = try .event(Self.decodePayload(EventFrame.self, from: raw))
         default:
             self = .unknown(type: type, raw: raw)
         }
@@ -472,23 +487,21 @@ public enum GatewayFrame: Codable {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .hello(let v): try v.encode(to: encoder)
-        case .helloOk(let v): try v.encode(to: encoder)
-        case .helloError(let v): try v.encode(to: encoder)
-        case .req(let v): try v.encode(to: encoder)
-        case .res(let v): try v.encode(to: encoder)
-        case .event(let v): try v.encode(to: encoder)
-        case .unknown(_, let raw):
+        case let .hello(v): try v.encode(to: encoder)
+        case let .helloOk(v): try v.encode(to: encoder)
+        case let .helloError(v): try v.encode(to: encoder)
+        case let .req(v): try v.encode(to: encoder)
+        case let .res(v): try v.encode(to: encoder)
+        case let .event(v): try v.encode(to: encoder)
+        case let .unknown(_, raw):
             var container = encoder.singleValueContainer()
             try container.encode(raw)
         }
     }
-
 
     private static func decodePayload<T: Decodable>(_ type: T.Type, from raw: [String: AnyCodable]) throws -> T {
         let data = try JSONSerialization.data(withJSONObject: raw)
         let decoder = JSONDecoder()
         return try decoder.decode(T.self, from: data)
     }
-
 }

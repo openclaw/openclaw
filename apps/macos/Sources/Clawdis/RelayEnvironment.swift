@@ -1,5 +1,5 @@
-import Foundation
 import ClawdisIPC
+import Foundation
 
 // Lightweight SemVer helper (major.minor.patch only) for relay compatibility checks.
 struct Semver: Comparable, CustomStringConvertible, Sendable {

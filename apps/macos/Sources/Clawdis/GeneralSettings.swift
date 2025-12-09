@@ -296,7 +296,9 @@ struct GeneralSettings: View {
                     .disabled(self.relayInstalling)
             }
 
-            Text(self.relayInstallMessage ?? "Installs the global \"clawdis\" package and expects the gateway on port 18789.")
+            Text(self
+                .relayInstallMessage ??
+                "Installs the global \"clawdis\" package and expects the gateway on port 18789.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)

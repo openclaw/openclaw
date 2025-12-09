@@ -116,10 +116,7 @@ export function buildProgram() {
       'clawdis send --to +15555550123 --message "Hi" --json',
       "Send via your web session and print JSON result.",
     ],
-    [
-      "clawdis gateway --port 18789",
-      "Run the WebSocket Gateway locally.",
-    ],
+    ["clawdis gateway --port 18789", "Run the WebSocket Gateway locally."],
     [
       "clawdis gateway --force",
       "Kill anything bound to the default gateway port, then start it.",

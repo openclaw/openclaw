@@ -101,7 +101,14 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
 
     private func loadWebChat(baseEndpoint: URL) {
         var comps = URLComponents(url: baseEndpoint.appendingPathComponent("webchat/"), resolvingAgainstBaseURL: false)
-        comps?.queryItems = [URLQueryItem(name: "session", value: self.sessionKey)]
+        var items = [URLQueryItem(name: "session", value: self.sessionKey)]
+        if let hostName = Host.current().localizedName ?? Host.current().name {
+            items.append(URLQueryItem(name: "host", value: hostName))
+        }
+        if let ip = Self.primaryIPv4Address() {
+            items.append(URLQueryItem(name: "ip", value: ip))
+        }
+        comps?.queryItems = items
         guard let url = comps?.url else {
             self.showError("invalid webchat url")
             return
@@ -194,6 +201,37 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         webChatLogger.error("webchat navigation failed: \(error.localizedDescription, privacy: .public)")
         self.showError(error.localizedDescription)
+    }
+}
+
+extension WebChatWindowController {
+    /// Returns the first non-loopback IPv4 address, skipping link-local (169.254.x.x).
+    fileprivate static func primaryIPv4Address() -> String? {
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(ifaddr) }
+
+        for ptr in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(ptr.pointee.ifa_flags)
+            let addrFamily = ptr.pointee.ifa_addr.pointee.sa_family
+            if (flags & IFF_UP) == 0 || (flags & IFF_LOOPBACK) != 0 { continue }
+            if addrFamily == UInt8(AF_INET) {
+                var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(
+                    ptr.pointee.ifa_addr,
+                    socklen_t(ptr.pointee.ifa_addr.pointee.sa_len),
+                    &hostname,
+                    socklen_t(hostname.count),
+                    nil,
+                    0,
+                    NI_NUMERICHOST) == 0
+                {
+                    let ip = String(cString: hostname)
+                    if !ip.hasPrefix("169.254") { return ip }
+                }
+            }
+        }
+        return nil
     }
 }
 

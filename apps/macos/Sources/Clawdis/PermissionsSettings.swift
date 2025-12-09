@@ -132,9 +132,8 @@ struct PermissionsSettings_Previews: PreviewProvider {
                 .speechRecognition: false,
             ],
             refresh: {},
-            showOnboarding: {}
-        )
-        .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+            showOnboarding: {})
+            .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
     }
 }
 #endif

@@ -181,7 +181,8 @@ struct OnboardingView: View {
         self.onboardingPage {
             Text("Install the relay")
                 .font(.largeTitle.weight(.semibold))
-            Text("Clawdis now runs the WebSocket gateway from the global \"clawdis\" package. Install/update it here and we’ll check Node for you.")
+            Text(
+                "Clawdis now runs the WebSocket gateway from the global \"clawdis\" package. Install/update it here and we’ll check Node for you.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

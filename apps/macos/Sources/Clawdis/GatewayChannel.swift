@@ -1,6 +1,6 @@
+import ClawdisProtocol
 import Foundation
 import OSLog
-import ClawdisProtocol
 
 struct GatewayEvent: Codable {
     let type: String
@@ -27,7 +27,7 @@ private actor GatewayChannelActor {
     private var shouldReconnect = true
     private var lastSeq: Int?
     private var lastTick: Date?
-    private var tickIntervalMs: Double = 30_000
+    private var tickIntervalMs: Double = 30000
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
 
@@ -88,7 +88,8 @@ private actor GatewayChannelActor {
               let type = obj["type"] as? String else { return false }
         if type == "hello-ok" {
             if let policy = obj["policy"] as? [String: Any],
-               let tick = policy["tickIntervalMs"] as? Double {
+               let tick = policy["tickIntervalMs"] as? Double
+            {
                 self.tickIntervalMs = tick
             }
             self.lastTick = Date()

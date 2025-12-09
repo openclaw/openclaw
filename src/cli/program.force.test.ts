@@ -1,9 +1,10 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>(
-    "node:child_process",
-  );
+  const actual =
+    await vi.importActual<typeof import("node:child_process")>(
+      "node:child_process",
+    );
   return {
     ...actual,
     execFileSync: vi.fn(),
@@ -14,8 +15,8 @@ import { execFileSync } from "node:child_process";
 import {
   forceFreePort,
   listPortListeners,
-  parseLsofOutput,
   type PortProcess,
+  parseLsofOutput,
 } from "./program.js";
 
 describe("gateway --force helpers", () => {
