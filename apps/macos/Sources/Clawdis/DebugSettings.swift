@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 struct DebugSettings: View {
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
+    @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
     @State private var modelsError: String?
@@ -25,6 +26,15 @@ struct DebugSettings: View {
                         Circle().fill(self.healthStore.state.tint).frame(width: 10, height: 10)
                         Text(self.healthStore.summaryLine)
                     }
+                }
+                LabeledContent("Icon override") {
+                    Picker("Icon override", selection: self.bindingOverride) {
+                        ForEach(IconOverrideSelection.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
                 }
                 LabeledContent("CLI helper") {
                     let loc = CLIInstaller.installedLocation()
@@ -400,6 +410,20 @@ struct DebugSettings: View {
             self.sessionStoreSaveError = nil
         } catch {
             self.sessionStoreSaveError = error.localizedDescription
+        }
+    }
+
+    private var bindingOverride: Binding<String> {
+        Binding {
+            self.iconOverrideRaw
+        } set: { newValue in
+            self.iconOverrideRaw = newValue
+            if let selection = IconOverrideSelection(rawValue: newValue) {
+                Task { @MainActor in
+                    AppStateStore.shared.iconOverride = selection
+                    WorkActivityStore.shared.resolveIconState(override: selection)
+                }
+            }
         }
     }
 

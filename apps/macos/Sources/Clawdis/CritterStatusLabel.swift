@@ -9,6 +9,7 @@ struct CritterStatusLabel: View {
     var sendCelebrationTick: Int
     var relayStatus: RelayProcessManager.Status
     var animationsEnabled: Bool
+    var iconState: IconState
 
     @State private var blinkAmount: CGFloat = 0
     @State private var nextBlink = Date().addingTimeInterval(Double.random(in: 3.5...8.5))
@@ -21,6 +22,10 @@ struct CritterStatusLabel: View {
     @State private var nextEarWiggle = Date().addingTimeInterval(Double.random(in: 7.0...14.0))
     private let ticker = Timer.publish(every: 0.35, on: .main, in: .common).autoconnect()
 
+    private var isWorkingNow: Bool {
+        self.iconState.isWorking || self.isWorking
+    }
+
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             Group {
@@ -30,7 +35,7 @@ struct CritterStatusLabel: View {
                 } else {
                     Image(nsImage: CritterIconRenderer.makeIcon(
                         blink: self.blinkAmount,
-                        legWiggle: max(self.legWiggle, self.isWorking ? 0.6 : 0),
+                        legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
                         earWiggle: self.earWiggle,
                         earScale: self.earBoostActive ? 1.9 : 1.0,
                         earHoles: self.earBoostActive))
@@ -63,7 +68,7 @@ struct CritterStatusLabel: View {
                                 self.nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0...14.0))
                             }
 
-                            if self.isWorking {
+                            if self.isWorkingNow {
                                 self.scurry()
                             }
                         }
@@ -98,6 +103,21 @@ struct CritterStatusLabel: View {
                     .fill(self.relayBadgeColor)
                     .frame(width: 8, height: 8)
                     .offset(x: 4, y: 4)
+            }
+
+            if case .idle = self.iconState {
+                EmptyView()
+            } else {
+                Text(self.iconState.glyph)
+                    .font(.system(size: 9))
+                    .padding(3)
+                    .background(
+                        Circle()
+                            .fill(self.iconState.tint.opacity(0.9))
+                    )
+                    .foregroundStyle(Color.white)
+                    .offset(x: -4, y: -2)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
             }
         }
     }

@@ -469,7 +469,23 @@ final class ControlChannel: ObservableObject {
                 let working = self.jobStates.values.contains { workingStates.contains($0) }
                 Task { @MainActor in
                     AppStateStore.shared.setWorking(working)
+                    WorkActivityStore.shared.handleJob(
+                        sessionKey: event.runId,
+                        state: state)
                 }
+            }
+        } else if event.stream == "tool" {
+            guard let phase = event.data["phase"]?.value as? String else { return }
+            let name = event.data["name"]?.value as? String
+            let meta = event.data["meta"]?.value as? String
+            let args = event.data["args"]?.value as? [String: AnyCodable]
+            Task { @MainActor in
+                WorkActivityStore.shared.handleTool(
+                    sessionKey: event.runId,
+                    phase: phase,
+                    name: name,
+                    meta: meta,
+                    args: args)
             }
         }
     }

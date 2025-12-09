@@ -11,6 +11,7 @@ struct MenuContent: View {
     @ObservedObject private var healthStore = HealthStore.shared
     @ObservedObject private var heartbeatStore = HeartbeatStore.shared
     @ObservedObject private var controlChannel = ControlChannel.shared
+    @ObservedObject private var activityStore = WorkActivityStore.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
@@ -64,44 +65,59 @@ struct MenuContent: View {
     }
 
     private var statusRow: some View {
-        let health = self.healthStore.state
-        let isRefreshing = self.healthStore.isRefreshing
-        let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
-
-        let label: String
-        let color: Color
-
-        if isRefreshing {
-            label = "Health check running…"
-            color = health.tint
-        } else {
-            switch health {
-            case .ok:
-                let ageText = lastAge.map { " · checked \($0)" } ?? ""
-                label = "Health ok\(ageText)"
-                color = .green
-            case .linkingNeeded:
-                label = "Health: login required"
-                color = .red
-            case let .degraded(reason):
-                let ageText = lastAge.map { " · checked \($0)" } ?? ""
-                label = "Health degraded: \(reason)\(ageText)"
-                color = .orange
-            case .unknown:
-                label = "Health pending"
-                color = .secondary
+        if let activity = self.activityStore.current {
+            let color: Color = activity.role == .main ? .accentColor : .gray
+            let roleLabel = activity.role == .main ? "Main" : "Other"
+            let text = "\(roleLabel) · \(activity.label)"
+            return HStack(spacing: 8) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                Text(text)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
             }
-        }
+            .padding(.vertical, 4)
+        } else {
+            let health = self.healthStore.state
+            let isRefreshing = self.healthStore.isRefreshing
+            let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
 
-        return HStack(spacing: 8) {
-            Circle()
-                .fill(color)
-                .frame(width: 8, height: 8)
-            Text(label)
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.primary)
+            let label: String
+            let color: Color
+
+            if isRefreshing {
+                label = "Health check running…"
+                color = health.tint
+            } else {
+                switch health {
+                case .ok:
+                    let ageText = lastAge.map { " · checked \($0)" } ?? ""
+                    label = "Health ok\(ageText)"
+                    color = .green
+                case .linkingNeeded:
+                    label = "Health: login required"
+                    color = .red
+                case let .degraded(reason):
+                    let ageText = lastAge.map { " · checked \($0)" } ?? ""
+                    label = "Health degraded: \(reason)\(ageText)"
+                    color = .orange
+                case .unknown:
+                    label = "Health pending"
+                    color = .secondary
+                }
+            }
+
+            return HStack(spacing: 8) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 8, height: 8)
+                Text(label)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .padding(.vertical, 4)
         }
-        .padding(.vertical, 4)
     }
 
     private var heartbeatStatusRow: some View {

@@ -104,6 +104,10 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(self.voicePushToTalkEnabled, forKey: voicePushToTalkEnabledKey) }
     }
 
+    @Published var iconOverride: IconOverrideSelection {
+        didSet { UserDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) }
+    }
+
     @Published var isWorking: Bool = false
     @Published var earBoostActive: Bool = false
     @Published var blinkTick: Int = 0
@@ -189,6 +193,13 @@ final class AppState: ObservableObject {
         } else {
             self.heartbeatsEnabled = true
             UserDefaults.standard.set(true, forKey: heartbeatsEnabledKey)
+        }
+        if let storedOverride = UserDefaults.standard.string(forKey: iconOverrideKey),
+           let selection = IconOverrideSelection(rawValue: storedOverride) {
+            self.iconOverride = selection
+        } else {
+            self.iconOverride = .system
+            UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
         let storedMode = UserDefaults.standard.string(forKey: connectionModeKey)

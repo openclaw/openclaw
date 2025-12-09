@@ -11,6 +11,7 @@ struct ClawdisApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state: AppState
     @StateObject private var relayManager = RelayProcessManager.shared
+    @StateObject private var activityStore = WorkActivityStore.shared
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
 
@@ -27,7 +28,8 @@ struct ClawdisApp: App {
                 blinkTick: self.state.blinkTick,
                 sendCelebrationTick: self.state.sendCelebrationTick,
                 relayStatus: self.relayManager.status,
-                animationsEnabled: self.state.iconAnimationsEnabled)
+                animationsEnabled: self.state.iconAnimationsEnabled,
+                iconState: self.effectiveIconState)
         }
         .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
@@ -49,6 +51,20 @@ struct ClawdisApp: App {
 
     private func applyStatusItemAppearance(paused: Bool) {
         self.statusItem?.button?.appearsDisabled = paused
+    }
+
+    private var effectiveIconState: IconState {
+        let selection = self.state.iconOverride
+        if selection == .system {
+            return self.activityStore.iconState
+        }
+        let overrideState = selection.toIconState()
+        switch overrideState {
+        case let .workingMain(kind): return .overridden(kind)
+        case let .workingOther(kind): return .overridden(kind)
+        case .idle: return .idle
+        case let .overridden(kind): return .overridden(kind)
+        }
     }
 }
 
