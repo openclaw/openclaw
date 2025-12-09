@@ -234,11 +234,11 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.fieldLabelWidth, alignment: .leading)
 
             Menu {
-                Button("No Sound") { selection.wrappedValue = .none }
+                Button("No Sound") { self.selectChime(.none, binding: selection) }
                 Divider()
                 ForEach(VoiceWakeChimeCatalog.systemOptions, id: \.self) { option in
                     Button(VoiceWakeChimeCatalog.displayName(for: option)) {
-                        selection.wrappedValue = .system(name: option)
+                        self.selectChime(.system(name: option), binding: selection)
                     }
                 }
                 Divider()
@@ -282,11 +282,18 @@ struct VoiceWakeSettings: View {
                     options: [.withSecurityScope],
                     includingResourceValuesForKeys: nil,
                     relativeTo: nil)
-                selection.wrappedValue = .custom(displayName: url.lastPathComponent, bookmark: bookmark)
+                let chosen = VoiceWakeChime.custom(displayName: url.lastPathComponent, bookmark: bookmark)
+                selection.wrappedValue = chosen
+                VoiceWakeChimePlayer.play(chosen)
             } catch {
                 // Ignore failures; user can retry.
             }
         }
+    }
+
+    private func selectChime(_ chime: VoiceWakeChime, binding: Binding<VoiceWakeChime>) {
+        binding.wrappedValue = chime
+        VoiceWakeChimePlayer.play(chime)
     }
 
     private func sanitizedTriggers() -> [String] {
