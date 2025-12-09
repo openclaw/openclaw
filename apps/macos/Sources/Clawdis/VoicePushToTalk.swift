@@ -87,6 +87,8 @@ actor VoicePushToTalk {
     private var activeConfig: Config?
     private var isCapturing = false
     private var triggerChimePlayed = false
+    private var finalized = false
+    private var timeoutTask: Task<Void, Never>?
 
     private struct Config {
         let micID: String?
@@ -108,6 +110,8 @@ actor VoicePushToTalk {
         self.activeConfig = config
         self.isCapturing = true
         self.triggerChimePlayed = false
+        self.finalized = false
+        self.timeoutTask?.cancel(); self.timeoutTask = nil
         if config.triggerChime != .none {
             self.triggerChimePlayed = true
             await MainActor.run { VoiceWakeChimePlayer.play(config.triggerChime) }
@@ -132,46 +136,16 @@ actor VoicePushToTalk {
         guard self.isCapturing else { return }
         self.isCapturing = false
 
-        self.recognitionTask?.cancel()
         self.recognitionRequest?.endAudio()
-        self.recognitionRequest = nil
-        self.recognitionTask = nil
         self.audioEngine.inputNode.removeTap(onBus: 0)
         self.audioEngine.stop()
 
-        let finalText = (self.committed + self.volatile).trimmingCharacters(in: .whitespacesAndNewlines)
-        let attributed = Self.makeAttributed(committed: self.committed, volatile: self.volatile, isFinal: true)
-        let forward: VoiceWakeForwardConfig
-        if let cached = self.activeConfig?.forwardConfig {
-            forward = cached
-        } else {
-            forward = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
+        // Give Speech a brief window to deliver the final result; otherwise fall back to current text.
+        self.timeoutTask?.cancel()
+        self.timeoutTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 700_000_000) // 700ms grace period
+            await self?.finalize(transcriptOverride: nil, reason: "timeout")
         }
-
-        let chime = finalText.isEmpty ? .none : (self.activeConfig?.sendChime ?? .none)
-
-        await MainActor.run {
-            if finalText.isEmpty {
-                VoiceWakeOverlayController.shared.dismiss(reason: .empty)
-            } else {
-                VoiceWakeOverlayController.shared.presentFinal(
-                    transcript: finalText,
-                    forwardConfig: forward,
-                    autoSendAfter: nil,
-                    sendChime: chime,
-                    attributed: attributed)
-                VoiceWakeOverlayController.shared.sendNow(sendChime: chime)
-            }
-        }
-
-        self.committed = ""
-        self.volatile = ""
-        self.activeConfig = nil
-        self.triggerChimePlayed = false
-
-        // Resume the wake-word runtime after push-to-talk finishes.
-        await VoiceWakeRuntime.shared.applyPushToTalkCooldown()
-        _ = await MainActor.run { Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) } }
     }
 
     // MARK: - Private
@@ -210,6 +184,9 @@ actor VoicePushToTalk {
             Task.detached { [weak self, transcript, isFinal] in
                 guard let self else { return }
                 await self.handle(transcript: transcript, isFinal: isFinal)
+                if isFinal {
+                    await self.finalize(transcriptOverride: transcript, reason: "speechFinal")
+                }
             }
         }
     }
@@ -228,6 +205,59 @@ actor VoicePushToTalk {
         await MainActor.run {
             VoiceWakeOverlayController.shared.showPartial(transcript: snapshot, attributed: attributed)
         }
+    }
+
+    private func finalize(transcriptOverride: String?, reason: String) async {
+        if self.finalized { return }
+        self.finalized = true
+        self.timeoutTask?.cancel(); self.timeoutTask = nil
+
+        let finalText: String = {
+            if let override = transcriptOverride?.trimmingCharacters(in: .whitespacesAndNewlines) {
+                return override
+            }
+            return (self.committed + self.volatile).trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+
+        let attributed = Self.makeAttributed(committed: self.committed, volatile: self.volatile, isFinal: true)
+        let forward: VoiceWakeForwardConfig
+        if let cached = self.activeConfig?.forwardConfig {
+            forward = cached
+        } else {
+            forward = await MainActor.run { AppStateStore.shared.voiceWakeForwardConfig }
+        }
+        let chime = finalText.isEmpty ? .none : (self.activeConfig?.sendChime ?? .none)
+
+        await MainActor.run {
+            Logger(subsystem: "com.steipete.clawdis", category: "voicewake.ptt")
+                .info("ptt finalize reason=\(reason, privacy: .public) len=\(finalText.count, privacy: .public)")
+            if finalText.isEmpty {
+                VoiceWakeOverlayController.shared.dismiss(reason: .empty)
+            } else {
+                VoiceWakeOverlayController.shared.presentFinal(
+                    transcript: finalText,
+                    forwardConfig: forward,
+                    autoSendAfter: nil,
+                    sendChime: chime,
+                    attributed: attributed)
+                VoiceWakeOverlayController.shared.sendNow(sendChime: chime)
+            }
+        }
+
+        self.recognitionTask?.cancel()
+        self.recognitionRequest = nil
+        self.recognitionTask = nil
+        self.audioEngine.inputNode.removeTap(onBus: 0)
+        self.audioEngine.stop()
+
+        self.committed = ""
+        self.volatile = ""
+        self.activeConfig = nil
+        self.triggerChimePlayed = false
+
+        // Resume the wake-word runtime after push-to-talk finishes.
+        await VoiceWakeRuntime.shared.applyPushToTalkCooldown()
+        _ = await MainActor.run { Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) } }
     }
 
     @MainActor
