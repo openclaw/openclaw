@@ -97,10 +97,14 @@ export async function startControlChannel(
 
   const handleLine = async (socket: net.Socket, line: string) => {
     if (!line) return;
+    const started = Date.now();
     let parsed: ControlRequest;
     try {
       parsed = JSON.parse(line) as ControlRequest;
     } catch (err) {
+      runtime.log?.(
+        `control: parse error (${String(err)}) on line: ${line.slice(0, 200)}`,
+      );
       return write(socket, {
         type: "response",
         id: "",
@@ -128,6 +132,7 @@ export async function startControlChannel(
       });
 
     try {
+      runtime.log?.(`control: recv ${parsed.method}`);
       switch (parsed.method) {
         case "ping": {
           respond({ pong: true, ts: Date.now() });
@@ -157,7 +162,13 @@ export async function startControlChannel(
           respond(undefined, false, `unknown method: ${parsed.method}`);
           break;
       }
+      runtime.log?.(
+        `control: ${parsed.method} responded in ${Date.now() - started}ms`,
+      );
     } catch (err) {
+      runtime.log?.(
+        `control: ${parsed.method} failed in ${Date.now() - started}ms: ${String(err)}`,
+      );
       respond(undefined, false, String(err));
     }
   };
