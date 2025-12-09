@@ -2,20 +2,6 @@ import Testing
 @testable import Clawdis
 
 @Suite(.serialized) struct VoiceWakeForwarderTests {
-    @Test func parsesUserHostPort() {
-        let parsed = VoiceWakeForwarder.parse(target: "[redacted-email]:2222")
-        #expect(parsed?.user == "user")
-        #expect(parsed?.host == "example.local")
-        #expect(parsed?.port == 2222)
-    }
-
-    @Test func parsesHostOnlyDefaultsPort() {
-        let parsed = VoiceWakeForwarder.parse(target: "primary.local")
-        #expect(parsed?.user == nil)
-        #expect(parsed?.host == "primary.local")
-        #expect(parsed?.port == defaultVoiceWakeForwardPort)
-    }
-
     @Test func shellEscapeHandlesQuotesAndParens() {
         let text = "Debug test works (and a funny pun)"
         let escaped = VoiceWakeForwarder.shellEscape(text)
@@ -52,8 +38,12 @@ import Testing
         #expect(opts.to == nil)
     }
 
-    @Test func sanitizedTargetStripsSshPrefix() {
-        let trimmed = VoiceWakeForwarder.sanitizedTarget("ssh user@box:22  ")
-        #expect(trimmed == "user@box:22")
+    @Test func parsesCommandTemplateWithQuotedValues() {
+        let opts = VoiceWakeForwarder._testParseCommandTemplate(
+            "clawdis-mac agent --session \"team chat\" --thinking \"deep focus\" --to \"+1 555 1212\" --message \"${text}\"")
+        #expect(opts.session == "team chat")
+        #expect(opts.thinking == "deep focus")
+        #expect(opts.deliver == true)
+        #expect(opts.to == "+1 555 1212")
     }
 }

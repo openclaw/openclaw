@@ -125,7 +125,7 @@ final class VoiceWakeOverlayController: ObservableObject {
 
         self.model.isSending = true
         let payload = VoiceWakeForwarder.prefixedTranscript(text)
-        self.logger.log(level: .info, "overlay sendNow forwarding len=\(payload.count, privacy: .public) target=\(forwardConfig.target, privacy: .public)")
+        self.logger.log(level: .info, "overlay sendNow forwarding len=\(payload.count, privacy: .public)")
         Task.detached {
             await VoiceWakeForwarder.forward(transcript: payload, config: forwardConfig)
         }

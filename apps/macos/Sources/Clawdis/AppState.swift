@@ -88,14 +88,6 @@ final class AppState: ObservableObject {
         didSet { UserDefaults.standard.set(self.voiceWakeForwardEnabled, forKey: voiceWakeForwardEnabledKey) }
     }
 
-    @Published var voiceWakeForwardTarget: String {
-        didSet { UserDefaults.standard.set(self.voiceWakeForwardTarget, forKey: voiceWakeForwardTargetKey) }
-    }
-
-    @Published var voiceWakeForwardIdentity: String {
-        didSet { UserDefaults.standard.set(self.voiceWakeForwardIdentity, forKey: voiceWakeForwardIdentityKey) }
-    }
-
     @Published var voiceWakeForwardCommand: String {
         didSet { UserDefaults.standard.set(self.voiceWakeForwardCommand, forKey: voiceWakeForwardCommandKey) }
     }
@@ -172,11 +164,6 @@ final class AppState: ObservableObject {
         self.voiceWakeAdditionalLocaleIDs = UserDefaults.standard
             .stringArray(forKey: voiceWakeAdditionalLocalesKey) ?? []
         self.voiceWakeForwardEnabled = UserDefaults.standard.bool(forKey: voiceWakeForwardEnabledKey)
-        let legacyTarget = Self.legacyTargetString()
-        self.voiceWakeForwardTarget = UserDefaults.standard
-            .string(forKey: voiceWakeForwardTargetKey) ?? legacyTarget
-        self.voiceWakeForwardIdentity = UserDefaults.standard.string(forKey: voiceWakeForwardIdentityKey) ?? ""
-
         self.voicePushToTalkEnabled = UserDefaults.standard
             .object(forKey: voicePushToTalkEnabledKey) as? Bool ?? false
 
@@ -317,20 +304,8 @@ extension AppState {
     var voiceWakeForwardConfig: VoiceWakeForwardConfig {
         VoiceWakeForwardConfig(
             enabled: self.voiceWakeForwardEnabled,
-            target: self.voiceWakeForwardTarget,
-            identityPath: self.voiceWakeForwardIdentity,
             commandTemplate: self.voiceWakeForwardCommand,
             timeout: defaultVoiceWakeForwardTimeout)
-    }
-
-    private static func legacyTargetString() -> String {
-        let host = UserDefaults.standard.string(forKey: voiceWakeForwardHostKey) ?? ""
-        let user = UserDefaults.standard.string(forKey: voiceWakeForwardUserKey) ?? ""
-        let savedPort = UserDefaults.standard.integer(forKey: voiceWakeForwardPortKey)
-        let port = savedPort == 0 ? defaultVoiceWakeForwardPort : savedPort
-        let userPrefix = user.isEmpty ? "" : "\(user)@"
-        let portSuffix = host.isEmpty ? "" : ":\(port)"
-        return "\(userPrefix)\(host)\(portSuffix)"
     }
 }
 

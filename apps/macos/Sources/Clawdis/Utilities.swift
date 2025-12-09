@@ -501,7 +501,11 @@ enum CommandResolver {
     }
 
     private static func sanitizedTarget(_ raw: String) -> String {
-        VoiceWakeForwarder.sanitizedTarget(raw)
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.hasPrefix("ssh ") {
+            return trimmed.replacingOccurrences(of: "ssh ", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return trimmed
     }
 
     private static func shellQuote(_ text: String) -> String {
