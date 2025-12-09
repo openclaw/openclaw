@@ -10,12 +10,13 @@ import {
   getLastHeartbeatEvent,
   onHeartbeatEvent,
 } from "../infra/heartbeat-events.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
-  enqueueSystemEvent,
   listSystemPresence,
   updateSystemPresence,
 } from "../infra/system-presence.js";
 import { setHeartbeatsEnabled } from "../provider-web.js";
+import type { RuntimeEnv } from "../runtime.js";
 
 export type RpcLoopHandles = { close: () => void };
 
