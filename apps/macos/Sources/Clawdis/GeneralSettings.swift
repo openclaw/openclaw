@@ -4,6 +4,7 @@ import SwiftUI
 struct GeneralSettings: View {
     @ObservedObject var state: AppState
     @ObservedObject private var healthStore = HealthStore.shared
+    @ObservedObject private var gatewayManager = GatewayProcessManager.shared
     @State private var isInstallingCLI = false
     @State private var cliStatus: String?
     @State private var cliInstalled = false
@@ -274,6 +275,12 @@ struct GeneralSettings: View {
 
             if let node = self.gatewayStatus.nodeVersion {
                 Text("Node \(node)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if case let .attachedExisting(details) = self.gatewayManager.status {
+                Text(details ?? "Using existing gateway instance")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

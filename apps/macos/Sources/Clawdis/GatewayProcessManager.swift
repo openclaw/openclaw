@@ -19,15 +19,21 @@ final class GatewayProcessManager: ObservableObject {
         case starting
         case running(pid: Int32)
         case restarting
+        case attachedExisting(details: String?)
         case failed(String)
 
         var label: String {
             switch self {
-            case .stopped: "Stopped"
-            case .starting: "Starting…"
-            case let .running(pid): "Running (pid \(pid))"
-            case .restarting: "Restarting…"
-            case let .failed(reason): "Failed: \(reason)"
+            case .stopped: return "Stopped"
+            case .starting: return "Starting…"
+            case let .running(pid): return "Running (pid \(pid))"
+            case .restarting: return "Restarting…"
+            case let .attachedExisting(details):
+                if let details, !details.isEmpty {
+                    return "Using existing gateway (\(details))"
+                }
+                return "Using existing gateway"
+            case let .failed(reason): return "Failed: \(reason)"
             }
         }
     }
@@ -36,6 +42,7 @@ final class GatewayProcessManager: ObservableObject {
     @Published private(set) var log: String = ""
     @Published private(set) var restartCount: Int = 0
     @Published private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
+    @Published private(set) var existingGatewayDetails: String?
 
     private var execution: Execution?
     private var desiredActive = false
@@ -63,9 +70,17 @@ final class GatewayProcessManager: ObservableObject {
             self.status = .failed("Too many crashes; giving up")
             return
         }
-        self.status = self.status == .restarting ? .restarting : .starting
-        Task.detached { [weak self] in
+
+        if self.status != .restarting {
+            self.status = .starting
+        }
+
+        // First try to latch onto an already-running gateway to avoid spawning a duplicate.
+        Task { [weak self] in
             guard let self else { return }
+            if await self.attachExistingGatewayIfAvailable() {
+                return
+            }
             await self.spawnGateway()
         }
     }
@@ -73,6 +88,7 @@ final class GatewayProcessManager: ObservableObject {
     func stop() {
         self.desiredActive = false
         self.stopping = true
+        self.existingGatewayDetails = nil
         guard let execution else {
             self.status = .stopped
             return
@@ -90,7 +106,40 @@ final class GatewayProcessManager: ObservableObject {
 
     // MARK: - Internals
 
+    /// Attempt to connect to an already-running gateway on the configured port.
+    /// If successful, mark status as attached and skip spawning a new process.
+    private func attachExistingGatewayIfAvailable() async -> Bool {
+        let port = GatewayEnvironment.gatewayPort()
+        guard let url = URL(string: "ws://127.0.0.1:\(port)") else { return false }
+        let token = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
+        let channel = GatewayChannel()
+        await channel.configure(url: url, token: token)
+        do {
+            let data = try await channel.request(method: "health", params: nil)
+            let details: String
+            if let snap = decodeHealthSnapshot(from: data) {
+                let linked = snap.web.linked ? "linked" : "not linked"
+                let authAge = snap.web.authAgeMs.flatMap(msToAge) ?? "unknown age"
+                details = "port \(port), \(linked), auth \(authAge)"
+            } else {
+                details = "port \(port), health probe succeeded"
+            }
+            self.existingGatewayDetails = details
+            self.status = .attachedExisting(details: details)
+            self.appendLog("[gateway] using existing instance: \(details)\n")
+            return true
+        } catch {
+            // No reachable gateway (or token mismatch) — fall through to spawn.
+            self.existingGatewayDetails = nil
+            return false
+        }
+    }
+
     private func spawnGateway() async {
+        if self.status != .restarting {
+            self.status = .starting
+        }
+        self.existingGatewayDetails = nil
         let resolution = GatewayEnvironment.resolveGatewayCommand()
         await MainActor.run { self.environmentStatus = resolution.status }
         guard let command = resolution.command else {

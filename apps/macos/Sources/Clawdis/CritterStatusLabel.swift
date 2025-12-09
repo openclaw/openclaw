@@ -196,7 +196,7 @@ struct CritterStatusLabel: View {
         switch self.gatewayStatus {
         case .failed, .stopped:
             !self.isPaused
-        case .starting, .restarting, .running:
+        case .starting, .restarting, .running, .attachedExisting:
             false
         }
     }
