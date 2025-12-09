@@ -18,6 +18,7 @@ actor VoiceWakeRuntime {
     private var audioEngine = AVAudioEngine()
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var recognitionGeneration: Int = 0 // drop stale callbacks after restarts
     private var lastHeard: Date?
     private var noiseFloorRMS: Double = 1e-4
     private var captureStartedAt: Date?
@@ -97,6 +98,9 @@ actor VoiceWakeRuntime {
 
     private func start(with config: RuntimeConfig) async {
         do {
+            self.recognitionGeneration &+= 1
+            let generation = self.recognitionGeneration
+
             self.configureSession(localeID: config.localeID)
 
             guard let recognizer, recognizer.isAvailable else {
@@ -127,11 +131,11 @@ actor VoiceWakeRuntime {
             self.lastHeard = Date()
             // Preserve any existing cooldownUntil so the debounce after send isn't wiped by a restart.
 
-            self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
+            self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, generation] result, error in
                 guard let self else { return }
                 let transcript = result?.bestTranscription.formattedString
                 let isFinal = result?.isFinal ?? false
-                Task { await self.handleRecognition(transcript: transcript, isFinal: isFinal, error: error, config: config) }
+                Task { await self.handleRecognition(transcript: transcript, isFinal: isFinal, error: error, config: config, generation: generation) }
             }
 
             self.logger.info("voicewake runtime started")
@@ -173,8 +177,12 @@ actor VoiceWakeRuntime {
         transcript: String?,
         isFinal: Bool,
         error: Error?,
-        config: RuntimeConfig) async
+        config: RuntimeConfig,
+        generation: Int) async
     {
+        if generation != self.recognitionGeneration {
+            return // stale callback from a superseded recognizer session
+        }
         if let error {
             self.logger.debug("voicewake recognition error: \(error.localizedDescription, privacy: .public)")
         }
