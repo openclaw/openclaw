@@ -111,7 +111,7 @@ enum GatewayEnvironment {
             let gatewayLabel = gatewayBin != nil ? "global" : "local"
             let gatewayVersionText = installed?.description ?? "unknown"
             let localPathHint = gatewayBin == nil && projectEntrypoint != nil
-                ? " (local: \(projectEntrypoint?.path ?? \"unknown\"))"
+                ? " (local: \(projectEntrypoint?.path ?? "unknown"))"
                 : ""
             return GatewayEnvironmentStatus(
                 kind: .ok,
