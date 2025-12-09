@@ -233,6 +233,16 @@ Examples:
     .command("rpc")
     .description("Run stdin/stdout JSON RPC loop for agent sends")
     .action(async () => {
+      // stdout must stay JSON-only for the macOS app's RPC bridge.
+      // Forward all console output to stderr so stray logs (e.g., WhatsApp sender)
+      // don't corrupt the stream the app parses.
+      const forwardToStderr = (...args: unknown[]) => console.error(...args);
+      console.log = forwardToStderr;
+      console.info = forwardToStderr;
+      console.warn = forwardToStderr;
+      console.debug = forwardToStderr;
+      console.trace = forwardToStderr;
+
       await runRpcLoop({ input: process.stdin, output: process.stdout });
       await new Promise<never>(() => {});
     });
