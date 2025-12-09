@@ -2,9 +2,8 @@ import { spawn } from "node:child_process";
 
 const DEFAULT_LAUNCHD_LABEL = "com.steipete.clawdis";
 
-export function triggerWarelayRestart(): void {
+export function triggerClawdisRestart(): void {
   const label =
-    process.env.WARELAY_LAUNCHD_LABEL ||
     process.env.CLAWDIS_LAUNCHD_LABEL ||
     DEFAULT_LAUNCHD_LABEL;
   const uid =

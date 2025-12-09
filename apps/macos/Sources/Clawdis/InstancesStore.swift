@@ -129,7 +129,7 @@ final class InstancesStore: ObservableObject {
                 self.logger.error("instances fetch returned empty payload")
                 self.instances = [self.localFallbackInstance(reason: "no presence payload")]
                 self.lastError = nil
-                self.statusMessage = "No presence payload from relay; showing local fallback + health probe."
+                self.statusMessage = "No presence payload from gateway; showing local fallback + health probe."
                 await self.probeHealthIfNeeded(reason: "no payload")
                 return
             }
@@ -255,7 +255,7 @@ final class InstancesStore: ObservableObject {
             guard let snap = decodeHealthSnapshot(from: data) else { return }
             let entry = InstanceInfo(
                 id: "health-\(snap.ts)",
-                host: "relay (health)",
+                host: "gateway (health)",
                 ip: nil,
                 version: nil,
                 lastInputSeconds: nil,
@@ -317,14 +317,14 @@ extension InstancesStore {
             text: "Local node: steipete-mac (10.0.0.12) · app 1.2.3",
             ts: Date().timeIntervalSince1970 * 1000),
         InstanceInfo(
-            id: "relay",
-            host: "relay",
+            id: "gateway",
+            host: "gateway",
             ip: "100.64.0.2",
             version: "1.2.3",
             lastInputSeconds: 45,
             mode: "remote",
             reason: "preview",
-            text: "Relay node · tunnel ok",
+            text: "Gateway node · tunnel ok",
             ts: Date().timeIntervalSince1970 * 1000 - 45000),
     ]) -> InstancesStore {
         let store = InstancesStore(isPreview: true)

@@ -118,8 +118,8 @@ rm -rf "$APP_ROOT/Contents/Resources/WebChat/vendor/pdfjs-dist/legacy"
 
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
-if [[ "${SKIP_RELAY_PACKAGE:-0}" != "1" ]]; then
-  echo "🧰 Staging relay payload (dist + node_modules; expects system Node ≥22)"
+if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
+  echo "🧰 Staging gateway payload (dist + node_modules; expects system Node ≥22)"
   rsync -a --delete --exclude "Clawdis.app" "$ROOT_DIR/dist/" "$RELAY_DIR/dist/"
   cp "$ROOT_DIR/package.json" "$RELAY_DIR/"
   cp "$ROOT_DIR/pnpm-lock.yaml" "$RELAY_DIR/"
@@ -170,7 +170,7 @@ if [[ "${SKIP_RELAY_PACKAGE:-0}" != "1" ]]; then
     "$RELAY_DIR/node_modules"/{vite,rolldown,vitest,ts-node,ts-node-dev,typescript,@types,docx-preview,jszip,lucide,ollama} 2>/dev/null || true
   rm -rf "$TMP_DEPLOY"
 else
-  echo "🧰 Skipping relay payload packaging (SKIP_RELAY_PACKAGE=1)"
+  echo "🧰 Skipping gateway payload packaging (SKIP_GATEWAY_PACKAGE=1)"
 fi
 
 if [ -f "$CLI_BIN" ]; then

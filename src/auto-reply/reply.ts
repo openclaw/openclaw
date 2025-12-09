@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
 import { resolveBundledPiBinary } from "../agents/pi-path.js";
-import { loadConfig, type WarelayConfig } from "../config/config.js";
+import { loadConfig, type ClawdisConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGER,
@@ -15,7 +15,7 @@ import {
 } from "../config/sessions.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
-import { triggerWarelayRestart } from "../infra/restart.js";
+import { triggerClawdisRestart } from "../infra/restart.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
@@ -42,7 +42,7 @@ const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
 
-type ReplyConfig = NonNullable<WarelayConfig["inbound"]>["reply"];
+type ReplyConfig = NonNullable<ClawdisConfig["inbound"]>["reply"];
 
 export function extractThinkDirective(body?: string): {
   cleaned: string;
@@ -112,7 +112,7 @@ function stripStructuralPrefixes(text: string): string {
 function stripMentions(
   text: string,
   ctx: MsgContext,
-  cfg: WarelayConfig | undefined,
+  cfg: ClawdisConfig | undefined,
 ): string {
   let result = text;
   const patterns = cfg?.inbound?.groupChat?.mentionPatterns ?? [];
@@ -161,7 +161,7 @@ function makeDefaultPiReply(): ReplyConfig {
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
-  configOverride?: WarelayConfig,
+  configOverride?: ClawdisConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   // Choose reply from config: static text or external command stdout.
   const cfg = configOverride ?? loadConfig();
@@ -503,7 +503,7 @@ export async function getReplyFromConfig(
     rawBodyNormalized === "restart" ||
     rawBodyNormalized.startsWith("/restart ")
   ) {
-    triggerWarelayRestart();
+    triggerClawdisRestart();
     cleanupTyping();
     return {
       text: "⚙️ Restarting clawdis via launchctl; give me a few seconds to come back online.",

@@ -66,7 +66,7 @@ export type GroupChatConfig = {
   historyLimit?: number;
 };
 
-export type WarelayConfig = {
+export type ClawdisConfig = {
   logging?: LoggingConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
@@ -179,7 +179,7 @@ const ReplySchema = z
     },
   );
 
-const WarelaySchema = z.object({
+const ClawdisSchema = z.object({
   logging: z
     .object({
       level: z
@@ -252,7 +252,7 @@ const WarelaySchema = z.object({
     .optional(),
 });
 
-export function loadConfig(): WarelayConfig {
+export function loadConfig(): ClawdisConfig {
   // Read config file (JSON5) if present.
   const configPath = CONFIG_PATH_CLAWDIS;
   try {
@@ -260,7 +260,7 @@ export function loadConfig(): WarelayConfig {
     const raw = fs.readFileSync(configPath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return {};
-    const validated = WarelaySchema.safeParse(parsed);
+    const validated = ClawdisSchema.safeParse(parsed);
     if (!validated.success) {
       console.error("Invalid config:");
       for (const iss of validated.error.issues) {
@@ -268,7 +268,7 @@ export function loadConfig(): WarelayConfig {
       }
       return {};
     }
-    return validated.data as WarelayConfig;
+    return validated.data as ClawdisConfig;
   } catch (err) {
     console.error(`Failed to read config at ${configPath}`, err);
     return {};

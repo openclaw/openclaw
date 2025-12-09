@@ -26,8 +26,8 @@ import Testing
         let clawdisPath = tmp.appendingPathComponent("node_modules/.bin/clawdis")
         try self.makeExec(at: clawdisPath)
 
-        let cmd = CommandResolver.clawdisCommand(subcommand: "relay")
-        #expect(cmd.prefix(2).elementsEqual([clawdisPath.path, "relay"]))
+        let cmd = CommandResolver.clawdisCommand(subcommand: "gateway")
+        #expect(cmd.prefix(2).elementsEqual([clawdisPath.path, "gateway"]))
     }
 
     @Test func fallsBackToNodeAndScript() async throws {

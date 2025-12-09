@@ -5,11 +5,11 @@ import path from "node:path";
 
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 import type { SessionEntry, SessionScope } from "../config/sessions.js";
 import type { ThinkLevel, VerboseLevel } from "./thinking.js";
 
-type ReplyConfig = NonNullable<WarelayConfig["inbound"]>["reply"];
+type ReplyConfig = NonNullable<ClawdisConfig["inbound"]>["reply"];
 
 type StatusArgs = {
   reply: ReplyConfig;

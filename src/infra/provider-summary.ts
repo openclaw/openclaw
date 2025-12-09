@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { loadConfig, type WarelayConfig } from "../config/config.js";
+import { loadConfig, type ClawdisConfig } from "../config/config.js";
 import { normalizeE164 } from "../utils.js";
 import {
   getWebAuthAgeMs,
@@ -10,7 +10,7 @@ import {
 const DEFAULT_WEBCHAT_PORT = 18788;
 
 export async function buildProviderSummary(
-  cfg?: WarelayConfig,
+  cfg?: ClawdisConfig,
 ): Promise<string[]> {
   const effective = cfg ?? loadConfig();
   const lines: string[] = [];

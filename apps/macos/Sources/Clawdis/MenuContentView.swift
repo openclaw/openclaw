@@ -7,7 +7,7 @@ import SwiftUI
 struct MenuContent: View {
     @ObservedObject var state: AppState
     let updater: UpdaterProviding?
-    @ObservedObject private var relayManager = RelayProcessManager.shared
+    @ObservedObject private var gatewayManager = GatewayProcessManager.shared
     @ObservedObject private var healthStore = HealthStore.shared
     @ObservedObject private var heartbeatStore = HeartbeatStore.shared
     @ObservedObject private var controlChannel = ControlChannel.shared

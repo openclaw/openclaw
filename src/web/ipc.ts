@@ -1,7 +1,7 @@
 /**
- * IPC server for clawdis relay.
+ * IPC server for clawdis gateway.
  *
- * When the relay is running, it starts a Unix socket server that allows
+ * When the gateway is running, it starts a Unix socket server that allows
  * `clawdis send` and `clawdis heartbeat` to send messages through the
  * existing WhatsApp connection instead of creating new ones.
  *
@@ -40,7 +40,7 @@ type SendHandler = (
 let server: net.Server | null = null;
 
 /**
- * Start the IPC server. Called by the relay when it starts.
+ * Start the IPC server. Called by the gateway when it starts.
  */
 export function startIpcServer(sendHandler: SendHandler): void {
   const logger = getChildLogger({ module: "ipc-server" });
@@ -126,7 +126,7 @@ export function startIpcServer(sendHandler: SendHandler): void {
 }
 
 /**
- * Stop the IPC server. Called when relay shuts down.
+ * Stop the IPC server. Called when gateway shuts down.
  */
 export function stopIpcServer(): void {
   if (server) {
@@ -141,7 +141,7 @@ export function stopIpcServer(): void {
 }
 
 /**
- * Check if the relay IPC server is running.
+ * Check if the gateway IPC server is running.
  */
 export function isRelayRunning(): boolean {
   try {
@@ -154,8 +154,8 @@ export function isRelayRunning(): boolean {
 }
 
 /**
- * Send a message through the running relay's IPC.
- * Returns null if relay is not running.
+ * Send a message through the running gateway's IPC.
+ * Returns null if gateway is not running.
  */
 export async function sendViaIpc(
   to: string,
@@ -214,7 +214,7 @@ export async function sendViaIpc(
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
-        // Socket exists but can't connect - relay might have crashed
+        // Socket exists but can't connect - gateway might have crashed
         resolve(null);
       }
     });

@@ -85,9 +85,9 @@ enum DebugActions {
 
     static func restartGateway() {
         Task { @MainActor in
-            RelayProcessManager.shared.stop()
+            GatewayProcessManager.shared.stop()
             try? await Task.sleep(nanoseconds: 300_000_000)
-            RelayProcessManager.shared.setActive(true)
+            GatewayProcessManager.shared.setActive(true)
         }
     }
 

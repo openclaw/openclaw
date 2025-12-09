@@ -62,7 +62,7 @@ LOG FLOW ARCHITECTURE:
 
 LOG CATEGORIES (examples):
     • voicewake           - Voice wake detection/test harness
-    • relay               - Relay process manager
+    • gateway             - Gateway process manager
     • xpc                 - XPC service calls
     • notifications       - Notification helper
     • screenshot          - Screenshotter

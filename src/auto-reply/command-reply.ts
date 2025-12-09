@@ -8,7 +8,7 @@ import type {
 } from "@mariozechner/pi-ai";
 import { piSpec } from "../agents/pi.js";
 import type { AgentMeta, AgentToolResult } from "../agents/types.js";
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { logError } from "../logger.js";
@@ -141,7 +141,7 @@ function extractAssistantTextLoosely(raw: string): string | undefined {
   return last ? last.replace(/\\n/g, "\n").trim() : undefined;
 }
 
-type CommandReplyConfig = NonNullable<WarelayConfig["inbound"]>["reply"] & {
+type CommandReplyConfig = NonNullable<ClawdisConfig["inbound"]>["reply"] & {
   mode: "command";
 };
 

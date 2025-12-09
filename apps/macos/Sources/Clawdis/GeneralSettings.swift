@@ -8,9 +8,9 @@ struct GeneralSettings: View {
     @State private var cliStatus: String?
     @State private var cliInstalled = false
     @State private var cliInstallLocation: String?
-    @State private var relayStatus: RelayEnvironmentStatus = .checking
-    @State private var relayInstallMessage: String?
-    @State private var relayInstalling = false
+    @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
+    @State private var gatewayInstallMessage: String?
+    @State private var gatewayInstalling = false
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showRemoteAdvanced = false
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -68,7 +68,7 @@ struct GeneralSettings: View {
         .onAppear {
             guard !self.isPreview else { return }
             self.refreshCLIStatus()
-            self.refreshRelayStatus()
+            self.refreshGatewayStatus()
         }
     }
 
@@ -92,7 +92,7 @@ struct GeneralSettings: View {
             .frame(width: 380, alignment: .leading)
 
             if self.state.connectionMode == .local {
-                self.relayInstallerCard
+                self.gatewayInstallerCard
                 self.healthRow
             }
 
@@ -248,31 +248,31 @@ struct GeneralSettings: View {
         }
     }
 
-    private var relayInstallerCard: some View {
+    private var gatewayInstallerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 Circle()
-                    .fill(self.relayStatusColor)
+                    .fill(self.gatewayStatusColor)
                     .frame(width: 10, height: 10)
-                Text(self.relayStatus.message)
+                Text(self.gatewayStatus.message)
                     .font(.callout)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
 
-            if let relayVersion = self.relayStatus.relayVersion,
-               let required = self.relayStatus.requiredRelay,
-               relayVersion != required
+            if let gatewayVersion = self.gatewayStatus.gatewayVersion,
+               let required = self.gatewayStatus.requiredGateway,
+               gatewayVersion != required
             {
-                Text("Installed: \(relayVersion) · Required: \(required)")
+                Text("Installed: \(gatewayVersion) · Required: \(required)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else if let relayVersion = self.relayStatus.relayVersion {
-                Text("Relay \(relayVersion) detected")
+            } else if let gatewayVersion = self.gatewayStatus.gatewayVersion {
+                Text("Gateway \(gatewayVersion) detected")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
-            if let node = self.relayStatus.nodeVersion {
+            if let node = self.gatewayStatus.nodeVersion {
                 Text("Node \(node)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -280,24 +280,24 @@ struct GeneralSettings: View {
 
             HStack(spacing: 10) {
                 Button {
-                    Task { await self.installRelay() }
+                    Task { await self.installGateway() }
                 } label: {
-                    if self.relayInstalling {
+                    if self.gatewayInstalling {
                         ProgressView().controlSize(.small)
                     } else {
-                        Text("Install/Update relay")
+                        Text("Install/Update gateway")
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.relayInstalling)
+                .disabled(self.gatewayInstalling)
 
-                Button("Recheck") { self.refreshRelayStatus() }
+                Button("Recheck") { self.refreshGatewayStatus() }
                     .buttonStyle(.bordered)
-                    .disabled(self.relayInstalling)
+                    .disabled(self.gatewayInstalling)
             }
 
             Text(self
-                .relayInstallMessage ??
+                .gatewayInstallMessage ??
                 "Installs the global \"clawdis\" package and expects the gateway on port 18789.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -326,27 +326,27 @@ struct GeneralSettings: View {
         self.cliInstalled = installLocation != nil
     }
 
-    private func refreshRelayStatus() {
-        self.relayStatus = RelayEnvironment.check()
+    private func refreshGatewayStatus() {
+        self.gatewayStatus = GatewayEnvironment.check()
     }
 
-    private func installRelay() async {
-        guard !self.relayInstalling else { return }
-        self.relayInstalling = true
-        defer { self.relayInstalling = false }
-        self.relayInstallMessage = nil
-        let expected = RelayEnvironment.expectedRelayVersion()
-        await RelayEnvironment.installGlobal(version: expected) { message in
-            Task { @MainActor in self.relayInstallMessage = message }
+    private func installGateway() async {
+        guard !self.gatewayInstalling else { return }
+        self.gatewayInstalling = true
+        defer { self.gatewayInstalling = false }
+        self.gatewayInstallMessage = nil
+        let expected = GatewayEnvironment.expectedGatewayVersion()
+        await GatewayEnvironment.installGlobal(version: expected) { message in
+            Task { @MainActor in self.gatewayInstallMessage = message }
         }
-        self.refreshRelayStatus()
+        self.refreshGatewayStatus()
     }
 
-    private var relayStatusColor: Color {
-        switch self.relayStatus.kind {
+    private var gatewayStatusColor: Color {
+        switch self.gatewayStatus.kind {
         case .ok: .green
         case .checking: .secondary
-        case .missingNode, .missingRelay, .incompatible, .error: .orange
+        case .missingNode, .missingGateway, .incompatible, .error: .orange
         }
     }
 

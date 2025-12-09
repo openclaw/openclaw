@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,7 +14,7 @@ export function isAudio(mediaType?: string | null) {
 }
 
 export async function transcribeInboundAudio(
-  cfg: WarelayConfig,
+  cfg: ClawdisConfig,
   ctx: MsgContext,
   runtime: RuntimeEnv,
 ): Promise<{ text: string } | undefined> {

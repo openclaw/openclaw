@@ -20,7 +20,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const token = (opts.token ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();
   if (!token) {
     throw new Error(
-      "TELEGRAM_BOT_TOKEN or telegram.botToken is required for Telegram relay",
+      "TELEGRAM_BOT_TOKEN or telegram.botToken is required for Telegram gateway",
     );
   }
 

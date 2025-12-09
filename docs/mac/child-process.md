@@ -31,7 +31,7 @@ Run the Node-based Clawdis/clawdis gateway as a direct child of the LSUIElement 
 - If you ever embed Node that *must* touch TCC, wrap that call in a tiny signed helper target inside the app bundle and have Node exec that helper instead of calling the API directly.
 
 ## Process manager design (Swift Subprocess)
-- Add a small `RelayProcessManager` (Swift) that owns:
+- Add a small `GatewayProcessManager` (Swift) that owns:
   - `execution: Execution?` from `Swift Subprocess` to track the child.
   - `start(config)` called when “Clawdis Active” flips ON:
     - binary: host Node running the bundled gateway under `Clawdis.app/Contents/Resources/Gateway/`
@@ -41,8 +41,8 @@ Run the Node-based Clawdis/clawdis gateway as a direct child of the LSUIElement 
     - restart: optional linear/backoff restart if exit was non-zero and Active is still true
   - `stop()` called when Active flips OFF or app terminates: cancel the execution and `waitUntilExit`.
 - Wire SwiftUI toggle:
-  - ON: `RelayProcessManager.start(...)`
-  - OFF: `RelayProcessManager.stop()` (no launchctl calls in this mode)
+- ON: `GatewayProcessManager.start(...)`
+- OFF: `GatewayProcessManager.stop()` (no launchctl calls in this mode)
 - Keep the existing `LaunchdManager` around so we can switch back if needed; the toggle can choose between launchd or child mode with a flag if we want both.
 
 ## Packaging and signing
@@ -67,5 +67,5 @@ Run the Node-based Clawdis/clawdis gateway as a direct child of the LSUIElement 
 
 ## Decision snapshot (current recommendation)
 - Keep all TCC surfaces in the Swift app/XPC.
-- Implement `RelayProcessManager` with Swift Subprocess to start/stop the gateway on the “Clawdis Active” toggle.
+- Implement `GatewayProcessManager` with Swift Subprocess to start/stop the gateway on the “Clawdis Active” toggle.
 - Maintain the launchd path as a fallback for uptime/login persistence until child-mode proves stable. 

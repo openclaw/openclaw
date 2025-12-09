@@ -46,9 +46,9 @@ struct OnboardingView: View {
     @State private var monitoringPermissions = false
     @State private var cliInstalled = false
     @State private var cliInstallLocation: String?
-    @State private var relayStatus: RelayEnvironmentStatus = .checking
-    @State private var relayInstalling = false
-    @State private var relayInstallMessage: String?
+    @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
+    @State private var gatewayInstalling = false
+    @State private var gatewayInstallMessage: String?
     @ObservedObject private var state = AppStateStore.shared
     @ObservedObject private var permissionMonitor = PermissionMonitor.shared
 
@@ -70,7 +70,7 @@ struct OnboardingView: View {
                 HStack(spacing: 0) {
                     self.welcomePage().frame(width: self.pageWidth)
                     self.connectionPage().frame(width: self.pageWidth)
-                    self.relayPage().frame(width: self.pageWidth)
+                    self.gatewayPage().frame(width: self.pageWidth)
                     self.permissionsPage().frame(width: self.pageWidth)
                     self.cliPage().frame(width: self.pageWidth)
                     self.whatsappPage().frame(width: self.pageWidth)
@@ -100,7 +100,7 @@ struct OnboardingView: View {
         .task {
             await self.refreshPerms()
             self.refreshCLIStatus()
-            self.refreshRelayStatus()
+            self.refreshGatewayStatus()
         }
     }
 
@@ -177,9 +177,9 @@ struct OnboardingView: View {
         }
     }
 
-    private func relayPage() -> some View {
+    private func gatewayPage() -> some View {
         self.onboardingPage {
-            Text("Install the relay")
+            Text("Install the gateway")
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "Clawdis now runs the WebSocket gateway from the global \"clawdis\" package. Install/update it here and we’ll check Node for you.")
@@ -193,27 +193,27 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 10) {
                         Circle()
-                            .fill(self.relayStatusColor)
+                            .fill(self.gatewayStatusColor)
                             .frame(width: 10, height: 10)
-                        Text(self.relayStatus.message)
+                        Text(self.gatewayStatus.message)
                             .font(.callout.weight(.semibold))
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
-                    if let relayVersion = self.relayStatus.relayVersion,
-                       let required = self.relayStatus.requiredRelay,
-                       relayVersion != required
+                    if let gatewayVersion = self.gatewayStatus.gatewayVersion,
+                       let required = self.gatewayStatus.requiredGateway,
+                       gatewayVersion != required
                     {
-                        Text("Installed: \(relayVersion) · Required: \(required)")
+                        Text("Installed: \(gatewayVersion) · Required: \(required)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                    } else if let relayVersion = self.relayStatus.relayVersion {
-                        Text("Relay \(relayVersion) detected")
+                    } else if let gatewayVersion = self.gatewayStatus.gatewayVersion {
+                        Text("Gateway \(gatewayVersion) detected")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
 
-                    if let node = self.relayStatus.nodeVersion {
+                    if let node = self.gatewayStatus.nodeVersion {
                         Text("Node \(node)")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -221,24 +221,24 @@ struct OnboardingView: View {
 
                     HStack(spacing: 12) {
                         Button {
-                            Task { await self.installRelay() }
+                            Task { await self.installGateway() }
                         } label: {
-                            if self.relayInstalling {
+                            if self.gatewayInstalling {
                                 ProgressView()
                             } else {
-                                Text("Install / Update relay")
+                                Text("Install / Update gateway")
                             }
                         }
                         .buttonStyle(.borderedProminent)
-                        .disabled(self.relayInstalling)
+                        .disabled(self.gatewayInstalling)
 
-                        Button("Recheck") { self.refreshRelayStatus() }
+                        Button("Recheck") { self.refreshGatewayStatus() }
                             .buttonStyle(.bordered)
-                            .disabled(self.relayInstalling)
+                            .disabled(self.gatewayInstalling)
                     }
 
-                    if let relayInstallMessage {
-                        Text(relayInstallMessage)
+                    if let gatewayInstallMessage {
+                        Text(gatewayInstallMessage)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
@@ -350,7 +350,7 @@ struct OnboardingView: View {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 """
-                Run `clawdis login` where the relay runs (local if local mode, remote if remote).
+                Run `clawdis login` where the gateway runs (local if local mode, remote if remote).
                 Scan the QR to pair your account.
                 """)
                 .font(.body)
@@ -368,7 +368,7 @@ struct OnboardingView: View {
                     title: "Run `clawdis login --verbose`",
                     subtitle: """
                     Scan the QR code with WhatsApp on your phone.
-                    We only use your personal session; no cloud relay involved.
+                    We only use your personal session; no cloud gateway involved.
                     """,
                     systemImage: "qrcode.viewfinder")
                 self.featureRow(
@@ -568,27 +568,27 @@ struct OnboardingView: View {
         self.cliInstalled = installLocation != nil
     }
 
-    private func refreshRelayStatus() {
-        self.relayStatus = RelayEnvironment.check()
+    private func refreshGatewayStatus() {
+        self.gatewayStatus = GatewayEnvironment.check()
     }
 
-    private func installRelay() async {
-        guard !self.relayInstalling else { return }
-        self.relayInstalling = true
-        defer { self.relayInstalling = false }
-        self.relayInstallMessage = nil
-        let expected = RelayEnvironment.expectedRelayVersion()
-        await RelayEnvironment.installGlobal(version: expected) { message in
-            Task { @MainActor in self.relayInstallMessage = message }
+    private func installGateway() async {
+        guard !self.gatewayInstalling else { return }
+        self.gatewayInstalling = true
+        defer { self.gatewayInstalling = false }
+        self.gatewayInstallMessage = nil
+        let expected = GatewayEnvironment.expectedGatewayVersion()
+        await GatewayEnvironment.installGlobal(version: expected) { message in
+            Task { @MainActor in self.gatewayInstallMessage = message }
         }
-        self.refreshRelayStatus()
+        self.refreshGatewayStatus()
     }
 
-    private var relayStatusColor: Color {
-        switch self.relayStatus.kind {
+    private var gatewayStatusColor: Color {
+        switch self.gatewayStatus.kind {
         case .ok: .green
         case .checking: .secondary
-        case .missingNode, .missingRelay, .incompatible, .error: .orange
+        case .missingNode, .missingGateway, .incompatible, .error: .orange
         }
     }
 

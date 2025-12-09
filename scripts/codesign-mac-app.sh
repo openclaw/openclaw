@@ -82,10 +82,10 @@ if [ -f "$APP_BUNDLE/Contents/MacOS/ClawdisCLI" ]; then
   echo "Signing CLI helper"; sign_item "$APP_BUNDLE/Contents/MacOS/ClawdisCLI"
 fi
 
-# Sign bundled relay payload (native addons, libvips dylibs)
+# Sign bundled gateway payload (native addons, libvips dylibs)
 if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   find "$APP_BUNDLE/Contents/Resources/Relay" -type f \( -name "*.node" -o -name "*.dylib" \) -print0 | while IFS= read -r -d '' f; do
-    echo "Signing relay payload: $f"; sign_item "$f"
+    echo "Signing gateway payload: $f"; sign_item "$f"
   done
 fi
 

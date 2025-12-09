@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 
 export type ReconnectPolicy = {
   initialMs: number;
@@ -23,7 +23,7 @@ const clamp = (val: number, min: number, max: number) =>
   Math.max(min, Math.min(max, val));
 
 export function resolveHeartbeatSeconds(
-  cfg: WarelayConfig,
+  cfg: ClawdisConfig,
   overrideSeconds?: number,
 ): number {
   const candidate = overrideSeconds ?? cfg.web?.heartbeatSeconds;
@@ -32,7 +32,7 @@ export function resolveHeartbeatSeconds(
 }
 
 export function resolveReconnectPolicy(
-  cfg: WarelayConfig,
+  cfg: ClawdisConfig,
   overrides?: Partial<ReconnectPolicy>,
 ): ReconnectPolicy {
   const merged = {

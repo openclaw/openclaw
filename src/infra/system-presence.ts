@@ -56,7 +56,7 @@ function initSelfPresence() {
 function ensureSelfPresence() {
   // If the map was somehow cleared (e.g., hot reload or a new worker spawn that
   // skipped module evaluation), re-seed with a local entry so UIs always show
-  // at least the current relay.
+  // at least the current gateway.
   if (entries.size === 0) {
     initSelfPresence();
   }

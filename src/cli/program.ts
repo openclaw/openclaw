@@ -279,7 +279,7 @@ Examples:
     });
   program
     .command("gateway")
-    .description("Run the WebSocket Gateway (replaces relay)")
+    .description("Run the WebSocket Gateway")
     .option("--port <port>", "Port for the gateway WebSocket", "18789")
     .option(
       "--token <token>",

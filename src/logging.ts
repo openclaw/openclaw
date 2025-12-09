@@ -3,7 +3,7 @@ import path from "node:path";
 import util from "node:util";
 
 import { Logger as TsLogger } from "tslog";
-import { loadConfig, type WarelayConfig } from "./config/config.js";
+import { loadConfig, type ClawdisConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
@@ -55,7 +55,7 @@ function normalizeLevel(level?: string): Level {
 }
 
 function resolveSettings(): ResolvedSettings {
-  const cfg: WarelayConfig["logging"] | undefined =
+  const cfg: ClawdisConfig["logging"] | undefined =
     overrideSettings ?? loadConfig().logging;
   const level = normalizeLevel(cfg?.level);
   const file = cfg?.file ?? defaultRollingPathForToday();

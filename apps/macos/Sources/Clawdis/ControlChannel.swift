@@ -57,7 +57,7 @@ final class ControlChannel: ObservableObject {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
     private let gateway = GatewayChannel()
     private var gatewayURL: URL {
-        let port = RelayEnvironment.gatewayPort()
+        let port = GatewayEnvironment.gatewayPort()
         return URL(string: "ws://127.0.0.1:\(port)")!
     }
 
@@ -130,16 +130,16 @@ final class ControlChannel: ObservableObject {
         }
 
         if let urlError = error as? URLError {
-            let port = RelayEnvironment.gatewayPort()
+            let port = GatewayEnvironment.gatewayPort()
             switch urlError.code {
             case .cancelled:
-                return "Gateway connection was closed; start the relay (localhost:\(port)) and retry."
+                return "Gateway connection was closed; start the gateway (localhost:\(port)) and retry."
             case .cannotFindHost, .cannotConnectToHost:
-                return "Cannot reach gateway at localhost:\(port); ensure the relay is running."
+                return "Cannot reach gateway at localhost:\(port); ensure the gateway is running."
             case .networkConnectionLost:
-                return "Gateway connection dropped; relay likely restarted—retry."
+                return "Gateway connection dropped; gateway likely restarted—retry."
             case .timedOut:
-                return "Gateway request timed out; check relay on localhost:\(port)."
+                return "Gateway request timed out; check gateway on localhost:\(port)."
             case .notConnectedToInternet:
                 return "No network connectivity; cannot reach gateway."
             default:

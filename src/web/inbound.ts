@@ -64,7 +64,7 @@ export async function monitorWebInbox(options: {
     onCloseResolve = resolve;
   });
   try {
-    // Advertise that the relay is online right after connecting.
+    // Advertise that the gateway is online right after connecting.
     await sock.sendPresenceUpdate("available");
     if (isVerbose()) logVerbose("Sent global 'available' presence on connect");
   } catch (err) {

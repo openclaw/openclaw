@@ -13,7 +13,7 @@ actor AgentRPC {
     private var configured = false
 
     private var gatewayURL: URL {
-        let port = RelayEnvironment.gatewayPort()
+        let port = GatewayEnvironment.gatewayPort()
         return URL(string: "ws://127.0.0.1:\(port)")!
     }
 

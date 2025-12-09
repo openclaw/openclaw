@@ -41,7 +41,7 @@ export function setHeartbeatsEnabled(enabled: boolean) {
 }
 
 /**
- * Send a message via IPC if relay is running, otherwise fall back to direct.
+ * Send a message via IPC if gateway is running, otherwise fall back to direct.
  * This avoids Signal session corruption from multiple Baileys connections.
  */
 async function sendWithIpcFallback(
@@ -52,7 +52,7 @@ async function sendWithIpcFallback(
   const ipcResult = await sendViaIpc(to, message, opts.mediaUrl);
   if (ipcResult?.success && ipcResult.messageId) {
     if (opts.verbose) {
-      console.log(info(`Sent via relay IPC (avoiding session corruption)`));
+      console.log(info(`Sent via gateway IPC (avoiding session corruption)`));
     }
     return { messageId: ipcResult.messageId, toJid: `${to}@s.whatsapp.net` };
   }
@@ -720,7 +720,7 @@ export async function monitorWebProvider(
     );
 
   // Avoid noisy MaxListenersExceeded warnings in test environments where
-  // multiple relay instances may be constructed.
+  // multiple gateway instances may be constructed.
   const currentMaxListeners = process.getMaxListeners?.() ?? 10;
   if (process.setMaxListeners && currentMaxListeners < 50) {
     process.setMaxListeners(50);
@@ -1021,7 +1021,7 @@ export async function monitorWebProvider(
     // Surface a concise connection event for the next main-session turn/heartbeat.
     const { e164: selfE164 } = readWebSelfId();
     enqueueSystemEvent(
-      `WhatsApp relay connected${selfE164 ? ` as ${selfE164}` : ""}.`,
+      `WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`,
     );
 
     // Start IPC server so `clawdis send` can use this connection
@@ -1099,10 +1099,10 @@ export async function monitorWebProvider(
         if (minutesSinceLastMessage && minutesSinceLastMessage > 30) {
           heartbeatLogger.warn(
             logData,
-            "⚠️ web relay heartbeat - no messages in 30+ minutes",
+            "⚠️ web gateway heartbeat - no messages in 30+ minutes",
           );
         } else {
-          heartbeatLogger.info(logData, "web relay heartbeat");
+          heartbeatLogger.info(logData, "web gateway heartbeat");
         }
       }, heartbeatSeconds * 1000);
 
@@ -1398,7 +1398,7 @@ export async function monitorWebProvider(
     );
 
     enqueueSystemEvent(
-      `WhatsApp relay disconnected (status ${status ?? "unknown"})`,
+      `WhatsApp gateway disconnected (status ${status ?? "unknown"})`,
     );
 
     if (loggedOut) {

@@ -10,9 +10,9 @@ struct DebugSettings: View {
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
     @State private var modelsError: String?
-    @ObservedObject private var relayManager = RelayProcessManager.shared
+    @ObservedObject private var gatewayManager = GatewayProcessManager.shared
     @ObservedObject private var healthStore = HealthStore.shared
-    @State private var relayRootInput: String = RelayProcessManager.shared.projectRootPath()
+    @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?
     @State private var debugSendInFlight = false
@@ -53,19 +53,19 @@ struct DebugSettings: View {
                         .textSelection(.enabled)
                 }
                 LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
-                LabeledContent("Relay status") {
+                LabeledContent("Gateway status") {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(self.relayManager.status.label)
-                        Text("Restarts: \(self.relayManager.restartCount)")
+                        Text(self.gatewayManager.status.label)
+                        Text("Restarts: \(self.gatewayManager.restartCount)")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Relay stdout/stderr")
+                    Text("Gateway stdout/stderr")
                         .font(.caption.weight(.semibold))
                     ScrollView {
-                        Text(self.relayManager.log.isEmpty ? "—" : self.relayManager.log)
+                        Text(self.gatewayManager.log.isEmpty ? "—" : self.gatewayManager.log)
                             .font(.caption.monospaced())
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .textSelection(.enabled)
@@ -77,7 +77,7 @@ struct DebugSettings: View {
                     Text("Clawdis project root")
                         .font(.caption.weight(.semibold))
                     HStack(spacing: 8) {
-                        TextField("Path to clawdis repo", text: self.$relayRootInput)
+                        TextField("Path to clawdis repo", text: self.$gatewayRootInput)
                             .textFieldStyle(.roundedBorder)
                             .font(.caption.monospaced())
                             .onSubmit { self.saveRelayRoot() }
@@ -86,12 +86,12 @@ struct DebugSettings: View {
                         Button("Reset") {
                             let def = FileManager.default.homeDirectoryForCurrentUser
                                 .appendingPathComponent("Projects/clawdis").path
-                            self.relayRootInput = def
+                            self.gatewayRootInput = def
                             self.saveRelayRoot()
                         }
                         .buttonStyle(.bordered)
                     }
-                    Text("Used for pnpm/node fallback and PATH population when launching the relay.")
+                    Text("Used for pnpm/node fallback and PATH population when launching the gateway.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -281,7 +281,7 @@ struct DebugSettings: View {
     }
 
     private func saveRelayRoot() {
-        RelayProcessManager.shared.setProjectRoot(path: self.relayRootInput)
+        GatewayProcessManager.shared.setProjectRoot(path: self.gatewayRootInput)
     }
 
     private func loadSessionStorePath() {

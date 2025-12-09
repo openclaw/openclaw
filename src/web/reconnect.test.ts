@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 import {
   computeBackoff,
   DEFAULT_HEARTBEAT_SECONDS,
@@ -11,7 +11,7 @@ import {
 } from "./reconnect.js";
 
 describe("web reconnect helpers", () => {
-  const cfg: WarelayConfig = {};
+  const cfg: ClawdisConfig = {};
 
   it("resolves sane reconnect defaults with clamps", () => {
     const policy = resolveReconnectPolicy(cfg, {

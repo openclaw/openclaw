@@ -12,7 +12,7 @@ import {
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
-import { loadConfig, type WarelayConfig } from "../config/config.js";
+import { loadConfig, type ClawdisConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
@@ -50,7 +50,7 @@ type SessionResolution = {
   persistedVerbose?: VerboseLevel;
 };
 
-function assertCommandConfig(cfg: WarelayConfig) {
+function assertCommandConfig(cfg: ClawdisConfig) {
   const reply = cfg.inbound?.reply;
   if (!reply || reply.mode !== "command" || !reply.command?.length) {
     throw new Error(
@@ -58,14 +58,14 @@ function assertCommandConfig(cfg: WarelayConfig) {
     );
   }
   return reply as NonNullable<
-    NonNullable<WarelayConfig["inbound"]>["reply"]
+    NonNullable<ClawdisConfig["inbound"]>["reply"]
   > & { mode: "command"; command: string[] };
 }
 
 function resolveSession(opts: {
   to?: string;
   sessionId?: string;
-  replyCfg: NonNullable<NonNullable<WarelayConfig["inbound"]>["reply"]>;
+  replyCfg: NonNullable<NonNullable<ClawdisConfig["inbound"]>["reply"]>;
 }): SessionResolution {
   const sessionCfg = opts.replyCfg?.session;
   const scope = sessionCfg?.scope ?? "per-sender";

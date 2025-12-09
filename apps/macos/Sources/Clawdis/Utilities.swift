@@ -204,10 +204,10 @@ enum CLIInstaller {
 }
 
 enum CommandResolver {
-    private static let projectRootDefaultsKey = "clawdis.relayProjectRootPath"
+    private static let projectRootDefaultsKey = "clawdis.gatewayProjectRootPath"
     private static let helperName = "clawdis"
 
-    static func relayEntrypoint(in root: URL) -> String? {
+    static func gatewayEntrypoint(in root: URL) -> String? {
         let distEntry = root.appendingPathComponent("dist/index.js").path
         if FileManager.default.isReadableFile(atPath: distEntry) { return distEntry }
         let binEntry = root.appendingPathComponent("bin/clawdis.js").path
@@ -326,7 +326,7 @@ enum CommandResolver {
                 return [clawdisPath, subcommand] + extraArgs
             }
 
-            if let entry = self.relayEntrypoint(in: self.projectRoot()) {
+            if let entry = self.gatewayEntrypoint(in: self.projectRoot()) {
                 return self.makeRuntimeCommand(
                     runtime: runtime,
                     entrypoint: entry,

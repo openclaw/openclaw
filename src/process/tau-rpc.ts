@@ -131,7 +131,7 @@ class TauRpcClient {
       if (!ok) child.stdin.once("drain", () => resolve());
     });
     return await new Promise<TauRpcResult>((resolve, reject) => {
-      // Hard cap to avoid stuck relays; resets on every line received.
+      // Hard cap to avoid stuck gateways; resets on every line received.
       const capMs = Math.min(timeoutMs, 5 * 60 * 1000);
       const timer = setTimeout(() => {
         this.pending = undefined;

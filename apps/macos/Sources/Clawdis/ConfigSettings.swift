@@ -111,7 +111,7 @@ struct ConfigSettings: View {
                     }
                     Text(
                         """
-                        Mac app connects to the relay’s loopback web chat on this port.
+                        Mac app connects to the gateway’s loopback web chat on this port.
                         Remote mode uses SSH -L to forward it.
                         """)
                         .font(.footnote)

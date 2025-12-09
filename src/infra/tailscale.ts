@@ -150,7 +150,7 @@ export async function ensureFunnel(
     );
     runtime.error(
       info(
-        "Tip: Funnel is optional for CLAWDIS. You can keep running the web relay without it: `pnpm clawdis gateway`",
+        "Tip: Funnel is optional for CLAWDIS. You can keep running the web gateway without it: `pnpm clawdis gateway`",
       ),
     );
     if (isVerbose()) {

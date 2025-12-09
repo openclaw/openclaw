@@ -59,8 +59,8 @@ run_step "bundle webchat" bash -lc "cd '${ROOT_DIR}' && pnpm webchat:bundle"
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
 run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Clawdis"
 
-# 3) Package app (skip TS + relay staging; rely on global/custom install for relay JS).
-run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=1 SKIP_RELAY_PACKAGE=1 '${ROOT_DIR}/scripts/package-mac-app.sh'"
+# 3) Package app (skip TS + gateway staging; rely on global/custom install for gateway JS).
+run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=1 SKIP_GATEWAY_PACKAGE=1 '${ROOT_DIR}/scripts/package-mac-app.sh'"
 
 choose_app_bundle() {
   if [[ -n "${APP_BUNDLE}" && -d "${APP_BUNDLE}" ]]; then

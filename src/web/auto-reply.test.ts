@@ -6,7 +6,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import * as commandQueue from "../process/command-queue.js";
 import {
@@ -65,7 +65,7 @@ describe("heartbeat helpers", () => {
   });
 
   it("resolves heartbeat minutes with default and overrides", () => {
-    const cfgBase: WarelayConfig = {
+    const cfgBase: ClawdisConfig = {
       inbound: {
         reply: { mode: "command" as const },
       },
@@ -94,7 +94,7 @@ describe("resolveHeartbeatRecipients", () => {
   it("returns the sole session recipient", async () => {
     const now = Date.now();
     const store = await makeSessionStore({ "+1000": { updatedAt: now } });
-    const cfg: WarelayConfig = {
+    const cfg: ClawdisConfig = {
       inbound: {
         allowFrom: ["+1999"],
         reply: { mode: "command", session: { store: store.storePath } },
@@ -112,7 +112,7 @@ describe("resolveHeartbeatRecipients", () => {
       "+1000": { updatedAt: now },
       "+2000": { updatedAt: now - 10 },
     });
-    const cfg: WarelayConfig = {
+    const cfg: ClawdisConfig = {
       inbound: {
         allowFrom: ["+1999"],
         reply: { mode: "command", session: { store: store.storePath } },
@@ -126,7 +126,7 @@ describe("resolveHeartbeatRecipients", () => {
 
   it("filters wildcard allowFrom when no sessions exist", async () => {
     const store = await makeSessionStore({});
-    const cfg: WarelayConfig = {
+    const cfg: ClawdisConfig = {
       inbound: {
         allowFrom: ["*"],
         reply: { mode: "command", session: { store: store.storePath } },
@@ -141,7 +141,7 @@ describe("resolveHeartbeatRecipients", () => {
   it("merges sessions and allowFrom when --all is set", async () => {
     const now = Date.now();
     const store = await makeSessionStore({ "+1000": { updatedAt: now } });
-    const cfg: WarelayConfig = {
+    const cfg: ClawdisConfig = {
       inbound: {
         allowFrom: ["+1999"],
         reply: { mode: "command", session: { store: store.storePath } },
@@ -162,7 +162,7 @@ describe("partial reply gating", () => {
 
     const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
 
-    const mockConfig: WarelayConfig = {
+    const mockConfig: ClawdisConfig = {
       inbound: {
         reply: { mode: "command" },
         allowFrom: ["*"],
@@ -342,7 +342,7 @@ describe("runWebHeartbeatOnce", () => {
 
     const replyResolver = vi.fn().mockResolvedValue({ text: HEARTBEAT_TOKEN });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never;
-    const cfg: WarelayConfig = {
+    const cfg: ClawdisConfig = {
       inbound: {
         allowFrom: ["+4367"],
         reply: {
@@ -385,7 +385,7 @@ describe("runWebHeartbeatOnce", () => {
     }));
 
     const resolver = vi.fn(async () => ({ text: HEARTBEAT_TOKEN }));
-    const cfg: WarelayConfig = {
+    const cfg: ClawdisConfig = {
       inbound: {
         allowFrom: ["+1999"],
         reply: {

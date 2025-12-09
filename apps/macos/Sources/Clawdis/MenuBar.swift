@@ -10,7 +10,7 @@ import SwiftUI
 struct ClawdisApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var state: AppState
-    @StateObject private var relayManager = RelayProcessManager.shared
+    @StateObject private var gatewayManager = GatewayProcessManager.shared
     @StateObject private var activityStore = WorkActivityStore.shared
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
@@ -27,7 +27,7 @@ struct ClawdisApp: App {
                 earBoostActive: self.state.earBoostActive,
                 blinkTick: self.state.blinkTick,
                 sendCelebrationTick: self.state.sendCelebrationTick,
-                relayStatus: self.relayManager.status,
+                gatewayStatus: self.gatewayManager.status,
                 animationsEnabled: self.state.iconAnimationsEnabled,
                 iconState: self.effectiveIconState)
         }
@@ -38,7 +38,7 @@ struct ClawdisApp: App {
         }
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused)
-            self.relayManager.setActive(!paused)
+            self.gatewayManager.setActive(!paused)
         }
 
         Settings {
@@ -86,7 +86,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         if let state {
-            RelayProcessManager.shared.setActive(!state.isPaused)
+            GatewayProcessManager.shared.setActive(!state.isPaused)
         }
         Task {
             await ControlChannel.shared.configure()
@@ -104,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        RelayProcessManager.shared.stop()
+        GatewayProcessManager.shared.stop()
         PresenceReporter.shared.stop()
         WebChatManager.shared.close()
         Task { await AgentRPC.shared.shutdown() }

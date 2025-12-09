@@ -9,12 +9,12 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/steipete/warelay/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/steipete/warelay/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://www.npmjs.com/package/warelay"><img src="https://img.shields.io/npm/v/warelay.svg?style=for-the-badge" alt="npm version"></a>
+  <a href="https://github.com/steipete/clawdis/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/steipete/clawdis/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
+  <a href="https://www.npmjs.com/package/clawdis"><img src="https://img.shields.io/npm/v/clawdis.svg?style=for-the-badge" alt="npm version"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**CLAWDIS** (formerly Warelay) is a WhatsApp- and Telegram-to-AI gateway. Send a message, get an AI response. It's like having a genius lobster in your pocket 24/7.
+**CLAWDIS** is a WhatsApp- and Telegram-to-AI gateway. Send a message, get an AI response. It's like having a genius lobster in your pocket 24/7.
 
 ```
 ┌─────────────┐      ┌──────────┐      ┌─────────────┐
@@ -52,7 +52,7 @@ Runtime requirement: **Node ≥22.0.0** (not bundled). The macOS app and CLI bot
 
 ```bash
 # Install
-npm install -g warelay  # (still warelay on npm for now)
+npm install -g clawdis
 
 # Link your WhatsApp
 clawdis login
@@ -125,11 +125,11 @@ CLAWDIS was built for **Clawd**, a space lobster AI assistant. See the full setu
 ### WhatsApp Web
 ```bash
 clawdis login      # Scan QR code
-clawdis relay      # Start listening
+clawdis gateway    # Start listening
 ```
 
 ### Telegram (Bot API)
-Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebChat, with groups kept isolated. Text and media send work via `clawdis send --provider telegram`. The unified `clawdis relay` starts WhatsApp and, when `TELEGRAM_BOT_TOKEN` or `telegram.botToken` is set, Telegram too (use `--provider` to force web|telegram|all). Webhook mode: `--webhook --port … --webhook-secret … --webhook-url …` (or register via BotFather). See `docs/telegram.md` for setup and limits.
+Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebChat, with groups kept isolated. Text and media send work via `clawdis send --provider telegram`. The unified `clawdis gateway` starts WhatsApp and, when `TELEGRAM_BOT_TOKEN` or `telegram.botToken` is set, Telegram too (use `--provider` to force web|telegram|all). Webhook mode: `--webhook --port … --webhook-secret … --webhook-url …` (or register via BotFather). See `docs/telegram.md` for setup and limits.
 
 ## Commands
 
@@ -138,7 +138,7 @@ Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebCha
 | `clawdis login` | Link WhatsApp Web via QR |
 | `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode, text + media) |
 | `clawdis agent` | Talk directly to the agent (no WhatsApp send) |
-| `clawdis relay` | Start auto-reply loop (WhatsApp + Telegram when configured) |
+| `clawdis gateway` | Start auto-reply loop (WhatsApp + Telegram when configured) |
 | `clawdis status` | Web session health + session store summary |
 | `clawdis heartbeat` | Trigger a heartbeat |
 

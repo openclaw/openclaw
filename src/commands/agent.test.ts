@@ -11,7 +11,7 @@ import {
   vi,
 } from "vitest";
 import * as commandReply from "../auto-reply/command-reply.js";
-import type { WarelayConfig } from "../config/config.js";
+import type { ClawdisConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
@@ -36,7 +36,7 @@ function makeStorePath() {
 
 function mockConfig(
   storePath: string,
-  replyOverrides?: Partial<NonNullable<WarelayConfig["inbound"]>["reply"]>,
+  replyOverrides?: Partial<NonNullable<ClawdisConfig["inbound"]>["reply"]>,
 ) {
   configSpy.mockReturnValue({
     inbound: {

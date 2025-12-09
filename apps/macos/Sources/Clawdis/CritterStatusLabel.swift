@@ -7,7 +7,7 @@ struct CritterStatusLabel: View {
     var earBoostActive: Bool
     var blinkTick: Int
     var sendCelebrationTick: Int
-    var relayStatus: RelayProcessManager.Status
+    var gatewayStatus: GatewayProcessManager.Status
     var animationsEnabled: Bool
     var iconState: IconState
 
@@ -98,9 +98,9 @@ struct CritterStatusLabel: View {
                 }
             }
 
-            if self.relayNeedsAttention {
+            if self.gatewayNeedsAttention {
                 Circle()
-                    .fill(self.relayBadgeColor)
+                    .fill(self.gatewayBadgeColor)
                     .frame(width: 8, height: 8)
                     .offset(x: 4, y: 4)
             }
@@ -192,8 +192,8 @@ struct CritterStatusLabel: View {
         self.nextEarWiggle = date.addingTimeInterval(Double.random(in: 7.0...14.0))
     }
 
-    private var relayNeedsAttention: Bool {
-        switch self.relayStatus {
+    private var gatewayNeedsAttention: Bool {
+        switch self.gatewayStatus {
         case .failed, .stopped:
             !self.isPaused
         case .starting, .restarting, .running:
@@ -201,8 +201,8 @@ struct CritterStatusLabel: View {
         }
     }
 
-    private var relayBadgeColor: Color {
-        switch self.relayStatus {
+    private var gatewayBadgeColor: Color {
+        switch self.gatewayStatus {
         case .failed: .red
         case .stopped: .orange
         default: .clear

@@ -38,7 +38,7 @@ READ ~/Projects/agent-scripts/AGENTS.MD BEFORE ANYTHING (skip if missing).
 - Never commit or publish real phone numbers, videos, or live configuration values. Use obviously fake placeholders in docs, tests, and examples.
 
 ## Agent-Specific Notes
-- Relay currently runs only as the menubar app (launchctl shows `application.com.steipete.clawdis.debug.*`), there is no separate LaunchAgent/helper label installed. Restart via the Clawdis Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep clawdis` rather than expecting `com.steipete.clawdis`. **When debugging on macOS, start/stop the relay via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
+- Gateway currently runs only as the menubar app (launchctl shows `application.com.steipete.clawdis.debug.*`), there is no separate LaunchAgent/helper label installed. Restart via the Clawdis Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep clawdis` rather than expecting `com.steipete.clawdis`. **When debugging on macOS, start/stop the gateway via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
 - macOS logs: use `./scripts/clawlog.sh` (aka `vtlog`) to query unified logs for subsystem `com.steipete.clawdis`; it supports follow/tail/category filters and expects passwordless sudo for `/usr/bin/log`.
 - Also read the shared guardrails at `~/Projects/oracle/AGENTS.md` and `~/Projects/agent-scripts/AGENTS.MD` before making changes; align with any cross-repo rules noted there.
 - When asked to open a “session” file, open the Pi/Tau session logs under `~/.tau/agent/sessions/clawdis/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`.

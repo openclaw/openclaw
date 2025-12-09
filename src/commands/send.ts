@@ -53,12 +53,12 @@ export async function sendCommand(
     return;
   }
 
-  // Try to send via IPC to running relay first (avoids Signal session corruption)
+  // Try to send via IPC to running gateway first (avoids Signal session corruption)
   const ipcResult = await sendViaIpc(opts.to, opts.message, opts.media);
   if (ipcResult) {
     if (ipcResult.success) {
       runtime.log(
-        success(`✅ Sent via relay IPC. Message ID: ${ipcResult.messageId}`),
+        success(`✅ Sent via gateway IPC. Message ID: ${ipcResult.messageId}`),
       );
       if (opts.json) {
         runtime.log(
@@ -77,7 +77,7 @@ export async function sendCommand(
       }
       return;
     }
-    // IPC failed but relay is running - warn and fall back
+    // IPC failed but gateway is running - warn and fall back
     runtime.log(
       info(
         `IPC send failed (${ipcResult.error}), falling back to direct connection`,
