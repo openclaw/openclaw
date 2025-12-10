@@ -38,7 +38,7 @@ export async function sendMessageWhatsApp(
         mediaType =
           media.contentType === "audio/ogg"
             ? "audio/ogg; codecs=opus"
-            : media.contentType ?? "application/octet-stream";
+            : (media.contentType ?? "application/octet-stream");
       } else if (media.kind === "video") {
         text = caption ?? "";
       } else if (media.kind === "image") {
@@ -54,18 +54,9 @@ export async function sendMessageWhatsApp(
       { jid, hasMedia: Boolean(options.mediaUrl) },
       "sending message",
     );
-    const result = await (async () => {
-      if (!active) throw new Error("Active web listener missing");
-      let mediaBuffer: Buffer | undefined;
-      let mediaType: string | undefined;
-      if (options.mediaUrl) {
-        const media = await loadWebMedia(options.mediaUrl);
-        mediaBuffer = media.buffer;
-        mediaType = media.contentType;
-      }
-      await active.sendComposingTo(to);
-      return active.sendMessage(to, text, mediaBuffer, mediaType);
-    })();
+    if (!active) throw new Error("Active web listener missing");
+    await active.sendComposingTo(to);
+    const result = await active.sendMessage(to, text, mediaBuffer, mediaType);
     const messageId =
       (result as { messageId?: string })?.messageId ?? "unknown";
     logInfo(

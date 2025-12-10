@@ -805,13 +805,13 @@ export async function runCommandReply(
         }
       },
     });
-    let stdoutUsed = stdout;
-    let stderrUsed = stderr;
-    let codeUsed = code;
-    let signalUsed = signal;
-    let killedUsed = killed;
-    let rpcAssistantText = extractRpcAssistantText(stdoutUsed);
-    let rawStdout = stdoutUsed.trim();
+    const stdoutUsed = stdout;
+    const stderrUsed = stderr;
+    const codeUsed = code;
+    const signalUsed = signal;
+    const killedUsed = killed;
+    const rpcAssistantText = extractRpcAssistantText(stdoutUsed);
+    const rawStdout = stdoutUsed.trim();
     let mediaFromCommand: string[] | undefined;
     const trimmed = stripRpcNoise(rawStdout);
     if (stderrUsed?.trim()) {

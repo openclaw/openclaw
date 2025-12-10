@@ -238,7 +238,10 @@ Examples:
       const webchatPort = opts.webchatPort
         ? Number.parseInt(String(opts.webchatPort), 10)
         : undefined;
-      if (webchatPort !== undefined && (Number.isNaN(webchatPort) || webchatPort <= 0)) {
+      if (
+        webchatPort !== undefined &&
+        (Number.isNaN(webchatPort) || webchatPort <= 0)
+      ) {
         defaultRuntime.error("Invalid webchat port");
         defaultRuntime.exit(1);
       }
@@ -290,7 +293,12 @@ Examples:
 
   const callGatewayCli = async (
     method: string,
-    opts: { url?: string; token?: string; timeout?: string; expectFinal?: boolean },
+    opts: {
+      url?: string;
+      token?: string;
+      timeout?: string;
+      expectFinal?: boolean;
+    },
     params?: unknown,
   ) =>
     callGateway({

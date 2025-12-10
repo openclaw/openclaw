@@ -15,7 +15,9 @@ describe("sendMessageTelegram", () => {
         message_id: 42,
         chat: { id: chatId },
       });
-    const api = { sendMessage } as unknown as { sendMessage: typeof sendMessage };
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
 
     const res = await sendMessageTelegram(chatId, "_oops_", {
       token: "tok",

@@ -1,11 +1,15 @@
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { makeProxyFetch } from "../telegram/proxy.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
-import { getWebAuthAgeMs, logWebSelfId, webAuthExists } from "../web/session.js";
-import { callGateway } from "../gateway/call.js";
+import {
+  getWebAuthAgeMs,
+  logWebSelfId,
+  webAuthExists,
+} from "../web/session.js";
 
 type TelegramProbe = {
   ok: boolean;

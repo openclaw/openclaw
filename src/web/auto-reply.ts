@@ -327,10 +327,10 @@ export async function runWebHeartbeatOnce(opts: {
         { to, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
         "heartbeat skipped",
       );
-          console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
-          emitHeartbeatEvent({ status: "ok-token", to });
-          return;
-        }
+      console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
+      emitHeartbeatEvent({ status: "ok-token", to });
+      return;
+    }
 
     if (hasMedia) {
       heartbeatLogger.warn(

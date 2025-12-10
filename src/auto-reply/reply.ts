@@ -769,7 +769,11 @@ export async function getReplyFromConfig(
         const returnedSessionId = meta.agentMeta?.sessionId;
         // TODO: remove once pi-mono persists stable session ids for custom --session paths.
         const allowMetaSessionId = false;
-        if (allowMetaSessionId && returnedSessionId && returnedSessionId !== sessionId) {
+        if (
+          allowMetaSessionId &&
+          returnedSessionId &&
+          returnedSessionId !== sessionId
+        ) {
           const entry = sessionEntry ??
             sessionStore[sessionKey] ?? {
               sessionId: returnedSessionId,

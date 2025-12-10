@@ -233,7 +233,7 @@ function formatError(err: unknown): string {
   return JSON.stringify(err, null, 2);
 }
 
-async function refreshHealthSnapshot(opts?: { probe?: boolean }) {
+async function refreshHealthSnapshot(_opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
       const snap = await getHealthSnapshot(undefined);
