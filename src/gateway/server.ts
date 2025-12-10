@@ -21,6 +21,7 @@ import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   listSystemPresence,
+  updateSystemPresence,
   upsertPresence,
 } from "../infra/system-presence.js";
 import { logError } from "../logger.js";
@@ -866,6 +867,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
               );
               break;
             }
+            updateSystemPresence(text);
             enqueueSystemEvent(text);
             presenceVersion += 1;
             broadcast(
