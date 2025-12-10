@@ -4,7 +4,9 @@ import path from "node:path";
 
 import { flockSync } from "fs-ext";
 
-const DEFAULT_LOCK_PATH = path.join(os.tmpdir(), "clawdis-gateway.lock");
+const defaultLockPath = () =>
+  process.env.CLAWDIS_GATEWAY_LOCK_PATH ??
+  path.join(os.tmpdir(), "clawdis-gateway.lock");
 
 export class GatewayLockError extends Error {}
 
@@ -20,7 +22,7 @@ const SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
  * correctness relies solely on the kernel lock.
  */
 export async function acquireGatewayLock(
-  lockPath = DEFAULT_LOCK_PATH,
+  lockPath = defaultLockPath(),
 ): Promise<ReleaseFn> {
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 

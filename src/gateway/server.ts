@@ -97,7 +97,7 @@ function buildSnapshot(): Snapshot {
 
 const MAX_PAYLOAD_BYTES = 512 * 1024; // cap incoming frame size
 const MAX_BUFFERED_BYTES = 1.5 * 1024 * 1024; // per-connection send buffer limit
-const HANDSHAKE_TIMEOUT_MS = 3_000;
+const HANDSHAKE_TIMEOUT_MS = 10_000;
 const TICK_INTERVAL_MS = 30_000;
 const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 const DEDUPE_TTL_MS = 5 * 60_000;

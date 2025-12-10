@@ -1,5 +1,8 @@
+import { randomUUID } from "node:crypto";
 import { type AddressInfo, createServer } from "node:net";
-import { describe, expect, test, vi } from "vitest";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { startGatewayServer } from "./server.js";
@@ -23,6 +26,19 @@ vi.mock("../commands/agent.js", () => ({
 }));
 
 process.env.CLAWDIS_SKIP_PROVIDERS = "1";
+
+const originalLockPath = process.env.CLAWDIS_GATEWAY_LOCK_PATH;
+
+beforeEach(() => {
+  process.env.CLAWDIS_GATEWAY_LOCK_PATH = path.join(
+    os.tmpdir(),
+    `clawdis-gateway-${randomUUID()}.lock`,
+  );
+});
+
+afterEach(() => {
+  process.env.CLAWDIS_GATEWAY_LOCK_PATH = originalLockPath;
+});
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -116,18 +132,22 @@ describe("gateway server", () => {
     process.env.CLAWDIS_GATEWAY_TOKEN = prevToken;
   });
 
-  test("closes silent handshakes after timeout", async () => {
-    const { server, ws } = await startServerWithClient();
-    const closed = await new Promise<boolean>((resolve) => {
-      const timer = setTimeout(() => resolve(false), 4000);
-      ws.once("close", () => {
-        clearTimeout(timer);
-        resolve(true);
+  test(
+    "closes silent handshakes after timeout",
+    { timeout: 15_000 },
+    async () => {
+      const { server, ws } = await startServerWithClient();
+      const closed = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => resolve(false), 12_000);
+        ws.once("close", () => {
+          clearTimeout(timer);
+          resolve(true);
+        });
       });
-    });
-    expect(closed).toBe(true);
-    await server.close();
-  });
+      expect(closed).toBe(true);
+      await server.close();
+    },
+  );
 
   test(
     "hello + health + presence + status succeed",
