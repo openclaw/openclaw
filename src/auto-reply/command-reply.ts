@@ -565,7 +565,13 @@ export async function runCommandReply(
       const runId = params.runId ?? crypto.randomUUID();
       const rpcPromptIndex =
         promptIndex >= 0 ? promptIndex : finalArgv.length - 1;
-      const body = promptArg ?? "";
+      let body = promptArg ?? "";
+      if (!body || !body.trim()) {
+        body = templatingCtx.Body ?? templatingCtx.BodyStripped ?? "";
+      }
+      logVerbose(
+        `pi rpc prompt (${body.length} chars): ${body.slice(0, 200).replace(/\n/g, "\\n")}`,
+      );
       // Build rpc args without the prompt body; force --mode rpc.
       const rpcArgvForRun = (() => {
         const copy = [...finalArgv];
