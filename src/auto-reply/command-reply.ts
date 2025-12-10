@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -78,6 +79,55 @@ function stripRpcNoise(raw: string): string {
     if (line.trim()) kept.push(line);
   }
   return kept.join("\n");
+}
+
+async function runJsonFallback(opts: {
+  argv: string[];
+  cwd?: string;
+  timeoutMs: number;
+}): Promise<{
+  stdout: string;
+  stderr: string;
+  code: number;
+  signal?: NodeJS.Signals | null;
+  killed?: boolean;
+}> {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(opts.argv[0], opts.argv.slice(1), {
+      cwd: opts.cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(
+        new Error(
+          `pi json fallback timed out after ${Math.round(opts.timeoutMs / 1000)}s`,
+        ),
+      );
+    }, opts.timeoutMs);
+    child.stdout.on("data", (d) => {
+      stdout += d.toString();
+    });
+    child.stderr.on("data", (d) => {
+      stderr += d.toString();
+    });
+    child.on("error", (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({
+        stdout,
+        stderr,
+        code: code ?? 0,
+        signal,
+        killed: child.killed,
+      });
+    });
+  });
 }
 
 function extractRpcAssistantText(raw: string): string | undefined {
@@ -561,14 +611,34 @@ export async function runCommandReply(
       streamedAny = true;
     };
 
+    const preferRpc = process.env.CLAWDIS_USE_PI_RPC === "1";
+
     const run = async () => {
       const runId = params.runId ?? crypto.randomUUID();
-      const rpcPromptIndex =
-        promptIndex >= 0 ? promptIndex : finalArgv.length - 1;
       let body = promptArg ?? "";
       if (!body || !body.trim()) {
         body = templatingCtx.Body ?? templatingCtx.BodyStripped ?? "";
       }
+      if (!preferRpc) {
+        const jsonArgv = (() => {
+          const copy = [...finalArgv];
+          const idx = copy.indexOf("--mode");
+          if (idx >= 0 && copy[idx + 1]) copy[idx + 1] = "json";
+          else copy.push("--mode", "json");
+          return copy;
+        })();
+        logVerbose(
+          `Running command auto-reply in json mode: ${jsonArgv.join(" ")}${reply.cwd ? ` (cwd: ${reply.cwd})` : ""}`,
+        );
+        return await runJsonFallback({
+          argv: jsonArgv,
+          cwd: reply.cwd,
+          timeoutMs,
+        });
+      }
+
+      const rpcPromptIndex =
+        promptIndex >= 0 ? promptIndex : finalArgv.length - 1;
       logVerbose(
         `pi rpc prompt (${body.length} chars): ${body.slice(0, 200).replace(/\n/g, "\\n")}`,
       );
@@ -735,12 +805,52 @@ export async function runCommandReply(
         }
       },
     });
-    const rawStdout = stdout.trim();
-    const rpcAssistantText = extractRpcAssistantText(stdout);
+    let stdoutUsed = stdout;
+    let stderrUsed = stderr;
+    let codeUsed = code;
+    let signalUsed = signal;
+    let killedUsed = killed;
+    let rpcAssistantText = extractRpcAssistantText(stdoutUsed);
+    let rawStdout = stdoutUsed.trim();
+    const _rpcUserEmpty =
+      /"role":"user","content":\[\{"type":"text","text":""\}\]/.test(rawStdout);
+    const anthropicNoMessages = rawStdout.includes(
+      "messages: at least one message is required",
+    );
+    const shouldRetryJson =
+      preferRpc && body.trim().length > 0 && anthropicNoMessages;
+    if (shouldRetryJson) {
+      const jsonArgv = (() => {
+        const copy = [...finalArgv];
+        const idx = copy.indexOf("--mode");
+        if (idx >= 0 && copy[idx + 1]) copy[idx + 1] = "json";
+        else copy.push("--mode", "json");
+        return copy;
+      })();
+      logVerbose(
+        `pi rpc returned empty user text; retrying with json mode: ${jsonArgv.join(" ")}`,
+      );
+      try {
+        const fallback = await runJsonFallback({
+          argv: jsonArgv,
+          cwd: reply.cwd,
+          timeoutMs,
+        });
+        stdoutUsed = fallback.stdout;
+        stderrUsed = fallback.stderr;
+        codeUsed = fallback.code;
+        signalUsed = fallback.signal ?? null;
+        killedUsed = fallback.killed;
+        rpcAssistantText = extractRpcAssistantText(stdoutUsed);
+        rawStdout = stdoutUsed.trim();
+      } catch (err) {
+        logVerbose(`json fallback failed: ${String(err)}`);
+      }
+    }
     let mediaFromCommand: string[] | undefined;
     const trimmed = stripRpcNoise(rawStdout);
-    if (stderr?.trim()) {
-      logVerbose(`Command auto-reply stderr: ${stderr.trim()}`);
+    if (stderrUsed?.trim()) {
+      logVerbose(`Command auto-reply stderr: ${stderrUsed.trim()}`);
     }
 
     const logFailure = () => {
@@ -748,13 +858,13 @@ export async function runCommandReply(
         s ? (s.length > 4000 ? `${s.slice(0, 4000)}…` : s) : undefined;
       logger.warn(
         {
-          code,
-          signal,
-          killed,
+          code: codeUsed,
+          signal: signalUsed,
+          killed: killedUsed,
           argv: finalArgv,
           cwd: reply.cwd,
           stdout: truncate(rawStdout),
-          stderr: truncate(stderr),
+          stderr: truncate(stderrUsed),
         },
         "command auto-reply failed",
       );
@@ -885,44 +995,44 @@ export async function runCommandReply(
       { durationMs: elapsed, agent: agentKind, cwd: reply.cwd },
       "command auto-reply finished",
     );
-    if ((code ?? 0) !== 0) {
+    if ((codeUsed ?? 0) !== 0) {
       logFailure();
       console.error(
-        `Command auto-reply exited with code ${code ?? "unknown"} (signal: ${signal ?? "none"})`,
+        `Command auto-reply exited with code ${codeUsed ?? "unknown"} (signal: ${signalUsed ?? "none"})`,
       );
       // Include any partial output or stderr in error message
       const summarySource = rpcAssistantText ?? trimmed;
       const partialOut = summarySource
         ? `\n\nOutput: ${summarySource.slice(0, 500)}${summarySource.length > 500 ? "..." : ""}`
         : "";
-      const errorText = `⚠️ Command exited with code ${code ?? "unknown"}${signal ? ` (${signal})` : ""}${partialOut}`;
+      const errorText = `⚠️ Command exited with code ${codeUsed ?? "unknown"}${signalUsed ? ` (${signalUsed})` : ""}${partialOut}`;
       return {
         payloads: [{ text: errorText }],
         meta: {
           durationMs: Date.now() - started,
           queuedMs,
           queuedAhead,
-          exitCode: code,
-          signal,
-          killed,
+          exitCode: codeUsed,
+          signal: signalUsed,
+          killed: killedUsed,
           agentMeta: parsed?.meta,
         },
       };
     }
-    if (killed && !signal) {
+    if (killedUsed && !signalUsed) {
       console.error(
-        `Command auto-reply process killed before completion (exit code ${code ?? "unknown"})`,
+        `Command auto-reply process killed before completion (exit code ${codeUsed ?? "unknown"})`,
       );
-      const errorText = `⚠️ Command was killed before completion (exit code ${code ?? "unknown"})`;
+      const errorText = `⚠️ Command was killed before completion (exit code ${codeUsed ?? "unknown"})`;
       return {
         payloads: [{ text: errorText }],
         meta: {
           durationMs: Date.now() - started,
           queuedMs,
           queuedAhead,
-          exitCode: code,
-          signal,
-          killed,
+          exitCode: codeUsed,
+          signal: signalUsed,
+          killed: killedUsed,
           agentMeta: parsed?.meta,
         },
       };
@@ -931,9 +1041,9 @@ export async function runCommandReply(
       durationMs: Date.now() - started,
       queuedMs,
       queuedAhead,
-      exitCode: code,
-      signal,
-      killed,
+      exitCode: codeUsed,
+      signal: signalUsed,
+      killed: killedUsed,
       agentMeta: parsed?.meta,
     };
 
