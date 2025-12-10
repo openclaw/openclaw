@@ -56,10 +56,8 @@ final class ControlChannel: ObservableObject {
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
     private let gateway = GatewayChannel()
-    private var gatewayURL: URL {
-        let port = GatewayEnvironment.gatewayPort()
-        return URL(string: "ws://127.0.0.1:\(port)")!
-    }
+    private var gatewayPort: Int = GatewayEnvironment.gatewayPort()
+    private var gatewayURL: URL { URL(string: "ws://127.0.0.1:\(self.gatewayPort)")! }
 
     private var gatewayToken: String? {
         ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
@@ -78,11 +76,19 @@ final class ControlChannel: ObservableObject {
     func configure(mode: Mode = .local) async throws {
         switch mode {
         case .local:
+            self.gatewayPort = GatewayEnvironment.gatewayPort()
             await self.configure()
         case let .remote(target, identity):
-            // Remote mode assumed to have an existing tunnel; placeholders retained for future use.
+            // Create/ensure SSH tunnel, then talk to the forwarded local port.
             _ = (target, identity)
-            await self.configure()
+            do {
+                let forwarded = try await RemoteTunnelManager.shared.ensureControlTunnel()
+                self.gatewayPort = Int(forwarded)
+                await self.configure()
+            } catch {
+                self.state = .degraded(error.localizedDescription)
+                throw error
+            }
         }
     }
 

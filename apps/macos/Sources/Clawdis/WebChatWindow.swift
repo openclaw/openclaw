@@ -515,6 +515,18 @@ final class WebChatManager {
     }
 
     @MainActor
+    func resetTunnels() {
+        self.browserTunnel?.terminate()
+        self.browserTunnel = nil
+        self.windowController?.shutdown()
+        self.windowController?.close()
+        self.windowController = nil
+        self.panelController?.shutdown()
+        self.panelController?.close()
+        self.panelController = nil
+    }
+
+    @MainActor
     func openInBrowser(sessionKey: String) async {
         let port = AppStateStore.webChatPort
         let base: URL

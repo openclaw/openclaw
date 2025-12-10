@@ -45,7 +45,14 @@ struct ClawdisApp: App {
         }
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused)
-            self.gatewayManager.setActive(!paused)
+            if self.state.connectionMode == .local {
+                self.gatewayManager.setActive(!paused)
+            } else {
+                self.gatewayManager.stop()
+            }
+        }
+        .onChange(of: self.state.connectionMode) { _, mode in
+            Task { await ConnectionModeCoordinator.shared.apply(mode: mode, paused: self.state.isPaused) }
         }
 
         Settings {
@@ -161,17 +168,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         self.state = AppStateStore.shared
         AppActivationPolicy.apply(showDockIcon: self.state?.showDockIcon ?? false)
         if let state {
-            GatewayProcessManager.shared.setActive(!state.isPaused)
+            Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
-        Task {
-            await ControlChannel.shared.configure()
-            PresenceReporter.shared.start()
-        }
+        Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
-        Task {
-            let mode = AppStateStore.shared.connectionMode
-            await PortGuardian.shared.sweep(mode: mode)
-        }
+        Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
         self.startListener()
         self.scheduleFirstRunOnboardingIfNeeded()
 
@@ -186,6 +187,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         GatewayProcessManager.shared.stop()
         PresenceReporter.shared.stop()
         WebChatManager.shared.close()
+        WebChatManager.shared.resetTunnels()
+        Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await AgentRPC.shared.shutdown() }
     }
 
