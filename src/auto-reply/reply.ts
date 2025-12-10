@@ -582,15 +582,24 @@ export async function getReplyFromConfig(
     ? applyTemplate(reply.bodyPrefix ?? "", sessionCtx)
     : "";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const baseBodyTrimmed = baseBody.trim();
+  const rawBodyTrimmed = (ctx.Body ?? "").trim();
+  const isBareSessionReset =
+    isNewSession && baseBodyTrimmed.length === 0 && rawBodyTrimmed.length > 0;
   // Bail early if the cleaned body is empty to avoid sending blank prompts to the agent.
   // This can happen if an inbound platform delivers an empty text message or we strip everything out.
-  if (!baseBody.trim()) {
+  if (!baseBodyTrimmed) {
     await onReplyStart();
+    if (isBareSessionReset) {
+      cleanupTyping();
+      return {
+        text: "Started a fresh session. Send a new message to continue.",
+      };
+    }
     logVerbose("Inbound body empty after normalization; skipping agent run");
     cleanupTyping();
     return {
-      text:
-        "I didn't receive any text in your message. Please resend or add a caption.",
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
     };
   }
   const abortedHint =

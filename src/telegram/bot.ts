@@ -18,6 +18,9 @@ import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 
+const PARSE_ERR_RE =
+  /can't parse entities|parse entities|find end of the entity/i;
+
 type TelegramMessage = Message.CommonMessage;
 
 type TelegramContext = {
@@ -203,7 +206,7 @@ async function deliverReplies(params: {
         : [];
     if (mediaList.length === 0) {
       for (const chunk of chunkText(reply.text || "", 4000)) {
-        await bot.api.sendMessage(chatId, chunk, { parse_mode: "Markdown" });
+        await sendTelegramText(bot, chatId, chunk, runtime);
       }
       continue;
     }
@@ -302,4 +305,26 @@ async function resolveMedia(
   else if (msg.video) placeholder = "<media:video>";
   else if (msg.audio || msg.voice) placeholder = "<media:audio>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
+}
+
+async function sendTelegramText(
+  bot: Bot,
+  chatId: string,
+  text: string,
+  runtime: RuntimeEnv,
+) {
+  try {
+    await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+  } catch (err) {
+    if (PARSE_ERR_RE.test(String(err ?? ""))) {
+      runtime.log?.(
+        `telegram markdown parse failed; retrying without formatting: ${String(
+          err,
+        )}`,
+      );
+      await bot.api.sendMessage(chatId, text);
+      return;
+    }
+    throw err;
+  }
 }

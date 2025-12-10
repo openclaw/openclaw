@@ -1,3 +1,5 @@
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as tauRpc from "../process/tau-rpc.js";
@@ -72,6 +74,32 @@ describe("trigger handling", () => {
     );
     const text = Array.isArray(res) ? res[0]?.text : res?.text;
     expect(text).toContain("Status");
+    expect(commandSpy).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a bare /new without treating it as empty", async () => {
+    const commandSpy = vi.spyOn(commandReply, "runCommandReply");
+    const res = await getReplyFromConfig(
+      {
+        Body: "/new",
+        From: "+1003",
+        To: "+2000",
+      },
+      {},
+      {
+        inbound: {
+          reply: {
+            mode: "command",
+            command: ["echo", "{{Body}}"],
+            session: {
+              store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
+            },
+          },
+        },
+      },
+    );
+    const text = Array.isArray(res) ? res[0]?.text : res?.text;
+    expect(text).toMatch(/fresh session/i);
     expect(commandSpy).not.toHaveBeenCalled();
   });
 

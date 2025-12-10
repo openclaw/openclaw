@@ -17,6 +17,9 @@ type TelegramSendResult = {
   chatId: string;
 };
 
+const PARSE_ERR_RE =
+  /can't parse entities|parse entities|find end of the entity/i;
+
 function resolveToken(explicit?: string): string {
   const token = explicit ?? process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
@@ -116,7 +119,22 @@ export async function sendMessageTelegram(
   const res = await sendWithRetry(
     () => api.sendMessage(chatId, text, { parse_mode: "Markdown" }),
     "message",
-  );
+  ).catch(async (err) => {
+    // Telegram rejects malformed Markdown (e.g., unbalanced '_' or '*').
+    // When that happens, fall back to plain text so the message still delivers.
+    if (PARSE_ERR_RE.test(String(err ?? ""))) {
+      if (opts.verbose) {
+        console.warn(
+          `telegram markdown parse failed, retrying as plain text: ${String(err)}`,
+        );
+      }
+      return await sendWithRetry(
+        () => api.sendMessage(chatId, text),
+        "message-plain",
+      );
+    }
+    throw err;
+  });
   const messageId = String(res?.message_id ?? "unknown");
   return { messageId, chatId: String(res?.chat?.id ?? chatId) };
 }
