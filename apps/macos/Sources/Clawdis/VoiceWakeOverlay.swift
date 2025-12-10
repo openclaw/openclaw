@@ -46,6 +46,7 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     @discardableResult
     func startSession(
+        token: UUID = UUID(),
         source: Source,
         transcript: String,
         attributed: NSAttributedString? = nil,
@@ -56,7 +57,6 @@ final class VoiceWakeOverlayController: ObservableObject {
             self.logger.log(level: .info, "overlay drop session_start while sending")
             return self.activeToken ?? UUID()
         }
-        let token = UUID()
         let message = """
         overlay session_start source=\(source.rawValue) \
         len=\(transcript.count)
@@ -133,9 +133,9 @@ final class VoiceWakeOverlayController: ObservableObject {
         if let delay {
             if delay <= 0 {
                 self.logger.log(level: .info, "overlay autoSend immediate token=\(token.uuidString)")
-                self.sendNow(token: token, sendChime: sendChime)
+                VoiceSessionCoordinator.shared.sendNow(token: token, reason: "autoSendImmediate")
             } else {
-                self.scheduleAutoSend(token: token, after: delay, sendChime: sendChime)
+                self.scheduleAutoSend(token: token, after: delay)
             }
         }
     }
@@ -164,48 +164,39 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.updateWindowFrame(animate: true)
     }
 
-    func sendNow(token: UUID? = nil, sendChime: VoiceWakeChime = .none) {
-        guard self.guardToken(token, context: "send") else { return }
+    /// UI-only path: show sending state and dismiss; actual forwarding is handled by the coordinator.
+    func beginSendUI(token: UUID, sendChime: VoiceWakeChime = .none) {
+        guard self.guardToken(token, context: "beginSendUI") else { return }
+        self.autoSendTask?.cancel(); self.autoSendToken = nil
         let message = """
-        overlay sendNow called token=\(self.activeToken?.uuidString ?? "nil") \
+        overlay beginSendUI token=\(token.uuidString) \
         isSending=\(self.model.isSending) \
         forwardEnabled=\(self.model.forwardEnabled) \
         textLen=\(self.model.text.count)
         """
         self.logger.log(level: .info, "\(message)")
-        self.autoSendTask?.cancel(); self.autoSendToken = nil
         if self.model.isSending { return }
         self.model.isEditing = false
-        guard let forwardConfig, forwardConfig.enabled else {
-            self.logger.log(level: .info, "overlay sendNow disabled -> dismiss")
-            self.dismiss(reason: .explicit)
-            return
-        }
-        let text = self.model.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else {
-            self.logger.log(level: .info, "overlay sendNow empty -> dismiss")
-            self.dismiss(reason: .empty)
-            return
-        }
 
         if sendChime != .none {
-            let message = "overlay sendNow playing sendChime=\(String(describing: sendChime))"
+            let message = "overlay beginSendUI playing sendChime=\(String(describing: sendChime))"
             self.logger.log(level: .info, "\(message)")
             VoiceWakeChimePlayer.play(sendChime, reason: "overlay.send")
         }
 
         self.model.isSending = true
-        let payload = VoiceWakeForwarder.prefixedTranscript(text)
-        self.logger.log(level: .info, "overlay sendNow forwarding len=\(payload.count, privacy: .public)")
-        Task.detached {
-            await VoiceWakeForwarder.forward(transcript: payload, config: forwardConfig)
-        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
             self.logger.log(
                 level: .info,
-                "overlay sendNow dismiss ticking token=\(self.activeToken?.uuidString ?? "nil")")
+                "overlay beginSendUI dismiss ticking token=\(self.activeToken?.uuidString ?? "nil")")
             self.dismiss(token: token, reason: .explicit, outcome: .sent)
         }
+    }
+
+    func requestSend(token: UUID? = nil, reason: String = "overlay_request") {
+        guard self.guardToken(token, context: "requestSend") else { return }
+        guard let active = token ?? self.activeToken else { return }
+        VoiceSessionCoordinator.shared.sendNow(token: active, reason: reason)
     }
 
     func dismiss(token: UUID? = nil, reason: DismissReason = .explicit, outcome: SendOutcome = .empty) {
@@ -408,17 +399,16 @@ final class VoiceWakeOverlayController: ObservableObject {
         }
     }
 
-    private func scheduleAutoSend(token: UUID, after delay: TimeInterval, sendChime: VoiceWakeChime) {
+    private func scheduleAutoSend(token: UUID, after delay: TimeInterval) {
         self.logger.log(
             level: .info,
             """
             overlay scheduleAutoSend token=\(token.uuidString) \
-            after=\(delay) \
-            sendChime=\(String(describing: sendChime))
+            after=\(delay)
             """)
         self.autoSendTask?.cancel()
         self.autoSendToken = token
-        self.autoSendTask = Task<Void, Never> { [weak self, sendChime, token] in
+        self.autoSendTask = Task<Void, Never> { [weak self, token] in
             let nanos = UInt64(max(0, delay) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)
             guard !Task.isCancelled else { return }
@@ -428,7 +418,7 @@ final class VoiceWakeOverlayController: ObservableObject {
                 self.logger.log(
                     level: .info,
                     "overlay autoSend firing token=\(token.uuidString, privacy: .public)")
-                self.sendNow(token: token, sendChime: sendChime)
+                VoiceSessionCoordinator.shared.sendNow(token: token, reason: "autoSendDelay")
                 self.autoSendTask = nil
             }
         }
@@ -471,7 +461,7 @@ private struct VoiceWakeOverlayView: View {
                             self.controller.endEditing()
                         },
                         onSend: {
-                            self.controller.sendNow()
+                            self.controller.requestSend()
                         })
                         .focused(self.$textFocused)
                         .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
@@ -488,7 +478,7 @@ private struct VoiceWakeOverlayView: View {
                 }
 
                 Button {
-                    self.controller.sendNow()
+                    self.controller.requestSend()
                 } label: {
                     let sending = self.controller.model.isSending
                     let level = self.controller.model.level

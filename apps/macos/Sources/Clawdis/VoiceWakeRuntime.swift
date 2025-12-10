@@ -351,7 +351,9 @@ actor VoiceWakeRuntime {
                 await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
             }
             Task.detached {
-                await VoiceWakeForwarder.forward(transcript: finalTranscript, config: forwardConfig)
+                await VoiceWakeForwarder.forward(
+                    transcript: VoiceWakeForwarder.prefixedTranscript(finalTranscript),
+                    config: forwardConfig)
             }
         }
         self.overlayToken = nil

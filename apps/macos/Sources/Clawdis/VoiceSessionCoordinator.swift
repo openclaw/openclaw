@@ -21,7 +21,6 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.coordinator")
     private var session: Session?
-    private var autoSendTask: Task<Void, Never>?
 
     // MARK: - API
 
@@ -40,7 +39,7 @@ final class VoiceSessionCoordinator: ObservableObject {
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
         let attributedText = attributed ?? VoiceWakeOverlayController.shared.makeAttributed(from: text)
-        self.session = Session(
+        let session = Session(
             token: token,
             source: source,
             text: text,
@@ -49,7 +48,9 @@ final class VoiceSessionCoordinator: ObservableObject {
             forwardConfig: forwardEnabled ? AppStateStore.shared.voiceWakeForwardConfig : nil,
             sendChime: .none,
             autoSendDelay: nil)
+        self.session = session
         VoiceWakeOverlayController.shared.startSession(
+            token: token,
             source: VoiceWakeOverlayController.Source(rawValue: source.rawValue) ?? .wakeWord,
             transcript: text,
             attributed: attributedText,
@@ -76,7 +77,6 @@ final class VoiceSessionCoordinator: ObservableObject {
         self.logger
             .info(
                 "coordinator finalize token=\(token.uuidString) len=\(text.count) autoSendAfter=\(autoSendAfter ?? -1)")
-        self.autoSendTask?.cancel(); self.autoSendTask = nil
         self.session?.text = text
         self.session?.isFinal = true
         self.session?.forwardConfig = forwardConfig
@@ -108,7 +108,7 @@ final class VoiceSessionCoordinator: ObservableObject {
             self.clearSession()
             return
         }
-        VoiceWakeOverlayController.shared.sendNow(token: token, sendChime: session.sendChime)
+        VoiceWakeOverlayController.shared.beginSendUI(token: token, sendChime: session.sendChime)
         Task.detached {
             _ = await VoiceWakeForwarder.forward(
                 transcript: VoiceWakeForwarder.prefixedTranscript(text),
@@ -139,7 +139,5 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     private func clearSession() {
         self.session = nil
-        self.autoSendTask?.cancel()
-        self.autoSendTask = nil
     }
 }
