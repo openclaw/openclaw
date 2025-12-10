@@ -221,8 +221,11 @@ class TauRpcClient {
       const ok = child.stdin.write(
         `${JSON.stringify({
           type: "prompt",
-          // RPC v0.17+ accepts raw string prompts and normalizes internally.
-          message: prompt,
+          // Send structured content to match tau RPC expectations and avoid
+          // empty-text bugs on older builds.
+          message: {
+            content: [{ type: "text", text: prompt }],
+          },
         })}\n`,
         (err) => (err ? reject(err) : resolve()),
       );
