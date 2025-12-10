@@ -38,6 +38,28 @@ function notFound(res: http.ServerResponse) {
   res.end("Not Found");
 }
 
+function contentTypeForExt(ext: string) {
+  switch (ext) {
+    case ".html":
+      return "text/html";
+    case ".js":
+      return "application/javascript";
+    case ".css":
+      return "text/css";
+    case ".json":
+    case ".map":
+      return "application/json";
+    case ".svg":
+      return "image/svg+xml";
+    case ".png":
+      return "image/png";
+    case ".ico":
+      return "image/x-icon";
+    default:
+      return "application/octet-stream";
+  }
+}
+
 export async function startWebChatServer(
   port = WEBCHAT_DEFAULT_PORT,
 ): Promise<WebChatServerState | null> {
@@ -67,15 +89,7 @@ export async function startWebChatServer(
       }
       const data = fs.readFileSync(filePath);
       const ext = path.extname(filePath).toLowerCase();
-      const type =
-        ext === ".html"
-          ? "text/html"
-          : ext === ".js"
-            ? "application/javascript"
-            : ext === ".css"
-              ? "text/css"
-              : "application/octet-stream";
-      res.setHeader("Content-Type", type);
+      res.setHeader("Content-Type", contentTypeForExt(ext));
       res.end(data);
       return;
     }
@@ -93,7 +107,8 @@ export async function startWebChatServer(
       const filePath = path.join(root, relPath);
       if (filePath.startsWith(root) && fs.existsSync(filePath)) {
         const data = fs.readFileSync(filePath);
-        res.setHeader("Content-Type", "application/octet-stream");
+        const ext = path.extname(filePath).toLowerCase();
+        res.setHeader("Content-Type", contentTypeForExt(ext));
         res.end(data);
         return;
       }
@@ -121,7 +136,6 @@ export async function startWebChatServer(
   }
 
   state = { server, port };
-  logDebug(`webchat server listening on 127.0.0.1:${port}`);
   return state;
 }
 
