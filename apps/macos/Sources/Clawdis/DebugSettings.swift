@@ -59,7 +59,7 @@ struct DebugSettings: View {
                 }
                 LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
                 LabeledContent("Gateway status") {
-                    VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
                         Text(self.gatewayManager.status.label)
                         Text("Restarts: \(self.gatewayManager.restartCount)")
                             .font(.caption2)
