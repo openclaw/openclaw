@@ -34,8 +34,8 @@
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
     "@grammyjs/transformer-throttler": "^1.2.1",
-    "@mariozechner/pi-ai": "^0.17.0",
-    "@mariozechner/pi-coding-agent": "^0.17.0",
+    "@mariozechner/pi-ai": "^0.18.0",
+    "@mariozechner/pi-coding-agent": "^0.18.0",
     "@sinclair/typebox": "^0.34.41",
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "ajv": "^8.17.1",
