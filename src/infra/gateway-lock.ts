@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { flockSync } from "fs-ext";
+import { getLogger } from "../logging.js";
 
 const defaultLockPath = () =>
   process.env.CLAWDIS_GATEWAY_LOCK_PATH ??
@@ -43,6 +44,7 @@ export async function acquireGatewayLock(
   fs.ftruncateSync(fd, 0);
   fs.writeSync(fd, `${process.pid}\n`, 0, "utf8");
   fs.fsyncSync(fd);
+  getLogger().info({ pid: process.pid, lockPath }, "gateway lock acquired");
 
   let released = false;
   const release = async (): Promise<void> => {

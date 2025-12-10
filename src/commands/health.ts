@@ -12,6 +12,7 @@ import {
   waitForWaConnection,
   webAuthExists,
 } from "../web/session.js";
+import { callGateway } from "../gateway/call.js";
 
 type HealthConnect = {
   ok: boolean;
@@ -236,12 +237,13 @@ export async function getHealthSnapshot(
 }
 
 export async function healthCommand(
-  opts: { json?: boolean; timeoutMs?: number; probe?: boolean },
+  opts: { json?: boolean; timeoutMs?: number },
   runtime: RuntimeEnv,
 ) {
-  const probe = opts.probe ?? true;
-  const summary = await getHealthSnapshot(opts.timeoutMs, {
-    probe,
+  // Always query the running gateway; do not open a direct Baileys socket here.
+  const summary = await callGateway<HealthSummary>({
+    method: "health",
+    timeoutMs: opts.timeoutMs,
   });
   const fatal =
     !summary.web.linked ||

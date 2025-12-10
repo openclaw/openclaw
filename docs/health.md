@@ -8,7 +8,7 @@ read_when:
 Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 
 ## Quick checks
-- `pnpm clawdis status --json` — confirms creds exist (`web.linked`), shows auth age (`authAgeMs`), heartbeat interval, and where the session store lives.
+- `pnpm clawdis status --json` — via the gateway; confirms creds exist (`web.linked`), shows auth age (`authAgeMs`), heartbeat interval, and where the session store lives.
 - Send `/status` in WhatsApp/WebChat to see agent readiness, session context usage, current thinking/verbose options, and when the web creds were last refreshed (relink if it looks stale) without invoking the agent.
 - `pnpm clawdis heartbeat --verbose --dry-run` — runs the heartbeat path end-to-end (session resolution, message creation) without sending anything. Drop `--dry-run` or add `--message "Ping"` to actually send.
 - `pnpm clawdis gateway --verbose --heartbeat-now` — spins the full monitor loop, fires a heartbeat immediately, and will reconnect per `web.reconnect` settings. Good for soak testing.
@@ -25,4 +25,4 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 - No inbound messages → confirm linked phone is online and sender is allowed; use `pnpm clawdis heartbeat --all --verbose` to test each known recipient.
 
 ## Dedicated "health" command
-`pnpm clawdis health --json` runs a connect-only probe (no sends) and reports: linked creds, auth age, Baileys connect result/status code, session-store summary, and a probe duration. It exits non-zero if not linked or if the connect fails/timeouts. Use `--timeout <ms>` to override the 10s default.
+`pnpm clawdis health --json` asks the running gateway for its health snapshot (no direct Baileys socket from the CLI). It reports linked creds, auth age, Baileys connect result/status code, session-store summary, and a probe duration. It exits non-zero if not linked or if the gateway probe fails/timeouts. Use `--timeout <ms>` to override the 10s default.

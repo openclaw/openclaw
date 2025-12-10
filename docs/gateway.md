@@ -131,7 +131,7 @@ Enable with `systemctl enable --now clawdis-gateway.service`.
 - `clawdis gateway send --to <num> --message "hi" [--media-url ...]` — send via Gateway (idempotent).
 - `clawdis gateway agent --message "hi" [--to ...]` — run an agent turn (waits for final by default).
 - `clawdis gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
-- All gateway helpers accept `--spawn-gateway` to start a local gateway if none is listening on `--url`.
+- Gateway helper subcommands assume a running gateway on `--url`; they no longer auto-spawn one.
 
 ## Migration guidance
 - Retire uses of `clawdis gateway` and the legacy TCP control port.

@@ -1,7 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
-import { listPortListeners } from "../cli/ports.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
-import { startGatewayServer } from "../gateway/server.js";
 import { success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -13,7 +11,6 @@ export async function sendCommand(
     json?: boolean;
     dryRun?: boolean;
     media?: string;
-    spawnGateway?: boolean;
   },
   deps: CliDeps,
   runtime: RuntimeEnv,
@@ -74,21 +71,7 @@ export async function sendCommand(
       mode: "cli",
     });
 
-  let result: { messageId: string } | undefined;
-  try {
-    result = await sendViaGateway();
-  } catch (err) {
-    if (!opts.spawnGateway) throw err;
-    // Only spawn when nothing is listening.
-    try {
-      const listeners = listPortListeners(18789);
-      if (listeners.length > 0) throw err;
-      await startGatewayServer(18789);
-      result = await sendViaGateway();
-    } catch {
-      throw err;
-    }
-  }
+  const result = await sendViaGateway();
 
   runtime.log(
     success(

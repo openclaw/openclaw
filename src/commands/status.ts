@@ -10,13 +10,14 @@ import { info } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { callGateway } from "../gateway/call.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import {
   getWebAuthAgeMs,
   logWebSelfId,
   webAuthExists,
 } from "../web/session.js";
-import { getHealthSnapshot, type HealthSummary } from "./health.js";
+import type { HealthSummary } from "./health.js";
 
 export type SessionStatus = {
   key: string;
@@ -193,7 +194,10 @@ export async function statusCommand(
 ) {
   const summary = await getStatusSummary();
   const health: HealthSummary | undefined = opts.deep
-    ? await getHealthSnapshot(opts.timeoutMs)
+    ? await callGateway<HealthSummary>({
+        method: "health",
+        timeoutMs: opts.timeoutMs,
+      })
     : undefined;
 
   if (opts.json) {

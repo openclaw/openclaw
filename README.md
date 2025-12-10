@@ -138,29 +138,26 @@ Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebCha
 | Command | Description |
 |---------|-------------|
 | `clawdis login` | Link WhatsApp Web via QR |
-| `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode). Always uses the Gateway WS; `--spawn-gateway` may start it if the port is free. |
+| `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode). Always uses the Gateway WS; requires a running gateway. |
 | `clawdis agent` | Talk directly to the agent (no WhatsApp send) |
 | `clawdis gateway` | Start the Gateway server (WS control plane). Params: `--port`, `--token`, `--force`, `--verbose`. |
-| `clawdis gateway health|status|send|agent|call` | Gateway WS clients; never start the server unless you pass `--spawn-gateway` (and only if no listener exists). |
+| `clawdis gateway health|status|send|agent|call` | Gateway WS clients; assume a running gateway. |
 | `clawdis status` | Web session health + session store summary |
-| `clawdis health` | Reports cached provider state; add `--probe` to force a fresh Baileys connect (may conflict if already connected). |
+| `clawdis health` | Reports cached provider state from the running gateway. |
 | `clawdis heartbeat` | Trigger a heartbeat |
 
 #### Gateway client params (WS only)
 - `--url` (default `ws://127.0.0.1:18789`)
 - `--token` (shared secret if set on the gateway)
 - `--timeout <ms>` (WS call timeout)
-- `--spawn-gateway` (only if no listener is present; explicit opt-in)
 
 #### Send
 - `--provider whatsapp|telegram` (default whatsapp)
 - `--media <path-or-url>`
 - `--json` for machine-readable output
-- `--spawn-gateway` to start a local gateway if the port is free and nothing is listening.
 
 #### Health
-- Default: reads gateway/provider state (no extra Baileys socket).
-- `--probe` will open a transient Baileys connection; use only when diagnosing login issues (can be rejected if the main session is already connected).
+- Reads gateway/provider state (no direct Baileys socket from the CLI).
 
 In chat, send `/status` to see if the agent is reachable, how much context the session has used, and the current thinking/verbose toggles—no agent call required.
 `/status` also shows whether your WhatsApp web session is linked and how long ago the creds were refreshed so you know when to re-scan the QR.
