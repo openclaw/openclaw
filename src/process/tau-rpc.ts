@@ -22,6 +22,10 @@ class TauRpcClient {
   private stderr = "";
   private buffer: string[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
+  private resolveTimer: NodeJS.Timeout | null = null;
+  private compactionRunning = false;
+  private pendingRetryCount = 0;
+  private seenAgentEnd = false;
   private pending:
     | {
         resolve: (r: TauRpcResult) => void;
@@ -37,6 +41,14 @@ class TauRpcClient {
     private readonly cwd: string | undefined,
   ) {}
 
+  private resetRunState() {
+    this.buffer = [];
+    this.compactionRunning = false;
+    this.pendingRetryCount = 0;
+    this.seenAgentEnd = false;
+    this.clearResolveTimer();
+  }
+
   private ensureChild() {
     if (this.child) return;
     this.child = spawn(this.argv[0], this.argv.slice(1), {
@@ -49,6 +61,7 @@ class TauRpcClient {
       this.stderr += d.toString();
     });
     this.child.on("exit", (code, signal) => {
+      this.clearResolveTimer();
       if (this.idleTimer) clearTimeout(this.idleTimer);
       if (this.pending) {
         const pending = this.pending;
@@ -63,6 +76,7 @@ class TauRpcClient {
           signal,
         });
       }
+      this.resetRunState();
       this.dispose();
     });
   }
@@ -84,6 +98,7 @@ class TauRpcClient {
         success?: boolean;
         error?: string;
         message?: unknown;
+        willRetry?: boolean;
       };
 
       if (evt.type === "response" && evt.command === "prompt") {
@@ -91,6 +106,8 @@ class TauRpcClient {
           const pending = this.pending;
           this.pending = undefined;
           this.buffer = [];
+          this.clearResolveTimer();
+          this.resetRunState();
           if (pending) {
             clearTimeout(pending.timer);
             pending.reject(
@@ -102,18 +119,60 @@ class TauRpcClient {
         }
       }
 
+      if (evt.type === "auto_compaction_start") {
+        this.compactionRunning = true;
+        this.clearResolveTimer();
+        return;
+      }
+
+      if (evt.type === "auto_compaction_end") {
+        this.compactionRunning = false;
+        if (evt.willRetry) this.pendingRetryCount += 1;
+        this.scheduleMaybeResolve();
+        return;
+      }
+
       if (evt?.type === "agent_end") {
-        // Tau signals the end of the prompt/response cycle; resolve with all buffered output.
-        const pending = this.pending;
-        this.pending = undefined;
-        const out = this.buffer.join("\n");
-        this.buffer = [];
-        clearTimeout(pending.timer);
-        pending.resolve({ stdout: out, stderr: this.stderr, code: 0 });
+        this.seenAgentEnd = true;
+        if (this.pendingRetryCount > 0) {
+          this.pendingRetryCount -= 1;
+        }
+        this.scheduleMaybeResolve();
         return;
       }
     } catch {
       // ignore malformed/non-JSON lines
+    }
+  }
+
+  private scheduleMaybeResolve() {
+    if (!this.pending) return;
+    this.clearResolveTimer();
+    // Allow a short window for auto-compaction events to arrive after agent_end.
+    this.resolveTimer = setTimeout(() => {
+      this.resolveTimer = null;
+      this.maybeResolve();
+    }, 150);
+  }
+
+  private maybeResolve() {
+    if (!this.pending) return;
+    if (!this.seenAgentEnd) return;
+    if (this.compactionRunning) return;
+    if (this.pendingRetryCount > 0) return;
+
+    const pending = this.pending;
+    this.pending = undefined;
+    const out = this.buffer.join("\n");
+    this.buffer = [];
+    clearTimeout(pending.timer);
+    pending.resolve({ stdout: out, stderr: this.stderr, code: 0 });
+  }
+
+  private clearResolveTimer() {
+    if (this.resolveTimer) {
+      clearTimeout(this.resolveTimer);
+      this.resolveTimer = null;
     }
   }
 
@@ -142,6 +201,7 @@ class TauRpcClient {
     }
     const child = this.child;
     if (!child) throw new Error("tau rpc child not initialized");
+    this.resetRunState();
     await new Promise<void>((resolve, reject) => {
       const ok = child.stdin.write(
         `${JSON.stringify({
@@ -168,6 +228,7 @@ class TauRpcClient {
   }
 
   dispose() {
+    this.clearResolveTimer();
     this.rl?.close();
     this.rl = null;
     if (this.child && !this.child.killed) {
