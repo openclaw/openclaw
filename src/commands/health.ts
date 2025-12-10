@@ -76,7 +76,7 @@ async function probeWebConnect(timeoutMs: number): Promise<HealthConnect> {
     const status = getStatusCode(err);
     // Conflict/duplicate sessions are expected when the primary gateway session
     // is already connected. Treat these as healthy so health checks don’t flap.
-    if (status === 409 || status === 440 || status === 515) {
+    if (status === 409 || status === 515) {
       return {
         ok: true,
         status,
@@ -239,8 +239,9 @@ export async function healthCommand(
   opts: { json?: boolean; timeoutMs?: number; probe?: boolean },
   runtime: RuntimeEnv,
 ) {
+  const probe = opts.probe ?? true;
   const summary = await getHealthSnapshot(opts.timeoutMs, {
-    probe: opts.probe,
+    probe,
   });
   const fatal =
     !summary.web.linked ||

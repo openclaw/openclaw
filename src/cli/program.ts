@@ -14,7 +14,9 @@ import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { startWebChatServer } from "../webchat/server.js";
 import { createDefaultDeps } from "./deps.js";
-import { forceFreePort, listPortListeners } from "./ports.js";
+import { forceFreePort, listPortListeners, parseLsofOutput } from "./ports.js";
+
+export { forceFreePort, listPortListeners, parseLsofOutput };
 
 export function buildProgram() {
   const program = new Command();
@@ -489,7 +491,7 @@ Examples:
     .option(
       "--probe",
       "Also attempt a live Baileys connect (can conflict if gateway is already connected)",
-      false,
+      true,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
@@ -508,7 +510,7 @@ Examples:
           {
             json: Boolean(opts.json),
             timeoutMs: timeout,
-            probe: Boolean(opts.probe),
+            probe: opts.probe ?? true,
           },
           defaultRuntime,
         );
@@ -564,6 +566,19 @@ Shows token usage per session when the agent reports it; set inbound.reply.agent
         ? Number.parseInt(String(opts.port), 10)
         : undefined;
       const server = await startWebChatServer(port);
+      if (!server) {
+        const targetPort = port ?? 18788;
+        const msg = `webchat failed to start on http://127.0.0.1:${targetPort}/`;
+        if (opts.json) {
+          defaultRuntime.error(
+            JSON.stringify({ error: msg, port: targetPort }),
+          );
+        } else {
+          defaultRuntime.error(danger(msg));
+        }
+        defaultRuntime.exit(1);
+        return;
+      }
       const payload = {
         port: server.port,
         basePath: "/",

@@ -97,7 +97,7 @@ function buildSnapshot(): Snapshot {
 
 const MAX_PAYLOAD_BYTES = 512 * 1024; // cap incoming frame size
 const MAX_BUFFERED_BYTES = 1.5 * 1024 * 1024; // per-connection send buffer limit
-const HANDSHAKE_TIMEOUT_MS = 10_000;
+const HANDSHAKE_TIMEOUT_MS = 3_000;
 const TICK_INTERVAL_MS = 30_000;
 const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 const DEDUPE_TTL_MS = 5 * 60_000;
@@ -754,9 +754,11 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                   typeof a?.content === "string"
                     ? a.content
                     : ArrayBuffer.isView(a?.content)
-                      ? Buffer.from(a.content as ArrayBufferLike).toString(
-                          "base64",
-                        )
+                      ? Buffer.from(
+                          a.content.buffer,
+                          a.content.byteOffset,
+                          a.content.byteLength,
+                        ).toString("base64")
                       : undefined,
               })) ?? [];
             let messageWithAttachments = p.message;
@@ -1076,9 +1078,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   defaultRuntime.log(`gateway log file: ${getResolvedLoggerSettings().file}`);
 
   // Start loopback WebChat server (unless disabled via config).
-  void ensureWebChatServerFromConfig({
-    gatewayUrl: `ws://127.0.0.1:${port}`,
-  })
+  void ensureWebChatServerFromConfig()
     .then((webchat) => {
       if (webchat) {
         defaultRuntime.log(
