@@ -99,6 +99,8 @@ class TauRpcClient {
         error?: string;
         message?: unknown;
         willRetry?: boolean;
+        id?: string;
+        method?: string;
       };
 
       if (evt.type === "response" && evt.command === "prompt") {
@@ -138,6 +140,19 @@ class TauRpcClient {
           this.pendingRetryCount -= 1;
         }
         this.scheduleMaybeResolve();
+        return;
+      }
+
+      // Handle hook UI requests by auto-cancelling (non-interactive surfaces like WhatsApp)
+      if (evt.type === "hook_ui_request" && evt.id) {
+        // Fire-and-forget response to unblock hook runner
+        this.child?.stdin.write(
+          `${JSON.stringify({
+            type: "hook_ui_response",
+            id: evt.id,
+            cancelled: true,
+          })}\n`,
+        );
         return;
       }
     } catch {
