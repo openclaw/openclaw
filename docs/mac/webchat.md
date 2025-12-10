@@ -17,6 +17,7 @@ The macOS menu bar app opens the gateway’s loopback web chat server in a WKWeb
 - Assets: `apps/macos/Sources/Clawdis/Resources/WebChat/` contains the `pi-web-ui` dist plus a local import map pointing at bundled vendor modules and a tiny `pi-ai` stub. Everything is served from the static host at `/` (legacy `/webchat/*` still works).
 - Bridge: none. The web UI connects directly to the Gateway WebSocket (default 18789) and uses `chat.history`/`chat.send` plus `chat/presence/tick/health` events. No `/rpc` or file-watcher socket path remains.
 - Session: always primary; multiple transports (WhatsApp/Telegram/Desktop) share the same session key so context is unified.
+- Debug-only: a native SwiftUI “glass” chat UI (same WS transport, attachments + thinking selector) can replace the WKWebView. Enable it via Debug → “Use SwiftUI web chat (glass, gateway WS)” (default off).
 
 ## Security / surface area
 - Loopback server only; remote mode uses SSH port-forwarding from the gateway host to the Mac. CSP is set to `default-src 'self' 'unsafe-inline' data: blob:`.

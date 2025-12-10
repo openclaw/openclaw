@@ -473,53 +473,94 @@ final class WebChatManager {
     static let shared = WebChatManager()
     private var windowController: WebChatWindowController?
     private var panelController: WebChatWindowController?
+    private var swiftWindowController: WebChatSwiftUIWindowController?
+    private var swiftPanelController: WebChatSwiftUIWindowController?
     private var browserTunnel: WebChatTunnel?
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     func show(sessionKey: String) {
         self.closePanel()
-        if let controller = self.windowController {
+        if AppStateStore.webChatSwiftUIEnabled {
+            if let controller = self.swiftWindowController {
+                controller.show()
+                return
+            }
+            let controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
+            controller.onVisibilityChanged = { [weak self] visible in
+                self?.onPanelVisibilityChanged?(visible)
+            }
+            self.swiftWindowController = controller
+            controller.show()
+        } else {
+            if let controller = self.windowController {
+                controller.showWindow(nil)
+                controller.window?.makeKeyAndOrderFront(nil)
+                NSApp.activate(ignoringOtherApps: true)
+                return
+            }
+
+            let controller = WebChatWindowController(sessionKey: sessionKey)
+            self.windowController = controller
             controller.showWindow(nil)
             controller.window?.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            return
         }
-
-        let controller = WebChatWindowController(sessionKey: sessionKey)
-        self.windowController = controller
-        controller.showWindow(nil)
-        controller.window?.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     func togglePanel(sessionKey: String, anchorProvider: @escaping () -> NSRect?) {
-        if let controller = self.panelController {
-            if controller.window?.isVisible == true {
-                controller.closePanel()
-            } else {
-                controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+        if AppStateStore.webChatSwiftUIEnabled {
+            if let controller = self.swiftPanelController {
+                if controller.isVisible {
+                    controller.close()
+                } else {
+                    controller.presentAnchored(anchorProvider: anchorProvider)
+                }
+                return
             }
-            return
-        }
+            let controller = WebChatSwiftUIWindowController(
+                sessionKey: sessionKey,
+                presentation: .panel(anchorProvider: anchorProvider))
+            controller.onClosed = { [weak self] in
+                self?.panelHidden()
+            }
+            controller.onVisibilityChanged = { [weak self] visible in
+                self?.onPanelVisibilityChanged?(visible)
+            }
+            self.swiftPanelController = controller
+            controller.presentAnchored(anchorProvider: anchorProvider)
+        } else {
+            if let controller = self.panelController {
+                if controller.window?.isVisible == true {
+                    controller.closePanel()
+                } else {
+                    controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+                }
+                return
+            }
 
-        let controller = WebChatWindowController(
-            sessionKey: sessionKey,
-            presentation: .panel(anchorProvider: anchorProvider))
-        self.panelController = controller
-        controller.onPanelClosed = { [weak self] in
-            self?.panelHidden()
+            let controller = WebChatWindowController(
+                sessionKey: sessionKey,
+                presentation: .panel(anchorProvider: anchorProvider))
+            self.panelController = controller
+            controller.onPanelClosed = { [weak self] in
+                self?.panelHidden()
+            }
+            controller.onVisibilityChanged = { [weak self] visible in
+                guard let self else { return }
+                self.onPanelVisibilityChanged?(visible)
+            }
+            controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+            // visibility will be reported by the controller callback
         }
-        controller.onVisibilityChanged = { [weak self] visible in
-            guard let self else { return }
-            self.onPanelVisibilityChanged?(visible)
-        }
-        controller.presentAnchoredPanel(anchorProvider: anchorProvider)
-        // visibility will be reported by the controller callback
     }
 
     func closePanel() {
-        guard let controller = self.panelController else { return }
-        controller.closePanel()
+        if let controller = self.panelController {
+            controller.closePanel()
+        }
+        if let controller = self.swiftPanelController {
+            controller.close()
+        }
     }
 
     func preferredSessionKey() -> String {
@@ -550,6 +591,10 @@ final class WebChatManager {
         self.panelController?.shutdown()
         self.panelController?.close()
         self.panelController = nil
+        self.swiftWindowController?.close()
+        self.swiftWindowController = nil
+        self.swiftPanelController?.close()
+        self.swiftPanelController = nil
     }
 
     @MainActor
@@ -594,11 +639,17 @@ final class WebChatManager {
         self.panelController?.shutdown()
         self.panelController?.close()
         self.panelController = nil
+
+        self.swiftWindowController?.close()
+        self.swiftWindowController = nil
+        self.swiftPanelController?.close()
+        self.swiftPanelController = nil
     }
 
     private func panelHidden() {
         self.onPanelVisibilityChanged?(false)
         self.panelController = nil
+        self.swiftPanelController = nil
     }
 }
 

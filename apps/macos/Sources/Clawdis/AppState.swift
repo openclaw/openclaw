@@ -153,6 +153,10 @@ final class AppState: ObservableObject {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatEnabled, forKey: webChatEnabledKey) } }
     }
 
+    @Published var webChatSwiftUIEnabled: Bool {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatSwiftUIEnabled, forKey: webChatSwiftUIEnabledKey) } }
+    }
+
     @Published var webChatPort: Int {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatPort, forKey: webChatPortKey) } }
     }
@@ -231,6 +235,7 @@ final class AppState: ObservableObject {
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.webChatEnabled = UserDefaults.standard.object(forKey: webChatEnabledKey) as? Bool ?? true
+        self.webChatSwiftUIEnabled = UserDefaults.standard.object(forKey: webChatSwiftUIEnabledKey) as? Bool ?? false
         let storedPort = UserDefaults.standard.integer(forKey: webChatPortKey)
         self.webChatPort = storedPort > 0 ? storedPort : 18788
 
@@ -343,6 +348,7 @@ extension AppState {
         state.heartbeatsEnabled = true
         state.connectionMode = .local
         state.webChatEnabled = true
+        state.webChatSwiftUIEnabled = false
         state.webChatPort = 18788
         state.remoteTarget = "[redacted-email]"
         state.remoteIdentity = "~/.ssh/id_ed25519"
@@ -364,6 +370,10 @@ enum AppStateStore {
 
     static var webChatEnabled: Bool {
         UserDefaults.standard.object(forKey: webChatEnabledKey) as? Bool ?? true
+    }
+
+    static var webChatSwiftUIEnabled: Bool {
+        UserDefaults.standard.object(forKey: webChatSwiftUIEnabledKey) as? Bool ?? false
     }
 
     static var webChatPort: Int {

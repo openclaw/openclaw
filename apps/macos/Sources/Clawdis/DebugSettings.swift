@@ -22,6 +22,7 @@ struct DebugSettings: View {
     @State private var portReports: [DebugActions.PortReport] = []
     @State private var portKillStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
+    @AppStorage(webChatSwiftUIEnabledKey) private var webChatSwiftUIEnabled: Bool = false
 
     var body: some View {
         ScrollView(.vertical) {
@@ -217,6 +218,9 @@ struct DebugSettings: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
+                Toggle("Use SwiftUI web chat (glass, gateway WS)", isOn: self.$webChatSwiftUIEnabled)
+                    .toggleStyle(.switch)
+                    .help("When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
                 Button("Send Test Notification") {
                     Task { await DebugActions.sendTestNotification() }
                 }
