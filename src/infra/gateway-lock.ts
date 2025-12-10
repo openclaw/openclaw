@@ -1,7 +1,8 @@
 import fs from "node:fs";
-import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+
+import { flockSync } from "fs-ext";
 
 const DEFAULT_LOCK_PATH = path.join(os.tmpdir(), "clawdis-gateway.lock");
 
@@ -9,92 +10,69 @@ export class GatewayLockError extends Error {}
 
 type ReleaseFn = () => Promise<void>;
 
+const SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
+
 /**
- * Acquire an exclusive single-instance lock for the gateway using a Unix domain socket.
+ * Acquire an exclusive gateway lock using POSIX flock and write the PID into the same file.
  *
- * Why a socket? If the process crashes or is SIGKILLed, the socket file remains but
- * the next start will detect ECONNREFUSED when connecting and clean the stale path
- * before retrying. This keeps the lock self-healing without manual pidfile cleanup.
+ * Kernel locks are released automatically when the process exits or is SIGKILLed, so the
+ * lock cannot become stale. A best-effort unlink on shutdown keeps the path clean, but
+ * correctness relies solely on the kernel lock.
  */
 export async function acquireGatewayLock(
   lockPath = DEFAULT_LOCK_PATH,
 ): Promise<ReleaseFn> {
-  // Fast path: try to listen on the lock path.
-  const attemptListen = (): Promise<net.Server> =>
-    new Promise((resolve, reject) => {
-      const server = net.createServer();
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
 
-      server.once("error", async (err: NodeJS.ErrnoException) => {
-        if (err.code !== "EADDRINUSE") {
-          reject(new GatewayLockError(`lock listen failed: ${err.message}`));
-          return;
-        }
+  const fd = fs.openSync(lockPath, "w+");
+  try {
+    flockSync(fd, "exnb");
+  } catch (err) {
+    fs.closeSync(fd);
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EWOULDBLOCK" || code === "EAGAIN") {
+      throw new GatewayLockError("another gateway instance is already running");
+    }
+    throw new GatewayLockError(
+      `failed to acquire gateway lock: ${(err as Error).message}`,
+    );
+  }
 
-        // Something is already bound. Try to connect to see if it is alive.
-        const client = net.connect({ path: lockPath });
-
-        client.once("connect", () => {
-          client.destroy();
-          reject(
-            new GatewayLockError("another gateway instance is already running"),
-          );
-        });
-
-        client.once("error", (connErr: NodeJS.ErrnoException) => {
-          // Nothing is listening -> stale socket file. Remove and retry once.
-          if (connErr.code === "ECONNREFUSED" || connErr.code === "ENOENT") {
-            try {
-              fs.rmSync(lockPath, { force: true });
-            } catch (rmErr) {
-              reject(
-                new GatewayLockError(
-                  `failed to clean stale lock at ${lockPath}: ${String(rmErr)}`,
-                ),
-              );
-              return;
-            }
-            attemptListen().then(resolve, reject);
-            return;
-          }
-
-          reject(
-            new GatewayLockError(
-              `failed to connect to existing lock (${lockPath}): ${connErr.message}`,
-            ),
-          );
-        });
-      });
-
-      server.listen(lockPath, () => resolve(server));
-    });
-
-  const server = await attemptListen();
+  fs.ftruncateSync(fd, 0);
+  fs.writeSync(fd, `${process.pid}\n`, 0, "utf8");
+  fs.fsyncSync(fd);
 
   let released = false;
   const release = async (): Promise<void> => {
     if (released) return;
     released = true;
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    try {
+      flockSync(fd, "un");
+    } catch {
+      /* ignore unlock errors */
+    }
+    try {
+      fs.closeSync(fd);
+    } catch {
+      /* ignore close errors */
+    }
     try {
       fs.rmSync(lockPath, { force: true });
     } catch {
-      /* ignore */
+      /* ignore unlink errors */
     }
   };
 
-  const cleanupSignals: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
-  const handleSignal = async () => {
-    await release();
+  const handleSignal = () => {
+    void release();
     process.exit(0);
   };
 
-  for (const sig of cleanupSignals) {
-    process.once(sig, () => {
-      void handleSignal();
-    });
+  for (const sig of SIGNALS) {
+    process.once(sig, handleSignal);
   }
+
   process.once("exit", () => {
-    // Exit handler must be sync-safe; release is async but close+rm are fast.
     void release();
   });
 

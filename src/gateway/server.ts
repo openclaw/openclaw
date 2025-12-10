@@ -667,7 +667,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             if (cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
               respond(true, cached, undefined, { cached: true });
               void refreshHealthSnapshot({ probe: true }).catch((err) =>
-                logError(`background health refresh failed: ${formatError(err)}`),
+                logError(
+                  `background health refresh failed: ${formatError(err)}`,
+                ),
               );
               break;
             }
