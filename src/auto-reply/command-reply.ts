@@ -46,6 +46,9 @@ function stripRpcNoise(raw: string): string {
       const msgType = msg?.type;
       const role = msg?.role;
 
+      // Drop early lifecycle frames; we only want final assistant/tool outputs.
+      if (type === "message_start") continue;
+
       // RPC streaming emits one message_update per delta; skip them to avoid flooding fallbacks.
       if (type === "message_update") continue;
 
