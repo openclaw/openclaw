@@ -322,8 +322,10 @@ startChat().catch((err) => {
   const msg = err?.stack || err?.message || String(err);
   logStatus(`boot failed: ${msg}`);
   document.body.dataset.webchatError = "1";
-  document.body.style.color = "#e06666";
-  document.body.style.fontFamily = "monospace";
-  document.body.style.padding = "16px";
-  document.body.innerText = "Web chat failed to load:\\n" + msg;
+  document.body.style.color = "#b32d2d";
+  document.body.style.fontFamily = "SFMono-Regular, Menlo, Consolas, monospace";
+  document.body.style.padding = "28px";
+  document.body.style.lineHeight = "1.5";
+  document.body.style.whiteSpace = "pre-wrap";
+  document.body.innerText = "Web chat failed to connect.\n\n" + msg;
 });
