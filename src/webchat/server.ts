@@ -102,16 +102,23 @@ export async function startWebChatServer(
     notFound(res);
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
-  }).catch((err) => {
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: Error) => reject(err);
+      server.once("error", onError);
+      server.listen(port, "127.0.0.1", () => {
+        server.off("error", onError);
+        resolve();
+      });
+    });
+  } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     const msg = code ? `${code}: ${String(err)}` : String(err);
     logError(
       `webchat server failed to bind 127.0.0.1:${port} (${msg}); continuing without webchat`,
     );
-  });
+    return null;
+  }
 
   state = { server, port };
   logDebug(`webchat server listening on 127.0.0.1:${port}`);
