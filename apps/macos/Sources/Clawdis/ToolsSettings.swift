@@ -4,7 +4,7 @@ import SwiftUI
 private enum NodePackageManager: String, CaseIterable, Identifiable {
     case npm
     case pnpm
-    case yarn
+    case bun
 
     var id: String { self.rawValue }
 
@@ -12,7 +12,7 @@ private enum NodePackageManager: String, CaseIterable, Identifiable {
         switch self {
         case .npm: "NPM"
         case .pnpm: "PNPM"
-        case .yarn: "Yarn"
+        case .bun: "Bun"
         }
     }
 
@@ -20,7 +20,7 @@ private enum NodePackageManager: String, CaseIterable, Identifiable {
         switch self {
         case .npm: "npm install -g"
         case .pnpm: "pnpm add -g"
-        case .yarn: "yarn global add"
+        case .bun: "bun add -g"
         }
     }
 }
@@ -223,22 +223,22 @@ struct ToolsSettings: View {
     }
 
     private var packageManager: NodePackageManager {
-        NodePackageManager(rawValue: self.packageManagerRaw) ?? .npm
+        if let parsed = NodePackageManager(rawValue: self.packageManagerRaw) {
+            return parsed
+        }
+        // Backward compatibility: map legacy "yarn" selection to Bun.
+        if self.packageManagerRaw == "yarn" { return .bun }
+        return .npm
     }
 
     private var packageManagerPicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Preferred package manager")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Picker("Preferred package manager", selection: self.$packageManagerRaw) {
-                ForEach(NodePackageManager.allCases) { manager in
-                    Text(manager.label).tag(manager.rawValue)
-                }
+        Picker("Preferred package manager", selection: self.$packageManagerRaw) {
+            ForEach(NodePackageManager.allCases) { manager in
+                Text(manager.label).tag(manager.rawValue)
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 340)
         }
+        .pickerStyle(.segmented)
+        .frame(maxWidth: 340)
         .padding(.top, 2)
     }
 
