@@ -33,15 +33,6 @@ struct DebugSettings: View {
                         Text(self.healthStore.summaryLine)
                     }
                 }
-                LabeledContent("Icon override") {
-                    Picker("Icon override", selection: self.bindingOverride) {
-                        ForEach(IconOverrideSelection.allCases) { option in
-                            Text(option.label).tag(option.rawValue)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: 280)
-                }
                 LabeledContent("CLI helper") {
                     let loc = CLIInstaller.installedLocation()
                     Text(loc ?? "missing")
@@ -218,9 +209,6 @@ struct DebugSettings: View {
                             .foregroundStyle(.tertiary)
                     }
                 }
-                Toggle("Use SwiftUI web chat (glass, gateway WS)", isOn: self.$webChatSwiftUIEnabled)
-                    .toggleStyle(.switch)
-                    .help("When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
                 Button("Send Test Notification") {
                     Task { await DebugActions.sendTestNotification() }
                 }
@@ -267,6 +255,19 @@ struct DebugSettings: View {
                     Button("Clear log") { GatewayProcessManager.shared.clearLog() }
                 }
                 .buttonStyle(.bordered)
+                Divider()
+                LabeledContent("Icon override") {
+                    Picker("Icon override", selection: self.bindingOverride) {
+                        ForEach(IconOverrideSelection.allCases) { option in
+                            Text(option.label).tag(option.rawValue)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 280)
+                }
+                Toggle("Use SwiftUI web chat (glass, gateway WS)", isOn: self.$webChatSwiftUIEnabled)
+                    .toggleStyle(.switch)
+                    .help("When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
                 Spacer(minLength: 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
