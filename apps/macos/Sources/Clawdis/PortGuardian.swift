@@ -128,7 +128,7 @@ actor PortGuardian {
             }
             return false
         case .local:
-            return cmd.contains("node") || cmd.contains("clawdis") || cmd.contains("tsx")
+            return cmd.contains("node") || cmd.contains("clawdis") || cmd.contains("tsx") || cmd.contains("pnpm") || cmd.contains("bun")
         }
     }
 
