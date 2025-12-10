@@ -187,8 +187,11 @@ export const piSpec: AgentSpec = {
   buildArgs: (ctx) => {
     const argv = [...ctx.argv];
     let bodyPos = ctx.bodyIndex;
+    const modeIdx = argv.indexOf("--mode");
+    const modeVal = modeIdx >= 0 ? argv[modeIdx + 1]?.toString().toLowerCase() : undefined;
+    const isRpcMode = modeVal === "rpc";
     // Non-interactive print + JSON
-    if (!argv.includes("-p") && !argv.includes("--print")) {
+    if (!isRpcMode && !argv.includes("-p") && !argv.includes("--print")) {
       argv.splice(bodyPos, 0, "-p");
       bodyPos += 1;
     }
