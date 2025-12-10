@@ -499,6 +499,11 @@ export async function startGatewayServer(
       close();
     });
     socket.once("close", (code, reason) => {
+      if (!client) {
+        logWarn(
+          `gateway/ws closed before hello conn=${connId} remote=${remoteAddr ?? "?"} code=${code ?? "n/a"} reason=${reason?.toString() || "n/a"}`,
+        );
+      }
       if (client && isWebchatHello(client.hello)) {
         logInfo(
           `webchat disconnected code=${code} reason=${reason?.toString() || "n/a"} conn=${connId}`,
@@ -529,7 +534,12 @@ export async function startGatewayServer(
     });
 
     const handshakeTimer = setTimeout(() => {
-      if (!client) close();
+      if (!client) {
+        logWarn(
+          `gateway/ws handshake timeout conn=${connId} remote=${remoteAddr ?? "?"}`,
+        );
+        close();
+      }
     }, HANDSHAKE_TIMEOUT_MS);
 
     socket.on("message", async (data) => {
