@@ -24,7 +24,7 @@ import {
   updateSystemPresence,
   upsertPresence,
 } from "../infra/system-presence.js";
-import { logError } from "../logger.js";
+import { logError, logInfo, logWarn } from "../logger.js";
 import { getLogger, getResolvedLoggerSettings } from "../logging.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
@@ -462,6 +462,12 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
     logWs("in", "connect", { connId, remoteAddr });
+    const describeHello = (hello: Hello | null | undefined) =>
+      hello
+        ? `${hello.client.name ?? "unknown"} ${hello.client.mode ?? "?"} v${hello.client.version ?? "?"}`
+        : "unknown";
+    const isWebchatHello = (hello: Hello | null | undefined) =>
+      hello?.client?.mode === "webchat" || hello?.client?.name === "webchat-ui";
 
     const send = (obj: unknown) => {
       try {
@@ -483,8 +489,18 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
       }
     };
 
-    socket.once("error", () => close());
-    socket.once("close", () => {
+    socket.once("error", (err) => {
+      logWarn(
+        `gateway/ws error conn=${connId} remote=${remoteAddr ?? "?"}: ${formatError(err)}`,
+      );
+      close();
+    });
+    socket.once("close", (code, reason) => {
+      if (client && isWebchatHello(client.hello)) {
+        logInfo(
+          `webchat disconnected code=${code} reason=${reason?.toString() || "n/a"} conn=${connId}`,
+        );
+      }
       if (client) {
         // mark presence as disconnected
         const key = client.hello.client.instanceId || connId;
@@ -501,7 +517,11 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           },
         );
       }
-      logWs("out", "close", { connId });
+      logWs("out", "close", {
+        connId,
+        code,
+        reason: reason?.toString(),
+      });
       close();
     });
 
@@ -517,6 +537,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
         if (!client) {
           // Expect hello
           if (!validateHello(parsed)) {
+            logWarn(
+              `gateway/ws invalid hello conn=${connId} remote=${remoteAddr ?? "?"}`,
+            );
             send({
               type: "hello-error",
               reason: `invalid hello: ${formatValidationErrors(validateHello.errors)}`,
@@ -532,6 +555,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             maxProtocol < PROTOCOL_VERSION ||
             minProtocol > PROTOCOL_VERSION
           ) {
+            logWarn(
+              `gateway/ws protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
+            );
             logWs("out", "hello-error", {
               connId,
               reason: "protocol mismatch",
@@ -551,6 +577,9 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
           // token auth if required
           const token = getGatewayToken();
           if (token && hello.auth?.token !== token) {
+            logWarn(
+              `gateway/ws unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
+            );
             logWs("out", "hello-error", { connId, reason: "unauthorized" });
             send({
               type: "hello-error",
@@ -572,6 +601,11 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             platform: hello.client.platform,
             token: hello.auth?.token ? "set" : "none",
           });
+          if (isWebchatHello(hello)) {
+            logInfo(
+              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
+            );
+          }
           upsertPresence(presenceKey, {
             host: hello.client.name || os.hostname(),
             ip: remoteAddr,
