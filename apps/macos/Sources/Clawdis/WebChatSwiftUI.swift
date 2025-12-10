@@ -9,6 +9,12 @@ extension EventFrame: @unchecked Sendable {}
 
 private let webChatSwiftLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChatSwiftUI")
 
+private enum WebChatSwiftUILayout {
+    static let windowSize = NSSize(width: 1120, height: 840)
+    static let panelSize = NSSize(width: 480, height: 640)
+    static let anchorPadding: CGFloat = 8
+}
+
 // MARK: - Models
 
 struct GatewayChatMessageContent: Codable {
@@ -271,32 +277,39 @@ struct WebChatView: View {
     @StateObject var viewModel: WebChatViewModel
     var body: some View {
         ZStack {
-            LinearGradient(
-                colors: [
-                    Color(red: 0.12, green: 0.17, blue: 0.28),
-                    Color(red: 0.06, green: 0.07, blue: 0.11)
-                ],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing)
-                .overlay(.ultraThinMaterial)
+            Color(nsColor: .windowBackgroundColor)
                 .ignoresSafeArea()
 
-            VStack(spacing: 10) {
+            VStack(spacing: 14) {
                 header
                 messageList
                 composer
             }
-            .padding(12)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 16)
+            .frame(maxWidth: 1040)
         }
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.96, green: 0.97, blue: 1.0),
+                    Color(red: 0.93, green: 0.94, blue: 0.98)
+                ],
+                startPoint: .top,
+                endPoint: .bottom)
+                .opacity(0.35)
+                .ignoresSafeArea()
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { viewModel.load() }
     }
 
     private var header: some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Clawdis Chat")
-                    .font(.title3.weight(.semibold))
-                Text("Session \(self.viewModel.thinkingLevel.uppercased()) · Gateway")
+                Text("Clawd Web Chat")
+                    .font(.title2.weight(.semibold))
+                Text("Session \(self.viewModel.thinkingLevel.uppercased()) · \(self.viewModel.healthOK ? "Connected" : "Connecting…")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -309,8 +322,12 @@ struct WebChatView: View {
                     .frame(width: 10, height: 10)
             }
         }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+                .shadow(color: .black.opacity(0.06), radius: 10, y: 4)
+        )
     }
 
     private var messageList: some View {
@@ -322,7 +339,11 @@ struct WebChatView: View {
             }
             .padding(.vertical, 8)
         }
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+                .shadow(color: .black.opacity(0.05), radius: 12, y: 6)
+        )
     }
 
     private var composer: some View {
@@ -354,21 +375,28 @@ struct WebChatView: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Color.white.opacity(0.08))
+                            .padding(.horizontal, 10)
+                            .background(Color.accentColor.opacity(0.08))
                             .clipShape(Capsule())
                         }
                     }
                 }
             }
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.ultraThinMaterial)
+                .strokeBorder(Color.secondary.opacity(0.2))
+                .background(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Color(nsColor: .textBackgroundColor))
+                )
                 .overlay(
                     TextEditor(text: self.$viewModel.input)
+                        .font(.body)
                         .background(Color.clear)
-                        .frame(minHeight: 80, maxHeight: 140)
-                        .padding(6)
+                        .frame(minHeight: 96, maxHeight: 168)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
                 )
-                .frame(maxHeight: 160)
+                .frame(maxHeight: 180)
 
             HStack {
                 if let error = self.viewModel.errorText {
@@ -387,8 +415,12 @@ struct WebChatView: View {
                 .disabled(self.viewModel.isSending)
             }
         }
-        .padding(12)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(Color(nsColor: .textBackgroundColor))
+                .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
+        )
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             self.handleDrop(providers)
         }
@@ -401,8 +433,9 @@ struct WebChatView: View {
             Text("Medium").tag("medium")
             Text("High").tag("high")
         }
-        .pickerStyle(.segmented)
-        .frame(maxWidth: 260)
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .frame(maxWidth: 200)
     }
 
     private func pickFiles() {
@@ -466,7 +499,11 @@ private struct MessageBubble: View {
             }
             .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
             .padding(12)
-            .background(self.isUser ? Color.white.opacity(0.12) : Color.white.opacity(0.08))
+            .background(self.isUser ? Color.accentColor.opacity(0.12) : Color(nsColor: .textBackgroundColor))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(self.isUser ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.15))
+            )
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .padding(.horizontal, 6)
@@ -537,9 +574,20 @@ final class WebChatSwiftUIWindowController {
     private func reposition(using anchorProvider: () -> NSRect?) {
         guard let window else { return }
         guard let anchor = anchorProvider() else { return }
+        let screen = NSScreen.screens.first { screen in
+            screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
+        } ?? NSScreen.main
         var frame = window.frame
-        frame.origin.x = round(anchor.midX - frame.width / 2)
-        frame.origin.y = anchor.minY - frame.height
+        if let screen {
+            let minX = screen.frame.minX + WebChatSwiftUILayout.anchorPadding
+            let maxX = screen.frame.maxX - frame.width - WebChatSwiftUILayout.anchorPadding
+            frame.origin.x = min(max(round(anchor.midX - frame.width / 2), minX), maxX)
+            let desiredY = anchor.minY - frame.height - WebChatSwiftUILayout.anchorPadding
+            frame.origin.y = max(desiredY, screen.frame.minY + WebChatSwiftUILayout.anchorPadding)
+        } else {
+            frame.origin.x = round(anchor.midX - frame.width / 2)
+            frame.origin.y = anchor.minY - frame.height
+        }
         window.setFrame(frame, display: false)
     }
 
@@ -567,21 +615,23 @@ final class WebChatSwiftUIWindowController {
         switch presentation {
         case .window:
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 960, height: 720),
+                contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.windowSize),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
             window.title = "Clawdis Chat (SwiftUI)"
             window.contentViewController = contentViewController
             window.isReleasedWhenClosed = false
-            window.titleVisibility = .hidden
-            window.titlebarAppearsTransparent = true
-            window.backgroundColor = .clear
-            window.isOpaque = false
+            window.titleVisibility = .visible
+            window.titlebarAppearsTransparent = false
+            window.backgroundColor = .windowBackgroundColor
+            window.isOpaque = true
+            window.center()
+            window.minSize = NSSize(width: 880, height: 680)
             return window
         case .panel:
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 440, height: 580),
+                contentRect: NSRect(origin: .zero, size: WebChatSwiftUILayout.panelSize),
                 styleMask: [.nonactivatingPanel, .borderless],
                 backing: .buffered,
                 defer: false)

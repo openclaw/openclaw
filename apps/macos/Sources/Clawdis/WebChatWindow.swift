@@ -6,6 +6,12 @@ import WebKit
 
 private let webChatLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
 
+private enum WebChatLayout {
+    static let windowSize = NSSize(width: 1120, height: 840)
+    static let panelSize = NSSize(width: 480, height: 640)
+    static let anchorPadding: CGFloat = 8
+}
+
 enum WebChatPresentation {
     case window
     case panel(anchorProvider: () -> NSRect?)
@@ -75,16 +81,18 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
         switch presentation {
         case .window:
             let window = NSWindow(
-                contentRect: NSRect(x: 0, y: 0, width: 960, height: 720),
+                contentRect: NSRect(origin: .zero, size: WebChatLayout.windowSize),
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
             window.title = "Clawd Web Chat"
             window.contentView = wrappedContent
+            window.center()
+            window.minSize = NSSize(width: 880, height: 680)
             return window
         case .panel:
             let panel = NSPanel(
-                contentRect: NSRect(x: 0, y: 0, width: 420, height: 560),
+                contentRect: NSRect(origin: .zero, size: WebChatLayout.panelSize),
                 styleMask: [.nonactivatingPanel, .borderless],
                 backing: .buffered,
                 defer: false)
@@ -312,8 +320,20 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
         guard let anchor = anchorProvider() else { return }
 
         var frame = panel.frame
-        frame.origin.x = round(anchor.midX - frame.width / 2)
-        frame.origin.y = anchor.minY - frame.height
+        let screen = NSScreen.screens.first { screen in
+            screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
+        } ?? NSScreen.main
+
+        if let screen {
+            let minX = screen.frame.minX + WebChatLayout.anchorPadding
+            let maxX = screen.frame.maxX - frame.width - WebChatLayout.anchorPadding
+            frame.origin.x = min(max(round(anchor.midX - frame.width / 2), minX), maxX)
+            let desiredY = anchor.minY - frame.height - WebChatLayout.anchorPadding
+            frame.origin.y = max(desiredY, screen.frame.minY + WebChatLayout.anchorPadding)
+        } else {
+            frame.origin.x = round(anchor.midX - frame.width / 2)
+            frame.origin.y = anchor.minY - frame.height
+        }
         panel.setFrame(frame, display: false)
     }
 
