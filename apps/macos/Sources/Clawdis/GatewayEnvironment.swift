@@ -71,6 +71,11 @@ enum GatewayEnvironment {
         return Semver.parse(bundleVersion)
     }
 
+    // Exposed for tests so we can inject fake version checks without rewriting bundle metadata.
+    static func expectedGatewayVersion(from versionString: String?) -> Semver? {
+        Semver.parse(versionString)
+    }
+
     static func check() -> GatewayEnvironmentStatus {
         let expected = self.expectedGatewayVersion()
         let projectRoot = CommandResolver.projectRoot()

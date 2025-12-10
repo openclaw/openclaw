@@ -27,4 +27,9 @@ import Testing
         defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
         #expect(GatewayEnvironment.gatewayPort() == 19999)
     }
+
+    @Test func expectedGatewayVersionFromStringUsesParser() {
+        #expect(GatewayEnvironment.expectedGatewayVersion(from: "v9.1.2") == Semver(major: 9, minor: 1, patch: 2))
+        #expect(GatewayEnvironment.expectedGatewayVersion(from: nil) == nil)
+    }
 }

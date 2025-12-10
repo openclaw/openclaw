@@ -77,4 +77,10 @@ import Testing
         try? fm.removeItem(at: older)
         try? fm.removeItem(at: newer)
     }
+
+    @Test func gatewayEntrypointNilWhenMissing() {
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        #expect(CommandResolver.gatewayEntrypoint(in: tmp) == nil)
+    }
 }
