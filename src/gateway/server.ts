@@ -236,7 +236,7 @@ function formatError(err: unknown): string {
 async function refreshHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot(undefined, opts);
+      const snap = await getHealthSnapshot(undefined);
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
@@ -251,7 +251,10 @@ async function refreshHealthSnapshot(opts?: { probe?: boolean }) {
   return healthRefresh;
 }
 
-export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
+export async function startGatewayServer(
+  port = 18789,
+  opts?: { webchatPort?: number },
+): Promise<GatewayServer> {
   const releaseLock = await acquireGatewayLock().catch((err) => {
     // Bubble known lock errors so callers can present a nice message.
     if (err instanceof GatewayLockError) throw err;
@@ -1146,7 +1149,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   defaultRuntime.log(`gateway log file: ${getResolvedLoggerSettings().file}`);
 
   // Start loopback WebChat server (unless disabled via config).
-  void ensureWebChatServerFromConfig()
+  void ensureWebChatServerFromConfig(opts?.webchatPort)
     .then((webchat) => {
       if (webchat) {
         defaultRuntime.log(

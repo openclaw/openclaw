@@ -22,6 +22,12 @@ export type HealthSummary = {
   web: {
     linked: boolean;
     authAgeMs: number | null;
+    connect?: {
+      ok: boolean;
+      status?: number | null;
+      error?: string | null;
+      elapsedMs?: number | null;
+    };
   };
   telegram: {
     configured: boolean;

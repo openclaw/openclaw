@@ -160,10 +160,12 @@ export async function __broadcastGatewayEventForTests() {
   // no-op
 }
 
-export async function ensureWebChatServerFromConfig() {
+export async function ensureWebChatServerFromConfig(
+  overridePort?: number,
+) {
   const cfg = loadConfig();
   if (cfg.webchat?.enabled === false) return null;
-  const port = cfg.webchat?.port ?? WEBCHAT_DEFAULT_PORT;
+  const port = overridePort ?? cfg.webchat?.port ?? WEBCHAT_DEFAULT_PORT;
   try {
     return await startWebChatServer(port);
   } catch (err) {
