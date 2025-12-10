@@ -19,6 +19,7 @@
     "format": "biome format src",
     "format:fix": "biome format src --write",
     "test": "vitest",
+    "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
