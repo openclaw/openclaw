@@ -113,8 +113,23 @@ struct GeneralSettings: View {
                     .frame(width: 48, alignment: .leading)
                 TextField("user@host[:22]", text: self.$state.remoteTarget)
                     .textFieldStyle(.roundedBorder)
-                    .frame(width: 280)
+                    .frame(maxWidth: .infinity)
+                Button {
+                    Task { await self.testRemote() }
+                } label: {
+                    if self.remoteStatus == .checking {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Test remote")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.remoteStatus == .checking || self.state.remoteTarget
+                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+
+            self.remoteStatusView
+                .padding(.leading, 58)
 
             DisclosureGroup(isExpanded: self.$showRemoteAdvanced) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -135,44 +150,15 @@ struct GeneralSettings: View {
                     .font(.callout.weight(.semibold))
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    Task { await self.testRemote() }
-                } label: {
-                    if self.remoteStatus == .checking {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Test remote")
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(self.remoteStatus == .checking || self.state.remoteTarget
-                    .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                switch self.remoteStatus {
-                case .idle:
-                    EmptyView()
-                case .checking:
-                    Text("Checking…").font(.caption).foregroundStyle(.secondary)
-                case .ok:
-                    Label("Ready", systemImage: "checkmark.circle.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
-                case let .failed(message):
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                }
-            }
-
             // Diagnostics
             VStack(alignment: .leading, spacing: 4) {
                 Text("Control channel")
                     .font(.caption.weight(.semibold))
-                Text(self.controlStatusLine)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                if !self.isControlStatusDuplicate {
+                    Text(self.controlStatusLine)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 if let ping = ControlChannel.shared.lastPingMs {
                     Text("Last ping: \(Int(ping)) ms")
                         .font(.caption)
@@ -201,6 +187,32 @@ struct GeneralSettings: View {
         case .disconnected: "Disconnected"
         case let .degraded(msg): msg
         }
+    }
+
+    @ViewBuilder
+    private var remoteStatusView: some View {
+        switch self.remoteStatus {
+        case .idle:
+            EmptyView()
+        case .checking:
+            Text("Testing…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .ok:
+            Label("Ready", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case let .failed(message):
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+        }
+    }
+
+    private var isControlStatusDuplicate: Bool {
+        guard case let .failed(message) = self.remoteStatus else { return false }
+        return message == self.controlStatusLine
     }
 
     private var cliInstaller: some View {
