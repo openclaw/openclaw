@@ -447,6 +447,7 @@ final class WebChatManager {
     static let shared = WebChatManager()
     private var windowController: WebChatWindowController?
     private var panelController: WebChatWindowController?
+    private var browserTunnel: WebChatTunnel?
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     func show(sessionKey: String) {
@@ -511,6 +512,37 @@ final class WebChatManager {
             if let first = sorted.first { return first.key }
         }
         return "+1003"
+    }
+
+    @MainActor
+    func openInBrowser(sessionKey: String) async {
+        let port = AppStateStore.webChatPort
+        let base: URL
+        if CommandResolver.connectionModeIsRemote() {
+            do {
+                // Prefer the configured port; fall back if busy.
+                let tunnel = try await WebChatTunnel.create(
+                    remotePort: port,
+                    preferredLocalPort: UInt16(port))
+                self.browserTunnel?.terminate()
+                self.browserTunnel = tunnel
+                guard let local = tunnel.localPort else {
+                    throw NSError(domain: "WebChat", code: 7, userInfo: [NSLocalizedDescriptionKey: "Tunnel missing local port"])
+                }
+                base = URL(string: "http://127.0.0.1:\(local)/")!
+            } catch {
+                NSAlert(error: error).runModal()
+                return
+            }
+        } else {
+            base = URL(string: "http://127.0.0.1:\(port)/")!
+        }
+
+        var comps = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        comps?.path = "/webchat/"
+        comps?.queryItems = [URLQueryItem(name: "session", value: sessionKey)]
+        guard let url = comps?.url else { return }
+        NSWorkspace.shared.open(url)
     }
 
     func close() {

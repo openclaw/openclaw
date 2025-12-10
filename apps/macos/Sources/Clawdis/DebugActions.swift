@@ -240,6 +240,12 @@ enum DebugActions {
     typealias PortListener = PortGuardian.ReportListener
     typealias PortReport = PortGuardian.PortReport
 
+    @MainActor
+    static func openChatInBrowser() async {
+        let session = WebChatManager.shared.preferredSessionKey()
+        await WebChatManager.shared.openInBrowser(sessionKey: session)
+    }
+
     static func checkGatewayPorts() async -> [PortReport] {
         let mode = CommandResolver.connectionSettings().mode
         return await PortGuardian.shared.diagnose(mode: mode)

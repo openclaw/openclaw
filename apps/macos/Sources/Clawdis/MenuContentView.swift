@@ -141,6 +141,11 @@ struct MenuContent: View {
                     } label: {
                         Label("Send Test Notification", systemImage: "bell")
                     }
+                    Button {
+                        Task { await DebugActions.openChatInBrowser() }
+                    } label: {
+                        Label("Open Chat in Browser…", systemImage: "safari")
+                    }
                     Divider()
                     Button {
                         DebugActions.restartGateway()
