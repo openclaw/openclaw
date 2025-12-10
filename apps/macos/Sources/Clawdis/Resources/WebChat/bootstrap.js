@@ -7,6 +7,8 @@ if (!globalThis.process) {
   globalThis.process = { env: {} };
 }
 
+import { formatError } from "./format-error.js";
+
 const logStatus = (msg) => {
   try {
     console.log(msg);
@@ -331,7 +333,7 @@ const startChat = async () => {
 };
 
 startChat().catch((err) => {
-  const msg = err?.stack || err?.message || String(err);
+  const msg = formatError(err);
   logStatus(`boot failed: ${msg}`);
   document.body.dataset.webchatError = "1";
   ensureErrorStyles();
