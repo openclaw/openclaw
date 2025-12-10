@@ -96,7 +96,7 @@ enum DebugActions {
                 let reason = rpcResult.error?.trimmingCharacters(in: .whitespacesAndNewlines)
                 let detail = (reason?.isEmpty == false)
                     ? reason!
-                    : "No error returned. Check /tmp/clawdis.log or rpc output."
+                    : "No error returned. Check logs or rpc output."
                 return .failure(.message("Local send failed: \(detail)"))
             }
         } catch {
@@ -114,14 +114,7 @@ enum DebugActions {
     }
 
     static func pinoLogPath() -> String {
-        let df = DateFormatter()
-        df.calendar = Calendar(identifier: .iso8601)
-        df.locale = Locale(identifier: "en_US_POSIX")
-        df.dateFormat = "yyyy-MM-dd"
-        let today = df.string(from: Date())
-        let rolling = URL(fileURLWithPath: "/tmp/clawdis/clawdis-\(today).log").path
-        if FileManager.default.fileExists(atPath: rolling) { return rolling }
-        return "/tmp/clawdis.log"
+        LogLocator.bestLogFile()?.path ?? LogLocator.legacyLogPath
     }
 
     @MainActor

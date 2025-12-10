@@ -522,26 +522,7 @@ extension GeneralSettings {
     }
 
     private func revealLogs() {
-        let fm = FileManager.default
-        let legacy = URL(fileURLWithPath: "/tmp/clawdis/clawdis.log")
-        let rollingDir = URL(fileURLWithPath: "/tmp/clawdis")
-
-        // Prefer the newest rolling log (clawdis-YYYY-MM-DD.log), fall back to legacy path.
-        let dirContents = (try? fm.contentsOfDirectory(
-            at: rollingDir,
-            includingPropertiesForKeys: [.contentModificationDateKey],
-            options: [.skipsHiddenFiles])) ?? []
-
-        let rollingLog = dirContents
-            .filter { $0.lastPathComponent.hasPrefix("clawdis-") && $0.pathExtension == "log" }
-            .sorted { lhs, rhs in
-                let lDate = (try? lhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                let rDate = (try? rhs.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
-                return lDate > rDate
-            }
-            .first
-
-        let target = rollingLog ?? (fm.fileExists(atPath: legacy.path) ? legacy : nil)
+        let target = LogLocator.bestLogFile()
 
         if let target {
             NSWorkspace.shared.selectFile(target.path, inFileViewerRootedAtPath: target.deletingLastPathComponent().path)
