@@ -141,10 +141,13 @@ private actor GatewayChannelActor {
             return
         }
         if let err = try? decoder.decode(HelloError.self, from: data) {
+            let reason = err.reason ?? "unknown"
+            // Log and throw a detailed error so UI can surface token/hello issues.
+            self.logger.error("gateway hello-error: \(reason, privacy: .public)")
             throw NSError(
                 domain: "Gateway",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "hello-error: \(err.reason)"])
+                code: 1008,
+                userInfo: [NSLocalizedDescriptionKey: "hello-error: \(reason)"])
         }
         throw NSError(
             domain: "Gateway",

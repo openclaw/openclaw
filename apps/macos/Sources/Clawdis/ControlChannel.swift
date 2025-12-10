@@ -140,6 +140,14 @@ final class ControlChannel: ObservableObject {
             return desc
         }
 
+        // If the gateway explicitly rejects the hello (e.g., auth/token mismatch), surface it.
+        if let urlErr = error as? URLError,
+           urlErr.code == .dataNotAllowed // used for WS close 1008 auth failures
+        {
+            let reason = urlErr.failureURLString ?? urlErr.localizedDescription
+            return "Gateway rejected token; set CLAWDIS_GATEWAY_TOKEN in the mac app environment or clear it on the gateway. Reason: \(reason)"
+        }
+
         // Common misfire: we connected to localhost:18789 but the port is occupied
         // by some other process (e.g. a local dev gateway or a stuck SSH forward).
         // The gateway handshake returns something we can't parse, which currently
