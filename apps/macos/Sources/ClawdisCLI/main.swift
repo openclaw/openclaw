@@ -1,12 +1,6 @@
-import AsyncXPCConnection
 import ClawdisIPC
 import Foundation
-
-private let serviceName = "com.steipete.clawdis.xpc"
-
-@objc protocol ClawdisXPCProtocol {
-    func handle(_ data: Data, withReply reply: @escaping @Sendable (Data?, Error?) -> Void)
-}
+import Darwin
 
 @main
 struct ClawdisCLI {
@@ -222,30 +216,51 @@ struct ClawdisCLI {
     private static func send(request: Request) async throws -> Response {
         try await self.ensureAppRunning()
 
-        var lastError: Error?
-        for _ in 0..<10 {
-            let conn = NSXPCConnection(machServiceName: serviceName)
-            let interface = NSXPCInterface(with: ClawdisXPCProtocol.self)
-            conn.remoteObjectInterface = interface
-            conn.resume()
+        return try await self.sendViaSocket(request: request)
+    }
 
-            let data = try JSONEncoder().encode(request)
-            do {
-                let service = AsyncXPCConnection.RemoteXPCService<ClawdisXPCProtocol>(connection: conn)
-                let raw: Data = try await service.withValueErrorCompletion { proxy, completion in
-                    struct CompletionBox: @unchecked Sendable { let handler: (Data?, Error?) -> Void }
-                    let box = CompletionBox(handler: completion)
-                    proxy.handle(data, withReply: { data, error in box.handler(data, error) })
-                }
-                conn.invalidate()
-                return try JSONDecoder().decode(Response.self, from: raw)
-            } catch {
-                lastError = error
-                conn.invalidate()
-                try? await Task.sleep(nanoseconds: 100_000_000)
+    /// Attempt a direct UNIX socket call; falls back to XPC if unavailable.
+    private static func sendViaSocket(request: Request) async throws -> Response {
+        let path = controlSocketPath
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(.ECONNREFUSED) }
+        defer { close(fd) }
+
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let capacity = MemoryLayout.size(ofValue: addr.sun_path)
+        let copied = path.withCString { cstr -> Int in
+            strlcpy(&addr.sun_path.0, cstr, capacity)
+        }
+        guard copied < capacity else { throw POSIXError(.ENAMETOOLONG) }
+        addr.sun_len = UInt8(MemoryLayout.size(ofValue: addr))
+        let len = socklen_t(MemoryLayout.size(ofValue: addr))
+        let result = withUnsafePointer(to: &addr) { ptr -> Int32 in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sockPtr in
+                connect(fd, sockPtr, len)
             }
         }
-        throw lastError ?? CLIError.help
+        guard result == 0 else { throw POSIXError(.ECONNREFUSED) }
+
+        let payload = try JSONEncoder().encode(request)
+        _ = payload.withUnsafeBytes { buf in
+            write(fd, buf.baseAddress!, payload.count)
+        }
+        shutdown(fd, SHUT_WR)
+
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 8192)
+        let bufSize = buffer.count
+        while true {
+            let n = buffer.withUnsafeMutableBytes { read(fd, $0.baseAddress!, bufSize) }
+            if n > 0 {
+                data.append(buffer, count: n)
+            } else {
+                break
+            }
+        }
+        guard !data.isEmpty else { throw POSIXError(.ECONNRESET) }
+        return try JSONDecoder().decode(Response.self, from: data)
     }
 
     private static func ensureAppRunning() async throws {

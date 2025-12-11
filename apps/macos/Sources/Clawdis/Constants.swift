@@ -1,6 +1,5 @@
 import Foundation
 
-let serviceName = "com.steipete.clawdis.xpc"
 let launchdLabel = "com.steipete.clawdis"
 let onboardingVersionKey = "clawdis.onboardingVersion"
 let currentOnboardingVersion = 3

@@ -74,11 +74,6 @@ enum LaunchAgentManager {
             <key>PATH</key>
             <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
           </dict>
-          <key>MachServices</key>
-          <dict>
-            <key>com.steipete.clawdis.xpc</key>
-            <true/>
-          </dict>
           <key>StandardOutPath</key>
           <string>\(LogLocator.launchdLogPath)</string>
           <key>StandardErrorPath</key>

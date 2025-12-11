@@ -150,13 +150,10 @@ private final class StatusItemMouseHandlerView: NSView {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate {
-    private var listener: NSXPCListener?
+final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
-    private let xpcLogger = Logger(subsystem: "com.steipete.clawdis", category: "xpc")
     private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
-    // Only clients signed with this team ID may talk to the XPC service (hard-fails if mismatched).
-    private let allowedTeamIDs: Set<String> = ["Y5PE65HELJ"]
+    private let socketServer = ControlSocketServer()
     let updaterController: UpdaterProviding = makeUpdaterController()
 
     @MainActor
@@ -173,7 +170,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        self.startListener()
+        Task { await self.socketServer.start() }
         self.scheduleFirstRunOnboardingIfNeeded()
 
         // Developer/testing helper: auto-open WebChat when launched with --webchat
@@ -190,15 +187,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await AgentRPC.shared.shutdown() }
-    }
-
-    @MainActor
-    private func startListener() {
-        guard self.state != nil else { return }
-        let listener = NSXPCListener(machServiceName: serviceName)
-        listener.delegate = self
-        listener.resume()
-        self.listener = listener
+        Task { await self.socketServer.stop() }
     }
 
     @MainActor
@@ -211,73 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSXPCListenerDelegate 
         }
     }
 
-    func listener(_ listener: NSXPCListener, shouldAcceptNewConnection connection: NSXPCConnection) -> Bool {
-        guard self.isAllowed(connection: connection) else {
-            self.xpcLogger.error("Rejecting XPC connection: team ID mismatch or invalid audit token")
-            connection.invalidate()
-            return false
-        }
-        let interface = NSXPCInterface(with: ClawdisXPCProtocol.self)
-        connection.exportedInterface = interface
-        connection.exportedObject = ClawdisXPCService()
-        connection.resume()
-        return true
-    }
-
     private func isDuplicateInstance() -> Bool {
         guard let bundleID = Bundle.main.bundleIdentifier else { return false }
         let running = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == bundleID }
         return running.count > 1
     }
-
-    private func isAllowed(connection: NSXPCConnection) -> Bool {
-        let pid = connection.processIdentifier
-        guard pid > 0 else { return false }
-
-        // Same-user shortcut: allow quickly when caller uid == ours.
-        if let callerUID = self.uid(for: pid), callerUID == getuid() {
-            return true
-        }
-
-        let attrs: NSDictionary = [kSecGuestAttributePid: pid]
-        if self.teamIDMatches(attrs: attrs) { return true }
-
-        return false
-    }
-
-    private func uid(for pid: pid_t) -> uid_t? {
-        var info = kinfo_proc()
-        var size = MemoryLayout.size(ofValue: info)
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-        let ok = mib.withUnsafeMutableBufferPointer { mibPtr -> Bool in
-            return sysctl(mibPtr.baseAddress, u_int(mibPtr.count), &info, &size, nil, 0) == 0
-        }
-        return ok ? info.kp_eproc.e_ucred.cr_uid : nil
-    }
-
-    private func teamIDMatches(attrs: NSDictionary) -> Bool {
-        var secCode: SecCode?
-        guard SecCodeCopyGuestWithAttributes(nil, attrs, SecCSFlags(), &secCode) == errSecSuccess,
-              let code = secCode else { return false }
-
-        var staticCode: SecStaticCode?
-        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
-              let sCode = staticCode else { return false }
-
-        var infoCF: CFDictionary?
-        guard SecCodeCopySigningInformation(sCode, SecCSFlags(), &infoCF) == errSecSuccess,
-              let info = infoCF as? [String: Any],
-              let teamID = info[kSecCodeInfoTeamIdentifier as String] as? String
-        else {
-            return false
-        }
-
-        return self.allowedTeamIDs.contains(teamID)
-    }
-
-    @MainActor
-    private func writeEndpoint(_ endpoint: NSXPCListenerEndpoint) {}
-    @MainActor private func writeEndpointIfAvailable() {}
 }
 
 // MARK: - Sparkle updater (disabled for unsigned/dev builds)

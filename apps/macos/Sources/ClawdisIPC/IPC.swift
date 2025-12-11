@@ -156,3 +156,10 @@ extension Request: Codable {
         }
     }
 }
+
+// Shared transport settings
+public let controlSocketPath =
+    FileManager.default
+        .homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/clawdis/control.sock")
+        .path
