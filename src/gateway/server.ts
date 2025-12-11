@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
 import { createDefaultDeps } from "../cli/deps.js";
@@ -17,7 +18,7 @@ import {
 } from "../config/sessions.js";
 import { isVerbose } from "../globals.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import { GatewayLockError } from "../infra/gateway-lock.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   listSystemPresence,
@@ -255,15 +256,38 @@ export async function startGatewayServer(
   port = 18789,
   opts?: { webchatPort?: number },
 ): Promise<GatewayServer> {
-  const releaseLock = await acquireGatewayLock().catch((err) => {
-    // Bubble known lock errors so callers can present a nice message.
-    if (err instanceof GatewayLockError) throw err;
-    throw new GatewayLockError(String(err));
-  });
+  const host = "127.0.0.1";
+  const httpServer: HttpServer = createHttpServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onError = (err: NodeJS.ErrnoException) => {
+        httpServer.off("listening", onListening);
+        reject(err);
+      };
+      const onListening = () => {
+        httpServer.off("error", onError);
+        resolve();
+      };
+      httpServer.once("error", onError);
+      httpServer.once("listening", onListening);
+      httpServer.listen(port, host);
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EADDRINUSE") {
+      throw new GatewayLockError(
+        `another gateway instance is already listening on ws://${host}:${port}`,
+        err,
+      );
+    }
+    throw new GatewayLockError(
+      `failed to bind gateway socket on ws://${host}:${port}: ${String(err)}`,
+      err,
+    );
+  }
 
   const wss = new WebSocketServer({
-    port,
-    host: "127.0.0.1",
+    server: httpServer,
     maxPayload: MAX_PAYLOAD_BYTES,
   });
   const providerAbort = new AbortController();
@@ -1183,7 +1207,6 @@ export async function startGatewayServer(
 
   return {
     close: async () => {
-      await releaseLock();
       providerAbort.abort();
       broadcast("shutdown", {
         reason: "gateway stopping",
@@ -1211,6 +1234,9 @@ export async function startGatewayServer(
       clients.clear();
       await Promise.allSettled(providerTasks);
       await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve, reject) =>
+        httpServer.close((err) => (err ? reject(err) : resolve())),
+      );
     },
   };
 }

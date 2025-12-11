@@ -1,28 +1,28 @@
 ---
-summary: "Gateway lock strategy using POSIX flock and PID file"
+summary: "Gateway singleton guard using the WebSocket listener bind"
 read_when:
   - Running or debugging the gateway process
   - Investigating single-instance enforcement
 ---
 # Gateway lock
 
-Last updated: 2025-12-10
+Last updated: 2025-12-11
 
 ## Why
 - Ensure only one gateway instance runs per host.
-- Survive crashes/SIGKILL without leaving a blocking stale lock.
-- Keep the PID visible for observability and manual debugging.
+- Survive crashes/SIGKILL without leaving stale lock files.
+- Fail fast with a clear error when the control port is already occupied.
 
 ## Mechanism
-- Uses a single lock file (default `${os.tmpdir()}/clawdis-gateway.lock`, e.g. `/var/folders/.../clawdis-gateway.lock` on macOS) opened once per process.
-- An exclusive, non-blocking POSIX `flock` is taken on the file descriptor. The kernel releases the lock automatically on any process exit, including crashes and SIGKILL.
-- The PID is written into the same file after locking; the lock (not file existence) is the source of truth.
-- On graceful shutdown, we best-effort unlock, close, and unlink the file to reduce crumbs, but correctness does not rely on cleanup.
+- The gateway binds the WebSocket listener (default `ws://127.0.0.1:18789`) immediately on startup using an exclusive TCP listener.
+- If the bind fails with `EADDRINUSE`, startup throws `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`.
+- The OS releases the listener automatically on any process exit, including crashes and SIGKILL—no separate lock file or cleanup step is needed.
+- On shutdown the gateway closes the WebSocket server and underlying HTTP server to free the port promptly.
 
 ## Error surface
-- If another instance holds the lock, startup throws `GatewayLockError("another gateway instance is already running")`.
-- Unexpected `flock` failures surface as `GatewayLockError("failed to acquire gateway lock: …")`.
+- If another process holds the port, startup throws `GatewayLockError("another gateway instance is already listening on ws://127.0.0.1:<port>")`.
+- Other bind failures surface as `GatewayLockError("failed to bind gateway socket on ws://127.0.0.1:<port>: …")`.
 
 ## Operational notes
-- The lock file may remain on disk after abnormal exits; this is expected and harmless because the kernel lock is gone.
-- If you need to inspect, `cat /tmp/clawdis-gateway.lock` shows the last PID. Do not delete the file while a process is running—you would only remove the convenience marker, not the lock itself.
+- If the port is occupied by *another* process, the error is the same; free the port or choose another with `clawdis gateway --port <port>`.
+- The macOS app still maintains its own lightweight PID guard before spawning the gateway; the runtime lock is enforced by the WebSocket bind.

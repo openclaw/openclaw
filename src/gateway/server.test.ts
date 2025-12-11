@@ -1,11 +1,9 @@
-import { randomUUID } from "node:crypto";
 import { type AddressInfo, createServer } from "node:net";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { startGatewayServer } from "./server.js";
+import { GatewayLockError } from "../infra/gateway-lock.js";
 
 vi.mock("../commands/health.js", () => ({
   getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
@@ -27,25 +25,23 @@ vi.mock("../commands/agent.js", () => ({
 
 process.env.CLAWDIS_SKIP_PROVIDERS = "1";
 
-const originalLockPath = process.env.CLAWDIS_GATEWAY_LOCK_PATH;
-
-beforeEach(() => {
-  process.env.CLAWDIS_GATEWAY_LOCK_PATH = path.join(
-    os.tmpdir(),
-    `clawdis-gateway-${randomUUID()}.lock`,
-  );
-});
-
-afterEach(() => {
-  process.env.CLAWDIS_GATEWAY_LOCK_PATH = originalLockPath;
-});
-
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const server = createServer();
     server.listen(0, "127.0.0.1", () => {
       const port = (server.address() as AddressInfo).port;
       server.close((err) => (err ? reject(err) : resolve(port)));
+    });
+  });
+}
+
+async function occupyPort(): Promise<{ server: ReturnType<typeof createServer>; port: number }> {
+  return await new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const port = (server.address() as AddressInfo).port;
+      resolve({ server, port });
     });
   });
 }
@@ -653,5 +649,13 @@ describe("gateway server", () => {
 
     ws.close();
     await server.close();
+  });
+
+  test("refuses to start when port already bound", async () => {
+    const { server: blocker, port } = await occupyPort();
+    await expect(startGatewayServer(port)).rejects.toBeInstanceOf(
+      GatewayLockError,
+    );
+    blocker.close();
   });
 });
