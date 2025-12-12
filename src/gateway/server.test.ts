@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
@@ -787,6 +788,47 @@ describe("gateway server", () => {
     expect(clientEntry?.host).toBe("fingerprint");
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("cli connections are not tracked as instances", async () => {
+    const { server, ws } = await startServerWithClient();
+    const cliId = `cli-${randomUUID()}`;
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: {
+          name: "cli",
+          version: "dev",
+          platform: "test",
+          mode: "cli",
+          instanceId: cliId,
+        },
+        caps: [],
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "hello-ok");
+
+    const presenceP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "cli-presence",
+      4000,
+    );
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "cli-presence",
+        method: "system-presence",
+      }),
+    );
+
+    const presenceRes = await presenceP;
+    const entries = presenceRes.payload as Array<Record<string, unknown>>;
+    expect(entries.some((e) => e.instanceId === cliId)).toBe(false);
 
     ws.close();
     await server.close();

@@ -44,6 +44,10 @@ This is meant to answer: “Which clients are currently connected?”
 
 Implementation: `src/gateway/server.ts` (WS `hello` handling uses `hello.client.instanceId` when provided; otherwise falls back to `connId`).
 
+#### Why one-off CLI commands do not show up
+
+The CLI connects to the Gateway to execute one-off commands (health/status/send/agent/etc.). These are not “nodes” and would spam the Instances list, so the Gateway does not create presence entries for clients with `client.mode === "cli"`.
+
 ### 3) `system-event` beacons (client-reported presence)
 
 Clients can publish richer periodic beacons via the `system-event` method. The mac app uses this to report:
@@ -112,4 +116,3 @@ The store refreshes periodically and also applies `presence` WS events.
   - confirm clients send a stable `instanceId` in `hello`
   - confirm beaconing uses the same `instanceId`
   - check whether the connection-derived entry is missing `instanceId` (then it will be keyed by `connId` and duplicates are expected on reconnect)
-

@@ -58,6 +58,7 @@ type Client = {
   socket: WebSocket;
   hello: Hello;
   connId: string;
+  presenceKey?: string;
 };
 
 const METHODS = [
@@ -545,10 +546,9 @@ export async function startGatewayServer(
           `webchat disconnected code=${code} reason=${reason?.toString() || "n/a"} conn=${connId}`,
         );
       }
-      if (client) {
+      if (client?.presenceKey) {
         // mark presence as disconnected
-        const key = client.hello.client.instanceId || connId;
-        upsertPresence(key, {
+        upsertPresence(client.presenceKey, {
           reason: "disconnect",
         });
         presenceVersion += 1;
@@ -639,8 +639,11 @@ export async function startGatewayServer(
             return;
           }
 
+          const shouldTrackPresence = hello.client.mode !== "cli";
           // synthesize presence entry for this connection (client fingerprint)
-          const presenceKey = hello.client.instanceId || connId;
+          const presenceKey = shouldTrackPresence
+            ? hello.client.instanceId || connId
+            : undefined;
           logWs("in", "hello", {
             connId,
             client: hello.client.name,
@@ -655,15 +658,17 @@ export async function startGatewayServer(
               `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
             );
           }
-          upsertPresence(presenceKey, {
-            host: hello.client.name || os.hostname(),
-            ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
-            version: hello.client.version,
-            mode: hello.client.mode,
-            instanceId: hello.client.instanceId,
-            reason: "connect",
-          });
-          presenceVersion += 1;
+          if (presenceKey) {
+            upsertPresence(presenceKey, {
+              host: hello.client.name || os.hostname(),
+              ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
+              version: hello.client.version,
+              mode: hello.client.mode,
+              instanceId: hello.client.instanceId,
+              reason: "connect",
+            });
+            presenceVersion += 1;
+          }
           const snapshot = buildSnapshot();
           if (healthCache) {
             snapshot.health = healthCache;
@@ -692,7 +697,7 @@ export async function startGatewayServer(
           clearTimeout(handshakeTimer);
           // Add the client only after the hello response is ready so no tick/presence
           // events reach it before the handshake completes.
-          client = { socket, hello, connId };
+          client = { socket, hello, connId, presenceKey };
           logWs("out", "hello-ok", {
             connId,
             methods: METHODS.length,

@@ -70,7 +70,10 @@ final class PresenceReporter {
     private static func appVersionString() -> String {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
-            return "\(version) (\(build))"
+            let trimmed = build.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, trimmed != version {
+                return "\(version) (\(trimmed))"
+            }
         }
         return version
     }
