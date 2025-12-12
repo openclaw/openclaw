@@ -106,33 +106,46 @@ final class VoiceWakeManager: NSObject, ObservableObject {
 
         self.recognitionTask = self.speechRecognizer?.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
-            if let error {
-                self.statusText = "Recognizer error: \(error.localizedDescription)"
-                self.isListening = false
-                if self.isEnabled {
-                    Task {
-                        try? await Task.sleep(nanoseconds: 700_000_000)
-                        await self.start()
-                    }
-                }
-                return
+            Task { @MainActor in
+                self.handleRecognitionCallback(result: result, error: error)
             }
-            guard let result else { return }
+        }
+    }
 
-            let transcript = result.bestTranscription.formattedString
-            if let cmd = self.extractCommand(from: transcript) {
-                if cmd != self.lastDispatched {
-                    self.lastDispatched = cmd
-                    self.statusText = "Triggered"
-                    Task { [weak self] in
-                        guard let self else { return }
-                        await self.onCommand?(cmd)
-                        if self.isEnabled {
-                            await self.start()
-                        }
-                    }
+    private func handleRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?) {
+        if let error {
+            self.statusText = "Recognizer error: \(error.localizedDescription)"
+            self.isListening = false
+
+            let shouldRestart = self.isEnabled
+            if shouldRestart {
+                Task {
+                    try? await Task.sleep(nanoseconds: 700_000_000)
+                    await self.start()
                 }
             }
+            return
+        }
+
+        guard let result else { return }
+        let transcript = result.bestTranscription.formattedString
+        guard let cmd = self.extractCommand(from: transcript) else { return }
+
+        if cmd == self.lastDispatched { return }
+        self.lastDispatched = cmd
+        self.statusText = "Triggered"
+
+        Task { [weak self] in
+            guard let self else { return }
+            await self.onCommand?(cmd)
+            await self.startIfEnabled()
+        }
+    }
+
+    private func startIfEnabled() async {
+        let shouldRestart = self.isEnabled
+        if shouldRestart {
+            await self.start()
         }
     }
 
@@ -150,7 +163,7 @@ final class VoiceWakeManager: NSObject, ObservableObject {
         try session.setCategory(.playAndRecord, mode: .measurement, options: [
             .duckOthers,
             .mixWithOthers,
-            .allowBluetooth,
+            .allowBluetoothHFP,
             .defaultToSpeaker,
         ])
         try session.setActive(true, options: [])
@@ -158,8 +171,10 @@ final class VoiceWakeManager: NSObject, ObservableObject {
 
     private static func requestMicrophonePermission() async -> Bool {
         await withCheckedContinuation { cont in
-            AVAudioSession.sharedInstance().requestRecordPermission { ok in
-                cont.resume(returning: ok)
+            AVAudioApplication.requestRecordPermission { ok in
+                Task { @MainActor in
+                    cont.resume(returning: ok)
+                }
             }
         }
     }
@@ -167,7 +182,9 @@ final class VoiceWakeManager: NSObject, ObservableObject {
     private static func requestSpeechPermission() async -> Bool {
         await withCheckedContinuation { cont in
             SFSpeechRecognizer.requestAuthorization { status in
-                cont.resume(returning: status == .authorized)
+                Task { @MainActor in
+                    cont.resume(returning: status == .authorized)
+                }
             }
         }
     }
