@@ -72,11 +72,21 @@ clawdis gateway --force
 
 ## macOS Companion App (Clawdis.app)
 
-- **On-device Voice Wake:** listens for wake words (e.g. “Claude”) using Apple’s on-device speech recognizer (macOS 26+). macOS still shows the standard Speech/Mic permissions prompt, but audio stays on device. Replies are delivered to the **last-used main surface** (WhatsApp/Telegram/WebChat); if delivery fails, you can still inspect the run in WebChat/logs.
+- **On-device Voice Wake:** listens for wake words (e.g. “Claude”) using Apple’s on-device speech recognizer (macOS 26+). macOS still shows the standard Speech/Mic permissions prompt, but audio stays on device.
 - **Push-to-talk (Right Option hold):** hold right Option to speak; the voice overlay shows live partials and sends when you release.
 - **Config tab:** pick the model from your local Pi model catalog (`pi-mono/packages/ai/src/models.generated.ts`), or enter a custom model ID; edit session store path and context tokens.
 - **Voice settings:** language + additional languages, mic picker, live level meter, trigger-word table, and a built-in test harness.
 - **Menu bar toggle:** enable/disable Voice Wake from the menu bar; respects Dock-icon preference.
+
+### Voice Wake reply routing
+
+Voice Wake sends messages into the `main` session and replies on the **last used surface**:
+
+- WhatsApp: last direct message you sent/received.
+- Telegram: last DM chat id (bot mode).
+- WebChat: last WebChat thread you used.
+
+If delivery fails (e.g. WhatsApp disconnected / Telegram token missing), Clawdis logs the error and you can still inspect the run via WebChat/session logs.
 
 Build/run the mac app with `./scripts/restart-mac.sh` (packages, installs, and launches), or `swift build --package-path apps/macos && open dist/Clawdis.app`.
 
