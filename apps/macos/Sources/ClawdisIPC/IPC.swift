@@ -21,8 +21,23 @@ public enum NotificationPriority: String, Codable, Sendable {
     case timeSensitive // breaks through Focus modes
 }
 
+/// Notification delivery mechanism.
+public enum NotificationDelivery: String, Codable, Sendable {
+    /// Use macOS notification center (UNUserNotificationCenter).
+    case system
+    /// Use an in-app overlay/toast (no Notification Center history).
+    case overlay
+    /// Prefer system; fall back to overlay when system isn't available.
+    case auto
+}
+
 public enum Request: Sendable {
-    case notify(title: String, body: String, sound: String?, priority: NotificationPriority?)
+    case notify(
+        title: String,
+        body: String,
+        sound: String?,
+        priority: NotificationPriority?,
+        delivery: NotificationDelivery?)
     case ensurePermissions([Capability], interactive: Bool)
     case screenshot(displayID: UInt32?, windowID: UInt32?, format: String)
     case runShell(
@@ -56,7 +71,7 @@ public struct Response: Codable, Sendable {
 extension Request: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
-        case title, body, sound, priority
+        case title, body, sound, priority, delivery
         case caps, interactive
         case displayID, windowID, format
         case command, cwd, env, timeoutSec, needsScreenRecording
@@ -77,12 +92,13 @@ extension Request: Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .notify(title, body, sound, priority):
+        case let .notify(title, body, sound, priority, delivery):
             try container.encode(Kind.notify, forKey: .type)
             try container.encode(title, forKey: .title)
             try container.encode(body, forKey: .body)
             try container.encodeIfPresent(sound, forKey: .sound)
             try container.encodeIfPresent(priority, forKey: .priority)
+            try container.encodeIfPresent(delivery, forKey: .delivery)
 
         case let .ensurePermissions(caps, interactive):
             try container.encode(Kind.ensurePermissions, forKey: .type)
@@ -128,7 +144,8 @@ extension Request: Codable {
             let body = try container.decode(String.self, forKey: .body)
             let sound = try container.decodeIfPresent(String.self, forKey: .sound)
             let priority = try container.decodeIfPresent(NotificationPriority.self, forKey: .priority)
-            self = .notify(title: title, body: body, sound: sound, priority: priority)
+            let delivery = try container.decodeIfPresent(NotificationDelivery.self, forKey: .delivery)
+            self = .notify(title: title, body: body, sound: sound, priority: priority, delivery: delivery)
 
         case .ensurePermissions:
             let caps = try container.decode([Capability].self, forKey: .caps)

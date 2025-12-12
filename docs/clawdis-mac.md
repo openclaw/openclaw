@@ -64,13 +64,14 @@ struct Response { ok: Bool; message?: String; payload?: Data }
 
 ## CLI (`clawdis-mac`)
 - Subcommands (JSON out, non-zero exit on failure):
-  - `notify --title --body [--sound] [--priority passive|active|timeSensitive]`
+  - `notify --title --body [--sound] [--priority passive|active|timeSensitive] [--delivery system|overlay|auto]`
   - `ensure-permissions --cap accessibility --cap screenRecording [--interactive]`
   - `screenshot [--display-id N | --window-id N] [--out path]`
   - `run -- cmd args... [--cwd] [--env KEY=VAL] [--timeout 30] [--needs-screen-recording]`
   - `status`
 - Sounds: supply any macOS alert name with `--sound` per notification; omit the flag to use the system default. There is no longer a persisted “default sound” in the app UI.
 - Priority: `timeSensitive` is best-effort and falls back to `active` unless the app is signed with the Time Sensitive Notifications entitlement.
+- Delivery: `overlay` and `auto` show an in-app toast panel (bypasses Notification Center/Focus).
 - Internals: builds Request, connects via AsyncXPCConnection, prints Response as JSON to stdout.
 
 ## Integration with clawdis/Clawdis (Node/TS)

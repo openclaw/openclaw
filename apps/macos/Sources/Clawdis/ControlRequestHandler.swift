@@ -14,10 +14,29 @@ enum ControlRequestHandler {
         }
 
         switch request {
-        case let .notify(title, body, sound, priority):
+        case let .notify(title, body, sound, priority, delivery):
             let chosenSound = sound?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let ok = await notifier.send(title: title, body: body, sound: chosenSound, priority: priority)
-            return ok ? Response(ok: true) : Response(ok: false, message: "notification not authorized")
+            let chosenDelivery = delivery ?? .system
+
+            switch chosenDelivery {
+            case .system:
+                let ok = await notifier.send(title: title, body: body, sound: chosenSound, priority: priority)
+                return ok ? Response(ok: true) : Response(ok: false, message: "notification not authorized")
+
+            case .overlay:
+                await MainActor.run {
+                    NotifyOverlayController.shared.present(title: title, body: body)
+                }
+                return Response(ok: true)
+
+            case .auto:
+                let ok = await notifier.send(title: title, body: body, sound: chosenSound, priority: priority)
+                if ok { return Response(ok: true) }
+                await MainActor.run {
+                    NotifyOverlayController.shared.present(title: title, body: body)
+                }
+                return Response(ok: true, message: "notification not authorized; used overlay")
+            }
 
         case let .ensurePermissions(caps, interactive):
             let statuses = await PermissionManager.ensure(caps, interactive: interactive)
