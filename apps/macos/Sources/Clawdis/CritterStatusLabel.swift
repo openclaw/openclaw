@@ -27,98 +27,95 @@ struct CritterStatusLabel: View {
     }
 
     var body: some View {
-        ZStack(alignment: .bottomTrailing) {
-            Group {
-                if self.isPaused {
-                    Image(nsImage: CritterIconRenderer.makeIcon(blink: 0))
-                        .frame(width: 18, height: 18)
-                } else {
-                    Image(nsImage: CritterIconRenderer.makeIcon(
-                        blink: self.blinkAmount,
-                        legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
-                        earWiggle: self.earWiggle,
-                        earScale: self.earBoostActive ? 1.9 : 1.0,
-                        earHoles: self.earBoostActive))
-                        .frame(width: 18, height: 18)
-                        .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
-                        .offset(x: self.wiggleOffset)
-                        .onReceive(self.ticker) { now in
-                            guard self.animationsEnabled, !self.earBoostActive else {
-                                self.resetMotion()
-                                return
-                            }
+        ZStack(alignment: .topTrailing) {
+            self.iconImage
+                .frame(width: 18, height: 18)
+                .rotationEffect(.degrees(self.wiggleAngle), anchor: .center)
+                .offset(x: self.wiggleOffset)
+                .onReceive(self.ticker) { now in
+                    guard self.animationsEnabled, !self.earBoostActive else {
+                        self.resetMotion()
+                        return
+                    }
 
-                            if now >= self.nextBlink {
-                                self.blink()
-                                self.nextBlink = now.addingTimeInterval(Double.random(in: 3.5...8.5))
-                            }
+                    if now >= self.nextBlink {
+                        self.blink()
+                        self.nextBlink = now.addingTimeInterval(Double.random(in: 3.5...8.5))
+                    }
 
-                            if now >= self.nextWiggle {
-                                self.wiggle()
-                                self.nextWiggle = now.addingTimeInterval(Double.random(in: 6.5...14))
-                            }
+                    if now >= self.nextWiggle {
+                        self.wiggle()
+                        self.nextWiggle = now.addingTimeInterval(Double.random(in: 6.5...14))
+                    }
 
-                            if now >= self.nextLegWiggle {
-                                self.wiggleLegs()
-                                self.nextLegWiggle = now.addingTimeInterval(Double.random(in: 5.0...11.0))
-                            }
+                    if now >= self.nextLegWiggle {
+                        self.wiggleLegs()
+                        self.nextLegWiggle = now.addingTimeInterval(Double.random(in: 5.0...11.0))
+                    }
 
-                            if now >= self.nextEarWiggle {
-                                self.wiggleEars()
-                                self.nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0...14.0))
-                            }
+                    if now >= self.nextEarWiggle {
+                        self.wiggleEars()
+                        self.nextEarWiggle = now.addingTimeInterval(Double.random(in: 7.0...14.0))
+                    }
 
-                            if self.isWorkingNow {
-                                self.scurry()
-                            }
-                        }
-                        .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
-                        .onChange(of: self.blinkTick) { _, _ in
-                            guard !self.earBoostActive else { return }
-                            self.blink()
-                        }
-                        .onChange(of: self.sendCelebrationTick) { _, _ in
-                            guard !self.earBoostActive else { return }
-                            self.wiggleLegs()
-                        }
-                        .onChange(of: self.animationsEnabled) { _, enabled in
-                            if enabled {
-                                self.scheduleRandomTimers(from: Date())
-                            } else {
-                                self.resetMotion()
-                            }
-                        }
-                        .onChange(of: self.earBoostActive) { _, active in
-                            if active {
-                                self.resetMotion()
-                            } else if self.animationsEnabled {
-                                self.scheduleRandomTimers(from: Date())
-                            }
-                        }
+                    if self.isWorkingNow {
+                        self.scurry()
+                    }
                 }
-            }
+                .onChange(of: self.isPaused) { _, _ in self.resetMotion() }
+                .onChange(of: self.blinkTick) { _, _ in
+                    guard !self.earBoostActive else { return }
+                    self.blink()
+                }
+                .onChange(of: self.sendCelebrationTick) { _, _ in
+                    guard !self.earBoostActive else { return }
+                    self.wiggleLegs()
+                }
+                .onChange(of: self.animationsEnabled) { _, enabled in
+                    if enabled {
+                        self.scheduleRandomTimers(from: Date())
+                    } else {
+                        self.resetMotion()
+                    }
+                }
+                .onChange(of: self.earBoostActive) { _, active in
+                    if active {
+                        self.resetMotion()
+                    } else if self.animationsEnabled {
+                        self.scheduleRandomTimers(from: Date())
+                    }
+                }
 
             if self.gatewayNeedsAttention {
                 Circle()
                     .fill(self.gatewayBadgeColor)
-                    .frame(width: 8, height: 8)
-                    .offset(x: 4, y: 4)
-            }
-
-            if case .idle = self.iconState {
-                EmptyView()
-            } else {
-                Text(self.iconState.glyph)
-                    .font(.system(size: 9))
-                    .padding(3)
-                    .background(
-                        Circle()
-                            .fill(self.iconState.tint.opacity(0.9)))
-                    .foregroundStyle(Color.white)
-                    .offset(x: -4, y: -2)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                    .frame(width: 6, height: 6)
+                    .padding(1)
             }
         }
+        .frame(width: 18, height: 18)
+    }
+
+    private var iconImage: Image {
+        let badge: CritterIconRenderer.Badge? = if let prominence = self.iconState.badgeProminence, !self.isPaused {
+            CritterIconRenderer.Badge(
+                symbolName: self.iconState.badgeSymbolName,
+                prominence: prominence)
+        } else {
+            nil
+        }
+
+        if self.isPaused {
+            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 0, badge: nil))
+        }
+
+        return Image(nsImage: CritterIconRenderer.makeIcon(
+            blink: self.blinkAmount,
+            legWiggle: max(self.legWiggle, self.isWorkingNow ? 0.6 : 0),
+            earWiggle: self.earWiggle,
+            earScale: self.earBoostActive ? 1.9 : 1.0,
+            earHoles: self.earBoostActive,
+            badge: badge))
     }
 
     private func resetMotion() {
@@ -213,12 +210,26 @@ struct CritterStatusLabel: View {
 enum CritterIconRenderer {
     private static let size = NSSize(width: 18, height: 18)
 
+    struct Badge {
+        let symbolName: String
+        let prominence: IconState.BadgeProminence
+    }
+
+    private struct Canvas {
+        let w: CGFloat
+        let h: CGFloat
+        let snapX: (CGFloat) -> CGFloat
+        let snapY: (CGFloat) -> CGFloat
+        let context: CGContext
+    }
+
     static func makeIcon(
         blink: CGFloat,
         legWiggle: CGFloat = 0,
         earWiggle: CGFloat = 0,
         earScale: CGFloat = 1,
-        earHoles: Bool = false) -> NSImage
+        earHoles: Bool = false,
+        badge: Badge? = nil) -> NSImage
     {
         // Force a 36×36px backing store (2× for the 18pt logical canvas) so the menu bar icon stays crisp on Retina.
         let pixelsWide = 36
@@ -371,6 +382,12 @@ enum CritterIconRenderer {
             context.cgContext.addPath(right)
             context.cgContext.fillPath()
             context.cgContext.restoreGState()
+
+            if let badge {
+                self.drawBadge(
+                    badge,
+                    canvas: Canvas(w: w, h: h, snapX: snapX, snapY: snapY, context: context.cgContext))
+            }
         } else {
             NSGraphicsContext.restoreGraphicsState()
             return NSImage(size: self.size)
@@ -380,5 +397,61 @@ enum CritterIconRenderer {
         image.addRepresentation(rep)
         image.isTemplate = true
         return image
+    }
+
+    private static func drawBadge(_ badge: Badge, canvas: Canvas) {
+        let strength: CGFloat = switch badge.prominence {
+        case .primary: 1.0
+        case .secondary: 0.58
+        case .overridden: 0.85
+        }
+
+        let diameter = canvas.snapX(canvas.w * 0.44) // ~8pt on an 18pt canvas
+        let margin = canvas.snapX(max(0.6, canvas.w * 0.04))
+        let rect = CGRect(
+            x: canvas.snapX(canvas.w - diameter - margin),
+            y: canvas.snapY(margin),
+            width: diameter,
+            height: diameter)
+
+        canvas.context.saveGState()
+        canvas.context.setShouldAntialias(true)
+
+        // Clear the underlying pixels so the badge stays readable over the critter.
+        canvas.context.saveGState()
+        canvas.context.setBlendMode(.clear)
+        canvas.context.addEllipse(in: rect.insetBy(dx: -0.7, dy: -0.7))
+        canvas.context.fillPath()
+        canvas.context.restoreGState()
+
+        let fillAlpha: CGFloat = 0.33 * strength
+        let strokeAlpha: CGFloat = 0.92 * strength
+        let symbolAlpha: CGFloat = 0.98 * strength
+
+        canvas.context.setFillColor(NSColor.labelColor.withAlphaComponent(fillAlpha).cgColor)
+        canvas.context.addEllipse(in: rect)
+        canvas.context.fillPath()
+
+        canvas.context.setStrokeColor(NSColor.labelColor.withAlphaComponent(strokeAlpha).cgColor)
+        canvas.context.setLineWidth(max(1.0, canvas.snapX(canvas.w * 0.065)))
+        canvas.context.strokeEllipse(in: rect.insetBy(dx: 0.35, dy: 0.35))
+
+        if let base = NSImage(systemSymbolName: badge.symbolName, accessibilityDescription: nil) {
+            let pointSize = max(5.0, diameter * 0.62)
+            let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
+            let symbol = base.withSymbolConfiguration(config) ?? base
+            symbol.isTemplate = true
+
+            let symbolRect = rect.insetBy(dx: diameter * 0.20, dy: diameter * 0.20)
+            symbol.draw(
+                in: symbolRect,
+                from: .zero,
+                operation: .sourceOver,
+                fraction: symbolAlpha,
+                respectFlipped: true,
+                hints: nil)
+        }
+
+        canvas.context.restoreGState()
     }
 }

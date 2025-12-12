@@ -21,23 +21,29 @@ enum IconState: Equatable {
     case workingOther(ActivityKind)
     case overridden(ActivityKind)
 
-    var glyph: String {
+    enum BadgeProminence: Equatable {
+        case primary
+        case secondary
+        case overridden
+    }
+
+    var badgeSymbolName: String {
         switch self.activity {
-        case .tool(.bash): "💻"
-        case .tool(.read): "📄"
-        case .tool(.write): "✍️"
-        case .tool(.edit): "📝"
-        case .tool(.attach): "📎"
-        case .tool(.other), .job: "🛠️"
+        case .tool(.bash): "terminal.fill"
+        case .tool(.read): "doc.text.magnifyingglass"
+        case .tool(.write): "pencil"
+        case .tool(.edit): "square.and.pencil"
+        case .tool(.attach): "paperclip"
+        case .tool(.other), .job: "wrench.and.screwdriver.fill"
         }
     }
 
-    var tint: Color {
+    var badgeProminence: BadgeProminence? {
         switch self {
-        case .workingMain: .accentColor
-        case .workingOther: .gray
-        case .overridden: .orange
-        case .idle: .clear
+        case .idle: nil
+        case .workingMain: .primary
+        case .workingOther: .secondary
+        case .overridden: .overridden
         }
     }
 
