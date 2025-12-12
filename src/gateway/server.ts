@@ -34,9 +34,9 @@ import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { sendMessageTelegram } from "../telegram/send.js";
+import { normalizeE164 } from "../utils.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { ensureWebChatServerFromConfig } from "../webchat/server.js";
-import { normalizeE164 } from "../utils.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
   ErrorCodes,

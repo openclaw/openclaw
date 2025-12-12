@@ -244,9 +244,16 @@ describe("partial reply gating", () => {
       replyResolver,
     );
 
-    const stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-      main?: { lastChannel?: string; lastTo?: string };
-    };
+    let stored: { main?: { lastChannel?: string; lastTo?: string } } | null =
+      null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+        main?: { lastChannel?: string; lastTo?: string };
+      };
+      if (stored.main?.lastChannel && stored.main?.lastTo) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (!stored) throw new Error("store not loaded");
     expect(stored.main?.lastChannel).toBe("whatsapp");
     expect(stored.main?.lastTo).toBe("+1000");
 

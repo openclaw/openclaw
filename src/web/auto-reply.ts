@@ -752,6 +752,7 @@ export async function monitorWebProvider(
     // Batch inbound messages per conversation while command queue is busy.
     type PendingBatch = { messages: WebInboundMsg[]; timer?: NodeJS.Timeout };
     const pendingBatches = new Map<string, PendingBatch>();
+    const backgroundTasks = new Set<Promise<unknown>>();
 
     const buildLine = (msg: WebInboundMsg) => {
       // Build message prefix: explicit config > default based on allowFrom
@@ -863,7 +864,7 @@ export async function monitorWebProvider(
           return normalizeE164(latest.from);
         })();
         if (to) {
-          void updateLastRoute({
+          const task = updateLastRoute({
             storePath,
             sessionKey: mainKey,
             channel: "whatsapp",
@@ -873,6 +874,10 @@ export async function monitorWebProvider(
               { error: String(err), storePath, sessionKey: mainKey, to },
               "failed updating last route",
             );
+          });
+          backgroundTasks.add(task);
+          task.finally(() => {
+            backgroundTasks.delete(task);
           });
         }
       }
@@ -1053,6 +1058,10 @@ export async function monitorWebProvider(
       if (heartbeat) clearInterval(heartbeat);
       if (replyHeartbeatTimer) clearInterval(replyHeartbeatTimer);
       if (watchdogTimer) clearInterval(watchdogTimer);
+      if (backgroundTasks.size > 0) {
+        await Promise.allSettled(backgroundTasks);
+        backgroundTasks.clear();
+      }
       try {
         await listener.close();
       } catch (err) {

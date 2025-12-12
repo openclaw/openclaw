@@ -269,8 +269,53 @@ Examples:
       if (opts.token) {
         process.env.CLAWDIS_GATEWAY_TOKEN = String(opts.token);
       }
+
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+      let shuttingDown = false;
+      let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const onSigterm = () => shutdown("SIGTERM");
+      const onSigint = () => shutdown("SIGINT");
+
+      const shutdown = (signal: string) => {
+        // Ensure we don't leak listeners across restarts/tests.
+        process.removeListener("SIGTERM", onSigterm);
+        process.removeListener("SIGINT", onSigint);
+
+        if (shuttingDown) {
+          defaultRuntime.log(
+            info(`gateway: received ${signal} during shutdown; exiting now`),
+          );
+          defaultRuntime.exit(0);
+        }
+        shuttingDown = true;
+        defaultRuntime.log(info(`gateway: received ${signal}; shutting down`));
+
+        // Avoid hanging forever if a provider task ignores abort.
+        forceExitTimer = setTimeout(() => {
+          defaultRuntime.error(
+            "gateway: shutdown timed out; exiting without full cleanup",
+          );
+          defaultRuntime.exit(0);
+        }, 5000);
+
+        void (async () => {
+          try {
+            await server?.close();
+          } catch (err) {
+            defaultRuntime.error(`gateway: shutdown error: ${String(err)}`);
+          } finally {
+            if (forceExitTimer) clearTimeout(forceExitTimer);
+            defaultRuntime.exit(0);
+          }
+        })();
+      };
+
+      process.once("SIGTERM", onSigterm);
+      process.once("SIGINT", onSigint);
+
       try {
-        await startGatewayServer(port, { webchatPort });
+        server = await startGatewayServer(port, { webchatPort });
       } catch (err) {
         if (err instanceof GatewayLockError) {
           defaultRuntime.error(`Gateway failed to start: ${err.message}`);

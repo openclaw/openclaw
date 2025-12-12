@@ -157,7 +157,10 @@ describe("gateway server", () => {
         },
       }),
     );
-    await onceMessage(ws, (o) => o.type === "res" && o.id === "agent-last-stale");
+    await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "agent-last-stale",
+    );
 
     const spy = vi.mocked(agentCommand);
     expect(spy).toHaveBeenCalled();
