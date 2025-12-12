@@ -221,11 +221,10 @@ class TauRpcClient {
       const ok = child.stdin.write(
         `${JSON.stringify({
           type: "prompt",
-          // Send structured content to match tau RPC expectations and avoid
-          // empty-text bugs on older builds.
-          message: {
-            content: [{ type: "text", text: prompt }],
-          },
+          // Pi/Tau RPC expects a plain string prompt.
+          // (The structured { content: [{type:"text", text}] } shape is used by some
+          // model APIs, but is not the RPC wire format here.)
+          message: prompt,
         })}\n`,
         (err) => (err ? reject(err) : resolve()),
       );
