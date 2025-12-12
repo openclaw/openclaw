@@ -22,12 +22,13 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         let response = self.response(for: url)
         let mime = response.mime
         let data = response.data
+        let encoding = self.textEncodingName(forMimeType: mime)
 
         let urlResponse = URLResponse(
             url: url,
             mimeType: mime,
             expectedContentLength: data.count,
-            textEncodingName: "utf-8")
+            textEncodingName: encoding)
         urlSchemeTask.didReceive(urlResponse)
         urlSchemeTask.didReceive(data)
         urlSchemeTask.didFinish()
@@ -175,7 +176,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
           </body>
         </html>
         """
-        return CanvasResponse(mime: "text/html; charset=utf-8", data: Data(html.utf8))
+        return CanvasResponse(mime: "text/html", data: Data(html.utf8))
     }
 
     private func welcomePage(sessionRoot: URL) -> CanvasResponse {
@@ -190,5 +191,14 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         """
         return self.html(body, title: "Canvas")
     }
-}
 
+    private func textEncodingName(forMimeType mimeType: String) -> String? {
+        if mimeType.hasPrefix("text/") { return "utf-8" }
+        switch mimeType {
+        case "application/javascript", "application/json", "image/svg+xml":
+            return "utf-8"
+        default:
+            return nil
+        }
+    }
+}

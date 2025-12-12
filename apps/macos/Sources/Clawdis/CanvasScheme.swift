@@ -20,10 +20,12 @@ enum CanvasScheme {
 
     static func mimeType(forExtension ext: String) -> String {
         switch ext.lowercased() {
-        case "html", "htm": "text/html; charset=utf-8"
-        case "js", "mjs": "application/javascript; charset=utf-8"
-        case "css": "text/css; charset=utf-8"
-        case "json", "map": "application/json; charset=utf-8"
+        // Note: WKURLSchemeHandler uses URLResponse(mimeType:), which expects a bare MIME type
+        // (no `; charset=...`). Encoding is provided via URLResponse(textEncodingName:).
+        case "html", "htm": "text/html"
+        case "js", "mjs": "application/javascript"
+        case "css": "text/css"
+        case "json", "map": "application/json"
         case "svg": "image/svg+xml"
         case "png": "image/png"
         case "jpg", "jpeg": "image/jpeg"
@@ -37,4 +39,3 @@ enum CanvasScheme {
         }
     }
 }
-
