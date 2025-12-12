@@ -74,7 +74,10 @@ describe("tau-rpc", () => {
     expect(writes.length).toBeGreaterThan(0);
     const first = writes[0]?.trim();
     expect(first?.endsWith("\n")).toBe(false);
-    const obj = JSON.parse(first ?? "{}") as { type?: string; message?: unknown };
+    const obj = JSON.parse(first ?? "{}") as {
+      type?: string;
+      message?: unknown;
+    };
     expect(obj.type).toBe("prompt");
     expect(obj.message).toBe("hello");
   });

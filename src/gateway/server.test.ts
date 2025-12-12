@@ -481,52 +481,60 @@ describe("gateway server", () => {
     await server.close();
   });
 
-  test("agent ack response then final response", { timeout: 8000 }, async () => {
-    const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          name: "test",
-          version: "1.0.0",
-          platform: "test",
-          mode: "test",
-        },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+  test(
+    "agent ack response then final response",
+    { timeout: 8000 },
+    async () => {
+      const { server, ws } = await startServerWithClient();
+      ws.send(
+        JSON.stringify({
+          type: "hello",
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            name: "test",
+            version: "1.0.0",
+            platform: "test",
+            mode: "test",
+          },
+          caps: [],
+        }),
+      );
+      await onceMessage(ws, (o) => o.type === "hello-ok");
 
-    const ackP = onceMessage(
-      ws,
-      (o) =>
-        o.type === "res" && o.id === "ag1" && o.payload?.status === "accepted",
-    );
-    const finalP = onceMessage(
-      ws,
-      (o) =>
-        o.type === "res" && o.id === "ag1" && o.payload?.status !== "accepted",
-    );
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "ag1",
-        method: "agent",
-        params: { message: "hi", idempotencyKey: "idem-ag" },
-      }),
-    );
+      const ackP = onceMessage(
+        ws,
+        (o) =>
+          o.type === "res" &&
+          o.id === "ag1" &&
+          o.payload?.status === "accepted",
+      );
+      const finalP = onceMessage(
+        ws,
+        (o) =>
+          o.type === "res" &&
+          o.id === "ag1" &&
+          o.payload?.status !== "accepted",
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "ag1",
+          method: "agent",
+          params: { message: "hi", idempotencyKey: "idem-ag" },
+        }),
+      );
 
-    const ack = await ackP;
-    const final = await finalP;
-    expect(ack.payload.runId).toBeDefined();
-    expect(final.payload.runId).toBe(ack.payload.runId);
-    expect(final.payload.status).toBe("ok");
+      const ack = await ackP;
+      const final = await finalP;
+      expect(ack.payload.runId).toBeDefined();
+      expect(final.payload.runId).toBe(ack.payload.runId);
+      expect(final.payload.status).toBe("ok");
 
-    ws.close();
-    await server.close();
-  });
+      ws.close();
+      await server.close();
+    },
+  );
 
   test(
     "agent dedupes by idempotencyKey after completion",
