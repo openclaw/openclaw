@@ -18,9 +18,6 @@ async function writeJsonSchema() {
     title: "Clawdis Gateway Protocol",
     description: "Handshake, request/response, and event frames for the Gateway WebSocket.",
     oneOf: [
-      { $ref: "#/definitions/Hello" },
-      { $ref: "#/definitions/HelloOk" },
-      { $ref: "#/definitions/HelloError" },
       { $ref: "#/definitions/RequestFrame" },
       { $ref: "#/definitions/ResponseFrame" },
       { $ref: "#/definitions/EventFrame" },
@@ -28,9 +25,6 @@ async function writeJsonSchema() {
     discriminator: {
       propertyName: "type",
       mapping: {
-        hello: "#/definitions/Hello",
-        "hello-ok": "#/definitions/HelloOk",
-        "hello-error": "#/definitions/HelloError",
         req: "#/definitions/RequestFrame",
         res: "#/definitions/ResponseFrame",
         event: "#/definitions/EventFrame",

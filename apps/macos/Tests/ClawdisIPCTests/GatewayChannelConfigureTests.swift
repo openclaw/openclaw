@@ -5,6 +5,7 @@ import Testing
 
 @Suite struct GatewayConnectionTests {
     private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
+        private let connectRequestID = OSAllocatedUnfairLock<String?>(initialState: nil)
         private let pendingReceiveHandler =
             OSAllocatedUnfairLock<(@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?>(initialState: nil)
         private let cancelCount = OSAllocatedUnfairLock(initialState: 0)
@@ -40,8 +41,18 @@ import Testing
                 return count
             }
 
-            // First send is the hello frame. Subsequent sends are request frames.
-            if currentSendCount == 0 { return }
+            // First send is the connect handshake request. Subsequent sends are request frames.
+            if currentSendCount == 0 {
+                guard case let .data(data) = message else { return }
+                if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   (obj["type"] as? String) == "req",
+                   (obj["method"] as? String) == "connect",
+                   let id = obj["id"] as? String
+                {
+                    self.connectRequestID.withLock { $0 = id }
+                }
+                return
+            }
 
             guard case let .data(data) = message else { return }
             guard
@@ -61,7 +72,8 @@ import Testing
             if self.helloDelayMs > 0 {
                 try await Task.sleep(nanoseconds: UInt64(self.helloDelayMs) * 1_000_000)
             }
-            return .data(Self.helloOkData())
+            let id = self.connectRequestID.withLock { $0 } ?? "connect"
+            return .data(Self.connectOkData(id: id))
         }
 
         func receive(
@@ -75,20 +87,25 @@ import Testing
             handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(data)))
         }
 
-        private static func helloOkData() -> Data {
+        private static func connectOkData(id: String) -> Data {
             let json = """
             {
-              "type": "hello-ok",
-              "protocol": 1,
-              "server": { "version": "test", "connId": "test" },
-              "features": { "methods": [], "events": [] },
-              "snapshot": {
-                "presence": [ { "ts": 1 } ],
-                "health": {},
-                "stateVersion": { "presence": 0, "health": 0 },
-                "uptimeMs": 0
-              },
-              "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+              "type": "res",
+              "id": "\(id)",
+              "ok": true,
+              "payload": {
+                "type": "hello-ok",
+                "protocol": 2,
+                "server": { "version": "test", "connId": "test" },
+                "features": { "methods": [], "events": [] },
+                "snapshot": {
+                  "presence": [ { "ts": 1 } ],
+                  "health": {},
+                  "stateVersion": { "presence": 0, "health": 0 },
+                  "uptimeMs": 0
+                },
+                "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+              }
             }
             """
             return Data(json.utf8)

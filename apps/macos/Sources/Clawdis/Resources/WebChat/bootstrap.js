@@ -51,11 +51,11 @@ class GatewaySocket {
       this.ws = ws;
 
       ws.onopen = () => {
-        logStatus(`ws: open -> sending hello (${this.url})`);
-        const hello = {
-          type: "hello",
-          minProtocol: 1,
-          maxProtocol: 1,
+        const id = randomId();
+        logStatus(`ws: open -> sending connect (${this.url})`);
+        const params = {
+          minProtocol: 2,
+          maxProtocol: 2,
           client: {
             name: "webchat-ui",
             version: "dev",
@@ -63,8 +63,10 @@ class GatewaySocket {
             mode: "webchat",
             instanceId: randomId(),
           },
+          caps: [],
         };
-        ws.send(JSON.stringify(hello));
+        ws.send(JSON.stringify({ type: "req", id, method: "connect", params }));
+        this.pending.set(id, { resolve, reject, _handshake: true });
       };
 
       ws.onerror = (err) => {
@@ -91,14 +93,6 @@ class GatewaySocket {
         } catch {
           return;
         }
-        if (msg.type === "hello-ok") {
-          logStatus(
-            `ws: hello-ok presence=${msg?.snapshot?.presence?.length ?? 0} healthOk=${msg?.snapshot?.health?.ok ?? "n/a"}`,
-          );
-          this.handlers.set("snapshot", msg.snapshot);
-          resolve(msg);
-          return;
-        }
         if (msg.type === "event") {
           const cb = this.handlers.get(msg.event);
           if (cb) cb(msg.payload, msg);
@@ -108,8 +102,20 @@ class GatewaySocket {
           const pending = this.pending.get(msg.id);
           if (!pending) return;
           this.pending.delete(msg.id);
-          if (msg.ok) pending.resolve(msg.payload);
-          else pending.reject(new Error(msg.error?.message || "gateway error"));
+          if (msg.ok) {
+            if (pending._handshake) {
+              const helloOk = msg.payload;
+              logStatus(
+                `ws: hello-ok presence=${helloOk?.snapshot?.presence?.length ?? 0} healthOk=${helloOk?.snapshot?.health?.ok ?? "n/a"}`,
+              );
+              this.handlers.set("snapshot", helloOk.snapshot);
+              pending.resolve(helloOk);
+            } else {
+              pending.resolve(msg.payload);
+            }
+          } else {
+            pending.reject(new Error(msg.error?.message || "gateway error"));
+          }
         }
       };
     });

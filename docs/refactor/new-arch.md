@@ -16,17 +16,16 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 - **Protocol folder**: create `protocol/` for schemas and build artifacts. ✅ `src/gateway/protocol`.
 - **Schema tooling**:
   - Prefer **TypeBox** (or ArkType) as source-of-truth types. ✅ TypeBox in `schema.ts`.
-  - `pnpm protocol:gen`:
-    1) emits JSON Schema (`dist/protocol.schema.json`),
-    2) runs quicktype → Swift `Codable` models (`apps/macos/Sources/ClawdisProtocol/Protocol.swift`). ✅
+  - `pnpm protocol:gen`: emits JSON Schema (`dist/protocol.schema.json`). ✅
+  - `pnpm protocol:gen:swift`: generates Swift `Codable` models (`apps/macos/Sources/ClawdisProtocol/GatewayModels.swift`). ✅
   - AJV compile step for server validators. ✅
 - **CI**: add a job that fails if schema or generated Swift is stale. ✅ `pnpm protocol:check` (runs gen + git diff).
 
 ## Phase 1 — Protocol specification
 - Frames (WS text JSON, all with explicit `type`):
-  - `hello {type:"hello", minProtocol, maxProtocol, client:{name,version,platform,mode,instanceId}, caps, auth:{token?}, locale?, userAgent?}`
+  - `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{name,version,platform,mode,instanceId}, caps, auth:{token?}, locale?, userAgent?}}`
+  - `res {type:"res", id, ok:true, payload: hello-ok }` (or `ok:false` then close)
   - `hello-ok {type:"hello-ok", protocol:<chosen>, server:{version,commit,host,connId}, features:{methods,events}, snapshot:{presence[], health, stateVersion:{presence,health}, uptimeMs}, policy:{maxPayload, maxBufferedBytes, tickIntervalMs}}`
-  - `hello-error {type:"hello-error", reason, expectedProtocol, minClient}`
   - `req {type:"req", id, method, params?}`
   - `res {type:"res", id, ok, payload?, error?}` where `error` = `{code,message,details?,retryable?,retryAfterMs?}`
   - `event {type:"event", event, payload, seq?, stateVersion?}` (presence/tick/shutdown/agent)
@@ -40,8 +39,8 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
   - Error codes: `NOT_LINKED`, `AGENT_TIMEOUT`, `INVALID_REQUEST`, `UNAVAILABLE`.
 - Error shape: `{code, message, details?, retryable?, retryAfterMs?}`
 - Rules:
-  - First frame must be `type:"hello"`; otherwise close. Add handshake timeout (e.g., 3s) for silent clients.
-  - Negotiate protocol: server picks within `[minProtocol,maxProtocol]`; if none, send `hello-error`.
+  - First frame must be `req` with `method:"connect"`; otherwise close. Add handshake timeout (e.g., 3s) for silent clients.
+  - Negotiate protocol: server picks within `[minProtocol,maxProtocol]`; if none, reply `res ok:false` and close.
   - Protocol version bump on breaking changes; `hello-ok` must include `minClient` when needed.
   - `stateVersion` increments for presence/health to drop stale deltas.
   - Stable IDs: client sends `instanceId`; server issues per-connection `connId` in `hello-ok`; presence entries may include `instanceId` to dedupe reconnects.
@@ -49,14 +48,14 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
   - Presence is primarily connection-derived; client may add hints (e.g., lastInputSeconds); entries expire via TTL to keep the map bounded (e.g., 5m TTL, max 200 entries).
   - Idempotency keys: required for `send` and `agent` to safely retry after disconnects.
   - Size limits: bound first-frame size by `maxPayload`; reject early if exceeded.
-  - Close on any non-JSON or wrong `type` before hello.
+  - Close on any non-JSON or wrong `type` before connect.
   - Per-op idempotency keys: client SHOULD supply an explicit key per `send`/`agent`; if omitted, server may derive a scoped key from `instanceId+connId`, but explicit keys are safer across reconnects.
   - Locale/userAgent are informational; server may log them for analytics but must not rely on them for access control.
 
 ## Phase 2 — Gateway WebSocket server
 - New module `src/gateway/server.ts`:
   - Bind 127.0.0.1:18789 (configurable).
-  - On connect: validate `hello`, send `hello-ok` with snapshot, start event pump.
+  - On connect: validate `connect` params, send snapshot payload, start event pump.
   - Per-connection queues with backpressure (bounded; drop oldest non-critical).
   - WS-level caps: set `maxPayload` to cap frame size before JSON parse.
   - Emit `tick` every N seconds when idle (or WS ping/pong if adequate).
@@ -73,7 +72,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 - Handshake edge cases:
   - Close on handshake timeout.
   - Close on over-limit first frame (maxPayload).
-  - Close immediately on non-JSON or wrong `type` before hello.
+  - Close immediately on non-JSON or wrong `type` before connect.
   - Default guardrails: `maxPayload` ~512 KB, handshake timeout ~3 s, outbound buffered amount cap ~1.5 MB (tune as you implement).
 - Dedupe cache: bound TTL (~5m) and max size (~1000 entries); evict oldest first (LRU) to prevent memory growth.
 
@@ -101,7 +100,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
   - Replace stdio/SSH RPC with WS client (tunneled via SSH/Tailscale for remote). ✅ AgentRPC/ControlChannel now use Gateway WS.
   - Implement handshake, snapshot hydration, subscriptions to `presence`, `tick`, `agent`, `shutdown`. ✅ snapshot + presence events broadcast to InstancesStore; agent events still to wire to UI if desired.
   - Remove immediate `health/system-presence` fetch on connect. ✅ presence hydrated from snapshot; periodic refresh kept as fallback.
-  - Handle `hello-error` and retry with backoff if version/token mismatched. ✅ macOS GatewayChannel reconnects with exponential backoff.
+  - Handle connect failures (`res ok:false`) and retry with backoff if version/token mismatched. ✅ macOS GatewayChannel reconnects with exponential backoff.
 - **CLI**:
 - Add lightweight WS client helper for `status/health/send/agent` when Gateway is up. ✅ `gateway` subcommands use the Gateway over WS.
   - Consider a “local only” flag to avoid accidental remote connects. (optional; not needed with tunnel-first model.)
@@ -134,7 +133,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 
 ## Edge cases and ordering
 - Event ordering: all events carry `seq`; clients detect gaps and should re-fetch snapshot (or targeted refresh) on gap.
-- Partial handshakes: if client connects and never sends hello, server closes after handshake timeout.
+- Partial handshakes: if client connects and never sends `req:connect`, server closes after handshake timeout.
 - Garbage/oversize first frame: bounded by `maxPayload`; server closes immediately on parse failure.
 - Duplicate delivery on reconnect: clients must send idempotency keys; Gateway dedupe cache prevents double-send/agent execution.
 - Snapshot sufficiency: `hello-ok.snapshot` must contain enough to render UI after reconnect without event replay.
@@ -144,7 +143,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 
 ## Phase 9 — Testing & validation
 - Unit: frame validation, handshake failure, auth/token, stateVersion on presence events, agent stream fanout, send dedupe. ✅
-- Integration: connect → snapshot → req/res → streaming agent → shutdown. ✅ Covered in gateway WS tests (hello/health/status/presence, agent ack+final, shutdown broadcast).
+- Integration: connect → snapshot → req/res → streaming agent → shutdown. ✅ Covered in gateway WS tests (connect/health/status/presence, agent ack+final, shutdown broadcast).
 - Load: multiple concurrent WS clients; backpressure behavior under burst. ✅ Basic fanout test with 3 clients receiving presence broadcast; heavier soak still recommended.
 - Mac app smoke: presence/health render from snapshot; reconnect on tick loss. (Manual: open Instances tab, verify snapshot after connect, induce seq gap by toggling wifi, ensure UI refreshes.)
 - WebChat smoke: snapshot seed + event updates; tunnel scenario. ✅ Offline snapshot harness in `src/webchat/server.test.ts` (mock gateway) now passes; live tunnel still recommended for manual.
@@ -161,7 +160,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 - Quick checklist
 - [x] Protocol types & schemas (TS + JSON Schema + Swift via quicktype)
 - [x] AJV validators wired
-- [x] WS server with hello → snapshot → events
+- [x] WS server with connect → snapshot → events
 - [x] Tick + shutdown events
 - [x] stateVersion + presence deltas
 - [x] Gateway CLI command

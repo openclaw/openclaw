@@ -18,7 +18,7 @@ Context: web chat currently lives in a WKWebView that loads the pi-web bundle. S
 
 ## Client work (pi-web bundle)
 - Replace `NativeTransport` with a Gateway WS client:
-  - `hello` → `chat.history` for initial state.
+  - `connect` → `chat.history` for initial state.
   - Listen to `chat/presence/tick/health`; update UI from events only.
   - Send via `chat.send`; mark pending until `chat state:final|error`.
   - Enforce health gate + 30s timeout.

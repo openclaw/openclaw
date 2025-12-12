@@ -220,7 +220,7 @@ Examples:
     )
     .option(
       "--token <token>",
-      "Shared token required in hello.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
+      "Shared token required in connect.params.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
     )
     .option(
       "--force",

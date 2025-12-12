@@ -5,15 +5,6 @@
   "description": "Handshake, request/response, and event frames for the Gateway WebSocket.",
   "oneOf": [
     {
-      "$ref": "#/definitions/Hello"
-    },
-    {
-      "$ref": "#/definitions/HelloOk"
-    },
-    {
-      "$ref": "#/definitions/HelloError"
-    },
-    {
       "$ref": "#/definitions/RequestFrame"
     },
     {
@@ -26,23 +17,16 @@
   "discriminator": {
     "propertyName": "type",
     "mapping": {
-      "hello": "#/definitions/Hello",
-      "hello-ok": "#/definitions/HelloOk",
-      "hello-error": "#/definitions/HelloError",
       "req": "#/definitions/RequestFrame",
       "res": "#/definitions/ResponseFrame",
       "event": "#/definitions/EventFrame"
     }
   },
   "definitions": {
-    "Hello": {
+    "ConnectParams": {
       "additionalProperties": false,
       "type": "object",
       "properties": {
-        "type": {
-          "const": "hello",
-          "type": "string"
-        },
         "minProtocol": {
           "minimum": 1,
           "type": "integer"
@@ -108,7 +92,6 @@
         }
       },
       "required": [
-        "type",
         "minProtocol",
         "maxProtocol",
         "client"
@@ -298,32 +281,6 @@
         "policy"
       ]
     },
-    "HelloError": {
-      "additionalProperties": false,
-      "type": "object",
-      "properties": {
-        "type": {
-          "const": "hello-error",
-          "type": "string"
-        },
-        "reason": {
-          "minLength": 1,
-          "type": "string"
-        },
-        "expectedProtocol": {
-          "minimum": 1,
-          "type": "integer"
-        },
-        "minClient": {
-          "minLength": 1,
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "reason"
-      ]
-    },
     "RequestFrame": {
       "additionalProperties": false,
       "type": "object",
@@ -441,295 +398,6 @@
     "GatewayFrame": {
       "discriminator": "type",
       "anyOf": [
-        {
-          "additionalProperties": false,
-          "type": "object",
-          "properties": {
-            "type": {
-              "const": "hello",
-              "type": "string"
-            },
-            "minProtocol": {
-              "minimum": 1,
-              "type": "integer"
-            },
-            "maxProtocol": {
-              "minimum": 1,
-              "type": "integer"
-            },
-            "client": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "name": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "version": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "platform": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "mode": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "instanceId": {
-                  "minLength": 1,
-                  "type": "string"
-                }
-              },
-              "required": [
-                "name",
-                "version",
-                "platform",
-                "mode"
-              ]
-            },
-            "caps": {
-              "default": [],
-              "type": "array",
-              "items": {
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "auth": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "token": {
-                  "type": "string"
-                }
-              }
-            },
-            "locale": {
-              "type": "string"
-            },
-            "userAgent": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "minProtocol",
-            "maxProtocol",
-            "client"
-          ]
-        },
-        {
-          "additionalProperties": false,
-          "type": "object",
-          "properties": {
-            "type": {
-              "const": "hello-ok",
-              "type": "string"
-            },
-            "protocol": {
-              "minimum": 1,
-              "type": "integer"
-            },
-            "server": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "version": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "commit": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "host": {
-                  "minLength": 1,
-                  "type": "string"
-                },
-                "connId": {
-                  "minLength": 1,
-                  "type": "string"
-                }
-              },
-              "required": [
-                "version",
-                "connId"
-              ]
-            },
-            "features": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "methods": {
-                  "type": "array",
-                  "items": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "events": {
-                  "type": "array",
-                  "items": {
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                }
-              },
-              "required": [
-                "methods",
-                "events"
-              ]
-            },
-            "snapshot": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "presence": {
-                  "type": "array",
-                  "items": {
-                    "additionalProperties": false,
-                    "type": "object",
-                    "properties": {
-                      "host": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "ip": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "version": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "mode": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "lastInputSeconds": {
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "reason": {
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "tags": {
-                        "type": "array",
-                        "items": {
-                          "minLength": 1,
-                          "type": "string"
-                        }
-                      },
-                      "text": {
-                        "type": "string"
-                      },
-                      "ts": {
-                        "minimum": 0,
-                        "type": "integer"
-                      },
-                      "instanceId": {
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "ts"
-                    ]
-                  }
-                },
-                "health": {},
-                "stateVersion": {
-                  "additionalProperties": false,
-                  "type": "object",
-                  "properties": {
-                    "presence": {
-                      "minimum": 0,
-                      "type": "integer"
-                    },
-                    "health": {
-                      "minimum": 0,
-                      "type": "integer"
-                    }
-                  },
-                  "required": [
-                    "presence",
-                    "health"
-                  ]
-                },
-                "uptimeMs": {
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "presence",
-                "health",
-                "stateVersion",
-                "uptimeMs"
-              ]
-            },
-            "policy": {
-              "additionalProperties": false,
-              "type": "object",
-              "properties": {
-                "maxPayload": {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "maxBufferedBytes": {
-                  "minimum": 1,
-                  "type": "integer"
-                },
-                "tickIntervalMs": {
-                  "minimum": 1,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "maxPayload",
-                "maxBufferedBytes",
-                "tickIntervalMs"
-              ]
-            }
-          },
-          "required": [
-            "type",
-            "protocol",
-            "server",
-            "features",
-            "snapshot",
-            "policy"
-          ]
-        },
-        {
-          "additionalProperties": false,
-          "type": "object",
-          "properties": {
-            "type": {
-              "const": "hello-error",
-              "type": "string"
-            },
-            "reason": {
-              "minLength": 1,
-              "type": "string"
-            },
-            "expectedProtocol": {
-              "minimum": 1,
-              "type": "integer"
-            },
-            "minClient": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          "required": [
-            "type",
-            "reason"
-          ]
-        },
         {
           "additionalProperties": false,
           "type": "object",

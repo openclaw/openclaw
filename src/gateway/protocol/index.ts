@@ -7,6 +7,8 @@ import {
   ChatEventSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
+  type ConnectParams,
+  ConnectParamsSchema,
   ErrorCodes,
   type ErrorShape,
   ErrorShapeSchema,
@@ -15,12 +17,8 @@ import {
   errorShape,
   type GatewayFrame,
   GatewayFrameSchema,
-  type Hello,
-  type HelloError,
-  HelloErrorSchema,
   type HelloOk,
   HelloOkSchema,
-  HelloSchema,
   PROTOCOL_VERSION,
   type PresenceEntry,
   PresenceEntrySchema,
@@ -50,7 +48,8 @@ const ajv = new (
   removeAdditional: false,
 });
 
-export const validateHello = ajv.compile<Hello>(HelloSchema);
+export const validateConnectParams =
+  ajv.compile<ConnectParams>(ConnectParamsSchema);
 export const validateRequestFrame =
   ajv.compile<RequestFrame>(RequestFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
@@ -67,9 +66,8 @@ export function formatValidationErrors(
 }
 
 export {
-  HelloSchema,
+  ConnectParamsSchema,
   HelloOkSchema,
-  HelloErrorSchema,
   RequestFrameSchema,
   ResponseFrameSchema,
   EventFrameSchema,
@@ -94,9 +92,8 @@ export {
 
 export type {
   GatewayFrame,
-  Hello,
+  ConnectParams,
   HelloOk,
-  HelloError,
   RequestFrame,
   ResponseFrame,
   EventFrame,

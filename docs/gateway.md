@@ -25,7 +25,7 @@ pnpm clawdis gateway --force
 - Pass `--verbose` to mirror debug logging (handshakes, req/res, events) from the log file into stdio when troubleshooting.
 - `--force` uses `lsof` to find listeners on the chosen port, sends SIGTERM, logs what it killed, then starts the gateway (fails fast if `lsof` is missing).
 - If you run under a supervisor (launchd/systemd/mac app child-process mode), a stop/restart typically sends **SIGTERM**; older builds may surface this as `pnpm` `ELIFECYCLE` exit code **143** (SIGTERM), which is a normal shutdown, not a crash.
-- Optional shared secret: pass `--token <value>` or set `CLAWDIS_GATEWAY_TOKEN` to require clients to send `hello.auth.token`.
+- Optional shared secret: pass `--token <value>` or set `CLAWDIS_GATEWAY_TOKEN` to require clients to send `connect.params.auth.token`.
 
 ## Remote access
 - Tailscale/VPN preferred; otherwise SSH tunnel:
@@ -33,11 +33,11 @@ pnpm clawdis gateway --force
   ssh -N -L 18789:127.0.0.1:18789 user@host
   ```
 - Clients then connect to `ws://127.0.0.1:18789` through the tunnel.
-- If a token is configured, clients must include it in `hello.auth.token` even over the tunnel.
+- If a token is configured, clients must include it in `connect.params.auth.token` even over the tunnel.
 
 ## Protocol (operator view)
-- Mandatory first frame from client: `hello {type:"hello", minProtocol, maxProtocol, client:{name,version,platform,mode,instanceId}, caps, auth?, locale?, userAgent? }`.
-- Gateway replies `hello-ok {type:"hello-ok", protocol:<chosen>, server:{version,commit,host,connId}, features:{methods,events}, snapshot:{presence[], health, stateVersion, uptimeMs}, policy:{maxPayload,maxBufferedBytes,tickIntervalMs} }` or `hello-error`.
+- Mandatory first frame from client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{name,version,platform,mode,instanceId}, caps, auth?, locale?, userAgent? } }`.
+- Gateway replies `res {type:"res", id, ok:true, payload:hello-ok }` (or `ok:false` with an error, then closes).
 - After handshake:
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`
   - Events: `{type:"event", event, payload, seq?, stateVersion?}`
@@ -63,13 +63,13 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 ## WebChat integration
 - WebChat serves static assets locally (default port 18788, configurable).
 - The WebChat backend keeps a single WS connection to the Gateway for control/data; all sends and agent runs flow through that connection.
-- Remote use goes through the same SSH/Tailscale tunnel; if a gateway token is configured, WebChat must include it during hello.
+- Remote use goes through the same SSH/Tailscale tunnel; if a gateway token is configured, WebChat must include it during connect.
 - macOS app also connects via this WS (one socket); it hydrates presence from the initial snapshot and listens for `presence` events to update the UI.
 
 ## Typing and validation
 - Server validates every inbound frame with AJV against JSON Schema emitted from the protocol definitions.
-- Clients (TS/Swift) consume generated types (TS directly; Swift via quicktype from the JSON Schema).
-- Types live in `src/gateway/protocol/*.ts`; regenerate schemas/models with `pnpm protocol:gen` (writes `dist/protocol.schema.json` and `apps/macos/Sources/ClawdisProtocol/Protocol.swift`).
+- Clients (TS/Swift) consume generated types (TS directly; Swift via the repo’s generator).
+- Types live in `src/gateway/protocol/*.ts`; regenerate schemas/models with `pnpm protocol:gen` (writes `dist/protocol.schema.json`) and `pnpm protocol:gen:swift` (writes `apps/macos/Sources/ClawdisProtocol/GatewayModels.swift`).
 
 ## Connection snapshot
 - `hello-ok` includes a `snapshot` with `presence`, `health`, `stateVersion`, and `uptimeMs` plus `policy {maxPayload,maxBufferedBytes,tickIntervalMs}` so clients can render immediately without extra requests.
@@ -119,14 +119,14 @@ WantedBy=multi-user.target
 Enable with `systemctl enable --now clawdis-gateway.service`.
 
 ## Operational checks
-- Liveness: open WS and send `hello` → expect `hello-ok` (with snapshot).
+- Liveness: open WS and send `req:connect` → expect `res` with `payload.type="hello-ok"` (with snapshot).
 - Readiness: call `health` → expect `ok: true` and `web.linked=true`.
 - Debug: subscribe to `tick` and `presence` events; ensure `status` shows linked/auth age; presence entries show Gateway host and connected clients.
 
 ## Safety guarantees
 - Only one Gateway per host; all sends/agent calls must go through it.
 - No fallback to direct Baileys connections; if the Gateway is down, sends fail fast.
-- Non-hello first frames or malformed JSON are rejected and the socket is closed.
+- Non-connect first frames or malformed JSON are rejected and the socket is closed.
 - Graceful shutdown: emit `shutdown` event before closing; clients must handle close + reconnect.
 
 ## CLI helpers
@@ -138,4 +138,4 @@ Enable with `systemctl enable --now clawdis-gateway.service`.
 
 ## Migration guidance
 - Retire uses of `clawdis gateway` and the legacy TCP control port.
-- Update clients to speak the WS protocol with mandatory hello and structured presence.
+- Update clients to speak the WS protocol with mandatory connect and structured presence.

@@ -3,7 +3,7 @@ summary: "How Clawdis presence entries are produced, merged, and displayed"
 read_when:
   - Debugging the Instances tab
   - Investigating duplicate or stale instance rows
-  - Changing gateway WS hello or system-event beacons
+  - Changing gateway WS connect or system-event beacons
 ---
 # Presence
 
@@ -36,13 +36,13 @@ The Gateway seeds a “self” entry at startup so UIs always show at least the 
 
 Implementation: `src/infra/system-presence.ts` (`initSelfPresence()`).
 
-### 2) WebSocket hello (connection-derived presence)
+### 2) WebSocket connect (connection-derived presence)
 
-Every WS client must begin with a `hello` frame. On successful handshake, the Gateway upserts a presence entry for that connection.
+Every WS client must begin with a `connect` request. On successful handshake, the Gateway upserts a presence entry for that connection.
 
 This is meant to answer: “Which clients are currently connected?”
 
-Implementation: `src/gateway/server.ts` (WS `hello` handling uses `hello.client.instanceId` when provided; otherwise falls back to `connId`).
+Implementation: `src/gateway/server.ts` (connect handling uses `connect.params.client.instanceId` when provided; otherwise falls back to `connId`).
 
 #### Why one-off CLI commands do not show up
 
@@ -113,6 +113,6 @@ The store refreshes periodically and also applies `presence` WS events.
 
 - To see the raw list, call `system-presence` against the gateway.
 - If you see duplicates:
-  - confirm clients send a stable `instanceId` in `hello`
+  - confirm clients send a stable `instanceId` in the handshake (`connect.params.client.instanceId`)
   - confirm beaconing uses the same `instanceId`
   - check whether the connection-derived entry is missing `instanceId` (then it will be keyed by `connId` and duplicates are expected on reconnect)

@@ -16,7 +16,7 @@ Last updated: 2025-12-09
 - **Gateway (daemon)**  
   - Maintains Baileys/Telegram connections.  
   - Exposes a typed WS API (req/resp + server push events).  
-  - Validates every inbound frame against JSON Schema; rejects anything before a mandatory `hello`.
+  - Validates every inbound frame against JSON Schema; rejects anything before a mandatory `connect`.
 - **Clients (mac app / CLI / web admin)**  
   - One WS connection per client.  
   - Send requests (`health`, `status`, `send`, `agent`, `system-presence`, toggles) and subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
@@ -31,9 +31,9 @@ Last updated: 2025-12-09
 ```
 Client                    Gateway
   |                          |
-  |------- hello ----------->|
-  |<------ hello-ok ---------|   (or hello-error + close)
-  |   (hello-ok carries snapshot: presence + health) 
+  |---- req:connect -------->|
+  |<------ res (ok) ---------|   (or res error + close)
+  |   (payload=hello-ok carries snapshot: presence + health) 
   |                          |
   |<------ event:presence ---|   (deltas)
   |<------ event:tick -------|   (keepalive/no-op)
@@ -46,13 +46,12 @@ Client                    Gateway
 ```
 ## Wire protocol (summary)
 - Transport: WebSocket, text frames with JSON payloads.
-- First frame must be `hello {type:"hello", minProtocol, maxProtocol, client:{name,version,platform,mode,instanceId}, caps, auth?, locale?, userAgent? }`.
-- Server replies `hello-ok {type:"hello-ok", protocol:<chosen>, server:{version,commit,host,connId}, features:{methods,events}, snapshot:{presence:[...], health:{...}, stateVersion:{presence,health}, uptimeMs}, policy:{maxPayload,maxBufferedBytes,tickIntervalMs} }`
-  or `hello-error {type:"hello-error", reason, expectedProtocol, minClient }` then closes.
+- First frame must be `req {type:"req", id, method:"connect", params:{minProtocol, maxProtocol, client:{name,version,platform,mode,instanceId}, caps, auth?, locale?, userAgent? } }`.
+- Server replies `res {type:"res", id, ok:true, payload: hello-ok }` or `ok:false` then closes.
 - After handshake:  
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`  
   - Events: `{type:"event", event:"agent"|"presence"|"tick"|"shutdown", payload, seq?, stateVersion?}`
-- If `CLAWDIS_GATEWAY_TOKEN` (or `--token`) is set, `hello.auth.token` must match; otherwise the socket closes with policy violation.
+- If `CLAWDIS_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token` must match; otherwise the socket closes with policy violation.
 - Presence payload is structured, not free text: `{host, ip, version, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }`.
 - Agent runs are acked `{runId,status:"accepted"}` then complete with a final res `{runId,status,summary}`; streamed output arrives as `event:"agent"`.
 - Protocol versions are bumped on breaking changes; clients must match `minClient`; Gateway chooses within client’s min/max.
@@ -69,13 +68,14 @@ Client                    Gateway
 
 ## Invariants
 - Exactly one Gateway controls a single Baileys session per host. No fallbacks to ad-hoc direct Baileys sends.
-- Handshake is mandatory; any non-JSON or non-hello first frame is a hard close.
+- Handshake is mandatory; any non-JSON or non-connect first frame is a hard close.
 - All methods and events are versioned; new fields are additive; breaking changes increment `protocol`.
 - No event replay: on seq gaps, clients must refresh (`health` + `system-presence`) and continue; presence is bounded via TTL/max entries.
 
 ## Remote access
 - Preferred: Tailscale or VPN; alternate: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host`.
-- Same protocol over the tunnel; same handshake. If a shared token is configured, clients must send it in `hello.auth.token` even over the tunnel.
+- Same protocol over the tunnel; same handshake. If a shared token is configured, clients must send it in `connect.params.auth.token` even over the tunnel.
+- Same protocol over the tunnel; same handshake. If a shared token is configured, clients must send it in `connect.params.auth.token` even over the tunnel.
 
 ## Operations snapshot
 - Start: `clawdis gateway` (foreground, logs to stdout).  

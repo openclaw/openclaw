@@ -151,7 +151,7 @@ actor GatewayChannelActor {
         self.task = self.session.makeWebSocketTask(url: self.url)
         self.task?.resume()
         do {
-            try await self.sendHello()
+            try await self.sendConnect()
         } catch {
             let wrapped = self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
             self.connected = false
@@ -176,40 +176,50 @@ actor GatewayChannelActor {
         }
     }
 
-    private func sendHello() async throws {
+    private func sendConnect() async throws {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
         let clientName = InstanceIdentity.displayName
 
-        let hello = Hello(
-            type: "hello",
-            minprotocol: GATEWAY_PROTOCOL_VERSION,
-            maxprotocol: GATEWAY_PROTOCOL_VERSION,
-            client: [
-                "name": ClawdisProtocol.AnyCodable(clientName),
-                "version": ClawdisProtocol.AnyCodable(
-                    Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
-                "platform": ClawdisProtocol.AnyCodable(platform),
-                "mode": ClawdisProtocol.AnyCodable("app"),
-                "instanceId": ClawdisProtocol.AnyCodable(InstanceIdentity.instanceId),
-            ],
-            caps: [],
-            auth: self.token.map { ["token": ClawdisProtocol.AnyCodable($0)] },
-            locale: primaryLocale,
-            useragent: ProcessInfo.processInfo.operatingSystemVersionString)
-        let data = try JSONEncoder().encode(hello)
+        let reqId = UUID().uuidString
+        let client: [String: ProtoAnyCodable] = [
+            "name": ProtoAnyCodable(clientName),
+            "version": ProtoAnyCodable(
+                Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
+            "platform": ProtoAnyCodable(platform),
+            "mode": ProtoAnyCodable("app"),
+            "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
+        ]
+        var params: [String: ProtoAnyCodable] = [
+            "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
+            "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
+            "client": ProtoAnyCodable(client),
+            "caps": ProtoAnyCodable([] as [String]),
+            "locale": ProtoAnyCodable(primaryLocale),
+            "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
+        ]
+        if let token = self.token {
+            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
+        }
+
+        let frame = RequestFrame(
+            type: "req",
+            id: reqId,
+            method: "connect",
+            params: ProtoAnyCodable(params))
+        let data = try self.encoder.encode(frame)
         try await self.task?.send(.data(data))
         guard let msg = try await task?.receive() else {
             throw NSError(
                 domain: "Gateway",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "hello failed (no response)"])
+                userInfo: [NSLocalizedDescriptionKey: "connect failed (no response)"])
         }
-        try await self.handleHelloResponse(msg)
+        try await self.handleConnectResponse(msg, reqId: reqId)
     }
 
-    private func handleHelloResponse(_ msg: URLSessionWebSocketTask.Message) async throws {
+    private func handleConnectResponse(_ msg: URLSessionWebSocketTask.Message, reqId: String) async throws {
         let data: Data? = switch msg {
         case let .data(d): d
         case let .string(s): s.data(using: .utf8)
@@ -219,37 +229,46 @@ actor GatewayChannelActor {
             throw NSError(
                 domain: "Gateway",
                 code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "hello failed (empty response)"])
+                userInfo: [NSLocalizedDescriptionKey: "connect failed (empty response)"])
         }
         let decoder = JSONDecoder()
-        if let ok = try? decoder.decode(HelloOk.self, from: data) {
-            if let tick = ok.policy["tickIntervalMs"]?.value as? Double {
-                self.tickIntervalMs = tick
-            } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
-                self.tickIntervalMs = Double(tick)
-            }
-            self.lastTick = Date()
-            self.tickTask?.cancel()
-            self.tickTask = Task { [weak self] in
-                guard let self else { return }
-                await self.watchTicks()
-            }
-            await self.pushHandler?(.snapshot(ok))
-            return
-        }
-        if let err = try? decoder.decode(HelloError.self, from: data) {
-            let reason = err.reason
-            // Log and throw a detailed error so UI can surface token/hello issues.
-            self.logger.error("gateway hello-error: \(reason, privacy: .public)")
+        guard let frame = try? decoder.decode(GatewayFrame.self, from: data) else {
             throw NSError(
                 domain: "Gateway",
-                code: 1008,
-                userInfo: [NSLocalizedDescriptionKey: "hello-error: \(reason)"])
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "connect failed (invalid response)"])
         }
-        throw NSError(
-            domain: "Gateway",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "hello failed (unexpected response)"])
+        guard case let .res(res) = frame, res.id == reqId else {
+            throw NSError(
+                domain: "Gateway",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "connect failed (unexpected response)"])
+        }
+        if res.ok == false {
+            let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
+            throw NSError(domain: "Gateway", code: 1008, userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        guard let payload = res.payload else {
+            throw NSError(
+                domain: "Gateway",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "connect failed (missing payload)"])
+        }
+        let payloadData = try self.encoder.encode(payload)
+        let ok = try decoder.decode(HelloOk.self, from: payloadData)
+        if let tick = ok.policy["tickIntervalMs"]?.value as? Double {
+            self.tickIntervalMs = tick
+        } else if let tick = ok.policy["tickIntervalMs"]?.value as? Int {
+            self.tickIntervalMs = Double(tick)
+        }
+        self.lastTick = Date()
+        self.tickTask?.cancel()
+        self.tickTask = Task { [weak self] in
+            guard let self else { return }
+            await self.watchTicks()
+        }
+        await self.pushHandler?(.snapshot(ok))
+        return
     }
 
     private func listen() {
@@ -301,9 +320,6 @@ actor GatewayChannelActor {
             }
             if evt.event == "tick" { self.lastTick = Date() }
             await self.pushHandler?(.event(evt))
-        case let .helloOk(ok):
-            self.lastTick = Date()
-            await self.pushHandler?(.snapshot(ok))
         default:
             break
         }

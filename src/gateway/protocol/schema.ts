@@ -53,9 +53,8 @@ export const ShutdownEventSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const HelloSchema = Type.Object(
+export const ConnectParamsSchema = Type.Object(
   {
-    type: Type.Literal("hello"),
     minProtocol: Type.Integer({ minimum: 1 }),
     maxProtocol: Type.Integer({ minimum: 1 }),
     client: Type.Object(
@@ -116,16 +115,6 @@ export const HelloOkSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export const HelloErrorSchema = Type.Object(
-  {
-    type: Type.Literal("hello-error"),
-    reason: NonEmptyString,
-    expectedProtocol: Type.Optional(Type.Integer({ minimum: 1 })),
-    minClient: Type.Optional(NonEmptyString),
-  },
-  { additionalProperties: false },
-);
-
 export const ErrorShapeSchema = Type.Object(
   {
     code: NonEmptyString,
@@ -173,14 +162,7 @@ export const EventFrameSchema = Type.Object(
 // downstream codegen (quicktype) produce tighter types instead of all-optional
 // blobs.
 export const GatewayFrameSchema = Type.Union(
-  [
-    HelloSchema,
-    HelloOkSchema,
-    HelloErrorSchema,
-    RequestFrameSchema,
-    ResponseFrameSchema,
-    EventFrameSchema,
-  ],
+  [RequestFrameSchema, ResponseFrameSchema, EventFrameSchema],
   { discriminator: "type" },
 );
 
@@ -261,9 +243,8 @@ export const ChatEventSchema = Type.Object(
 );
 
 export const ProtocolSchemas: Record<string, TSchema> = {
-  Hello: HelloSchema,
+  ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
-  HelloError: HelloErrorSchema,
   RequestFrame: RequestFrameSchema,
   ResponseFrame: ResponseFrameSchema,
   EventFrame: EventFrameSchema,
@@ -282,11 +263,10 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ShutdownEvent: ShutdownEventSchema,
 };
 
-export const PROTOCOL_VERSION = 1 as const;
+export const PROTOCOL_VERSION = 2 as const;
 
-export type Hello = Static<typeof HelloSchema>;
+export type ConnectParams = Static<typeof ConnectParamsSchema>;
 export type HelloOk = Static<typeof HelloOkSchema>;
-export type HelloError = Static<typeof HelloErrorSchema>;
 export type RequestFrame = Static<typeof RequestFrameSchema>;
 export type ResponseFrame = Static<typeof ResponseFrameSchema>;
 export type EventFrame = Static<typeof EventFrameSchema>;

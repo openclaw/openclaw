@@ -8,6 +8,7 @@ import { WebSocket } from "ws";
 import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { startGatewayServer } from "./server.js";
 
 let testSessionStorePath: string | undefined;
@@ -109,6 +110,67 @@ async function startServerWithClient(token?: string) {
   return { server, ws, port, prevToken: prev };
 }
 
+type ConnectResponse = {
+  type: "res";
+  id: string;
+  ok: boolean;
+  payload?: unknown;
+  error?: { message?: string };
+};
+
+async function connectReq(
+  ws: WebSocket,
+  opts?: {
+    token?: string;
+    minProtocol?: number;
+    maxProtocol?: number;
+    client?: {
+      name: string;
+      version: string;
+      platform: string;
+      mode: string;
+      instanceId?: string;
+    };
+  },
+): Promise<ConnectResponse> {
+  const id = randomUUID();
+  ws.send(
+    JSON.stringify({
+      type: "req",
+      id,
+      method: "connect",
+      params: {
+        minProtocol: opts?.minProtocol ?? PROTOCOL_VERSION,
+        maxProtocol: opts?.maxProtocol ?? PROTOCOL_VERSION,
+        client: opts?.client ?? {
+          name: "test",
+          version: "1.0.0",
+          platform: "test",
+          mode: "test",
+        },
+        caps: [],
+        auth: opts?.token ? { token: opts.token } : undefined,
+      },
+    }),
+  );
+  return await onceMessage<ConnectResponse>(
+    ws,
+    (o) => o.type === "res" && o.id === id,
+  );
+}
+
+async function connectOk(
+  ws: WebSocket,
+  opts?: Parameters<typeof connectReq>[1],
+) {
+  const res = await connectReq(ws, opts);
+  expect(res.ok).toBe(true);
+  expect((res.payload as { type?: unknown } | undefined)?.type).toBe(
+    "hello-ok",
+  );
+  return res.payload as { type: "hello-ok" };
+}
+
 describe("gateway server", () => {
   test("agent falls back to allowFrom when lastTo is stale", async () => {
     testAllowFrom = ["+436769770569"];
@@ -132,16 +194,7 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     ws.send(
       JSON.stringify({
@@ -196,16 +249,7 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     ws.send(
       JSON.stringify({
@@ -260,16 +304,7 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     ws.send(
       JSON.stringify({
@@ -322,16 +357,7 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     ws.send(
       JSON.stringify({
@@ -364,18 +390,12 @@ describe("gateway server", () => {
 
   test("rejects protocol mismatch", async () => {
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 2,
-        maxProtocol: 3,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
     try {
-      const res = await onceMessage(ws, () => true, 2000);
-      expect(res.type).toBe("hello-error");
+      const res = await connectReq(ws, {
+        minProtocol: PROTOCOL_VERSION + 1,
+        maxProtocol: PROTOCOL_VERSION + 2,
+      });
+      expect(res.ok).toBe(false);
     } catch {
       // If the server closed before we saw the frame, that's acceptable for mismatch.
     }
@@ -385,19 +405,9 @@ describe("gateway server", () => {
 
   test("rejects invalid token", async () => {
     const { server, ws, prevToken } = await startServerWithClient("secret");
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-        auth: { token: "wrong" },
-      }),
-    );
-    const res = await onceMessage(ws, () => true);
-    expect(res.type).toBe("hello-error");
-    expect(res.reason).toContain("unauthorized");
+    const res = await connectReq(ws, { token: "wrong" });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("unauthorized");
     ws.close();
     await server.close();
     process.env.CLAWDIS_GATEWAY_TOKEN = prevToken;
@@ -420,16 +430,17 @@ describe("gateway server", () => {
     },
   );
 
-  test(
-    "hello + health + presence + status succeed",
-    { timeout: 8000 },
-    async () => {
-      const { server, ws } = await startServerWithClient();
-      ws.send(
-        JSON.stringify({
-          type: "hello",
-          minProtocol: 1,
-          maxProtocol: 1,
+  test("connect (req) handshake returns hello-ok payload", async () => {
+    const { server, ws } = await startServerWithClient();
+    const id = randomUUID();
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id,
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
           client: {
             name: "test",
             version: "1.0.0",
@@ -437,9 +448,40 @@ describe("gateway server", () => {
             mode: "test",
           },
           caps: [],
-        }),
-      );
-      await onceMessage(ws, (o) => o.type === "hello-ok");
+        },
+      }),
+    );
+
+    const res = await onceMessage<{ ok: boolean; payload?: unknown }>(
+      ws,
+      (o) => o.type === "res" && o.id === id,
+    );
+    expect(res.ok).toBe(true);
+    expect((res.payload as { type?: unknown } | undefined)?.type).toBe(
+      "hello-ok",
+    );
+    ws.close();
+    await server.close();
+  });
+
+  test("rejects non-connect first request", async () => {
+    const { server, ws } = await startServerWithClient();
+    ws.send(JSON.stringify({ type: "req", id: "h1", method: "health" }));
+    const res = await onceMessage<{ ok: boolean; error?: unknown }>(
+      ws,
+      (o) => o.type === "res" && o.id === "h1",
+    );
+    expect(res.ok).toBe(false);
+    await new Promise<void>((resolve) => ws.once("close", () => resolve()));
+    await server.close();
+  });
+
+  test(
+    "connect + health + presence + status succeed",
+    { timeout: 8000 },
+    async () => {
+      const { server, ws } = await startServerWithClient();
+      await connectOk(ws);
 
       const healthP = onceMessage(
         ws,
@@ -478,21 +520,7 @@ describe("gateway server", () => {
     { timeout: 8000 },
     async () => {
       const { server, ws } = await startServerWithClient();
-      ws.send(
-        JSON.stringify({
-          type: "hello",
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            name: "test",
-            version: "1.0.0",
-            platform: "test",
-            mode: "test",
-          },
-          caps: [],
-        }),
-      );
-      await onceMessage(ws, (o) => o.type === "hello-ok");
+      await connectOk(ws);
 
       const presenceEventP = onceMessage(
         ws,
@@ -519,21 +547,7 @@ describe("gateway server", () => {
 
   test("agent events stream with seq", { timeout: 8000 }, async () => {
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          name: "test",
-          version: "1.0.0",
-          platform: "test",
-          mode: "test",
-        },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     // Emit a fake agent event directly through the shared emitter.
     const evtPromise = onceMessage(
@@ -555,21 +569,7 @@ describe("gateway server", () => {
     { timeout: 8000 },
     async () => {
       const { server, ws } = await startServerWithClient();
-      ws.send(
-        JSON.stringify({
-          type: "hello",
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            name: "test",
-            version: "1.0.0",
-            platform: "test",
-            mode: "test",
-          },
-          caps: [],
-        }),
-      );
-      await onceMessage(ws, (o) => o.type === "hello-ok");
+      await connectOk(ws);
 
       const ackP = onceMessage(
         ws,
@@ -610,21 +610,7 @@ describe("gateway server", () => {
     { timeout: 8000 },
     async () => {
       const { server, ws } = await startServerWithClient();
-      ws.send(
-        JSON.stringify({
-          type: "hello",
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            name: "test",
-            version: "1.0.0",
-            platform: "test",
-            mode: "test",
-          },
-          caps: [],
-        }),
-      );
-      await onceMessage(ws, (o) => o.type === "hello-ok");
+      await connectOk(ws);
 
       const firstFinalP = onceMessage(
         ws,
@@ -665,21 +651,7 @@ describe("gateway server", () => {
 
   test("shutdown event is broadcast on close", { timeout: 8000 }, async () => {
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          name: "test",
-          version: "1.0.0",
-          platform: "test",
-          mode: "test",
-        },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     const shutdownP = onceMessage(
       ws,
@@ -700,21 +672,7 @@ describe("gateway server", () => {
       const mkClient = async () => {
         const c = new WebSocket(`ws://127.0.0.1:${port}`);
         await new Promise<void>((resolve) => c.once("open", resolve));
-        c.send(
-          JSON.stringify({
-            type: "hello",
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              name: "test",
-              version: "1.0.0",
-              platform: "test",
-              mode: "test",
-            },
-            caps: [],
-          }),
-        );
-        await onceMessage(c, (o) => o.type === "hello-ok");
+        await connectOk(c);
         return c;
       };
 
@@ -742,21 +700,7 @@ describe("gateway server", () => {
 
   test("send dedupes by idempotencyKey", { timeout: 8000 }, async () => {
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          name: "test",
-          version: "1.0.0",
-          platform: "test",
-          mode: "test",
-        },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     const idem = "same-key";
     const res1P = onceMessage(ws, (o) => o.type === "res" && o.id === "a1");
@@ -789,21 +733,7 @@ describe("gateway server", () => {
     const dial = async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
       await new Promise<void>((resolve) => ws.once("open", resolve));
-      ws.send(
-        JSON.stringify({
-          type: "hello",
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: {
-            name: "test",
-            version: "1.0.0",
-            platform: "test",
-            mode: "test",
-          },
-          caps: [],
-        }),
-      );
-      await onceMessage(ws, (o) => o.type === "hello-ok");
+      await connectOk(ws);
       return ws;
     };
 
@@ -849,16 +779,7 @@ describe("gateway server", () => {
 
   test("chat.send accepts image attachment", { timeout: 12000 }, async () => {
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     const reqId = "chat-img";
     ws.send(
@@ -916,16 +837,7 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: { name: "test", version: "1", platform: "test", mode: "test" },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws);
 
     const reqId = "chat-route";
     ws.send(
@@ -961,22 +873,15 @@ describe("gateway server", () => {
 
   test("presence includes client fingerprint", async () => {
     const { server, ws } = await startServerWithClient();
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          name: "fingerprint",
-          version: "9.9.9",
-          platform: "test",
-          mode: "ui",
-          instanceId: "abc",
-        },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws, {
+      client: {
+        name: "fingerprint",
+        version: "9.9.9",
+        platform: "test",
+        mode: "ui",
+        instanceId: "abc",
+      },
+    });
 
     const presenceP = onceMessage(
       ws,
@@ -1005,22 +910,15 @@ describe("gateway server", () => {
   test("cli connections are not tracked as instances", async () => {
     const { server, ws } = await startServerWithClient();
     const cliId = `cli-${randomUUID()}`;
-    ws.send(
-      JSON.stringify({
-        type: "hello",
-        minProtocol: 1,
-        maxProtocol: 1,
-        client: {
-          name: "cli",
-          version: "dev",
-          platform: "test",
-          mode: "cli",
-          instanceId: cliId,
-        },
-        caps: [],
-      }),
-    );
-    await onceMessage(ws, (o) => o.type === "hello-ok");
+    await connectOk(ws, {
+      client: {
+        name: "cli",
+        version: "dev",
+        platform: "test",
+        mode: "cli",
+        instanceId: cliId,
+      },
+    });
 
     const presenceP = onceMessage(
       ws,

@@ -7,22 +7,22 @@ read_when:
 
 Last updated: 2025-12-09
 
-We use TypeBox schemas in `src/gateway/protocol/schema.ts` as the single source of truth for the Gateway control plane (hello/req/res/event frames and payloads). All derived artifacts should be generated from these schemas, not edited by hand.
+We use TypeBox schemas in `src/gateway/protocol/schema.ts` as the single source of truth for the Gateway control plane (connect/req/res/event frames and payloads). All derived artifacts should be generated from these schemas, not edited by hand.
 
 ## Current pipeline
 
 - **TypeBox → JSON Schema**: `pnpm protocol:gen` writes `dist/protocol.schema.json` (draft-07) and runs AJV in the server tests.
-- **TypeBox → Swift (quicktype)**: `pnpm protocol:gen` currently also generates `apps/macos/Sources/ClawdisProtocol/Protocol.swift` via quicktype. This produces a single struct with many optionals and is not ideal for strong typing.
+- **TypeBox → Swift**: `pnpm protocol:gen:swift` generates `apps/macos/Sources/ClawdisProtocol/GatewayModels.swift`.
 
 ## Problem
 
-- Quicktype flattens `oneOf`/`discriminator` into an all-optional struct, so Swift loses exhaustiveness and safety for `GatewayFrame`.
+- We want strong typing in Swift, including a sealed `GatewayFrame` enum with a discriminator and a forward-compatible `unknown` case.
 
 ## Preferred plan (next step)
 
 - Add a small, custom Swift generator driven directly by the TypeBox schemas:
-  - Emit a sealed `enum GatewayFrame: Codable { case hello(Hello), helloOk(HelloOk), helloError(...), req(RequestFrame), res(ResponseFrame), event(EventFrame) }`.
-  - Emit strongly typed payload structs/enums (`Hello`, `HelloOk`, `HelloError`, `RequestFrame`, `ResponseFrame`, `EventFrame`, `PresenceEntry`, `Snapshot`, `StateVersion`, `ErrorShape`, `AgentEvent`, `TickEvent`, `ShutdownEvent`, `SendParams`, `AgentParams`, `ErrorCode`, `PROTOCOL_VERSION`).
+  - Emit a sealed `enum GatewayFrame: Codable { case req(RequestFrame), res(ResponseFrame), event(EventFrame) }`.
+  - Emit strongly typed payload structs/enums (`ConnectParams`, `HelloOk`, `RequestFrame`, `ResponseFrame`, `EventFrame`, `PresenceEntry`, `Snapshot`, `StateVersion`, `ErrorShape`, `AgentEvent`, `TickEvent`, `ShutdownEvent`, `SendParams`, `AgentParams`, `ErrorCode`, `PROTOCOL_VERSION`).
   - Custom `init(from:)` / `encode(to:)` enforces the `type` discriminator and can include an `unknown` case for forward compatibility.
   - Wire a new script (e.g., `pnpm protocol:gen:swift`) into `protocol:check` so CI fails if the generated Swift is stale.
 

@@ -29,11 +29,13 @@ describe("GatewayClient", () => {
     wss = new WebSocketServer({ port, host: "127.0.0.1" });
 
     wss.on("connection", (socket) => {
-      socket.once("message", () => {
+      socket.once("message", (data) => {
+        const first = JSON.parse(String(data)) as { id?: string };
+        const id = first.id ?? "connect";
         // Respond with tiny tick interval to trigger watchdog quickly.
         const helloOk = {
           type: "hello-ok",
-          protocol: 1,
+          protocol: 2,
           server: { version: "dev", connId: "c1" },
           features: { methods: [], events: [] },
           snapshot: {
@@ -48,7 +50,9 @@ describe("GatewayClient", () => {
             tickIntervalMs: 5,
           },
         };
-        socket.send(JSON.stringify(helloOk));
+        socket.send(
+          JSON.stringify({ type: "res", id, ok: true, payload: helloOk }),
+        );
       });
     });
 

@@ -2,8 +2,8 @@ import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 import { logDebug, logError } from "../logger.js";
 import {
+  type ConnectParams,
   type EventFrame,
-  type Hello,
   type HelloOk,
   PROTOCOL_VERSION,
   type RequestFrame,
@@ -53,7 +53,7 @@ export class GatewayClient {
     const url = this.opts.url ?? "ws://127.0.0.1:18789";
     this.ws = new WebSocket(url, { maxPayload: 512 * 1024 });
 
-    this.ws.on("open", () => this.sendHello());
+    this.ws.on("open", () => this.sendConnect());
     this.ws.on("message", (data) => this.handleMessage(data.toString()));
     this.ws.on("close", (code, reason) => {
       this.ws = null;
@@ -79,9 +79,8 @@ export class GatewayClient {
     this.flushPendingErrors(new Error("gateway client stopped"));
   }
 
-  private sendHello() {
-    const hello: Hello = {
-      type: "hello",
+  private sendConnect() {
+    const params: ConnectParams = {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
       client: {
@@ -94,28 +93,27 @@ export class GatewayClient {
       caps: [],
       auth: this.opts.token ? { token: this.opts.token } : undefined,
     };
-    this.ws?.send(JSON.stringify(hello));
+
+    void this.request<HelloOk>("connect", params)
+      .then((helloOk) => {
+        this.backoffMs = 1000;
+        this.tickIntervalMs =
+          typeof helloOk.policy?.tickIntervalMs === "number"
+            ? helloOk.policy.tickIntervalMs
+            : 30_000;
+        this.lastTick = Date.now();
+        this.startTickWatch();
+        this.opts.onHelloOk?.(helloOk);
+      })
+      .catch((err) => {
+        logError(`gateway connect failed: ${String(err)}`);
+        this.ws?.close(1008, "connect failed");
+      });
   }
 
   private handleMessage(raw: string) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed?.type === "hello-ok") {
-        this.backoffMs = 1000;
-        this.tickIntervalMs =
-          typeof parsed.policy?.tickIntervalMs === "number"
-            ? parsed.policy.tickIntervalMs
-            : 30_000;
-        this.lastTick = Date.now();
-        this.startTickWatch();
-        this.opts.onHelloOk?.(parsed as HelloOk);
-        return;
-      }
-      if (parsed?.type === "hello-error") {
-        logError(`gateway hello-error: ${parsed.reason}`);
-        this.ws?.close(1008, "hello-error");
-        return;
-      }
       if (parsed?.type === "event") {
         const evt = parsed as EventFrame;
         const seq = typeof evt.seq === "number" ? evt.seq : null;

@@ -82,7 +82,7 @@ Unify mac Canvas + iOS Canvas under a single conceptual surface:
 Add to `src/gateway/protocol/schema.ts` (and regenerate Swift models):
 
 **Identity**
-- Node identity comes from `hello.client.instanceId` (stable), and `hello.client.mode = "node"` (or `"ios-node"`).
+- Node identity comes from `connect.params.client.instanceId` (stable), and `connect.params.client.mode = "node"` (or `"ios-node"`).
 
 **Methods**
 - `node.list` → list paired/connected nodes + capabilities
@@ -134,7 +134,7 @@ When iOS is backgrounded:
 ## Code sharing (macOS + iOS)
 Create/expand SwiftPM targets so both apps share:
 - `ClawdisProtocol` (generated models; platform-neutral)
-- `ClawdisGatewayClient` (shared WS framing + hello/req/res + seq-gap handling)
+- `ClawdisGatewayClient` (shared WS framing + connect/req/res + seq-gap handling)
 - `ClawdisNodeKit` (node.invoke command types + error codes)
 
 macOS continues to own:
@@ -191,6 +191,6 @@ open ClawdisNode.xcodeproj
    - Keep existing implementation, but expose it through the unified protocol path so the agent uses one API.
 
 ## Open questions
-- Should `hello.client.mode` be `"node"` with `platform="ios ..."` or a distinct mode `"ios-node"`? (Presence filtering currently excludes `"cli"` only.)
+- Should `connect.params.client.mode` be `"node"` with `platform="ios ..."` or a distinct mode `"ios-node"`? (Presence filtering currently excludes `"cli"` only.)
 - Do we want a “permissions” model per node (voice only vs voice+screen) at pairing time?
 - Should “website mode” allow arbitrary https, or enforce an allowlist to reduce risk?

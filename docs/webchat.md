@@ -20,7 +20,7 @@ Updated: 2025-12-09
 - Data plane is entirely on the Gateway WS (`ws://127.0.0.1:<gatewayPort>`): methods `chat.history`, `chat.send`; events `chat`, `presence`, `tick`, `health`.
 
 ## How it connects
-- Browser/WebView performs Gateway WS `hello`, then calls `chat.history` for bootstrap and `chat.send` for sends; listens to `chat/presence/tick/health` events.
+- Browser/WebView performs Gateway WS `connect`, then calls `chat.history` for bootstrap and `chat.send` for sends; listens to `chat/presence/tick/health` events.
 - No session file watching. History comes from the Gateway via `chat.history`.
 - If Gateway WS is unavailable, the UI surfaces the error and blocks send.
 

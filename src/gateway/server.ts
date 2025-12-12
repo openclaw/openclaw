@@ -39,25 +39,25 @@ import { sendMessageWhatsApp } from "../web/outbound.js";
 import { ensureWebChatServerFromConfig } from "../webchat/server.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
+  type ConnectParams,
   ErrorCodes,
   type ErrorShape,
   errorShape,
   formatValidationErrors,
-  type Hello,
   PROTOCOL_VERSION,
   type RequestFrame,
   type Snapshot,
   validateAgentParams,
   validateChatHistoryParams,
   validateChatSendParams,
-  validateHello,
+  validateConnectParams,
   validateRequestFrame,
   validateSendParams,
 } from "./protocol/index.js";
 
 type Client = {
   socket: WebSocket;
-  hello: Hello;
+  connect: ConnectParams;
   connId: string;
   presenceKey?: string;
 };
@@ -502,13 +502,10 @@ export async function startGatewayServer(
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
-    logWs("in", "connect", { connId, remoteAddr });
-    const describeHello = (hello: Hello | null | undefined) =>
-      hello
-        ? `${hello.client.name ?? "unknown"} ${hello.client.mode ?? "?"} v${hello.client.version ?? "?"}`
-        : "unknown";
-    const isWebchatHello = (hello: Hello | null | undefined) =>
-      hello?.client?.mode === "webchat" || hello?.client?.name === "webchat-ui";
+    logWs("in", "open", { connId, remoteAddr });
+    const isWebchatConnect = (params: ConnectParams | null | undefined) =>
+      params?.client?.mode === "webchat" ||
+      params?.client?.name === "webchat-ui";
 
     const send = (obj: unknown) => {
       try {
@@ -539,10 +536,10 @@ export async function startGatewayServer(
     socket.once("close", (code, reason) => {
       if (!client) {
         logWarn(
-          `gateway/ws closed before hello conn=${connId} remote=${remoteAddr ?? "?"} code=${code ?? "n/a"} reason=${reason?.toString() || "n/a"}`,
+          `gateway/ws closed before connect conn=${connId} remote=${remoteAddr ?? "?"} code=${code ?? "n/a"} reason=${reason?.toString() || "n/a"}`,
         );
       }
-      if (client && isWebchatHello(client.hello)) {
+      if (client && isWebchatConnect(client.connect)) {
         logInfo(
           `webchat disconnected code=${code} reason=${reason?.toString() || "n/a"} conn=${connId}`,
         );
@@ -585,91 +582,115 @@ export async function startGatewayServer(
       try {
         const parsed = JSON.parse(text);
         if (!client) {
-          // Expect hello
-          if (!validateHello(parsed)) {
-            logWarn(
-              `gateway/ws invalid hello conn=${connId} remote=${remoteAddr ?? "?"}`,
-            );
-            send({
-              type: "hello-error",
-              reason: `invalid hello: ${formatValidationErrors(validateHello.errors)}`,
-            });
-            socket.close(1008, "invalid hello");
+          // Handshake must be a normal request:
+          // { type:"req", method:"connect", params: ConnectParams }.
+          if (
+            !validateRequestFrame(parsed) ||
+            (parsed as RequestFrame).method !== "connect" ||
+            !validateConnectParams((parsed as RequestFrame).params)
+          ) {
+            if (validateRequestFrame(parsed)) {
+              const req = parsed as RequestFrame;
+              send({
+                type: "res",
+                id: req.id,
+                ok: false,
+                error: errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  req.method === "connect"
+                    ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
+                    : "invalid handshake: first request must be connect",
+                ),
+              });
+            } else {
+              logWarn(
+                `gateway/ws invalid handshake conn=${connId} remote=${remoteAddr ?? "?"}`,
+              );
+            }
+            socket.close(1008, "invalid handshake");
             close();
             return;
           }
-          const hello = parsed as Hello;
+
+          const req = parsed as RequestFrame;
+          const connectParams = req.params as ConnectParams;
+
           // protocol negotiation
-          const { minProtocol, maxProtocol } = hello;
+          const { minProtocol, maxProtocol } = connectParams;
           if (
             maxProtocol < PROTOCOL_VERSION ||
             minProtocol > PROTOCOL_VERSION
           ) {
             logWarn(
-              `gateway/ws protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
+              `gateway/ws protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
-            logWs("out", "hello-error", {
-              connId,
-              reason: "protocol mismatch",
-              minProtocol,
-              maxProtocol,
-              expected: PROTOCOL_VERSION,
-            });
             send({
-              type: "hello-error",
-              reason: "protocol mismatch",
-              expectedProtocol: PROTOCOL_VERSION,
+              type: "res",
+              id: req.id,
+              ok: false,
+              error: errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "protocol mismatch",
+                {
+                  details: { expectedProtocol: PROTOCOL_VERSION },
+                },
+              ),
             });
             socket.close(1002, "protocol mismatch");
             close();
             return;
           }
+
           // token auth if required
           const token = getGatewayToken();
-          if (token && hello.auth?.token !== token) {
+          if (token && connectParams.auth?.token !== token) {
             logWarn(
-              `gateway/ws unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
+              `gateway/ws unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
-            logWs("out", "hello-error", { connId, reason: "unauthorized" });
             send({
-              type: "hello-error",
-              reason: "unauthorized",
+              type: "res",
+              id: req.id,
+              ok: false,
+              error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
             });
             socket.close(1008, "unauthorized");
             close();
             return;
           }
 
-          const shouldTrackPresence = hello.client.mode !== "cli";
-          // synthesize presence entry for this connection (client fingerprint)
+          const shouldTrackPresence = connectParams.client.mode !== "cli";
           const presenceKey = shouldTrackPresence
-            ? hello.client.instanceId || connId
+            ? connectParams.client.instanceId || connId
             : undefined;
-          logWs("in", "hello", {
+
+          logWs("in", "connect", {
             connId,
-            client: hello.client.name,
-            version: hello.client.version,
-            mode: hello.client.mode,
-            instanceId: hello.client.instanceId,
-            platform: hello.client.platform,
-            token: hello.auth?.token ? "set" : "none",
+            client: connectParams.client.name,
+            version: connectParams.client.version,
+            mode: connectParams.client.mode,
+            instanceId: connectParams.client.instanceId,
+            platform: connectParams.client.platform,
+            token: connectParams.auth?.token ? "set" : "none",
           });
-          if (isWebchatHello(hello)) {
+
+          if (isWebchatConnect(connectParams)) {
             logInfo(
-              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${describeHello(hello)}`,
+              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
           }
+
           if (presenceKey) {
             upsertPresence(presenceKey, {
-              host: hello.client.name || os.hostname(),
+              host: connectParams.client.name || os.hostname(),
               ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
-              version: hello.client.version,
-              mode: hello.client.mode,
-              instanceId: hello.client.instanceId,
+              version: connectParams.client.version,
+              mode: connectParams.client.mode,
+              instanceId: connectParams.client.instanceId,
               reason: "connect",
             });
             presenceVersion += 1;
           }
+
           const snapshot = buildSnapshot();
           if (healthCache) {
             snapshot.health = healthCache;
@@ -695,10 +716,10 @@ export async function startGatewayServer(
               tickIntervalMs: TICK_INTERVAL_MS,
             },
           };
+
           clearTimeout(handshakeTimer);
-          // Add the client only after the hello response is ready so no tick/presence
-          // events reach it before the handshake completes.
-          client = { socket, hello, connId, presenceKey };
+          client = { socket, connect: connectParams, connId, presenceKey };
+
           logWs("out", "hello-ok", {
             connId,
             methods: METHODS.length,
@@ -706,11 +727,12 @@ export async function startGatewayServer(
             presence: snapshot.presence.length,
             stateVersion: snapshot.stateVersion.presence,
           });
-          send(helloOk);
+
+          send({ type: "res", id: req.id, ok: true, payload: helloOk });
+
           clients.add(client);
-          // Kick a health refresh in the background to keep cache warm.
           void refreshHealthSnapshot({ probe: true }).catch((err) =>
-            logError(`post-hello health refresh failed: ${formatError(err)}`),
+            logError(`post-connect health refresh failed: ${formatError(err)}`),
           );
           return;
         }
@@ -751,6 +773,17 @@ export async function startGatewayServer(
         };
 
         switch (req.method) {
+          case "connect": {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                "connect is only valid as the first request",
+              ),
+            );
+            break;
+          }
           case "health": {
             const now = Date.now();
             const cached = healthCache;

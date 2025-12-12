@@ -146,11 +146,8 @@ function emitStruct(name: string, schema: JsonSchema): string {
 }
 
 function emitGatewayFrame(): string {
-  const cases = ["hello", "hello-ok", "hello-error", "req", "res", "event"];
+  const cases = ["req", "res", "event"];
   const associated: Record<string, string> = {
-    hello: "Hello",
-    "hello-ok": "HelloOk",
-    "hello-error": "HelloError",
     req: "RequestFrame",
     res: "ResponseFrame",
     event: "EventFrame",
@@ -165,12 +162,6 @@ function emitGatewayFrame(): string {
         let typeContainer = try decoder.container(keyedBy: CodingKeys.self)
         let type = try typeContainer.decode(String.self, forKey: .type)
         switch type {
-        case "hello":
-            self = .hello(try Hello(from: decoder))
-        case "hello-ok":
-            self = .helloOk(try HelloOk(from: decoder))
-        case "hello-error":
-            self = .helloError(try HelloError(from: decoder))
         case "req":
             self = .req(try RequestFrame(from: decoder))
         case "res":
@@ -186,9 +177,6 @@ function emitGatewayFrame(): string {
 
     public func encode(to encoder: Encoder) throws {
         switch self {
-        case .hello(let v): try v.encode(to: encoder)
-        case .helloOk(let v): try v.encode(to: encoder)
-        case .helloError(let v): try v.encode(to: encoder)
         case .req(let v): try v.encode(to: encoder)
         case .res(let v): try v.encode(to: encoder)
         case .event(let v): try v.encode(to: encoder)
