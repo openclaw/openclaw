@@ -70,7 +70,10 @@ struct InstancesSettings: View {
                 self.label(icon: "clock", text: inst.lastInputDescription)
                 if let mode = inst.mode { self.label(icon: "network", text: mode) }
                 if let reason = inst.reason, !reason.isEmpty {
-                    self.label(icon: "info.circle", text: reason)
+                    self.label(
+                        icon: "info.circle",
+                        text: "Updated by: \(self.presenceUpdateSourceText(reason))")
+                        .help(self.presenceUpdateSourceHelp(reason))
                 }
             }
             Text(inst.text)
@@ -89,6 +92,36 @@ struct InstancesSettings: View {
             Text(text)
         }
         .font(.footnote)
+    }
+
+    private func presenceUpdateSourceText(_ reason: String) -> String {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch trimmed {
+        case "self":
+            return "Gateway (self)"
+        case "connect":
+            return "Client connected"
+        case "disconnect":
+            return "Client disconnected"
+        case "launch":
+            return "App launch"
+        case "periodic":
+            return "Heartbeat"
+        case "instances-refresh":
+            return "UI refresh (Instances tab)"
+        case "seq gap":
+            return "Resynced after event gap"
+        default:
+            return trimmed.isEmpty ? "Unknown" : trimmed
+        }
+    }
+
+    private func presenceUpdateSourceHelp(_ reason: String) -> String {
+        let trimmed = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return "Why this presence entry was last updated (debug marker)."
+        }
+        return "Why this presence entry was last updated (debug marker). Raw: \(trimmed)"
     }
 }
 
