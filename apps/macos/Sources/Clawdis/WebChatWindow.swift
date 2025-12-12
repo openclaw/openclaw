@@ -133,6 +133,36 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
     private func loadPlaceholder() {
         let html = """
         <html>
+          <head>
+            <style>
+              html, body { height: 100%; margin: 0; padding: 0; }
+              body {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: #fff;
+              }
+              .boot {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 8px;
+              }
+              .boot span {
+                width: 10px;
+                height: 10px;
+                border-radius: 50%;
+                background: #0f172a;
+                animation: boot-pulse 1s ease-in-out infinite;
+              }
+              .boot span:nth-child(2) { animation-delay: 0.15s; }
+              .boot span:nth-child(3) { animation-delay: 0.3s; }
+              @keyframes boot-pulse {
+                0%, 80%, 100% { opacity: 0.25; transform: scale(0.8); }
+                40% { opacity: 1; transform: scale(1.1); }
+              }
+            </style>
+          </head>
           <body style='font-family:-apple-system;
                        margin:0;
                        padding:0;
@@ -141,7 +171,9 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
                        justify-content:center;
                        height:100vh;
                        color:#888'>
-            Connecting to web chat…
+            <div class="boot" aria-label="Booting web chat">
+              <span></span><span></span><span></span>
+            </div>
           </body>
         </html>
         """

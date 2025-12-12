@@ -13,7 +13,8 @@ const logStatus = (msg) => {
   try {
     console.log(msg);
     const el = document.getElementById("app");
-    if (el && !el.dataset.booted) el.textContent = msg;
+    // Keep the animated boot loader visible; don't overwrite it with status text.
+    if (el && !el.dataset.booted) el.dataset.status = msg;
   } catch {
     // Ignore logging failures—never block bootstrap.
   }
