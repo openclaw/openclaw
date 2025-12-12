@@ -145,6 +145,10 @@ actor VoiceWakeRuntime {
             }
 
             self.logger.info("voicewake runtime started")
+            DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "started", fields: [
+                "locale": config.localeID ?? "",
+                "micID": config.micID ?? "",
+            ])
         } catch {
             self.logger.error("voicewake runtime failed to start: \(error.localizedDescription, privacy: .public)")
             self.stop()
@@ -167,6 +171,7 @@ actor VoiceWakeRuntime {
         self.currentConfig = nil
         self.listeningState = .idle
         self.logger.debug("voicewake runtime stopped")
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "stopped")
 
         let token = self.overlayToken
         self.overlayToken = nil
@@ -255,6 +260,7 @@ actor VoiceWakeRuntime {
     private func beginCapture(transcript: String, config: RuntimeConfig) async {
         self.listeningState = .voiceWake
         self.isCapturing = true
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "beginCapture")
         let trimmed = Self.trimmedAfterTrigger(transcript, triggers: config.triggers)
         self.capturedTranscript = trimmed
         self.committedTranscript = ""
@@ -321,6 +327,9 @@ actor VoiceWakeRuntime {
         self.captureTask = nil
 
         let finalTranscript = self.capturedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "finalizeCapture", fields: [
+            "finalLen": "\(finalTranscript.count)",
+        ])
         // Stop further recognition events so we don't retrigger immediately with buffered audio.
         self.haltRecognitionPipeline()
         self.capturedTranscript = ""

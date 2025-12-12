@@ -28,5 +28,6 @@ let modelCatalogPathKey = "clawdis.modelCatalogPath"
 let modelCatalogReloadKey = "clawdis.modelCatalogReload"
 let attachExistingGatewayOnlyKey = "clawdis.gateway.attachExistingOnly"
 let heartbeatsEnabledKey = "clawdis.heartbeatsEnabled"
+let debugFileLogEnabledKey = "clawdis.debug.fileLogEnabled"
 let voiceWakeSupported: Bool = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26
 let cliHelperSearchPaths = ["/usr/local/bin", "/opt/homebrew/bin"]

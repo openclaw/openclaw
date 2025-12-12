@@ -25,6 +25,7 @@ struct DebugSettings: View {
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(webChatSwiftUIEnabledKey) private var webChatSwiftUIEnabled: Bool = false
     @AppStorage(attachExistingGatewayOnlyKey) private var attachExistingGatewayOnly: Bool = false
+    @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
 
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
@@ -56,6 +57,27 @@ struct DebugSettings: View {
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+                LabeledContent("Diagnostics log") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
+                            .toggleStyle(.switch)
+                            .help("Writes a rotating, local-only diagnostics log under ~/Library/Logs/Clawdis/. Enable only while actively debugging.")
+                        HStack(spacing: 8) {
+                            Button("Open folder") {
+                                NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
+                            }
+                            .buttonStyle(.bordered)
+                            Button("Clear") {
+                                Task { try? await DiagnosticsFileLog.shared.clear() }
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Text(DiagnosticsFileLog.logFileURL().path)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                 }
                 LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
                 LabeledContent("Gateway status") {

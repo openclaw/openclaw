@@ -51,6 +51,11 @@ enum VoiceWakeChimePlayer {
         } else {
             self.logger.log(level: .info, "chime play")
         }
+        DiagnosticsFileLog.shared.log(category: "voicewake.chime", event: "play", fields: [
+            "reason": reason ?? "",
+            "chime": chime.displayLabel,
+            "systemName": chime.systemName ?? "",
+        ])
         SoundEffectPlayer.play(sound)
     }
 

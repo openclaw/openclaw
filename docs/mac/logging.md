@@ -1,9 +1,23 @@
 ---
-summary: "Enabling verbose macOS unified logging for Clawdis with privacy flags"
+summary: "Clawdis logging: rolling diagnostics file log + unified log privacy flags"
 read_when:
   - Capturing macOS logs or investigating private data logging
+  - Debugging voice wake/session lifecycle issues
 ---
-# Logging private data on macOS
+# Logging (macOS)
+
+## Rolling diagnostics file log (Debug pane)
+Clawdis can write a local, rotating diagnostics log to disk (useful when macOS unified logging is impractical during iterative repros).
+
+- Enable: **Debug pane → Diagnostics log → “Write rolling diagnostics log (JSONL)”**
+- Location: `~/Library/Logs/Clawdis/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
+- Clear: **Debug pane → Diagnostics log → “Clear”**
+
+Notes:
+- This is **off by default**. Enable only while actively debugging.
+- Treat the file as sensitive; don’t share it without review.
+
+## Unified logging private data on macOS
 
 Unified logging redacts most payloads unless a subsystem opts into `privacy -off`. Per Peter's write-up on macOS [logging privacy shenanigans](https://steipete.me/posts/2025/logging-privacy-shenanigans) (2025) this is controlled by a plist in `/Library/Preferences/Logging/Subsystems/` keyed by the subsystem name. Only new log entries pick up the flag, so enable it before reproducing an issue.
 
