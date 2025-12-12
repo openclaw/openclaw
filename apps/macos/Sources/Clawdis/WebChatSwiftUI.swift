@@ -213,8 +213,7 @@ final class WebChatViewModel: ObservableObject {
     private func handleGatewayEvent(_ evt: EventFrame) {
         guard evt.event == "chat" else { return }
         guard let payload = evt.payload else { return }
-        guard let data = try? JSONEncoder().encode(payload) else { return }
-        guard let chat = try? JSONDecoder().decode(ChatEventPayload.self, from: data) else { return }
+        guard let chat = try? GatewayPayloadDecoding.decode(payload, as: ChatEventPayload.self) else { return }
         guard chat.sessionKey == nil || chat.sessionKey == self.sessionKey else { return }
 
         if let runId = chat.runId, !self.pendingRuns.contains(runId) {

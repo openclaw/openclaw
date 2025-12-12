@@ -92,11 +92,7 @@ final class InstancesStore: ObservableObject {
         case .seqGap:
             Task { await self.refresh() }
         case let .snapshot(hello):
-            if JSONSerialization.isValidJSONObject(hello.snapshot.presence),
-               let data = try? JSONEncoder().encode(hello.snapshot.presence)
-            {
-                self.decodeAndApplyPresenceData(data)
-            }
+            self.applyPresence(hello.snapshot.presence)
         default:
             break
         }
@@ -264,8 +260,7 @@ final class InstancesStore: ObservableObject {
 
     func handlePresenceEventPayload(_ payload: ClawdisProtocol.AnyCodable) {
         do {
-            let payloadData = try JSONEncoder().encode(payload)
-            let wrapper = try JSONDecoder().decode(PresenceEventPayload.self, from: payloadData)
+            let wrapper = try GatewayPayloadDecoding.decode(payload, as: PresenceEventPayload.self)
             self.applyPresence(wrapper.presence)
         } catch {
             self.logger.error("presence event decode failed: \(error.localizedDescription, privacy: .public)")
