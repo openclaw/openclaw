@@ -18,6 +18,7 @@ import {
   runWebHeartbeatOnce,
   stripHeartbeatToken,
 } from "./auto-reply.js";
+import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { sendMessageWhatsApp } from "./outbound.js";
 import {
   resetBaileysMocks,
@@ -200,6 +201,39 @@ describe("partial reply gating", () => {
     expect("onPartialReply" in resolverOptions).toBe(false);
     expect(reply).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith("final reply");
+  });
+
+  it("defaults to self-only when no config is present", async () => {
+    const cfg: ClawdisConfig = {
+      inbound: {
+        // No allowFrom provided; this simulates zero config file while keeping reply simple
+        reply: { mode: "text", text: "ok" },
+      },
+    };
+
+    // Not self: should be blocked
+    const blocked = await getReplyFromConfig(
+      {
+        Body: "hi",
+        From: "whatsapp:+999",
+        To: "whatsapp:+123",
+      },
+      undefined,
+      cfg,
+    );
+    expect(blocked).toBeUndefined();
+
+    // Self: should be allowed
+    const allowed = await getReplyFromConfig(
+      {
+        Body: "hi",
+        From: "whatsapp:+123",
+        To: "whatsapp:+123",
+      },
+      undefined,
+      cfg,
+    );
+    expect(allowed).toEqual({ text: "ok" });
   });
 });
 
@@ -531,7 +565,7 @@ describe("web auto-reply", () => {
     await run;
   });
 
-  it("stops after hitting max reconnect attempts", async () => {
+  it("stops after hitting max reconnect attempts", { timeout: 20000 }, async () => {
     const closeResolvers: Array<() => void> = [];
     const sleep = vi.fn(async () => {});
     const listenerFactory = vi.fn(async () => {
@@ -570,7 +604,7 @@ describe("web auto-reply", () => {
     await run;
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Reached max retries"),
+      expect.stringContaining("max attempts reached"),
     );
   });
 

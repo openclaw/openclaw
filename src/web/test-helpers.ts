@@ -7,10 +7,11 @@ import { createMockBaileys } from "../../test/mocks/baileys.js";
 const CONFIG_KEY = Symbol.for("clawdis:testConfigMock");
 const DEFAULT_CONFIG = {
   inbound: {
-    allowFrom: ["*"], // Allow all in tests by default
-    messagePrefix: undefined, // No message prefix in tests
-    responsePrefix: undefined, // No response prefix in tests
-    timestampPrefix: false, // No timestamp in tests
+    // Tests can override; default remains open to avoid surprising fixtures
+    allowFrom: ["*"],
+    messagePrefix: undefined,
+    responsePrefix: undefined,
+    timestampPrefix: false,
   },
 };
 

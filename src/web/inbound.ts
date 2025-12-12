@@ -149,7 +149,16 @@ export async function monitorWebInbox(options: {
       // Filter unauthorized senders early to prevent wasted processing
       // and potential session corruption from Bad MAC errors
       const cfg = loadConfig();
-      const allowFrom = cfg.inbound?.allowFrom;
+      const configuredAllowFrom = cfg.inbound?.allowFrom;
+      // Without user config, default to self-only DM access so the owner can talk to themselves
+      const defaultAllowFrom =
+        (!configuredAllowFrom || configuredAllowFrom.length === 0) && selfE164
+          ? [selfE164]
+          : undefined;
+      const allowFrom =
+        configuredAllowFrom && configuredAllowFrom.length > 0
+          ? configuredAllowFrom
+          : defaultAllowFrom;
       const isSamePhone = from === selfE164;
 
       const allowlistEnabled =

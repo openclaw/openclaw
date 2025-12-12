@@ -1383,7 +1383,7 @@ export async function monitorWebProvider(
         },
         "web reconnect: max attempts reached; continuing in degraded mode",
       );
-      reconnectAttempts = 0;
+      break;
     }
 
     const delay = computeBackoff(reconnectPolicy, reconnectAttempts);

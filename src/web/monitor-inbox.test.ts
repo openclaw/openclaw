@@ -11,7 +11,7 @@ vi.mock("../media/store.js", () => ({
 
 const mockLoadConfig = vi.fn().mockReturnValue({
   inbound: {
-    allowFrom: ["*"], // Allow all in tests
+    allowFrom: ["*"], // Allow all in tests by default
     messagePrefix: undefined,
     responsePrefix: undefined,
     timestampPrefix: false,
@@ -553,3 +553,59 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 });
+  it("defaults to self-only when no config is present", async () => {
+    // No config file => allowFrom should be derived from selfE164
+    mockLoadConfig.mockReturnValue({});
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    // Message from someone else should be blocked
+    const upsertBlocked = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "no-config-1", fromMe: false, remoteJid: "[redacted-email]" },
+          message: { conversation: "ping" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsertBlocked);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onMessage).not.toHaveBeenCalled();
+
+    // Message from self should be allowed
+    const upsertSelf = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "no-config-2", fromMe: false, remoteJid: "[redacted-email]" },
+          message: { conversation: "self ping" },
+          messageTimestamp: 1_700_000_001,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsertSelf);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "self ping", from: "+123", to: "+123" }),
+    );
+
+    // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    await listener.close();
+  });

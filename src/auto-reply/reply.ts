@@ -473,10 +473,19 @@ export async function getReplyFromConfig(
   }
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)
-  const allowFrom = cfg.inbound?.allowFrom;
+  const configuredAllowFrom = cfg.inbound?.allowFrom;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const isSamePhone = from && to && from === to;
+  // If no config is present, default to self-only DM access.
+  const defaultAllowFrom =
+    (!configuredAllowFrom || configuredAllowFrom.length === 0) && to
+      ? [to]
+      : undefined;
+  const allowFrom =
+    configuredAllowFrom && configuredAllowFrom.length > 0
+      ? configuredAllowFrom
+      : defaultAllowFrom;
   const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
 
