@@ -308,7 +308,9 @@ final class VoiceWakeOverlayController: ObservableObject {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.level = .statusBar
+        // Voice wake must stay above any other Clawdis windows (Canvas, WebChat, notifications).
+        // `.statusBar` is shared with some other overlays, so bump it slightly to avoid ordering fights.
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
         panel.isMovable = false

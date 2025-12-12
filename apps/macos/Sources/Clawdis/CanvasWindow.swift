@@ -66,6 +66,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
         self.watcher = CanvasFileWatcher(url: self.sessionDir) { [weak webView] in
             Task { @MainActor in
+                // Only auto-reload when we are showing local canvas content.
+                guard webView?.url?.scheme == CanvasScheme.scheme else { return }
                 webView?.reload()
             }
         }
@@ -127,11 +129,19 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     }
 
     func goto(path: String) {
-        guard let url = CanvasScheme.makeURL(session: CanvasWindowController.sanitizeSessionKey(self.sessionKey), path: path) else {
-            canvasWindowLogger.error("invalid canvas url session=\(self.sessionKey, privacy: .public) path=\(path, privacy: .public)")
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" {
+            canvasWindowLogger.debug("canvas goto web \(url.absoluteString, privacy: .public)")
+            self.webView.load(URLRequest(url: url))
             return
         }
-        canvasWindowLogger.debug("canvas goto \(url.absoluteString, privacy: .public)")
+
+        guard let url = CanvasScheme.makeURL(session: CanvasWindowController.sanitizeSessionKey(self.sessionKey), path: trimmed) else {
+            canvasWindowLogger.error("invalid canvas url session=\(self.sessionKey, privacy: .public) path=\(trimmed, privacy: .public)")
+            return
+        }
+        canvasWindowLogger.debug("canvas goto canvas \(url.absoluteString, privacy: .public)")
         self.webView.load(URLRequest(url: url))
     }
 
@@ -300,7 +310,8 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             decisionHandler(.cancel)
             return
         }
-        if url.scheme == CanvasScheme.scheme {
+        let scheme = url.scheme?.lowercased()
+        if scheme == CanvasScheme.scheme || scheme == "https" || scheme == "http" {
             decisionHandler(.allow)
             return
         }
