@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ClawdisConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import * as commandQueue from "../process/command-queue.js";
@@ -18,7 +18,6 @@ import {
   runWebHeartbeatOnce,
   stripHeartbeatToken,
 } from "./auto-reply.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { sendMessageWhatsApp } from "./outbound.js";
 import {
   resetBaileysMocks,
@@ -565,48 +564,52 @@ describe("web auto-reply", () => {
     await run;
   });
 
-  it("stops after hitting max reconnect attempts", { timeout: 20000 }, async () => {
-    const closeResolvers: Array<() => void> = [];
-    const sleep = vi.fn(async () => {});
-    const listenerFactory = vi.fn(async () => {
-      const onClose = new Promise<void>((res) => closeResolvers.push(res));
-      return { close: vi.fn(), onClose };
-    });
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+  it(
+    "stops after hitting max reconnect attempts",
+    { timeout: 20000 },
+    async () => {
+      const closeResolvers: Array<() => void> = [];
+      const sleep = vi.fn(async () => {});
+      const listenerFactory = vi.fn(async () => {
+        const onClose = new Promise<void>((res) => closeResolvers.push(res));
+        return { close: vi.fn(), onClose };
+      });
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
 
-    const run = monitorWebProvider(
-      false,
-      listenerFactory,
-      true,
-      async () => ({ text: "ok" }),
-      runtime as never,
-      undefined,
-      {
-        heartbeatSeconds: 1,
-        reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
-        sleep,
-      },
-    );
+      const run = monitorWebProvider(
+        false,
+        listenerFactory,
+        true,
+        async () => ({ text: "ok" }),
+        runtime as never,
+        undefined,
+        {
+          heartbeatSeconds: 1,
+          reconnect: { initialMs: 5, maxMs: 5, maxAttempts: 2, factor: 1.1 },
+          sleep,
+        },
+      );
 
-    await Promise.resolve();
-    expect(listenerFactory).toHaveBeenCalledTimes(1);
+      await Promise.resolve();
+      expect(listenerFactory).toHaveBeenCalledTimes(1);
 
-    closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    expect(listenerFactory).toHaveBeenCalledTimes(2);
+      closeResolvers.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      expect(listenerFactory).toHaveBeenCalledTimes(2);
 
-    closeResolvers.shift()?.();
-    await new Promise((resolve) => setTimeout(resolve, 15));
-    await run;
+      closeResolvers.shift()?.();
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      await run;
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("max attempts reached"),
-    );
-  });
+      expect(runtime.error).toHaveBeenCalledWith(
+        expect.stringContaining("max attempts reached"),
+      );
+    },
+  );
 
   it("skips reply heartbeat when requests are running", async () => {
     const tmpDir = await fs.mkdtemp(

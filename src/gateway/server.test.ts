@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
+import { type AddressInfo, createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { type AddressInfo, createServer } from "node:net";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { agentCommand } from "../commands/agent.js";
