@@ -6,11 +6,12 @@ import type {
   AgentSpec,
   AgentToolResult,
 } from "./types.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 
 type PiAssistantMessage = {
   role?: string;
   content?: Array<{ type?: string; text?: string }>;
-  usage?: { input?: number; output?: number };
+  usage?: UsageLike;
   model?: string;
   provider?: string;
   stopReason?: string;
@@ -153,7 +154,7 @@ function parsePiJson(raw: string): AgentParseResult {
         model: lastAssistant.model,
         provider: lastAssistant.provider,
         stopReason: lastAssistant.stopReason,
-        usage: lastAssistant.usage,
+        usage: normalizeUsage(lastAssistant.usage),
       }
     : undefined;
 

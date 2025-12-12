@@ -36,12 +36,17 @@ describe("pi agent helpers", () => {
   it("parses final assistant message and preserves usage meta", () => {
     const stdout = [
       '{"type":"message_start","message":{"role":"assistant"}}',
-      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}],"usage":{"input":10,"output":5},"model":"pi-1","provider":"inflection","stopReason":"end"}}',
+      '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hello world"}],"usage":{"input":10,"output":5,"cacheRead":100,"cacheWrite":20,"totalTokens":135},"model":"pi-1","provider":"inflection","stopReason":"end"}}',
     ].join("\n");
     const parsed = piSpec.parseOutput(stdout);
     expect(parsed.texts?.[0]).toBe("hello world");
     expect(parsed.meta?.provider).toBe("inflection");
     expect((parsed.meta?.usage as { output?: number })?.output).toBe(5);
+    expect((parsed.meta?.usage as { cacheRead?: number })?.cacheRead).toBe(100);
+    expect((parsed.meta?.usage as { cacheWrite?: number })?.cacheWrite).toBe(
+      20,
+    );
+    expect((parsed.meta?.usage as { total?: number })?.total).toBe(135);
   });
 
   it("piSpec carries tool names when present", () => {

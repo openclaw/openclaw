@@ -822,12 +822,15 @@ export async function getReplyFromConfig(
           if (entry) {
             const input = usage.input ?? 0;
             const output = usage.output ?? 0;
-            const total = usage.total ?? input + output;
+            const promptTokens =
+              input + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
             sessionEntry = {
               ...entry,
-              inputTokens: (entry.inputTokens ?? 0) + input,
-              outputTokens: (entry.outputTokens ?? 0) + output,
-              totalTokens: (entry.totalTokens ?? 0) + total,
+              inputTokens: input,
+              outputTokens: output,
+              // Track the effective prompt/context size (cached + uncached input).
+              totalTokens:
+                promptTokens > 0 ? promptTokens : (usage.total ?? input),
               model,
               contextTokens: contextTokens ?? entry.contextTokens,
               updatedAt: Date.now(),

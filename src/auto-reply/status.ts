@@ -5,6 +5,11 @@ import path from "node:path";
 
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
+import {
+  derivePromptTokens,
+  normalizeUsage,
+  type UsageLike,
+} from "../agents/usage.js";
 import type { ClawdisConfig } from "../config/config.js";
 import type { SessionEntry, SessionScope } from "../config/sessions.js";
 import type { ThinkLevel, VerboseLevel } from "./thinking.js";
@@ -117,6 +122,7 @@ const readUsageFromSessionLog = (
   | {
       input: number;
       output: number;
+      promptTokens: number;
       total: number;
       model?: string;
     }
@@ -144,33 +150,38 @@ const readUsageFromSessionLog = (
     const lines = fs.readFileSync(logPath, "utf-8").split(/\n+/);
     let input = 0;
     let output = 0;
+    let promptTokens = 0;
     let model: string | undefined;
+    let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
 
     for (const line of lines) {
       if (!line.trim()) continue;
       try {
         const parsed = JSON.parse(line) as {
           message?: {
-            usage?: { input?: number; output?: number; total?: number };
+            usage?: UsageLike;
             model?: string;
           };
-          usage?: { input?: number; output?: number; total?: number };
+          usage?: UsageLike;
           model?: string;
         };
-        const usage = parsed.message?.usage ?? parsed.usage;
-        if (usage) {
-          input += usage.input ?? 0;
-          output += usage.output ?? 0;
-        }
+        const usageRaw = parsed.message?.usage ?? parsed.usage;
+        const usage = normalizeUsage(usageRaw);
+        if (usage) lastUsage = usage;
         model = parsed.message?.model ?? parsed.model ?? model;
       } catch {
         // ignore bad lines
       }
     }
 
-    const total = input + output;
-    if (total === 0) return undefined;
-    return { input, output, total, model };
+    if (!lastUsage) return undefined;
+    input = lastUsage.input ?? 0;
+    output = lastUsage.output ?? 0;
+    promptTokens =
+      derivePromptTokens(lastUsage) ?? lastUsage.total ?? input + output;
+    const total = lastUsage.total ?? promptTokens + output;
+    if (promptTokens === 0 && total === 0) return undefined;
+    return { input, output, promptTokens, total, model };
   } catch {
     return undefined;
   }
@@ -190,15 +201,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry?.totalTokens ??
     (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
-  // Fallback: derive usage from the session transcript if the store lacks it
-  if (!totalTokens || totalTokens === 0) {
-    const logUsage = readUsageFromSessionLog(entry?.sessionId, args.storePath);
-    if (logUsage) {
-      totalTokens = logUsage.total;
-      if (!model) model = logUsage.model ?? model;
-      if (!contextTokens && logUsage.model) {
-        contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
-      }
+  // Prefer prompt-size tokens from the session transcript when it looks larger
+  // (cached prompt tokens are often missing from agent meta/store).
+  const logUsage = readUsageFromSessionLog(entry?.sessionId, args.storePath);
+  if (logUsage) {
+    const candidate = logUsage.promptTokens || logUsage.total;
+    if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+      totalTokens = candidate;
+    }
+    if (!model) model = logUsage.model ?? model;
+    if (!contextTokens && logUsage.model) {
+      contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
     }
   }
   const agentProbe = probeAgentCommand(args.reply?.command);
