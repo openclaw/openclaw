@@ -90,7 +90,10 @@ enum ControlRequestHandler {
                 return Response(ok: false, message: "Canvas disabled by user")
             }
             do {
-                let dir = try await MainActor.run { try CanvasManager.shared.show(sessionKey: session, path: path, placement: placement) }
+                let dir = try await MainActor.run { try CanvasManager.shared.show(
+                    sessionKey: session,
+                    path: path,
+                    placement: placement) }
                 return Response(ok: true, message: dir)
             } catch {
                 return Response(ok: false, message: error.localizedDescription)
@@ -105,7 +108,10 @@ enum ControlRequestHandler {
                 return Response(ok: false, message: "Canvas disabled by user")
             }
             do {
-                try await MainActor.run { try CanvasManager.shared.goto(sessionKey: session, path: path, placement: placement) }
+                try await MainActor.run { try CanvasManager.shared.goto(
+                    sessionKey: session,
+                    path: path,
+                    placement: placement) }
                 return Response(ok: true)
             } catch {
                 return Response(ok: false, message: error.localizedDescription)
@@ -129,6 +135,28 @@ enum ControlRequestHandler {
             do {
                 let path = try await CanvasManager.shared.snapshot(sessionKey: session, outPath: outPath)
                 return Response(ok: true, message: path)
+            } catch {
+                return Response(ok: false, message: error.localizedDescription)
+            }
+
+        case .nodeList:
+            let ids = await BridgeServer.shared.connectedNodeIds()
+            let payload = (try? JSONSerialization.data(
+                withJSONObject: ["connectedNodeIds": ids],
+                options: [.prettyPrinted]))
+                .flatMap { String(data: $0, encoding: .utf8) }
+                ?? "{}"
+            return Response(ok: true, payload: Data(payload.utf8))
+
+        case let .nodeInvoke(nodeId, command, paramsJSON):
+            do {
+                let res = try await BridgeServer.shared.invoke(nodeId: nodeId, command: command, paramsJSON: paramsJSON)
+                if res.ok {
+                    let payload = res.payloadJSON ?? ""
+                    return Response(ok: true, payload: Data(payload.utf8))
+                }
+                let errText = res.error?.message ?? "node invoke failed"
+                return Response(ok: false, message: errText)
             } catch {
                 return Response(ok: false, message: error.localizedDescription)
             }

@@ -1,6 +1,6 @@
 import ClawdisIPC
-import Foundation
 import Darwin
+import Foundation
 
 @main
 struct ClawdisCLI {
@@ -163,6 +163,34 @@ struct ClawdisCLI {
             guard let message else { throw CLIError.help }
             return .agent(message: message, thinking: thinking, session: session, deliver: deliver, to: to)
 
+        case "node":
+            guard let sub = args.first else { throw CLIError.help }
+            args = Array(args.dropFirst())
+
+            switch sub {
+            case "list":
+                return .nodeList
+
+            case "invoke":
+                var nodeId: String?
+                var command: String?
+                var paramsJSON: String?
+                while !args.isEmpty {
+                    let arg = args.removeFirst()
+                    switch arg {
+                    case "--node": nodeId = args.popFirst()
+                    case "--command": command = args.popFirst()
+                    case "--params-json": paramsJSON = args.popFirst()
+                    default: break
+                    }
+                }
+                guard let nodeId, let command else { throw CLIError.help }
+                return .nodeInvoke(nodeId: nodeId, command: command, paramsJSON: paramsJSON)
+
+            default:
+                throw CLIError.help
+            }
+
         case "canvas":
             guard let sub = args.first else { throw CLIError.help }
             args = Array(args.dropFirst())
@@ -281,6 +309,8 @@ struct ClawdisCLI {
           clawdis-mac rpc-status
           clawdis-mac agent --message <text> [--thinking <low|default|high>]
             [--session <key>] [--deliver] [--to <E.164>]
+          clawdis-mac node list
+          clawdis-mac node invoke --node <id> --command <name> [--params-json <json>]
           clawdis-mac canvas show [--session <key>] [--path </...>]
             [--x <screenX> --y <screenY>] [--width <w> --height <h>]
           clawdis-mac canvas hide [--session <key>]
@@ -336,7 +366,7 @@ struct ClawdisCLI {
     }
 
     private static func resolveExecutableURL() -> URL? {
-        var size: UInt32 = UInt32(PATH_MAX)
+        var size = UInt32(PATH_MAX)
         var buffer = [CChar](repeating: 0, count: Int(size))
 
         let result = buffer.withUnsafeMutableBufferPointer { ptr in

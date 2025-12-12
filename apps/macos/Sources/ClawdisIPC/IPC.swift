@@ -16,8 +16,8 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
 
 /// Notification interruption level (maps to UNNotificationInterruptionLevel)
 public enum NotificationPriority: String, Codable, Sendable {
-    case passive      // silent, no wake
-    case active       // default
+    case passive // silent, no wake
+    case active // default
     case timeSensitive // breaks through Focus modes
 }
 
@@ -72,6 +72,8 @@ public enum Request: Sendable {
     case canvasGoto(session: String, path: String, placement: CanvasPlacement?)
     case canvasEval(session: String, javaScript: String)
     case canvasSnapshot(session: String, outPath: String?)
+    case nodeList
+    case nodeInvoke(nodeId: String, command: String, paramsJSON: String?)
 }
 
 // MARK: - Responses
@@ -104,6 +106,9 @@ extension Request: Codable {
         case javaScript
         case outPath
         case placement
+        case nodeId
+        case nodeCommand
+        case paramsJSON
     }
 
     private enum Kind: String, Codable {
@@ -119,6 +124,8 @@ extension Request: Codable {
         case canvasGoto
         case canvasEval
         case canvasSnapshot
+        case nodeList
+        case nodeInvoke
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -190,6 +197,15 @@ extension Request: Codable {
             try container.encode(Kind.canvasSnapshot, forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encodeIfPresent(outPath, forKey: .outPath)
+
+        case .nodeList:
+            try container.encode(Kind.nodeList, forKey: .type)
+
+        case let .nodeInvoke(nodeId, command, paramsJSON):
+            try container.encode(Kind.nodeInvoke, forKey: .type)
+            try container.encode(nodeId, forKey: .nodeId)
+            try container.encode(command, forKey: .nodeCommand)
+            try container.encodeIfPresent(paramsJSON, forKey: .paramsJSON)
         }
     }
 
@@ -263,6 +279,15 @@ extension Request: Codable {
             let session = try container.decode(String.self, forKey: .session)
             let outPath = try container.decodeIfPresent(String.self, forKey: .outPath)
             self = .canvasSnapshot(session: session, outPath: outPath)
+
+        case .nodeList:
+            self = .nodeList
+
+        case .nodeInvoke:
+            let nodeId = try container.decode(String.self, forKey: .nodeId)
+            let command = try container.decode(String.self, forKey: .nodeCommand)
+            let paramsJSON = try container.decodeIfPresent(String.self, forKey: .paramsJSON)
+            self = .nodeInvoke(nodeId: nodeId, command: command, paramsJSON: paramsJSON)
         }
     }
 }

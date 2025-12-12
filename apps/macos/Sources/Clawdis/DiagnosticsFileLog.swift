@@ -28,7 +28,7 @@ actor DiagnosticsFileLog {
     }
 
     nonisolated static func logFileURL() -> URL {
-        Self.logDirectoryURL().appendingPathComponent("diagnostics.jsonl", isDirectory: false)
+        self.logDirectoryURL().appendingPathComponent("diagnostics.jsonl", isDirectory: false)
     }
 
     nonisolated func log(category: String, event: String, fields: [String: String]? = nil) {
@@ -131,4 +131,3 @@ actor DiagnosticsFileLog {
         Self.logDirectoryURL().appendingPathComponent("\(self.fileName).\(index)", isDirectory: false)
     }
 }
-

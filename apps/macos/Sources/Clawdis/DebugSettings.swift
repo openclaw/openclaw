@@ -62,7 +62,8 @@ struct DebugSettings: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.switch)
-                            .help("Writes a rotating, local-only diagnostics log under ~/Library/Logs/Clawdis/. Enable only while actively debugging.")
+                            .help(
+                                "Writes a rotating, local-only diagnostics log under ~/Library/Logs/Clawdis/. Enable only while actively debugging.")
                         HStack(spacing: 8) {
                             Button("Open folder") {
                                 NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())
@@ -90,7 +91,8 @@ struct DebugSettings: View {
                 }
                 Toggle("Only attach to existing gateway (don’t spawn locally)", isOn: self.$attachExistingGatewayOnly)
                     .toggleStyle(.switch)
-                    .help("When enabled in local mode, the mac app will only connect to an already-running gateway and will not start one itself.")
+                    .help(
+                        "When enabled in local mode, the mac app will only connect to an already-running gateway and will not start one itself.")
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Gateway stdout/stderr")
                         .font(.caption.weight(.semibold))
@@ -295,7 +297,8 @@ struct DebugSettings: View {
                         .font(.caption.weight(.semibold))
                     Toggle("Allow Canvas (agent)", isOn: self.$canvasEnabled)
                         .toggleStyle(.switch)
-                        .help("When off, agent Canvas requests return “Canvas disabled by user”. Manual debug actions still work.")
+                        .help(
+                            "When off, agent Canvas requests return “Canvas disabled by user”. Manual debug actions still work.")
                     HStack(spacing: 8) {
                         TextField("Session", text: self.$canvasSessionKey)
                             .textFieldStyle(.roundedBorder)
@@ -353,7 +356,8 @@ struct DebugSettings: View {
                                 .truncationMode(.middle)
                                 .textSelection(.enabled)
                             Button("Reveal") {
-                                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
+                                NSWorkspace.shared
+                                    .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
                             }
                             .buttonStyle(.bordered)
                         }
@@ -379,7 +383,8 @@ struct DebugSettings: View {
                 }
                 Toggle("Use SwiftUI web chat (glass, gateway WS)", isOn: self.$webChatSwiftUIEnabled)
                     .toggleStyle(.switch)
-                    .help("When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
+                    .help(
+                        "When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
                 Spacer(minLength: 8)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
