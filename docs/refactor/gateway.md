@@ -9,7 +9,7 @@ read_when:
 
 Last updated: 2025-12-12
 
-This document captures the rationale and direction for the macOS app’s Gateway client refactor: **one shared websocket connection per app process**, plus follow-up improvements to simplify lifetimes and reduce “hidden” reconnection behavior.
+This document captures the rationale and outcome of the macOS app’s Gateway client refactor: **one shared websocket connection per app process**, with an in-process event bus for server push frames.
 
 Related docs:
 - `docs/refactor/new-arch.md` (overall gateway protocol/server plan)
@@ -31,6 +31,14 @@ Root cause (historical bug):
 
 ---
 
+## What changed
+
+- **One socket owner:** `GatewayConnection.shared` is the only supported entry point for gateway RPC.
+- **No global notifications:** server push frames are delivered via `GatewayConnection.shared.subscribe(...) -> AsyncStream<GatewayPush>` (no `NotificationCenter` fan-out).
+- **No tunnel side effects:** `GatewayConnection` does not create/ensure SSH tunnels in remote mode; it consumes the already-established forwarded port.
+
+---
+
 ## Current architecture (as of 2025-12-12)
 
 Goal: enforce the invariant **“one gateway websocket per app process (per effective config)”**.
@@ -39,7 +47,8 @@ Key elements:
 - `GatewayConnection.shared` owns the one websocket and is the *only* supported entry point for app code that needs gateway RPC.
 - Consumers (e.g. Control UI, Agent RPC, SwiftUI WebChat) call `GatewayConnection.shared.request(...)` and do not create their own sockets.
 - If the effective connection config changes (local ↔ remote tunnel port, token change), `GatewayConnection` replaces the underlying connection.
-- Server-push frames are delivered via `GatewayConnection.shared.subscribe(...) -> AsyncStream<GatewayPush>`, which is the in-process event bus (no `NotificationCenter`).
+- The transport (`GatewayChannelActor`) is an internal detail and forwards push frames back into `GatewayConnection`.
+- Server-push frames are delivered via `GatewayConnection.shared.subscribe(...) -> AsyncStream<GatewayPush>` (in-process event bus).
 
 Notes:
 - Remote mode requires an SSH control tunnel. `GatewayConnection` **does not** start tunnels; it consumes the already-established forwarded port (owned by `ConnectionModeCoordinator` / `RemoteTunnelManager`).
@@ -55,55 +64,14 @@ Notes:
 
 ---
 
-## Follow-up refactors (recommended)
-
-### Status (as of 2025-12-12)
+## Status / remaining work
 
 - ✅ One shared websocket per app process (per config)
-- ✅ Event streaming moved into `GatewayConnection` (`AsyncStream<GatewayPush>`)
-- ✅ `NotificationCenter` removed for in-process gateway events
-- ✅ `GatewayConnection` no longer implicitly starts the remote control tunnel
-- ⏳ Further separation of concerns (polish/cleanup): push parsing helpers + clearer UI adapters
-- ⏳ Optional: a dedicated “resolved endpoint” publisher for remote mode (to make mode transitions observable)
-
-### 1) Move event streaming into `GatewayConnection` (done)
-
-Implemented:
-- `GatewayChannelActor` no longer posts global notifications; it forwards pushes to `GatewayConnection` via a callback.
-- `GatewayConnection` fans out pushes via `subscribe(...) -> AsyncStream<GatewayPush>` and replays the latest snapshot to new subscribers.
-
-### 2) Replace `NotificationCenter` for in-process events (done)
-
-Implemented:
-- `ControlChannel`, `InstancesStore`, and SwiftUI WebChat now subscribe to `GatewayConnection` directly.
-- This removed the risk of leaking `NotificationCenter` observer tokens when views/controllers churn.
-
-### 3) Separate control-plane vs chat-plane concerns (partially done)
-
-As features grow, split responsibilities:
-- **RPC layer**: request/response, retries, timeouts.
-- **Event bus**: typed gateway events with buffering/backpressure.
-- **UI adapters**: user-facing state and error mapping.
-
-This reduces the risk that “a UI refresh” causes connection or tunnel side effects.
-
-Notes:
-- The RPC layer and event bus are now centralized in `GatewayConnection`.
-- There’s still room to extract small helpers for decoding specific event payloads (agent/chat/presence) so UI code stays thin.
-
-### 4) Centralize tunnel lifecycle (remote mode) (done for GatewayConnection)
-
-Previously, “first request wins” could implicitly start/ensure a tunnel (via `GatewayConnection`’s default config provider).
-
-Now:
-- `GatewayConnection` uses the already-running forwarded port from `RemoteTunnelManager` and will error if remote mode is enabled but no tunnel is active.
-- Remote tunnel lifecycle is owned by mode/application coordinators (e.g. `ConnectionModeCoordinator`), not by incidental RPC calls.
-
-Future improvement:
-- A dedicated coordinator that owns remote tunnel lifecycle and publishes a resolved endpoint.
-- `GatewayConnection` consumes that endpoint rather than calling into tunnel code itself.
-
-This makes remote mode behavior easier to reason about (and test).
+- ✅ Event streaming moved into `GatewayConnection` (`AsyncStream<GatewayPush>`) and replays latest snapshot to new subscribers
+- ✅ `NotificationCenter` removed for in-process gateway events (ControlChannel / Instances / WebChatSwiftUI)
+- ✅ Remote tunnel lifecycle is not started implicitly by random RPC calls
+- ✅ Payload decoding helpers extracted so UI adapters stay thin
+- ✅ Dedicated resolved-endpoint publisher for remote mode (`GatewayEndpointStore`)
 
 ---
 
