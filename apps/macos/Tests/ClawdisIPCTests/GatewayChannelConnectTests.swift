@@ -101,7 +101,7 @@ import Testing
         let channel = GatewayChannelActor(
             url: URL(string: "ws://example.invalid")!,
             token: nil,
-            session: session)
+            session: WebSocketSessionBox(session: session))
 
         let t1 = Task { try await channel.connect() }
         let t2 = Task { try await channel.connect() }
@@ -117,7 +117,7 @@ import Testing
         let channel = GatewayChannelActor(
             url: URL(string: "ws://example.invalid")!,
             token: nil,
-            session: session)
+            session: WebSocketSessionBox(session: session))
 
         let t1 = Task { try await channel.connect() }
         let t2 = Task { try await channel.connect() }

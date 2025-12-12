@@ -93,7 +93,7 @@ import Testing
         let channel = GatewayChannelActor(
             url: URL(string: "ws://example.invalid")!,
             token: nil,
-            session: session)
+            session: WebSocketSessionBox(session: session))
 
         do {
             _ = try await channel.request(method: "test", params: nil, timeoutMs: 10)
@@ -108,4 +108,3 @@ import Testing
         try? await Task.sleep(nanoseconds: 250 * 1_000_000)
     }
 }
-

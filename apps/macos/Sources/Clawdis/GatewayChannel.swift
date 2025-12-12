@@ -47,6 +47,10 @@ extension URLSession: WebSocketSessioning {
     }
 }
 
+struct WebSocketSessionBox: @unchecked Sendable {
+    let session: any WebSocketSessioning
+}
+
 struct GatewayEvent: Codable {
     let type: String
     let event: String?
@@ -81,14 +85,37 @@ actor GatewayChannelActor {
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
     private var watchdogTask: Task<Void, Never>?
+    private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
 
-    init(url: URL, token: String?, session: WebSocketSessioning? = nil) {
+    init(url: URL, token: String?, session: WebSocketSessionBox? = nil) {
         self.url = url
         self.token = token
-        self.session = session ?? URLSession(configuration: .default)
+        self.session = session?.session ?? URLSession(configuration: .default)
         Task { [weak self] in
             await self?.startWatchdog()
+        }
+    }
+
+    func shutdown() async {
+        self.shouldReconnect = false
+        self.connected = false
+
+        self.watchdogTask?.cancel()
+        self.watchdogTask = nil
+
+        self.tickTask?.cancel()
+        self.tickTask = nil
+
+        self.task?.cancel(with: .goingAway, reason: nil)
+        self.task = nil
+
+        await self.failPending(NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+
+        let waiters = self.connectWaiters
+        self.connectWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(throwing: NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
         }
     }
 
@@ -104,6 +131,7 @@ actor GatewayChannelActor {
         // Keep nudging reconnect in case exponential backoff stalls.
         while self.shouldReconnect {
             try? await Task.sleep(nanoseconds: 30 * 1_000_000_000) // 30s cadence
+            guard self.shouldReconnect else { return }
             if self.connected { continue }
             do {
                 try await self.connect()
@@ -207,7 +235,11 @@ actor GatewayChannelActor {
                 self.tickIntervalMs = Double(tick)
             }
             self.lastTick = Date()
-            Task { await self.watchTicks() }
+            self.tickTask?.cancel()
+            self.tickTask = Task { [weak self] in
+                guard let self else { return }
+                await self.watchTicks()
+            }
             let frame = GatewayFrame.helloOk(ok)
             NotificationCenter.default.post(name: .gatewaySnapshot, object: frame)
             return
@@ -314,6 +346,7 @@ actor GatewayChannelActor {
         let delay = self.backoffMs / 1000
         self.backoffMs = min(self.backoffMs * 2, 30000)
         try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        guard self.shouldReconnect else { return }
         do {
             try await self.connect()
         } catch {
@@ -414,21 +447,4 @@ actor GatewayChannelActor {
     }
 }
 
-actor GatewayChannel {
-    private var inner: GatewayChannelActor?
-
-    func configure(url: URL, token: String?) {
-        self.inner = GatewayChannelActor(url: url, token: token)
-    }
-
-    func request(
-        method: String,
-        params: [String: AnyCodable]?,
-        timeoutMs: Double? = nil) async throws -> Data
-    {
-        guard let inner else {
-            throw NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "not configured"])
-        }
-        return try await inner.request(method: method, params: params, timeoutMs: timeoutMs)
-    }
-}
+// Intentionally no `GatewayChannel` wrapper: the app should use the single shared `GatewayConnection`.

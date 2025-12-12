@@ -149,12 +149,8 @@ final class GatewayProcessManager: ObservableObject {
     /// If successful, mark status as attached and skip spawning a new process.
     private func attachExistingGatewayIfAvailable() async -> Bool {
         let port = GatewayEnvironment.gatewayPort()
-        guard let url = URL(string: "ws://127.0.0.1:\(port)") else { return false }
-        let token = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
-        let channel = GatewayChannel()
-        await channel.configure(url: url, token: token)
         do {
-            let data = try await channel.request(method: "health", params: nil)
+            let data = try await GatewayConnection.shared.request(method: "health", params: nil)
             let details: String
             if let snap = decodeHealthSnapshot(from: data) {
                 let linked = snap.web.linked ? "linked" : "not linked"

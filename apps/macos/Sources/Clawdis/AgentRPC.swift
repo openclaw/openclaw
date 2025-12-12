@@ -11,26 +11,9 @@ actor AgentRPC {
     static let shared = AgentRPC()
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "agent.rpc")
-    private let gateway = GatewayChannel()
-    private var configured = false
-
-    private var gatewayURL: URL {
-        let port = GatewayEnvironment.gatewayPort()
-        return URL(string: "ws://127.0.0.1:\(port)")!
-    }
-
-    private var gatewayToken: String? {
-        ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
-    }
-
-    func start() async throws {
-        if self.configured { return }
-        await self.gateway.configure(url: self.gatewayURL, token: self.gatewayToken)
-        self.configured = true
-    }
 
     func shutdown() async {
-        // no-op for WS; socket managed by GatewayChannel
+        // no-op; socket managed by GatewayConnection
     }
 
     func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
@@ -85,8 +68,7 @@ actor AgentRPC {
     }
 
     func controlRequest(method: String, params: ControlRequestParams? = nil) async throws -> Data {
-        try await self.start()
         let rawParams = params?.raw.reduce(into: [String: AnyCodable]()) { $0[$1.key] = AnyCodable($1.value) }
-        return try await self.gateway.request(method: method, params: rawParams)
+        return try await GatewayConnection.shared.request(method: method, params: rawParams)
     }
 }

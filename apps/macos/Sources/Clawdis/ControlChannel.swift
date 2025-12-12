@@ -55,35 +55,34 @@ final class ControlChannel: ObservableObject {
     @Published private(set) var lastPingMs: Double?
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
-    private let gateway = GatewayChannel()
-    private var gatewayPort: Int = GatewayEnvironment.gatewayPort()
-    private var gatewayURL: URL { URL(string: "ws://127.0.0.1:\(self.gatewayPort)")! }
-
-    private var gatewayToken: String? {
-        ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
-    }
 
     private var eventTokens: [NSObjectProtocol] = []
 
+    private init() {
+        self.startEventStream()
+    }
+
     func configure() async {
         self.state = .connecting
-        await self.gateway.configure(url: self.gatewayURL, token: self.gatewayToken)
-        self.startEventStream()
-        self.state = .connected
-        PresenceReporter.shared.sendImmediate(reason: "connect")
+        do {
+            try await GatewayConnection.shared.refresh()
+            self.state = .connected
+            PresenceReporter.shared.sendImmediate(reason: "connect")
+        } catch {
+            let message = self.friendlyGatewayMessage(error)
+            self.state = .degraded(message)
+        }
     }
 
     func configure(mode: Mode = .local) async throws {
         switch mode {
         case .local:
-            self.gatewayPort = GatewayEnvironment.gatewayPort()
             await self.configure()
         case let .remote(target, identity):
             // Create/ensure SSH tunnel, then talk to the forwarded local port.
             _ = (target, identity)
             do {
-                let forwarded = try await RemoteTunnelManager.shared.ensureControlTunnel()
-                self.gatewayPort = Int(forwarded)
+                _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
                 await self.configure()
             } catch {
                 self.state = .degraded(error.localizedDescription)
@@ -124,7 +123,7 @@ final class ControlChannel: ObservableObject {
     {
         do {
             let rawParams = params?.reduce(into: [String: AnyCodable]()) { $0[$1.key] = AnyCodable($1.value) }
-            let data = try await self.gateway.request(method: method, params: rawParams, timeoutMs: timeoutMs)
+            let data = try await GatewayConnection.shared.request(method: method, params: rawParams, timeoutMs: timeoutMs)
             self.state = .connected
             return data
         } catch {

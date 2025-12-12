@@ -189,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await AgentRPC.shared.shutdown() }
+        Task { await GatewayConnection.shared.shutdown() }
         Task { await self.socketServer.stop() }
         Task { await BridgeServer.shared.stop() }
     }

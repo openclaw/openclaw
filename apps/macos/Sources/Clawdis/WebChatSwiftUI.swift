@@ -79,11 +79,8 @@ final class WebChatViewModel: ObservableObject {
     @Published var healthOK: Bool = true
 
     private let sessionKey: String
-    private let gateway = GatewayChannel()
-    private var gatewayConfigured = false
     private var eventToken: NSObjectProtocol?
     private var pendingRuns = Set<String>()
-    private var currentPort: Int?
 
     init(sessionKey: String) {
         self.sessionKey = sessionKey
@@ -141,7 +138,6 @@ final class WebChatViewModel: ObservableObject {
         self.isLoading = true
         defer { self.isLoading = false }
         do {
-            try await self.ensureGatewayConfigured()
             let payload = try await self.requestHistory()
             self.messages = payload.messages ?? []
             if let level = payload.thinkingLevel, !level.isEmpty {
@@ -157,12 +153,6 @@ final class WebChatViewModel: ObservableObject {
         guard !self.isSending else { return }
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !self.attachments.isEmpty else { return }
-        do {
-            try await self.ensureGatewayConfigured()
-        } catch {
-            self.errorText = error.localizedDescription
-            return
-        }
 
         self.isSending = true
         self.errorText = nil
@@ -202,7 +192,7 @@ final class WebChatViewModel: ObservableObject {
                 "idempotencyKey": AnyCodable(runId),
                 "timeoutMs": AnyCodable(30_000)
             ]
-            let data = try await self.gateway.request(method: "chat.send", params: params)
+            let data = try await GatewayConnection.shared.request(method: "chat.send", params: params)
             let response = try JSONDecoder().decode(ChatSendResponse.self, from: data)
             self.pendingRuns.insert(response.runId)
         } catch {
@@ -215,26 +205,8 @@ final class WebChatViewModel: ObservableObject {
         self.isSending = false
     }
 
-    private func ensureGatewayConfigured() async throws {
-        guard !self.gatewayConfigured else { return }
-        let port = try await self.resolveGatewayPort()
-        self.currentPort = port
-        let url = URL(string: "ws://127.0.0.1:\(port)")!
-        let token = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
-        await self.gateway.configure(url: url, token: token)
-        self.gatewayConfigured = true
-    }
-
-    private func resolveGatewayPort() async throws -> Int {
-        if CommandResolver.connectionModeIsRemote() {
-            let forwarded = try await RemoteTunnelManager.shared.ensureControlTunnel()
-            return Int(forwarded)
-        }
-        return GatewayEnvironment.gatewayPort()
-    }
-
     private func requestHistory() async throws -> ChatHistoryPayload {
-        let data = try await self.gateway.request(
+        let data = try await GatewayConnection.shared.request(
             method: "chat.history",
             params: ["sessionKey": AnyCodable(self.sessionKey)])
         return try JSONDecoder().decode(ChatHistoryPayload.self, from: data)

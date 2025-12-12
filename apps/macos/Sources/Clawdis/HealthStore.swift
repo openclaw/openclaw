@@ -92,16 +92,6 @@ final class HealthStore: ObservableObject {
         defer { self.isRefreshing = false }
 
         do {
-            let mode = AppStateStore.shared.connectionMode
-            switch mode {
-            case .local:
-                try await ControlChannel.shared.configure(mode: .local)
-            case .remote:
-                let target = AppStateStore.shared.remoteTarget
-                let identity = AppStateStore.shared.remoteIdentity
-                try await ControlChannel.shared.configure(mode: .remote(target: target, identity: identity))
-            }
-
             let data = try await ControlChannel.shared.health(timeout: 15)
             if let decoded = decodeHealthSnapshot(from: data) {
                 self.snapshot = decoded
