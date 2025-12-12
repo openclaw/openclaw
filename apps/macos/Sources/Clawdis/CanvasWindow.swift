@@ -118,6 +118,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
     func hideCanvas() {
         if case .panel = self.presentation {
+            self.persistFrameIfPanel()
             self.window?.orderOut(nil)
         } else {
             self.close()
@@ -248,47 +249,30 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             return screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
         } ?? NSScreen.main
 
-        if let placement = self.preferredPlacement,
-           let rect = self.frame(for: placement, panel: panel, screen: screen)
-        {
-            self.setPanelFrame(rect, on: screen)
-            return
+        // Base frame: restored frame (preferred), otherwise default top-right.
+        var frame = Self.loadRestoredFrame(sessionKey: self.sessionKey) ?? Self.defaultTopRightFrame(panel: panel, screen: screen)
+
+        // Apply agent placement as partial overrides:
+        // - If agent provides x/y, override origin.
+        // - If agent provides width/height, override size.
+        // - If agent provides only size, keep the remembered origin.
+        if let placement = self.preferredPlacement {
+            if let x = placement.x { frame.origin.x = x }
+            if let y = placement.y { frame.origin.y = y }
+            if let w = placement.width { frame.size.width = max(CanvasLayout.minPanelSize.width, CGFloat(w)) }
+            if let h = placement.height { frame.size.height = max(CanvasLayout.minPanelSize.height, CGFloat(h)) }
         }
 
-        if let restored = Self.loadRestoredFrame(sessionKey: self.sessionKey) {
-            self.setPanelFrame(restored, on: screen)
-            return
-        }
+        self.setPanelFrame(frame, on: screen)
+    }
 
-        // Default: top-right corner of the visible frame.
+    private static func defaultTopRightFrame(panel: NSWindow, screen: NSScreen?) -> NSRect {
         let visible = (screen?.visibleFrame ?? NSScreen.main?.visibleFrame) ?? panel.frame
         let w = max(CanvasLayout.minPanelSize.width, panel.frame.width)
         let h = max(CanvasLayout.minPanelSize.height, panel.frame.height)
         let x = visible.maxX - w - CanvasLayout.defaultPadding
         let y = visible.maxY - h - CanvasLayout.defaultPadding
-        self.setPanelFrame(NSRect(x: x, y: y, width: w, height: h), on: screen)
-    }
-
-    private func frame(for placement: CanvasPlacement, panel: NSWindow, screen: NSScreen?) -> NSRect? {
-        let visible = (screen?.visibleFrame ?? NSScreen.main?.visibleFrame) ?? panel.frame
-        let cur = panel.frame
-
-        let width = placement.width.map { max(CanvasLayout.minPanelSize.width, CGFloat($0)) } ?? cur.size.width
-        let height = placement.height.map { max(CanvasLayout.minPanelSize.height, CGFloat($0)) } ?? cur.size.height
-        let size = NSSize(width: width, height: height)
-
-        let origin: NSPoint = {
-            // If any origin component is provided, apply it and keep the other coordinate stable.
-            if placement.x != nil || placement.y != nil {
-                return NSPoint(x: placement.x ?? cur.origin.x, y: placement.y ?? cur.origin.y)
-            }
-            // Default: top-right.
-            return NSPoint(
-                x: visible.maxX - size.width - CanvasLayout.defaultPadding,
-                y: visible.maxY - size.height - CanvasLayout.defaultPadding)
-        }()
-
-        return NSRect(origin: origin, size: size)
+        return NSRect(x: x, y: y, width: w, height: h)
     }
 
     private func setPanelFrame(_ frame: NSRect, on screen: NSScreen?) {
@@ -301,6 +285,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             constrained = frame
         }
         panel.setFrame(constrained, display: false)
+        self.persistFrameIfPanel()
     }
 
     // MARK: - WKNavigationDelegate
