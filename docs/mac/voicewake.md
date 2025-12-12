@@ -19,6 +19,17 @@ Updated: 2025-12-12 · Owners: mac app
 - Overlay is driven via `VoiceWakeOverlayController` with committed/volatile coloring.
 - After send, recognizer restarts cleanly to listen for the next trigger.
 
+## Lifecycle invariants
+- If Voice Wake is enabled and permissions are granted, the wake-word recognizer should be listening (except during an explicit push-to-talk capture).
+- Overlay visibility (including manual dismiss via the X button) must never prevent the recognizer from resuming.
+
+## Sticky overlay failure mode (previous)
+Previously, if the overlay got stuck visible and you manually closed it, Voice Wake could appear “dead” because the runtime’s restart attempt could be blocked by overlay visibility and no subsequent restart was scheduled.
+
+Hardening:
+- Wake runtime restart is no longer blocked by overlay visibility.
+- Overlay dismiss completion triggers a `VoiceWakeRuntime.refresh(...)` via `VoiceSessionCoordinator`, so manual X-dismiss always resumes listening.
+
 ## Push-to-talk specifics
 - Hotkey detection uses a global `.flagsChanged` monitor for **right Option** (`keyCode 61` + `.option`). We only observe events (no swallowing).
 - Capture pipeline lives in `VoicePushToTalk`: starts Speech immediately, streams partials to the overlay, and calls `VoiceWakeForwarder` on release.

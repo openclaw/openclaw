@@ -52,10 +52,6 @@ final class VoiceWakeOverlayController: ObservableObject {
         forwardEnabled: Bool = false,
         isFinal: Bool = false) -> UUID
     {
-        if self.model.isSending {
-            self.logger.log(level: .info, "overlay drop session_start while sending")
-            return self.activeToken ?? UUID()
-        }
         let message = """
         overlay session_start source=\(source.rawValue) \
         len=\(transcript.count)
@@ -218,6 +214,7 @@ final class VoiceWakeOverlayController: ObservableObject {
             window.animator().alphaValue = 0
         } completionHandler: {
             Task { @MainActor in
+                let dismissedToken = self.activeToken
                 window.orderOut(nil)
                 self.model.isVisible = false
                 self.model.level = 0
@@ -229,6 +226,7 @@ final class VoiceWakeOverlayController: ObservableObject {
                     AppStateStore.shared.celebrateSend()
                 }
                 AppStateStore.shared.stopVoiceEars()
+                VoiceSessionCoordinator.shared.overlayDidDismiss(token: dismissedToken)
             }
         }
     }

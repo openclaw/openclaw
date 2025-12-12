@@ -151,6 +151,9 @@ actor VoicePushToTalk {
                 VoiceWakeOverlayController.shared.dismiss()
             }
             self.isCapturing = false
+            // If push-to-talk fails to start after pausing wake-word, ensure we resume listening.
+            await VoiceWakeRuntime.shared.applyPushToTalkCooldown()
+            await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared)
         }
     }
 

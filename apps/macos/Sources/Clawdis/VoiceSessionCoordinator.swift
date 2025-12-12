@@ -29,12 +29,6 @@ final class VoiceSessionCoordinator: ObservableObject {
         attributed: NSAttributedString? = nil,
         forwardEnabled: Bool = false) -> UUID
     {
-        // If a send is in-flight, ignore new sessions to avoid token churn.
-        if VoiceWakeOverlayController.shared.model.isSending {
-            self.logger.info("coordinator drop start while sending")
-            return self.session?.token ?? UUID()
-        }
-
         let token = UUID()
         self.logger.info("coordinator start token=\(token.uuidString) source=\(source.rawValue) len=\(text.count)")
         let attributedText = attributed ?? VoiceWakeOverlayController.shared.makeAttributed(from: text)
@@ -126,5 +120,14 @@ final class VoiceSessionCoordinator: ObservableObject {
 
     private func clearSession() {
         self.session = nil
+    }
+
+    /// Overlay dismiss completion callback (manual X, empty, auto-dismiss after send).
+    /// Ensures the wake-word recognizer is resumed if Voice Wake is enabled.
+    func overlayDidDismiss(token: UUID?) {
+        if let token, self.session?.token == token {
+            self.clearSession()
+        }
+        Task { await VoiceWakeRuntime.shared.refresh(state: AppStateStore.shared) }
     }
 }

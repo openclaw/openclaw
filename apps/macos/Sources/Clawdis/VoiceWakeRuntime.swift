@@ -404,8 +404,6 @@ actor VoiceWakeRuntime {
 
     private func restartRecognizerIfIdleAndOverlayHidden() async {
         if self.isCapturing { return }
-        let overlayVisible = await MainActor.run { VoiceWakeOverlayController.shared.isVisible }
-        if overlayVisible { return }
         self.restartRecognizer()
     }
 
