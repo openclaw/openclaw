@@ -8,6 +8,7 @@ struct DebugSettings: View {
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
+    @AppStorage(deepLinkAgentEnabledKey) private var deepLinkAgentEnabled: Bool = false
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
     @State private var modelsError: String?
@@ -93,6 +94,33 @@ struct DebugSettings: View {
                     .toggleStyle(.switch)
                     .help(
                         "When enabled in local mode, the mac app will only connect to an already-running gateway and will not start one itself.")
+                LabeledContent("URL scheme") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Toggle("Allow URL scheme (agent)", isOn: self.$deepLinkAgentEnabled)
+                            .toggleStyle(.switch)
+                            .help("Enables handling of clawdis://agent?... deep links to trigger an agent run.")
+                        let key = DeepLinkHandler.currentKey()
+                        HStack(spacing: 8) {
+                            Text(key)
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            Button("Copy key") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(key, forType: .string)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                        Button("Copy sample agent URL") {
+                            let msg = "Hello from deep link"
+                            let encoded = msg.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? msg
+                            let url = "clawdis://agent?message=\(encoded)&key=\(key)"
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(url, forType: .string)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Gateway stdout/stderr")
                         .font(.caption.weight(.semibold))

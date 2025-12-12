@@ -157,6 +157,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let socketServer = ControlSocketServer()
     let updaterController: UpdaterProviding = makeUpdaterController()
 
+    func application(_: NSApplication, open urls: [URL]) {
+        Task { @MainActor in
+            for url in urls {
+                await DeepLinkHandler.shared.handle(url: url)
+            }
+        }
+    }
+
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
         if self.isDuplicateInstance() {

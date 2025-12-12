@@ -73,6 +73,17 @@ cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
     <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>com.steipete.clawdis.deeplink</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>clawdis</string>
+            </array>
+        </dict>
+    </array>
     <key>ClawdisBuildTimestamp</key>
     <string>${BUILD_TS}</string>
     <key>ClawdisGitCommit</key>

@@ -80,6 +80,42 @@ struct Response { ok: Bool; message?: String; payload?: Data }
   - Use `notify` for desktop toasts; fall back to JS notifier only if CLI missing or platform ≠ macOS.
   - Use `run` for tasks requiring privileged UI context (screen-recorded terminal runs, etc.).
 
+## Deep links (URL scheme)
+
+Clawdis (the macOS app) registers a URL scheme for triggering local actions from anywhere (browser, Shortcuts, CLI, etc.).
+
+Scheme:
+- `clawdis://…`
+
+### `clawdis://agent`
+
+Triggers a Gateway `agent` request (same machinery as WebChat/agent runs).
+
+Example:
+
+```bash
+open 'clawdis://agent?message=Hello%20from%20deep%20link'
+```
+
+Query parameters:
+- `message` (required): the agent prompt (URL-encoded).
+- `sessionKey` (optional): explicit session key to use.
+- `thinking` (optional): `off|minimal|low|medium|high` (or omit for default).
+- `deliver` (optional): `true|false` (default: false).
+- `to` / `channel` (optional): forwarded to the Gateway `agent` method (only meaningful with `deliver=true`).
+- `timeoutSeconds` (optional): timeout hint forwarded to the Gateway.
+- `key` (optional): unattended mode key (see below).
+
+Safety/guardrails:
+- Disabled by default; enable in **Clawdis → Settings → Debug** (“Allow URL scheme (agent)”).
+- Without `key`, Clawdis prompts with a confirmation dialog before invoking the agent.
+- With `key=<value>`, Clawdis runs without prompting (intended for personal automations).
+  - The current key is shown in Debug Settings and stored locally in UserDefaults.
+
+Notes:
+- In local mode, Clawdis will start the local Gateway if needed before issuing the request.
+- In remote mode, Clawdis will use the configured remote tunnel/endpoint.
+
 ## Permissions strategy
 - All TCC prompts originate from the app bundle; CLI and Node stay headless.
 - Permission checks are idempotent; onboarding surfaces missing grants and provides one-click request buttons.

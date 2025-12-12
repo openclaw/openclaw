@@ -79,6 +79,9 @@ Expose Canvas via the existing `clawdis-mac` → XPC → app routing so the agen
 
 This should be modeled after `WebChatManager`/`WebChatWindowController` but targeting `clawdis-canvas://…` URLs.
 
+Related:
+- For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdis://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See `docs/clawdis-mac.md`.
+
 ## Security / guardrails
 
 Recommended defaults:
