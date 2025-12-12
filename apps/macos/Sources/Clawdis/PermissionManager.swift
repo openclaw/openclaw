@@ -67,12 +67,27 @@ enum PermissionManager {
                 results[cap] = ScreenRecordingProbe.isAuthorized()
 
             case .microphone:
-                let granted = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-                if interactive, !granted {
-                    let ok = await AVCaptureDevice.requestAccess(for: .audio)
-                    results[cap] = ok
-                } else {
-                    results[cap] = granted
+                let status = AVCaptureDevice.authorizationStatus(for: .audio)
+                switch status {
+                case .authorized:
+                    results[cap] = true
+
+                case .notDetermined:
+                    if interactive {
+                        let ok = await AVCaptureDevice.requestAccess(for: .audio)
+                        results[cap] = ok
+                    } else {
+                        results[cap] = false
+                    }
+
+                case .denied, .restricted:
+                    results[cap] = false
+                    if interactive {
+                        MicrophonePermissionHelper.openSettings()
+                    }
+
+                @unknown default:
+                    results[cap] = false
                 }
 
             case .speechRecognition:
@@ -140,6 +155,21 @@ enum NotificationPermissionHelper {
         let candidates = [
             "x-apple.systempreferences:com.apple.Notifications-Settings.extension",
             "x-apple.systempreferences:com.apple.preference.notifications",
+        ]
+
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+}
+
+enum MicrophonePermissionHelper {
+    static func openSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "x-apple.systempreferences:com.apple.preference.security",
         ]
 
         for candidate in candidates {

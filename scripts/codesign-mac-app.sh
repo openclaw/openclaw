@@ -51,10 +51,6 @@ cat > "$ENT_TMP_BASE" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.hardened-runtime</key>
-    <true/>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
@@ -68,10 +64,6 @@ cat > "$ENT_TMP_APP_BASE" <<'PLIST'
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>com.apple.security.hardened-runtime</key>
-    <true/>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
@@ -87,10 +79,6 @@ cat > "$ENT_TMP_APP" <<'PLIST'
 <dict>
     <key>com.apple.developer.usernotifications.time-sensitive</key>
     <true/>
-    <key>com.apple.security.hardened-runtime</key>
-    <true/>
-    <key>com.apple.security.cs.allow-jit</key>
-    <true/>
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
@@ -99,17 +87,14 @@ cat > "$ENT_TMP_APP" <<'PLIST'
 </plist>
 PLIST
 
-# The time-sensitive entitlement is restricted and needs to be present in a
-# matching provisioning profile when using Apple Development signing.
-# Avoid breaking local debug builds by only enabling it when forced, or when
-# using distribution-style identities.
+# The time-sensitive entitlement is restricted and requires explicit enablement
+# (and typically a matching provisioning profile). It is *not* safe to enable
+# unconditionally for local debug packaging since AMFI will refuse to launch.
 APP_ENTITLEMENTS="$ENT_TMP_APP_BASE"
 if [[ "${ENABLE_TIME_SENSITIVE_NOTIFICATIONS:-}" == "1" ]]; then
   APP_ENTITLEMENTS="$ENT_TMP_APP"
-elif [[ "$IDENTITY" == *"Developer ID Application"* ]] || [[ "$IDENTITY" == *"Apple Distribution"* ]]; then
-  APP_ENTITLEMENTS="$ENT_TMP_APP"
 else
-  echo "Note: Time Sensitive Notifications entitlement disabled for this signing identity."
+  echo "Note: Time Sensitive Notifications entitlement disabled."
   echo "      To force it: ENABLE_TIME_SENSITIVE_NOTIFICATIONS=1 scripts/codesign-mac-app.sh <app>"
 fi
 

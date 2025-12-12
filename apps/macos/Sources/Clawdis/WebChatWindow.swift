@@ -388,11 +388,19 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
+        if Self.shouldIgnoreNavigationError(error) {
+            webChatLogger.debug("webchat navigation cancelled (provisional)")
+            return
+        }
         webChatLogger.error("webchat navigation failed (provisional): \(error.localizedDescription, privacy: .public)")
         self.showError(error.localizedDescription)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        if Self.shouldIgnoreNavigationError(error) {
+            webChatLogger.debug("webchat navigation cancelled")
+            return
+        }
         webChatLogger.error("webchat navigation failed: \(error.localizedDescription, privacy: .public)")
         self.showError(error.localizedDescription)
     }
@@ -482,6 +490,11 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
         }
         if let url = Bundle.module.url(forResource: "WebChat", withExtension: nil) { return url }
         throw NSError(domain: "WebChat", code: 10, userInfo: [NSLocalizedDescriptionKey: "WebChat assets missing"])
+    }
+
+    private static func shouldIgnoreNavigationError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorCancelled
     }
 }
 

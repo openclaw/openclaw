@@ -86,7 +86,16 @@ choose_app_bundle() {
 choose_app_bundle
 
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
-run_step "launch app" open "${APP_BUNDLE}"
+# LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
+# That can cause launchd spawn failures and is undesirable for a GUI app anyway.
+run_step "launch app" env -i \
+  HOME="${HOME}" \
+  USER="${USER:-$(id -un)}" \
+  LOGNAME="${LOGNAME:-$(id -un)}" \
+  TMPDIR="${TMPDIR:-/tmp}" \
+  PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+  LANG="${LANG:-en_US.UTF-8}" \
+  /usr/bin/open "${APP_BUNDLE}"
 
 # 5) Verify the app is alive.
 sleep 1.5
