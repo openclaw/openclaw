@@ -51,6 +51,8 @@ pnpm clawdis gateway --force
 - `send` — send a message via the active provider(s).
 - `agent` — run an agent turn (streams events back on same connection).
 
+See also: `docs/presence.md` for how presence is produced/deduped and why `instanceId` matters.
+
 ## Events
 - `agent` — streamed tool/output events from the agent run (seq-tagged).
 - `presence` — presence updates (deltas with stateVersion) pushed to all connected clients.
