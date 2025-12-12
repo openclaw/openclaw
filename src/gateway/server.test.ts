@@ -300,7 +300,8 @@ describe("gateway server", () => {
     await server.close();
   });
 
-  test("agent forces no-deliver when last-channel is webchat", async () => {
+  test("agent ignores webchat last-channel for routing", async () => {
+    testAllowFrom = ["+1555"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
@@ -311,7 +312,7 @@ describe("gateway server", () => {
             sessionId: "sess-main-webchat",
             updatedAt: Date.now(),
             lastChannel: "webchat",
-            lastTo: "ignored",
+            lastTo: "+1555",
           },
         },
         null,
@@ -351,8 +352,9 @@ describe("gateway server", () => {
     const spy = vi.mocked(agentCommand);
     expect(spy).toHaveBeenCalled();
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
-    expect(call.provider).toBe("webchat");
-    expect(call.deliver).toBe(false);
+    expect(call.provider).toBe("whatsapp");
+    expect(call.to).toBe("+1555");
+    expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
     expect(call.sessionId).toBe("sess-main-webchat");
 

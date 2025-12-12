@@ -1174,7 +1174,11 @@ export async function startGatewayServer(
 
             const resolvedChannel = (() => {
               if (requestedChannel === "last") {
-                return lastChannel ?? "whatsapp";
+                // WebChat is not a deliverable surface. Treat it as "unset" for routing,
+                // so VoiceWake and CLI callers don't get stuck with deliver=false.
+                return lastChannel && lastChannel !== "webchat"
+                  ? lastChannel
+                  : "whatsapp";
               }
               if (
                 requestedChannel === "whatsapp" ||
@@ -1183,7 +1187,9 @@ export async function startGatewayServer(
               ) {
                 return requestedChannel;
               }
-              return lastChannel ?? "whatsapp";
+              return lastChannel && lastChannel !== "webchat"
+                ? lastChannel
+                : "whatsapp";
             })();
 
             const resolvedTo = (() => {
