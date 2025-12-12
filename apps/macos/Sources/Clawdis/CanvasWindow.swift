@@ -248,6 +248,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         window.makeFirstResponder(self.webView)
+        VoiceWakeOverlayController.shared.bringToFrontIfVisible()
         self.onVisibilityChanged?(true)
     }
 

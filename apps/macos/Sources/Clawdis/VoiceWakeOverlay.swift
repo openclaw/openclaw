@@ -10,6 +10,10 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.overlay")
 
+    /// Keep the voice wake overlay above any other Clawdis windows, but below the system’s pop-up menus.
+    /// (Menu bar menus typically live at `.popUpMenu`.)
+    private static let preferredWindowLevel = NSWindow.Level(rawValue: NSWindow.Level.popUpMenu.rawValue - 4)
+
     enum Source: String { case wakeWord, pushToTalk }
 
     @Published private(set) var model = Model()
@@ -308,9 +312,7 @@ final class VoiceWakeOverlayController: ObservableObject {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        // Voice wake must stay above any other Clawdis windows (Canvas, WebChat, notifications).
-        // `.statusBar` is shared with some other overlays, so bump it slightly to avoid ordering fights.
-        panel.level = NSWindow.Level(rawValue: NSWindow.Level.statusBar.rawValue + 2)
+        panel.level = Self.preferredWindowLevel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
         panel.hidesOnDeactivate = false
         panel.isMovable = false
@@ -324,6 +326,13 @@ final class VoiceWakeOverlayController: ObservableObject {
         panel.contentView = host
         self.hostingView = host
         self.window = panel
+    }
+
+    /// Reassert window ordering when other panels are shown.
+    func bringToFrontIfVisible() {
+        guard self.model.isVisible, let window = self.window else { return }
+        window.level = Self.preferredWindowLevel
+        window.orderFrontRegardless()
     }
 
     private func targetFrame() -> NSRect {
