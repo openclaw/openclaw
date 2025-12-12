@@ -48,6 +48,8 @@ actor VoiceWakeRuntime {
 
     /// Stops the active Speech pipeline without clearing the stored config, so we can restart cleanly.
     private func haltRecognitionPipeline() {
+        // Bump generation first so any in-flight callbacks from the cancelled task get dropped.
+        self.recognitionGeneration &+= 1
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
@@ -323,6 +325,9 @@ actor VoiceWakeRuntime {
     private func finalizeCapture(config: RuntimeConfig) async {
         guard self.isCapturing else { return }
         self.isCapturing = false
+        // Disarm trigger matching immediately (before halting recognition) to avoid double-trigger
+        // races from late callbacks that arrive after isCapturing is cleared.
+        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
         self.captureTask?.cancel()
         self.captureTask = nil
 
@@ -362,8 +367,6 @@ actor VoiceWakeRuntime {
             }
         }
         self.overlayToken = nil
-
-        self.cooldownUntil = Date().addingTimeInterval(self.debounceAfterSend)
         self.scheduleRestartRecognizer()
     }
 
