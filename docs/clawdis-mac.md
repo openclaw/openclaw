@@ -70,6 +70,7 @@ struct Response { ok: Bool; message?: String; payload?: Data }
   - `run -- cmd args... [--cwd] [--env KEY=VAL] [--timeout 30] [--needs-screen-recording]`
   - `status`
 - Sounds: supply any macOS alert name with `--sound` per notification; omit the flag to use the system default. There is no longer a persisted “default sound” in the app UI.
+- Priority: `timeSensitive` is best-effort and falls back to `active` unless the app is signed with the Time Sensitive Notifications entitlement.
 - Internals: builds Request, connects via AsyncXPCConnection, prints Response as JSON to stdout.
 
 ## Integration with clawdis/Clawdis (Node/TS)

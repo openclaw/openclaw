@@ -3,7 +3,9 @@ set -euo pipefail
 
 APP_BUNDLE="${1:-dist/Clawdis.app}"
 IDENTITY="${SIGN_IDENTITY:-}"
-ENT_TMP=$(mktemp -t clawdis-entitlements)
+ENT_TMP_BASE=$(mktemp -t clawdis-entitlements-base)
+ENT_TMP_APP=$(mktemp -t clawdis-entitlements-app)
+ENT_TMP_APP_BASE=$(mktemp -t clawdis-entitlements-app-base)
 
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
@@ -44,7 +46,41 @@ fi
 
 echo "Using signing identity: $IDENTITY"
 
-cat > "$ENT_TMP" <<'PLIST'
+cat > "$ENT_TMP_BASE" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.hardened-runtime</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+cat > "$ENT_TMP_APP_BASE" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.hardened-runtime</key>
+    <true/>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+
+cat > "$ENT_TMP_APP" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -63,12 +99,27 @@ cat > "$ENT_TMP" <<'PLIST'
 </plist>
 PLIST
 
+# The time-sensitive entitlement is restricted and needs to be present in a
+# matching provisioning profile when using Apple Development signing.
+# Avoid breaking local debug builds by only enabling it when forced, or when
+# using distribution-style identities.
+APP_ENTITLEMENTS="$ENT_TMP_APP_BASE"
+if [[ "${ENABLE_TIME_SENSITIVE_NOTIFICATIONS:-}" == "1" ]]; then
+  APP_ENTITLEMENTS="$ENT_TMP_APP"
+elif [[ "$IDENTITY" == *"Developer ID Application"* ]] || [[ "$IDENTITY" == *"Apple Distribution"* ]]; then
+  APP_ENTITLEMENTS="$ENT_TMP_APP"
+else
+  echo "Note: Time Sensitive Notifications entitlement disabled for this signing identity."
+  echo "      To force it: ENABLE_TIME_SENSITIVE_NOTIFICATIONS=1 scripts/codesign-mac-app.sh <app>"
+fi
+
 # clear extended attributes to avoid stale signatures
 xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 
 sign_item() {
   local target="$1"
-  codesign --force --options runtime --timestamp=none --entitlements "$ENT_TMP" --sign "$IDENTITY" "$target"
+  local entitlements="$2"
+  codesign --force --options runtime --timestamp=none --entitlements "$entitlements" --sign "$IDENTITY" "$target"
 }
 
 sign_plain_item() {
@@ -78,16 +129,16 @@ sign_plain_item() {
 
 # Sign main binary and CLI helper if present
 if [ -f "$APP_BUNDLE/Contents/MacOS/Clawdis" ]; then
-  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Clawdis"
+  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Clawdis" "$APP_ENTITLEMENTS"
 fi
 if [ -f "$APP_BUNDLE/Contents/MacOS/ClawdisCLI" ]; then
-  echo "Signing CLI helper"; sign_item "$APP_BUNDLE/Contents/MacOS/ClawdisCLI"
+  echo "Signing CLI helper"; sign_item "$APP_BUNDLE/Contents/MacOS/ClawdisCLI" "$ENT_TMP_BASE"
 fi
 
 # Sign bundled gateway payload (native addons, libvips dylibs)
 if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   find "$APP_BUNDLE/Contents/Resources/Relay" -type f \( -name "*.node" -o -name "*.dylib" \) -print0 | while IFS= read -r -d '' f; do
-    echo "Signing gateway payload: $f"; sign_item "$f"
+    echo "Signing gateway payload: $f"; sign_item "$f" "$ENT_TMP_BASE"
   done
 fi
 
@@ -115,7 +166,7 @@ if [ -d "$APP_BUNDLE/Contents/Frameworks" ]; then
 fi
 
 # Finally sign the bundle
-sign_item "$APP_BUNDLE"
+sign_item "$APP_BUNDLE" "$APP_ENTITLEMENTS"
 
-rm -f "$ENT_TMP"
+rm -f "$ENT_TMP_BASE" "$ENT_TMP_APP_BASE" "$ENT_TMP_APP"
 echo "Codesign complete for $APP_BUNDLE"

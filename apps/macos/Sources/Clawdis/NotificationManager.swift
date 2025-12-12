@@ -1,9 +1,17 @@
 import ClawdisIPC
 import Foundation
+import Security
 import UserNotifications
 
 @MainActor
 struct NotificationManager {
+    private static let hasTimeSensitiveEntitlement: Bool = {
+        guard let task = SecTaskCreateFromSelf(nil) else { return false }
+        let key = "com.apple.developer.usernotifications.time-sensitive" as CFString
+        guard let val = SecTaskCopyValueForEntitlement(task, key, nil) else { return false }
+        return (val as? Bool) == true
+    }()
+
     func send(title: String, body: String, sound: String?, priority: NotificationPriority? = nil) async -> Bool {
         let center = UNUserNotificationCenter.current()
         let status = await center.notificationSettings()
@@ -29,7 +37,7 @@ struct NotificationManager {
             case .active:
                 content.interruptionLevel = .active
             case .timeSensitive:
-                content.interruptionLevel = .timeSensitive
+                content.interruptionLevel = Self.hasTimeSensitiveEntitlement ? .timeSensitive : .active
             }
         }
 
