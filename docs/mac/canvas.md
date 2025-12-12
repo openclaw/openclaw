@@ -56,6 +56,8 @@ Canvas is presented as a borderless `NSPanel` (similar to the existing WebChat p
 - Can be shown/hidden at any time by the agent.
 - Supports an “anchored” presentation (near the menu bar icon or another anchor rect).
 - Uses a rounded container; shadow stays on, but **chrome/bezel only appears on hover**.
+- Default position is the **top-right corner** of the current screen’s visible frame (unless the user moved/resized it previously).
+- The panel is **user-resizable** (edge resize + hover resize handle) and the last frame is persisted per session.
 
 ### Hover-only chrome
 
@@ -73,6 +75,7 @@ Expose Canvas via the existing `clawdis-mac` → XPC → app routing so the agen
 - Evaluate JavaScript and optionally return results.
 - Query/modify DOM (helpers mirroring “dom query/all/attr/click/type/wait” patterns).
 - Capture a snapshot image of the current canvas view.
+- Optionally set panel placement (screen `x/y` + `width/height`) when showing/navigating.
 
 This should be modeled after `WebChatManager`/`WebChatWindowController` but targeting `clawdis-canvas://…` URLs.
 

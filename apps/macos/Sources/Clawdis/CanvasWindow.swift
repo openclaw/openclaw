@@ -1,4 +1,5 @@
 import AppKit
+import ClawdisIPC
 import Foundation
 import OSLog
 import WebKit
@@ -10,6 +11,8 @@ private enum CanvasLayout {
     static let panelSize = NSSize(width: 520, height: 680)
     static let windowSize = NSSize(width: 1120, height: 840)
     static let anchorPadding: CGFloat = 8
+    static let defaultPadding: CGFloat = 10
+    static let minPanelSize = NSSize(width: 360, height: 360)
 }
 
 final class CanvasPanel: NSPanel {
@@ -37,6 +40,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     private let watcher: CanvasFileWatcher
     private let container: HoverChromeContainerView
     let presentation: CanvasPresentation
+    private var preferredPlacement: CanvasPlacement?
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -84,6 +88,10 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
     @MainActor deinit {
         self.watcher.stop()
+    }
+
+    func applyPreferredPlacement(_ placement: CanvasPlacement?) {
+        self.preferredPlacement = placement
     }
 
     func showCanvas(path: String? = nil) {
@@ -203,7 +211,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         case .panel:
             let panel = CanvasPanel(
                 contentRect: NSRect(origin: .zero, size: CanvasLayout.panelSize),
-                styleMask: [.borderless],
+                styleMask: [.borderless, .resizable],
                 backing: .buffered,
                 defer: false)
             // Keep Canvas below the Voice Wake overlay panel.
@@ -218,6 +226,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             panel.contentView = contentView
             panel.becomesKeyOnlyIfNeeded = true
             panel.hidesOnDeactivate = false
+            panel.minSize = CanvasLayout.minPanelSize
             return panel
         }
     }
@@ -233,24 +242,65 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
     private func repositionPanel(using anchorProvider: () -> NSRect?) {
         guard let panel = self.window else { return }
-        guard let anchor = anchorProvider() else { return }
-
-        var frame = panel.frame
+        let anchor = anchorProvider()
         let screen = NSScreen.screens.first { screen in
-            screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
+            guard let anchor else { return false }
+            return screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
         } ?? NSScreen.main
 
-        if let screen {
-            let minX = screen.frame.minX + CanvasLayout.anchorPadding
-            let maxX = screen.frame.maxX - frame.width - CanvasLayout.anchorPadding
-            frame.origin.x = min(max(round(anchor.midX - frame.width / 2), minX), maxX)
-            let desiredY = anchor.minY - frame.height - CanvasLayout.anchorPadding
-            frame.origin.y = max(desiredY, screen.frame.minY + CanvasLayout.anchorPadding)
-        } else {
-            frame.origin.x = round(anchor.midX - frame.width / 2)
-            frame.origin.y = anchor.minY - frame.height
+        if let placement = self.preferredPlacement,
+           let rect = self.frame(for: placement, panel: panel, screen: screen)
+        {
+            self.setPanelFrame(rect, on: screen)
+            return
         }
-        panel.setFrame(frame, display: false)
+
+        if let restored = Self.loadRestoredFrame(sessionKey: self.sessionKey) {
+            self.setPanelFrame(restored, on: screen)
+            return
+        }
+
+        // Default: top-right corner of the visible frame.
+        let visible = (screen?.visibleFrame ?? NSScreen.main?.visibleFrame) ?? panel.frame
+        let w = max(CanvasLayout.minPanelSize.width, panel.frame.width)
+        let h = max(CanvasLayout.minPanelSize.height, panel.frame.height)
+        let x = visible.maxX - w - CanvasLayout.defaultPadding
+        let y = visible.maxY - h - CanvasLayout.defaultPadding
+        self.setPanelFrame(NSRect(x: x, y: y, width: w, height: h), on: screen)
+    }
+
+    private func frame(for placement: CanvasPlacement, panel: NSWindow, screen: NSScreen?) -> NSRect? {
+        let visible = (screen?.visibleFrame ?? NSScreen.main?.visibleFrame) ?? panel.frame
+        let cur = panel.frame
+
+        let width = placement.width.map { max(CanvasLayout.minPanelSize.width, CGFloat($0)) } ?? cur.size.width
+        let height = placement.height.map { max(CanvasLayout.minPanelSize.height, CGFloat($0)) } ?? cur.size.height
+        let size = NSSize(width: width, height: height)
+
+        let origin: NSPoint = {
+            // If any origin component is provided, apply it and keep the other coordinate stable.
+            if placement.x != nil || placement.y != nil {
+                return NSPoint(x: placement.x ?? cur.origin.x, y: placement.y ?? cur.origin.y)
+            }
+            // Default: top-right.
+            return NSPoint(
+                x: visible.maxX - size.width - CanvasLayout.defaultPadding,
+                y: visible.maxY - size.height - CanvasLayout.defaultPadding)
+        }()
+
+        return NSRect(origin: origin, size: size)
+    }
+
+    private func setPanelFrame(_ frame: NSRect, on screen: NSScreen?) {
+        guard let panel = self.window else { return }
+        let s = screen ?? panel.screen ?? NSScreen.main
+        let constrained: NSRect
+        if let s {
+            constrained = panel.constrainFrameRect(frame, to: s)
+        } else {
+            constrained = frame
+        }
+        panel.setFrame(constrained, display: false)
     }
 
     // MARK: - WKNavigationDelegate
@@ -279,6 +329,19 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.onVisibilityChanged?(false)
     }
 
+    func windowDidMove(_: Notification) {
+        self.persistFrameIfPanel()
+    }
+
+    func windowDidEndLiveResize(_: Notification) {
+        self.persistFrameIfPanel()
+    }
+
+    private func persistFrameIfPanel() {
+        guard case .panel = self.presentation, let window else { return }
+        Self.storeRestoredFrame(window.frame, sessionKey: self.sessionKey)
+    }
+
     // MARK: - Helpers
 
     private static func sanitizeSessionKey(_ key: String) -> String {
@@ -287,6 +350,23 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-+")
         let scalars = trimmed.unicodeScalars.map { allowed.contains($0) ? Character($0) : "_" }
         return String(scalars)
+    }
+
+    private static func storedFrameDefaultsKey(sessionKey: String) -> String {
+        "clawdis.canvas.frame.\(sanitizeSessionKey(sessionKey))"
+    }
+
+    private static func loadRestoredFrame(sessionKey: String) -> NSRect? {
+        let key = storedFrameDefaultsKey(sessionKey: sessionKey)
+        guard let arr = UserDefaults.standard.array(forKey: key) as? [Double], arr.count == 4 else { return nil }
+        let rect = NSRect(x: arr[0], y: arr[1], width: arr[2], height: arr[3])
+        if rect.width < CanvasLayout.minPanelSize.width || rect.height < CanvasLayout.minPanelSize.height { return nil }
+        return rect
+    }
+
+    private static func storeRestoredFrame(_ frame: NSRect, sessionKey: String) {
+        let key = storedFrameDefaultsKey(sessionKey: sessionKey)
+        UserDefaults.standard.set([Double(frame.origin.x), Double(frame.origin.y), Double(frame.size.width), Double(frame.size.height)], forKey: key)
     }
 }
 
@@ -354,10 +434,43 @@ private final class CanvasDragHandleView: NSView {
     override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
 }
 
+private final class CanvasResizeHandleView: NSView {
+    private var startPoint: NSPoint = .zero
+    private var startFrame: NSRect = .zero
+
+    override func acceptsFirstMouse(for _: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        guard let window else { return }
+        _ = window.makeFirstResponder(self)
+        self.startPoint = NSEvent.mouseLocation
+        self.startFrame = window.frame
+        super.mouseDown(with: event)
+    }
+
+    override func mouseDragged(with _: NSEvent) {
+        guard let window else { return }
+        let current = NSEvent.mouseLocation
+        let dx = current.x - self.startPoint.x
+        let dy = current.y - self.startPoint.y
+
+        var frame = self.startFrame
+        frame.size.width = max(CanvasLayout.minPanelSize.width, frame.size.width + dx)
+        frame.origin.y += dy
+        frame.size.height = max(CanvasLayout.minPanelSize.height, frame.size.height - dy)
+
+        if let screen = window.screen {
+            frame = window.constrainFrameRect(frame, to: screen)
+        }
+        window.setFrame(frame, display: true)
+    }
+}
+
 private final class CanvasChromeOverlayView: NSView {
     var onClose: (() -> Void)?
 
     private let dragHandle = CanvasDragHandleView(frame: .zero)
+    private let resizeHandle = CanvasResizeHandleView(frame: .zero)
     private let closeButton: NSButton = {
         let img = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")
             ?? NSImage(size: NSSize(width: 18, height: 18))
@@ -385,6 +498,11 @@ private final class CanvasChromeOverlayView: NSView {
         self.dragHandle.layer?.backgroundColor = NSColor.clear.cgColor
         self.addSubview(self.dragHandle)
 
+        self.resizeHandle.translatesAutoresizingMaskIntoConstraints = false
+        self.resizeHandle.wantsLayer = true
+        self.resizeHandle.layer?.backgroundColor = NSColor.clear.cgColor
+        self.addSubview(self.resizeHandle)
+
         self.closeButton.translatesAutoresizingMaskIntoConstraints = false
         self.closeButton.target = self
         self.closeButton.action = #selector(self.handleClose)
@@ -400,6 +518,11 @@ private final class CanvasChromeOverlayView: NSView {
             self.closeButton.topAnchor.constraint(equalTo: self.topAnchor, constant: 8),
             self.closeButton.widthAnchor.constraint(equalToConstant: 18),
             self.closeButton.heightAnchor.constraint(equalToConstant: 18),
+
+            self.resizeHandle.trailingAnchor.constraint(equalTo: self.trailingAnchor),
+            self.resizeHandle.bottomAnchor.constraint(equalTo: self.bottomAnchor),
+            self.resizeHandle.widthAnchor.constraint(equalToConstant: 18),
+            self.resizeHandle.heightAnchor.constraint(equalToConstant: 18),
         ])
     }
 
@@ -412,6 +535,7 @@ private final class CanvasChromeOverlayView: NSView {
 
         if self.closeButton.frame.contains(point) { return self.closeButton }
         if self.dragHandle.frame.contains(point) { return self.dragHandle }
+        if self.resizeHandle.frame.contains(point) { return self.resizeHandle }
         return nil
     }
 

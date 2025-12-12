@@ -171,15 +171,26 @@ struct ClawdisCLI {
             case "show":
                 var session = "main"
                 var path: String?
+                var x: Double?
+                var y: Double?
+                var width: Double?
+                var height: Double?
                 while !args.isEmpty {
                     let arg = args.removeFirst()
                     switch arg {
                     case "--session": session = args.popFirst() ?? session
                     case "--path": path = args.popFirst()
+                    case "--x": x = args.popFirst().flatMap(Double.init)
+                    case "--y": y = args.popFirst().flatMap(Double.init)
+                    case "--width": width = args.popFirst().flatMap(Double.init)
+                    case "--height": height = args.popFirst().flatMap(Double.init)
                     default: break
                     }
                 }
-                return .canvasShow(session: session, path: path)
+                let placement = (x != nil || y != nil || width != nil || height != nil)
+                    ? CanvasPlacement(x: x, y: y, width: width, height: height)
+                    : nil
+                return .canvasShow(session: session, path: path, placement: placement)
 
             case "hide":
                 var session = "main"
@@ -195,16 +206,27 @@ struct ClawdisCLI {
             case "goto":
                 var session = "main"
                 var path: String?
+                var x: Double?
+                var y: Double?
+                var width: Double?
+                var height: Double?
                 while !args.isEmpty {
                     let arg = args.removeFirst()
                     switch arg {
                     case "--session": session = args.popFirst() ?? session
                     case "--path": path = args.popFirst()
+                    case "--x": x = args.popFirst().flatMap(Double.init)
+                    case "--y": y = args.popFirst().flatMap(Double.init)
+                    case "--width": width = args.popFirst().flatMap(Double.init)
+                    case "--height": height = args.popFirst().flatMap(Double.init)
                     default: break
                     }
                 }
                 guard let path else { throw CLIError.help }
-                return .canvasGoto(session: session, path: path)
+                let placement = (x != nil || y != nil || width != nil || height != nil)
+                    ? CanvasPlacement(x: x, y: y, width: width, height: height)
+                    : nil
+                return .canvasGoto(session: session, path: path, placement: placement)
 
             case "eval":
                 var session = "main"
@@ -260,8 +282,10 @@ struct ClawdisCLI {
           clawdis-mac agent --message <text> [--thinking <low|default|high>]
             [--session <key>] [--deliver] [--to <E.164>]
           clawdis-mac canvas show [--session <key>] [--path </...>]
+            [--x <screenX> --y <screenY>] [--width <w> --height <h>]
           clawdis-mac canvas hide [--session <key>]
           clawdis-mac canvas goto --path </...> [--session <key>]
+            [--x <screenX> --y <screenY>] [--width <w> --height <h>]
           clawdis-mac canvas eval --js <code> [--session <key>]
           clawdis-mac canvas snapshot [--out <path>] [--session <key>]
           clawdis-mac --help

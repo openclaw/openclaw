@@ -31,6 +31,24 @@ public enum NotificationDelivery: String, Codable, Sendable {
     case auto
 }
 
+// MARK: - Canvas geometry
+
+/// Optional placement hints for the Canvas panel.
+/// Values are in screen coordinates (same as `NSWindow` frame).
+public struct CanvasPlacement: Codable, Sendable {
+    public var x: Double?
+    public var y: Double?
+    public var width: Double?
+    public var height: Double?
+
+    public init(x: Double? = nil, y: Double? = nil, width: Double? = nil, height: Double? = nil) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
 public enum Request: Sendable {
     case notify(
         title: String,
@@ -49,9 +67,9 @@ public enum Request: Sendable {
     case status
     case agent(message: String, thinking: String?, session: String?, deliver: Bool, to: String?)
     case rpcStatus
-    case canvasShow(session: String, path: String?)
+    case canvasShow(session: String, path: String?, placement: CanvasPlacement?)
     case canvasHide(session: String)
-    case canvasGoto(session: String, path: String)
+    case canvasGoto(session: String, path: String, placement: CanvasPlacement?)
     case canvasEval(session: String, javaScript: String)
     case canvasSnapshot(session: String, outPath: String?)
 }
@@ -85,6 +103,7 @@ extension Request: Codable {
         case path
         case javaScript
         case outPath
+        case placement
     }
 
     private enum Kind: String, Codable {
@@ -146,19 +165,21 @@ extension Request: Codable {
         case .rpcStatus:
             try container.encode(Kind.rpcStatus, forKey: .type)
 
-        case let .canvasShow(session, path):
+        case let .canvasShow(session, path, placement):
             try container.encode(Kind.canvasShow, forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encodeIfPresent(path, forKey: .path)
+            try container.encodeIfPresent(placement, forKey: .placement)
 
         case let .canvasHide(session):
             try container.encode(Kind.canvasHide, forKey: .type)
             try container.encode(session, forKey: .session)
 
-        case let .canvasGoto(session, path):
+        case let .canvasGoto(session, path, placement):
             try container.encode(Kind.canvasGoto, forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encode(path, forKey: .path)
+            try container.encodeIfPresent(placement, forKey: .placement)
 
         case let .canvasEval(session, javaScript):
             try container.encode(Kind.canvasEval, forKey: .type)
@@ -220,7 +241,8 @@ extension Request: Codable {
         case .canvasShow:
             let session = try container.decode(String.self, forKey: .session)
             let path = try container.decodeIfPresent(String.self, forKey: .path)
-            self = .canvasShow(session: session, path: path)
+            let placement = try container.decodeIfPresent(CanvasPlacement.self, forKey: .placement)
+            self = .canvasShow(session: session, path: path, placement: placement)
 
         case .canvasHide:
             let session = try container.decode(String.self, forKey: .session)
@@ -229,7 +251,8 @@ extension Request: Codable {
         case .canvasGoto:
             let session = try container.decode(String.self, forKey: .session)
             let path = try container.decode(String.self, forKey: .path)
-            self = .canvasGoto(session: session, path: path)
+            let placement = try container.decodeIfPresent(CanvasPlacement.self, forKey: .placement)
+            self = .canvasGoto(session: session, path: path, placement: placement)
 
         case .canvasEval:
             let session = try container.decode(String.self, forKey: .session)

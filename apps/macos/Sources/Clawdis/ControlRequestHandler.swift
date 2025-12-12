@@ -85,12 +85,12 @@ enum ControlRequestHandler {
                 ? Response(ok: true, message: rpcResult.text ?? "sent")
                 : Response(ok: false, message: rpcResult.error ?? "failed to send")
 
-        case let .canvasShow(session, path):
+        case let .canvasShow(session, path, placement):
             guard canvasEnabled else {
                 return Response(ok: false, message: "Canvas disabled by user")
             }
             do {
-                let dir = try await MainActor.run { try CanvasManager.shared.show(sessionKey: session, path: path) }
+                let dir = try await MainActor.run { try CanvasManager.shared.show(sessionKey: session, path: path, placement: placement) }
                 return Response(ok: true, message: dir)
             } catch {
                 return Response(ok: false, message: error.localizedDescription)
@@ -100,12 +100,12 @@ enum ControlRequestHandler {
             await MainActor.run { CanvasManager.shared.hide(sessionKey: session) }
             return Response(ok: true)
 
-        case let .canvasGoto(session, path):
+        case let .canvasGoto(session, path, placement):
             guard canvasEnabled else {
                 return Response(ok: false, message: "Canvas disabled by user")
             }
             do {
-                try await MainActor.run { try CanvasManager.shared.goto(sessionKey: session, path: path) }
+                try await MainActor.run { try CanvasManager.shared.goto(sessionKey: session, path: path, placement: placement) }
                 return Response(ok: true)
             } catch {
                 return Response(ok: false, message: error.localizedDescription)

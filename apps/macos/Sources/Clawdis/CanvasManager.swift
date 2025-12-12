@@ -1,4 +1,5 @@
 import AppKit
+import ClawdisIPC
 import Foundation
 
 @MainActor
@@ -16,11 +17,12 @@ final class CanvasManager {
         return base.appendingPathComponent("Clawdis/canvas", isDirectory: true)
     }()
 
-    func show(sessionKey: String, path: String? = nil) throws -> String {
+    func show(sessionKey: String, path: String? = nil, placement: CanvasPlacement? = nil) throws -> String {
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if let controller = self.panelController, self.panelSessionKey == session {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
+            controller.applyPreferredPlacement(placement)
             controller.goto(path: path ?? "/")
             return controller.directoryPath
         }
@@ -36,6 +38,7 @@ final class CanvasManager {
             presentation: .panel(anchorProvider: anchorProvider))
         self.panelController = controller
         self.panelSessionKey = session
+        controller.applyPreferredPlacement(placement)
         controller.showCanvas(path: path ?? "/")
         return controller.directoryPath
     }
@@ -50,8 +53,8 @@ final class CanvasManager {
         self.panelController?.hideCanvas()
     }
 
-    func goto(sessionKey: String, path: String) throws {
-        _ = try self.show(sessionKey: sessionKey, path: path)
+    func goto(sessionKey: String, path: String, placement: CanvasPlacement? = nil) throws {
+        _ = try self.show(sessionKey: sessionKey, path: path, placement: placement)
     }
 
     func eval(sessionKey: String, javaScript: String) async throws -> String {
@@ -74,4 +77,6 @@ final class CanvasManager {
         let pt = NSEvent.mouseLocation
         return NSRect(x: pt.x, y: pt.y, width: 1, height: 1)
     }
+
+    // placement interpretation is handled by the window controller.
 }
