@@ -1,11 +1,10 @@
 import Foundation
-import Darwin
+import CoreServices
 
 final class CanvasFileWatcher: @unchecked Sendable {
     private let url: URL
     private let queue: DispatchQueue
-    private var source: DispatchSourceFileSystemObject?
-    private var fd: Int32 = -1
+    private var stream: FSEventStreamRef?
     private var pending = false
     private let onChange: () -> Void
 
@@ -20,42 +19,76 @@ final class CanvasFileWatcher: @unchecked Sendable {
     }
 
     func start() {
-        guard self.source == nil else { return }
-        let path = (self.url as NSURL).fileSystemRepresentation
-        let fd = open(path, O_EVTONLY)
-        guard fd >= 0 else { return }
-        self.fd = fd
+        guard self.stream == nil else { return }
 
-        let source = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: fd,
-            eventMask: [.write, .delete, .rename, .attrib, .extend, .link, .revoke],
-            queue: self.queue)
+        let retainedSelf = Unmanaged.passRetained(self)
+        var context = FSEventStreamContext(
+            version: 0,
+            info: retainedSelf.toOpaque(),
+            retain: nil,
+            release: { pointer in
+                guard let pointer else { return }
+                Unmanaged<CanvasFileWatcher>.fromOpaque(pointer).release()
+            },
+            copyDescription: nil)
 
-        source.setEventHandler { [weak self] in
-            guard let self else { return }
-            if self.pending { return }
-            self.pending = true
-            self.queue.asyncAfter(deadline: .now() + 0.12) { [weak self] in
-                guard let self else { return }
-                self.pending = false
-                self.onChange()
-            }
+        let paths = [self.url.path] as CFArray
+        let flags = FSEventStreamCreateFlags(
+            kFSEventStreamCreateFlagFileEvents |
+                kFSEventStreamCreateFlagUseCFTypes |
+                kFSEventStreamCreateFlagNoDefer)
+
+        guard let stream = FSEventStreamCreate(
+            kCFAllocatorDefault,
+            Self.callback,
+            &context,
+            paths,
+            FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
+            0.05,
+            flags)
+        else {
+            retainedSelf.release()
+            return
         }
 
-        source.setCancelHandler { [weak self] in
-            guard let self else { return }
-            if self.fd >= 0 {
-                close(self.fd)
-                self.fd = -1
-            }
+        self.stream = stream
+        FSEventStreamSetDispatchQueue(stream, self.queue)
+        if FSEventStreamStart(stream) == false {
+            self.stream = nil
+            FSEventStreamSetDispatchQueue(stream, nil)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
         }
-
-        self.source = source
-        source.resume()
     }
 
     func stop() {
-        self.source?.cancel()
-        self.source = nil
+        guard let stream = self.stream else { return }
+        self.stream = nil
+        FSEventStreamStop(stream)
+        FSEventStreamSetDispatchQueue(stream, nil)
+        FSEventStreamInvalidate(stream)
+        FSEventStreamRelease(stream)
+    }
+}
+
+extension CanvasFileWatcher {
+    private static let callback: FSEventStreamCallback = { _, info, numEvents, _, eventFlags, _ in
+        guard let info else { return }
+        let watcher = Unmanaged<CanvasFileWatcher>.fromOpaque(info).takeUnretainedValue()
+        watcher.handleEvents(numEvents: numEvents, eventFlags: eventFlags)
+    }
+
+    private func handleEvents(numEvents: Int, eventFlags: UnsafePointer<FSEventStreamEventFlags>?) {
+        guard numEvents > 0 else { return }
+        guard eventFlags != nil else { return }
+
+        // Coalesce rapid changes (common during builds/atomic saves).
+        if self.pending { return }
+        self.pending = true
+        self.queue.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self else { return }
+            self.pending = false
+            self.onChange()
+        }
     }
 }
