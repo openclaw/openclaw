@@ -147,11 +147,11 @@ struct ToolsSettings: View {
             method: .brew(formula: "openhue/cli/openhue-cli", binary: "openhue"),
             kind: .tool),
         ToolEntry(
-            id: "openai-whisper",
-            name: "OpenAI Whisper",
-            url: URL(string: "https://github.com/openai/whisper")!,
-            description: "On-device speech-to-text for quick note taking or voicemail transcription.",
-            method: .brew(formula: "openai-whisper", binary: "whisper"),
+            id: "gog",
+            name: "gog",
+            url: URL(string: "https://github.com/steipete/gog")!,
+            description: "Unified Google CLI for Gmail, Calendar, Drive, and Contacts. Replaces MCP servers.",
+            method: .brew(formula: "steipete/tap/gog", binary: "gog"),
             kind: .tool),
         ToolEntry(
             id: "gemini-cli",
@@ -179,26 +179,6 @@ struct ToolsSettings: View {
                 url: "https://github.com/badlogic/agent-tools.git",
                 destination: "\(NSHomeDirectory())/agent-tools"),
             kind: .tool),
-        ToolEntry(
-            id: "gmail-mcp",
-            name: "Gmail MCP",
-            url: URL(string: "https://www.npmjs.com/package/@gongrzhe/server-gmail-autoauth-mcp")!,
-            description: "Model Context Protocol server that exposes Gmail search, read, and send tools.",
-            method: .mcporter(
-                name: "gmail",
-                command: "npx -y @gongrzhe/server-gmail-autoauth-mcp",
-                summary: "Adds Gmail MCP via mcporter (stdio transport, auto-auth)."),
-            kind: .mcp),
-        ToolEntry(
-            id: "google-calendar-mcp",
-            name: "Google Calendar MCP",
-            url: URL(string: "https://www.npmjs.com/package/@cocal/google-calendar-mcp")!,
-            description: "MCP server to list, create, and update calendar events for scheduling automations.",
-            method: .mcporter(
-                name: "google-calendar",
-                command: "npx -y @cocal/google-calendar-mcp",
-                summary: "Adds Google Calendar MCP via mcporter (stdio transport)."),
-            kind: .mcp),
     ]
 
     @AppStorage("tools.packageManager") private var packageManagerRaw = NodePackageManager.npm.rawValue
