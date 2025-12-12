@@ -198,7 +198,9 @@ function emitGatewayFrame(): string {
 
   const helper = `
     private static func decodePayload<T: Decodable>(_ type: T.Type, from raw: [String: AnyCodable]) throws -> T {
-        let data = try JSONSerialization.data(withJSONObject: raw)
+        // raw is [String: AnyCodable] which is not directly JSONSerialization-compatible.
+        // Round-trip through JSONEncoder so AnyCodable can encode itself safely.
+        let data = try JSONEncoder().encode(raw)
         let decoder = JSONDecoder()
         return try decoder.decode(T.self, from: data)
     }
