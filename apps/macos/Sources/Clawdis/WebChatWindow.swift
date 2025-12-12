@@ -220,7 +220,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
 
     private func prepareGatewayPort() async throws -> Int {
         if CommandResolver.connectionModeIsRemote() {
-            let forwarded = try await RemoteTunnelManager.shared.ensureControlTunnel()
+            let forwarded = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
             return Int(forwarded)
         }
         return GatewayEnvironment.gatewayPort()
@@ -684,7 +684,7 @@ final class WebChatManager {
         let gatewayPort: Int
         if CommandResolver.connectionModeIsRemote() {
             do {
-                let forwarded = try await RemoteTunnelManager.shared.ensureControlTunnel()
+                let forwarded = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 gatewayPort = Int(forwarded)
 
                 let root = try WebChatWindowController.webChatAssetsRootURL()

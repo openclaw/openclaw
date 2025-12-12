@@ -34,7 +34,7 @@ final class ConnectionModeCoordinator {
             WebChatManager.shared.resetTunnels()
 
             do {
-                _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
+                _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 let settings = CommandResolver.connectionSettings()
                 try await ControlChannel.shared.configure(mode: .remote(
                     target: settings.target,

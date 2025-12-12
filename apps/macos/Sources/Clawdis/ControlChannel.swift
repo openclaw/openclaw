@@ -79,10 +79,9 @@ final class ControlChannel: ObservableObject {
         case .local:
             await self.configure()
         case let .remote(target, identity):
-            // Create/ensure SSH tunnel, then talk to the forwarded local port.
-            _ = (target, identity)
             do {
-                _ = try await RemoteTunnelManager.shared.ensureControlTunnel()
+                _ = (target, identity)
+                _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 await self.configure()
             } catch {
                 self.state = .degraded(error.localizedDescription)
@@ -215,8 +214,7 @@ final class ControlChannel: ObservableObject {
         switch push {
         case let .event(evt) where evt.event == "agent":
             if let payload = evt.payload,
-               let payloadData = try? JSONEncoder().encode(payload),
-               let agent = try? JSONDecoder().decode(ControlAgentEvent.self, from: payloadData)
+               let agent = try? GatewayPayloadDecoding.decode(payload, as: ControlAgentEvent.self)
             {
                 AgentEventStore.shared.append(agent)
                 self.routeWorkActivity(from: agent)

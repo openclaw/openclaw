@@ -109,20 +109,6 @@ actor GatewayConnection {
     }
 
     private static func defaultConfigProvider() async throws -> Config {
-        let mode = await MainActor.run { AppStateStore.shared.connectionMode }
-        let token = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"]
-        switch mode {
-        case .local:
-            let port = GatewayEnvironment.gatewayPort()
-            return (URL(string: "ws://127.0.0.1:\(port)")!, token)
-        case .remote:
-            if let forwarded = await RemoteTunnelManager.shared.controlTunnelPortIfRunning() {
-                return (URL(string: "ws://127.0.0.1:\(Int(forwarded))")!, token)
-            }
-            throw NSError(
-                domain: "RemoteTunnel",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "Remote mode is enabled, but the control tunnel is not active"])
-        }
+        try await GatewayEndpointStore.shared.requireConfig()
     }
 }
