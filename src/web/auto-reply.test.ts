@@ -31,9 +31,31 @@ const makeSessionStore = async (
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-session-"));
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(entries));
+  const cleanup = async () => {
+    // Session store writes can be in-flight when the test finishes (e.g. updateLastRoute
+    // after a batched message flush). `fs.rm({ recursive })` can race and throw ENOTEMPTY.
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      try {
+        await fs.rm(dir, { recursive: true, force: true });
+        return;
+      } catch (err) {
+        const code =
+          err && typeof err === "object" && "code" in err
+            ? String((err as { code?: unknown }).code)
+            : null;
+        if (code === "ENOTEMPTY" || code === "EBUSY" || code === "EPERM") {
+          await new Promise((resolve) => setTimeout(resolve, 25));
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    await fs.rm(dir, { recursive: true, force: true });
+  };
   return {
     storePath,
-    cleanup: () => fs.rm(dir, { recursive: true, force: true }),
+    cleanup,
   };
 };
 
