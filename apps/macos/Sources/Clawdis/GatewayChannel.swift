@@ -51,21 +51,8 @@ struct WebSocketSessionBox: @unchecked Sendable {
     let session: any WebSocketSessioning
 }
 
-struct GatewayEvent: Codable {
-    let type: String
-    let event: String?
-    let payload: AnyCodable?
-    let seq: Int?
-}
-
 // Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = ClawdisProtocol.AnyCodable
-
-extension Notification.Name {
-    static let gatewaySnapshot = Notification.Name("clawdis.gateway.snapshot")
-    static let gatewayEvent = Notification.Name("clawdis.gateway.event")
-    static let gatewaySeqGap = Notification.Name("clawdis.gateway.seqgap")
-}
 
 actor GatewayChannelActor {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway")
@@ -87,11 +74,18 @@ actor GatewayChannelActor {
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
+    private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
 
-    init(url: URL, token: String?, session: WebSocketSessionBox? = nil) {
+    init(
+        url: URL,
+        token: String?,
+        session: WebSocketSessionBox? = nil,
+        pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil)
+    {
         self.url = url
         self.token = token
         self.session = session?.session ?? URLSession(configuration: .default)
+        self.pushHandler = pushHandler
         Task { [weak self] in
             await self?.startWatchdog()
         }
@@ -240,8 +234,7 @@ actor GatewayChannelActor {
                 guard let self else { return }
                 await self.watchTicks()
             }
-            let frame = GatewayFrame.helloOk(ok)
-            NotificationCenter.default.post(name: .gatewaySnapshot, object: frame)
+            await self.pushHandler?(.snapshot(ok))
             return
         }
         if let err = try? decoder.decode(HelloError.self, from: data) {
@@ -302,18 +295,15 @@ actor GatewayChannelActor {
         case let .event(evt):
             if let seq = evt.seq {
                 if let last = lastSeq, seq > last + 1 {
-                    NotificationCenter.default.post(
-                        name: .gatewaySeqGap,
-                        object: frame,
-                        userInfo: ["expected": last + 1, "received": seq])
+                    await self.pushHandler?(.seqGap(expected: last + 1, received: seq))
                 }
                 self.lastSeq = seq
             }
             if evt.event == "tick" { self.lastTick = Date() }
-            NotificationCenter.default.post(name: .gatewayEvent, object: frame)
-        case .helloOk:
+            await self.pushHandler?(.event(evt))
+        case let .helloOk(ok):
             self.lastTick = Date()
-            NotificationCenter.default.post(name: .gatewaySnapshot, object: frame)
+            await self.pushHandler?(.snapshot(ok))
         default:
             break
         }

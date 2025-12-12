@@ -4,9 +4,6 @@ import OSLog
 import SwiftUI
 import UniformTypeIdentifiers
 
-extension GatewayFrame: @unchecked Sendable {}
-extension EventFrame: @unchecked Sendable {}
-
 private let webChatSwiftLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChatSwiftUI")
 
 private enum WebChatSwiftUILayout {
@@ -79,25 +76,26 @@ final class WebChatViewModel: ObservableObject {
     @Published var healthOK: Bool = true
 
     private let sessionKey: String
-    private var eventToken: NSObjectProtocol?
+    private var eventTask: Task<Void, Never>?
     private var pendingRuns = Set<String>()
 
     init(sessionKey: String) {
         self.sessionKey = sessionKey
-        self.eventToken = NotificationCenter.default.addObserver(
-            forName: .gatewayEvent,
-            object: nil,
-            queue: .main)
-        { [weak self] note in
-            guard let frame = note.object as? GatewayFrame else { return }
-            Task { @MainActor in
-                self?.handleGatewayFrame(frame)
+        self.eventTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await GatewayConnection.shared.subscribe()
+            for await push in stream {
+                if Task.isCancelled { return }
+                guard case let .event(evt) = push else { continue }
+                await MainActor.run { [weak self] in
+                    self?.handleGatewayEvent(evt)
+                }
             }
         }
     }
 
     deinit {
-        // Intentionally no cleanup; NotificationCenter observer is weakly captured and drops with this instance.
+        self.eventTask?.cancel()
     }
 
     func load() {
@@ -212,8 +210,8 @@ final class WebChatViewModel: ObservableObject {
         return try JSONDecoder().decode(ChatHistoryPayload.self, from: data)
     }
 
-    private func handleGatewayFrame(_ frame: GatewayFrame) {
-        guard case let .event(evt) = frame, evt.event == "chat" else { return }
+    private func handleGatewayEvent(_ evt: EventFrame) {
+        guard evt.event == "chat" else { return }
         guard let payload = evt.payload else { return }
         guard let data = try? JSONEncoder().encode(payload) else { return }
         guard let chat = try? JSONDecoder().decode(ChatEventPayload.self, from: data) else { return }

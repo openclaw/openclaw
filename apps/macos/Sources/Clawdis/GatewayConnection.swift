@@ -1,3 +1,4 @@
+import ClawdisProtocol
 import Foundation
 
 /// Single, shared Gateway websocket connection for the whole app.
@@ -15,6 +16,9 @@ actor GatewayConnection {
     private var client: GatewayChannelActor?
     private var configuredURL: URL?
     private var configuredToken: String?
+
+    private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
+    private var lastSnapshot: HelloOk?
 
     init(
         configProvider: @escaping @Sendable () async throws -> Config = GatewayConnection.defaultConfigProvider,
@@ -50,6 +54,35 @@ actor GatewayConnection {
         self.client = nil
         self.configuredURL = nil
         self.configuredToken = nil
+        self.lastSnapshot = nil
+    }
+
+    func subscribe(bufferingNewest: Int = 100) -> AsyncStream<GatewayPush> {
+        let id = UUID()
+        let snapshot = self.lastSnapshot
+        let connection = self
+        return AsyncStream(bufferingPolicy: .bufferingNewest(bufferingNewest)) { continuation in
+            if let snapshot {
+                continuation.yield(.snapshot(snapshot))
+            }
+            self.subscribers[id] = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { await connection.removeSubscriber(id) }
+            }
+        }
+    }
+
+    private func removeSubscriber(_ id: UUID) {
+        self.subscribers[id] = nil
+    }
+
+    private func broadcast(_ push: GatewayPush) {
+        if case let .snapshot(snapshot) = push {
+            self.lastSnapshot = snapshot
+        }
+        for (_, continuation) in self.subscribers {
+            continuation.yield(push)
+        }
     }
 
     private func configure(url: URL, token: String?) async {
@@ -59,9 +92,20 @@ actor GatewayConnection {
         if let client {
             await client.shutdown()
         }
-        self.client = GatewayChannelActor(url: url, token: token, session: self.sessionBox)
+        self.lastSnapshot = nil
+        self.client = GatewayChannelActor(
+            url: url,
+            token: token,
+            session: self.sessionBox,
+            pushHandler: { [weak self] push in
+                await self?.handle(push: push)
+            })
         self.configuredURL = url
         self.configuredToken = token
+    }
+
+    private func handle(push: GatewayPush) {
+        self.broadcast(push)
     }
 
     private static func defaultConfigProvider() async throws -> Config {
@@ -72,9 +116,13 @@ actor GatewayConnection {
             let port = GatewayEnvironment.gatewayPort()
             return (URL(string: "ws://127.0.0.1:\(port)")!, token)
         case .remote:
-            let forwarded = try await RemoteTunnelManager.shared.ensureControlTunnel()
-            return (URL(string: "ws://127.0.0.1:\(Int(forwarded))")!, token)
+            if let forwarded = await RemoteTunnelManager.shared.controlTunnelPortIfRunning() {
+                return (URL(string: "ws://127.0.0.1:\(Int(forwarded))")!, token)
+            }
+            throw NSError(
+                domain: "RemoteTunnel",
+                code: 2,
+                userInfo: [NSLocalizedDescriptionKey: "Remote mode is enabled, but the control tunnel is not active"])
         }
     }
 }
-

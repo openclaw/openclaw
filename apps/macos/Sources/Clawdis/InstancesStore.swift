@@ -38,7 +38,7 @@ final class InstancesStore: ObservableObject {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "instances")
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 30
-    private var observers: [NSObjectProtocol] = []
+    private var eventTask: Task<Void, Never>?
 
     private struct PresenceEventPayload: Codable {
         let presence: [PresenceEntry]
@@ -51,7 +51,7 @@ final class InstancesStore: ObservableObject {
     func start() {
         guard !self.isPreview else { return }
         guard self.task == nil else { return }
-        self.observeGatewayEvents()
+        self.startGatewaySubscription()
         self.task = Task.detached { [weak self] in
             guard let self else { return }
             await self.refresh()
@@ -65,56 +65,41 @@ final class InstancesStore: ObservableObject {
     func stop() {
         self.task?.cancel()
         self.task = nil
-        for token in self.observers {
-            NotificationCenter.default.removeObserver(token)
-        }
-        self.observers.removeAll()
+        self.eventTask?.cancel()
+        self.eventTask = nil
     }
 
-    private func observeGatewayEvents() {
-        let ev = NotificationCenter.default.addObserver(
-            forName: .gatewayEvent,
-            object: nil,
-            queue: .main)
-        { [weak self] note in
-            guard let self,
-                  let frame = note.object as? GatewayFrame else { return }
-            switch frame {
-            case let .event(evt) where evt.event == "presence":
-                if let payload = evt.payload {
-                    Task { @MainActor [weak self] in self?.handlePresenceEventPayload(payload) }
-                }
-            default:
-                break
-            }
-        }
-        let gap = NotificationCenter.default.addObserver(
-            forName: .gatewaySeqGap,
-            object: nil,
-            queue: .main)
-        { [weak self] _ in
+    private func startGatewaySubscription() {
+        self.eventTask?.cancel()
+        self.eventTask = Task { [weak self] in
             guard let self else { return }
-            Task { await self.refresh() }
-        }
-        let snap = NotificationCenter.default.addObserver(
-            forName: .gatewaySnapshot,
-            object: nil,
-            queue: .main)
-        { [weak self] note in
-            guard let self,
-                  let frame = note.object as? GatewayFrame else { return }
-            switch frame {
-            case let .helloOk(hello):
-                if JSONSerialization.isValidJSONObject(hello.snapshot.presence),
-                   let data = try? JSONEncoder().encode(hello.snapshot.presence)
-                {
-                    Task { @MainActor [weak self] in self?.decodeAndApplyPresenceData(data) }
+            let stream = await GatewayConnection.shared.subscribe()
+            for await push in stream {
+                if Task.isCancelled { return }
+                await MainActor.run { [weak self] in
+                    self?.handle(push: push)
                 }
-            default:
-                break
             }
         }
-        self.observers = [ev, snap, gap]
+    }
+
+    private func handle(push: GatewayPush) {
+        switch push {
+        case let .event(evt) where evt.event == "presence":
+            if let payload = evt.payload {
+                self.handlePresenceEventPayload(payload)
+            }
+        case .seqGap:
+            Task { await self.refresh() }
+        case let .snapshot(hello):
+            if JSONSerialization.isValidJSONObject(hello.snapshot.presence),
+               let data = try? JSONEncoder().encode(hello.snapshot.presence)
+            {
+                self.decodeAndApplyPresenceData(data)
+            }
+        default:
+            break
+        }
     }
 
     func refresh() async {

@@ -70,6 +70,11 @@ import Testing
             self.pendingReceiveHandler.withLock { $0 = completionHandler }
         }
 
+        func emitIncoming(_ data: Data) {
+            let handler = self.pendingReceiveHandler.withLock { $0 }
+            handler?(Result<URLSessionWebSocketTask.Message, Error>.success(.data(data)))
+        }
+
         private static func helloOkData() -> Data {
             let json = """
             {
@@ -116,6 +121,10 @@ import Testing
             self.tasks.withLock { tasks in
                 tasks.reduce(0) { $0 + $1.snapshotCancelCount() }
             }
+        }
+
+        func latestTask() -> FakeWebSocketTask? {
+            self.tasks.withLock { $0.last }
         }
 
         func makeWebSocketTask(url: URL) -> WebSocketTaskBox {
@@ -184,5 +193,75 @@ import Testing
         _ = try await (r1, r2)
 
         #expect(session.snapshotMakeCount() == 1)
+    }
+
+    @Test func subscribeReplaysLatestSnapshot() async throws {
+        let session = FakeWebSocketSession()
+        let url = URL(string: "ws://example.invalid")!
+        let cfg = ConfigSource(token: nil)
+        let conn = GatewayConnection(
+            configProvider: { (url, cfg.snapshotToken()) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        _ = try await conn.request(method: "status", params: nil)
+
+        let stream = await conn.subscribe(bufferingNewest: 10)
+        var iterator = stream.makeAsyncIterator()
+        let first = await iterator.next()
+
+        guard case let .snapshot(snap) = first else {
+            Issue.record("expected snapshot, got \(String(describing: first))")
+            return
+        }
+        #expect(snap.type == "hello-ok")
+    }
+
+    @Test func subscribeEmitsSeqGapBeforeEvent() async throws {
+        let session = FakeWebSocketSession()
+        let url = URL(string: "ws://example.invalid")!
+        let cfg = ConfigSource(token: nil)
+        let conn = GatewayConnection(
+            configProvider: { (url, cfg.snapshotToken()) },
+            sessionBox: WebSocketSessionBox(session: session))
+
+        let stream = await conn.subscribe(bufferingNewest: 10)
+        var iterator = stream.makeAsyncIterator()
+
+        _ = try await conn.request(method: "status", params: nil)
+        _ = await iterator.next() // snapshot
+
+        let evt1 = Data(
+            """
+            {"type":"event","event":"presence","payload":{"presence":[]},"seq":1}
+            """.utf8)
+        session.latestTask()?.emitIncoming(evt1)
+
+        let firstEvent = await iterator.next()
+        guard case let .event(firstFrame) = firstEvent else {
+            Issue.record("expected event, got \(String(describing: firstEvent))")
+            return
+        }
+        #expect(firstFrame.seq == 1)
+
+        let evt3 = Data(
+            """
+            {"type":"event","event":"presence","payload":{"presence":[]},"seq":3}
+            """.utf8)
+        session.latestTask()?.emitIncoming(evt3)
+
+        let gap = await iterator.next()
+        guard case let .seqGap(expected, received) = gap else {
+            Issue.record("expected seqGap, got \(String(describing: gap))")
+            return
+        }
+        #expect(expected == 2)
+        #expect(received == 3)
+
+        let secondEvent = await iterator.next()
+        guard case let .event(secondFrame) = secondEvent else {
+            Issue.record("expected event, got \(String(describing: secondEvent))")
+            return
+        }
+        #expect(secondFrame.seq == 3)
     }
 }

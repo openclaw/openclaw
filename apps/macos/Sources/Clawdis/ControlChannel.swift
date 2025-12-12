@@ -56,7 +56,7 @@ final class ControlChannel: ObservableObject {
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
 
-    private var eventTokens: [NSObjectProtocol] = []
+    private var eventTask: Task<Void, Never>?
 
     private init() {
         self.startEventStream()
@@ -198,42 +198,36 @@ final class ControlChannel: ObservableObject {
     }
 
     private func startEventStream() {
-        for tok in self.eventTokens {
-            NotificationCenter.default.removeObserver(tok)
-        }
-        self.eventTokens.removeAll()
-        let ev = NotificationCenter.default.addObserver(
-            forName: .gatewayEvent,
-            object: nil,
-            queue: .main)
-        { [weak self] note in
-            guard let self,
-                  let frame = note.object as? GatewayFrame else { return }
-            switch frame {
-            case let .event(evt) where evt.event == "agent":
-                if let payload = evt.payload,
-                   let payloadData = try? JSONEncoder().encode(payload),
-                   let agent = try? JSONDecoder().decode(ControlAgentEvent.self, from: payloadData)
-                {
-                    Task { @MainActor in
-                        AgentEventStore.shared.append(agent)
-                        self.routeWorkActivity(from: agent)
-                    }
+        self.eventTask?.cancel()
+        self.eventTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await GatewayConnection.shared.subscribe()
+            for await push in stream {
+                if Task.isCancelled { return }
+                await MainActor.run { [weak self] in
+                    self?.handle(push: push)
                 }
-            case let .event(evt) where evt.event == "shutdown":
-                Task { @MainActor in self.state = .degraded("gateway shutdown") }
-            default:
-                break
             }
         }
-        let tick = NotificationCenter.default.addObserver(
-            forName: .gatewaySnapshot,
-            object: nil,
-            queue: .main)
-        { [weak self] _ in
-            Task { @MainActor [weak self] in self?.state = .connected }
+    }
+
+    private func handle(push: GatewayPush) {
+        switch push {
+        case let .event(evt) where evt.event == "agent":
+            if let payload = evt.payload,
+               let payloadData = try? JSONEncoder().encode(payload),
+               let agent = try? JSONDecoder().decode(ControlAgentEvent.self, from: payloadData)
+            {
+                AgentEventStore.shared.append(agent)
+                self.routeWorkActivity(from: agent)
+            }
+        case let .event(evt) where evt.event == "shutdown":
+            self.state = .degraded("gateway shutdown")
+        case .snapshot:
+            self.state = .connected
+        default:
+            break
         }
-        self.eventTokens = [ev, tick]
     }
 
     private func routeWorkActivity(from event: ControlAgentEvent) {

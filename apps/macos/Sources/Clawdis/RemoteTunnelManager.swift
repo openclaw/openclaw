@@ -6,6 +6,16 @@ actor RemoteTunnelManager {
 
     private var controlTunnel: WebChatTunnel?
 
+    func controlTunnelPortIfRunning() -> UInt16? {
+        if let tunnel = self.controlTunnel,
+           tunnel.process.isRunning,
+           let local = tunnel.localPort
+        {
+            return local
+        }
+        return nil
+    }
+
     /// Ensure an SSH tunnel is running for the gateway control port.
     /// Returns the local forwarded port (usually 18789).
     func ensureControlTunnel() async throws -> UInt16 {
@@ -17,12 +27,7 @@ actor RemoteTunnelManager {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
 
-        if let tunnel = self.controlTunnel,
-           tunnel.process.isRunning,
-           let local = tunnel.localPort
-        {
-            return local
-        }
+        if let local = self.controlTunnelPortIfRunning() { return local }
 
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
         let tunnel = try await WebChatTunnel.create(
