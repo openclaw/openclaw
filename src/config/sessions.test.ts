@@ -1,6 +1,14 @@
+import os from "node:os";
+import path from "node:path";
+import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
-import { deriveSessionKey, resolveSessionKey } from "./sessions.js";
+import {
+  deriveSessionKey,
+  loadSessionStore,
+  resolveSessionKey,
+  updateLastRoute,
+} from "./sessions.js";
 
 describe("sessions", () => {
   it("returns normalized per-sender key", () => {
@@ -51,5 +59,39 @@ describe("sessions", () => {
     expect(
       resolveSessionKey("per-sender", { From: "[redacted-email]" }, "main"),
     ).toBe("group:[redacted-email]");
+  });
+
+  it("updateLastRoute persists channel and target", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-1",
+            updatedAt: 123,
+            systemSent: true,
+            thinkingLevel: "low",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await updateLastRoute({
+      storePath,
+      sessionKey: "main",
+      channel: "telegram",
+      to: "  12345  ",
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store.main?.sessionId).toBe("sess-1");
+    expect(store.main?.updatedAt).toBeGreaterThanOrEqual(123);
+    expect(store.main?.lastChannel).toBe("telegram");
+    expect(store.main?.lastTo).toBe("12345");
   });
 });

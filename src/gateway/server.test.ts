@@ -1,9 +1,26 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { type AddressInfo, createServer } from "node:net";
 import { describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
+import { agentCommand } from "../commands/agent.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { startGatewayServer } from "./server.js";
+
+let testSessionStorePath: string | undefined;
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => ({
+    inbound: {
+      reply: {
+        mode: "command",
+        command: ["echo", "ok"],
+        session: { mainKey: "main", store: testSessionStorePath },
+      },
+    },
+  }),
+}));
 
 vi.mock("../commands/health.js", () => ({
   getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
@@ -90,6 +107,127 @@ async function startServerWithClient(token?: string) {
 }
 
 describe("gateway server", () => {
+  test("agent routes main last-channel telegram", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { name: "test", version: "1", platform: "test", mode: "test" },
+        caps: [],
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "hello-ok");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "agent-last",
+        method: "agent",
+        params: {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last",
+        },
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "res" && o.id === "agent-last");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).toHaveBeenCalled();
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.provider).toBe("telegram");
+    expect(call.to).toBe("123");
+    expect(call.deliver).toBe(true);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-main");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent forces no-deliver when last-channel is webchat", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-webchat",
+            updatedAt: Date.now(),
+            lastChannel: "webchat",
+            lastTo: "ignored",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { name: "test", version: "1", platform: "test", mode: "test" },
+        caps: [],
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "hello-ok");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "agent-webchat",
+        method: "agent",
+        params: {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-webchat",
+        },
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "res" && o.id === "agent-webchat");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).toHaveBeenCalled();
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.provider).toBe("webchat");
+    expect(call.deliver).toBe(false);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-main-webchat");
+
+    ws.close();
+    await server.close();
+  });
+
   test("rejects protocol mismatch", async () => {
     const { server, ws } = await startServerWithClient();
     ws.send(
