@@ -36,6 +36,7 @@ import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { sendMessageTelegram } from "../telegram/send.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { ensureWebChatServerFromConfig } from "../webchat/server.js";
+import { normalizeE164 } from "../utils.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
   ErrorCodes,
@@ -1132,10 +1133,12 @@ export async function startGatewayServer(
             let resolvedSessionId = params.sessionId?.trim() || undefined;
             let sessionEntry: SessionEntry | undefined;
             let bestEffortDeliver = false;
+            let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
 
             if (requestedSessionKey) {
               const { cfg, storePath, store, entry } =
                 loadSessionEntry(requestedSessionKey);
+              cfgForAgent = cfg;
               const now = Date.now();
               const sessionId = entry?.sessionId ?? randomUUID();
               sessionEntry = {
@@ -1206,6 +1209,35 @@ export async function startGatewayServer(
               return undefined;
             })();
 
+            const sanitizedTo = (() => {
+              // If we derived a WhatsApp recipient from session "lastTo", ensure it is still valid
+              // for the configured allowlist. Otherwise, fall back to the first allowed number so
+              // voice wake doesn't silently route to stale/test recipients.
+              if (resolvedChannel !== "whatsapp") return resolvedTo;
+              const explicit =
+                typeof params.to === "string" && params.to.trim()
+                  ? params.to.trim()
+                  : undefined;
+              if (explicit) return resolvedTo;
+
+              const cfg = cfgForAgent ?? loadConfig();
+              const rawAllow = cfg.inbound?.allowFrom ?? [];
+              if (rawAllow.includes("*")) return resolvedTo;
+              const allowFrom = rawAllow
+                .map((val) => normalizeE164(val))
+                .filter((val) => val.length > 1);
+              if (allowFrom.length === 0) return resolvedTo;
+
+              const normalizedLast =
+                typeof resolvedTo === "string" && resolvedTo.trim()
+                  ? normalizeE164(resolvedTo)
+                  : undefined;
+              if (normalizedLast && allowFrom.includes(normalizedLast)) {
+                return normalizedLast;
+              }
+              return allowFrom[0];
+            })();
+
             const deliver =
               params.deliver === true && resolvedChannel !== "webchat";
 
@@ -1221,7 +1253,7 @@ export async function startGatewayServer(
             void agentCommand(
               {
                 message,
-                to: resolvedTo,
+                to: sanitizedTo,
                 sessionId: resolvedSessionId,
                 thinking: params.thinking,
                 deliver,

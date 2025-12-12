@@ -62,11 +62,9 @@ export async function saveSessionStore(
   store: Record<string, SessionEntry>,
 ) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.promises.writeFile(
-    storePath,
-    JSON.stringify(store, null, 2),
-    "utf-8",
-  );
+  const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await fs.promises.writeFile(tmp, JSON.stringify(store, null, 2), "utf-8");
+  await fs.promises.rename(tmp, storePath);
 }
 
 export async function updateLastRoute(params: {

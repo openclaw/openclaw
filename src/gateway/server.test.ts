@@ -11,9 +11,11 @@ import { GatewayLockError } from "../infra/gateway-lock.js";
 import { startGatewayServer } from "./server.js";
 
 let testSessionStorePath: string | undefined;
+let testAllowFrom: string[] | undefined;
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
     inbound: {
+      allowFrom: testAllowFrom,
       reply: {
         mode: "command",
         command: ["echo", "ok"],
@@ -108,7 +110,69 @@ async function startServerWithClient(token?: string) {
 }
 
 describe("gateway server", () => {
+  test("agent falls back to allowFrom when lastTo is stale", async () => {
+    testAllowFrom = ["+436769770569"];
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-stale",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    ws.send(
+      JSON.stringify({
+        type: "hello",
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { name: "test", version: "1", platform: "test", mode: "test" },
+        caps: [],
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "hello-ok");
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "agent-last-stale",
+        method: "agent",
+        params: {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-stale",
+        },
+      }),
+    );
+    await onceMessage(ws, (o) => o.type === "res" && o.id === "agent-last-stale");
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).toHaveBeenCalled();
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.provider).toBe("whatsapp");
+    expect(call.to).toBe("+436769770569");
+    expect(call.sessionId).toBe("sess-main-stale");
+
+    ws.close();
+    await server.close();
+    testAllowFrom = undefined;
+  });
+
   test("agent routes main last-channel whatsapp", async () => {
+    testAllowFrom = undefined;
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
