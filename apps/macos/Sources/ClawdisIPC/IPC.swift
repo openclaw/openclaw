@@ -14,8 +14,15 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
 
 // MARK: - Requests
 
+/// Notification interruption level (maps to UNNotificationInterruptionLevel)
+public enum NotificationPriority: String, Codable, Sendable {
+    case passive      // silent, no wake
+    case active       // default
+    case timeSensitive // breaks through Focus modes
+}
+
 public enum Request: Sendable {
-    case notify(title: String, body: String, sound: String?)
+    case notify(title: String, body: String, sound: String?, priority: NotificationPriority?)
     case ensurePermissions([Capability], interactive: Bool)
     case screenshot(displayID: UInt32?, windowID: UInt32?, format: String)
     case runShell(
@@ -49,7 +56,7 @@ public struct Response: Codable, Sendable {
 extension Request: Codable {
     private enum CodingKeys: String, CodingKey {
         case type
-        case title, body, sound
+        case title, body, sound, priority
         case caps, interactive
         case displayID, windowID, format
         case command, cwd, env, timeoutSec, needsScreenRecording
@@ -70,11 +77,12 @@ extension Request: Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .notify(title, body, sound):
+        case let .notify(title, body, sound, priority):
             try container.encode(Kind.notify, forKey: .type)
             try container.encode(title, forKey: .title)
             try container.encode(body, forKey: .body)
             try container.encodeIfPresent(sound, forKey: .sound)
+            try container.encodeIfPresent(priority, forKey: .priority)
 
         case let .ensurePermissions(caps, interactive):
             try container.encode(Kind.ensurePermissions, forKey: .type)
@@ -119,7 +127,8 @@ extension Request: Codable {
             let title = try container.decode(String.self, forKey: .title)
             let body = try container.decode(String.self, forKey: .body)
             let sound = try container.decodeIfPresent(String.self, forKey: .sound)
-            self = .notify(title: title, body: body, sound: sound)
+            let priority = try container.decodeIfPresent(NotificationPriority.self, forKey: .priority)
+            self = .notify(title: title, body: body, sound: sound, priority: priority)
 
         case .ensurePermissions:
             let caps = try container.decode([Capability].self, forKey: .caps)

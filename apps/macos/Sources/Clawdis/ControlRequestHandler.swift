@@ -14,9 +14,9 @@ enum ControlRequestHandler {
         }
 
         switch request {
-        case let .notify(title, body, sound):
+        case let .notify(title, body, sound, priority):
             let chosenSound = sound?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let ok = await notifier.send(title: title, body: body, sound: chosenSound)
+            let ok = await notifier.send(title: title, body: body, sound: chosenSound, priority: priority)
             return ok ? Response(ok: true) : Response(ok: false, message: "notification not authorized")
 
         case let .ensurePermissions(caps, interactive):

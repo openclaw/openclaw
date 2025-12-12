@@ -54,17 +54,20 @@ struct ClawdisCLI {
             var title: String?
             var body: String?
             var sound: String?
+            var priority: NotificationPriority?
             while !args.isEmpty {
                 let arg = args.removeFirst()
                 switch arg {
                 case "--title": title = args.popFirst()
                 case "--body": body = args.popFirst()
                 case "--sound": sound = args.popFirst()
+                case "--priority":
+                    if let val = args.popFirst(), let p = NotificationPriority(rawValue: val) { priority = p }
                 default: break
                 }
             }
             guard let t = title, let b = body else { throw CLIError.help }
-            return .notify(title: t, body: b, sound: sound)
+            return .notify(title: t, body: b, sound: sound, priority: priority)
 
         case "ensure-permissions":
             var caps: [Capability] = []
@@ -169,7 +172,7 @@ struct ClawdisCLI {
         clawdis-mac — talk to the running Clawdis.app XPC service
 
         Usage:
-          clawdis-mac notify --title <t> --body <b> [--sound <name>]
+          clawdis-mac notify --title <t> --body <b> [--sound <name>] [--priority <passive|active|timeSensitive>]
           clawdis-mac ensure-permissions
             [--cap <notifications|accessibility|screenRecording|microphone|speechRecognition>]
             [--interactive]
