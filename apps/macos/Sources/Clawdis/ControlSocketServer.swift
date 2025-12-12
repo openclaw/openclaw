@@ -8,6 +8,7 @@ final actor ControlSocketServer {
     private var listenFD: Int32 = -1
     private var source: DispatchSourceRead?
     private let maxRequestBytes = 512 * 1024
+    private let allowedTeamIDs: Set<String> = ["Y5PE65HELJ"]
 
     func start() {
         // Already running
@@ -82,6 +83,8 @@ final actor ControlSocketServer {
     }
 
     private func handleClient(fd: Int32) async {
+        guard self.isAllowed(fd: fd) else { return }
+
         var data = Data()
         var buffer = [UInt8](repeating: 0, count: 16 * 1024)
         let bufSize = buffer.count
@@ -114,5 +117,50 @@ final actor ControlSocketServer {
                 }
             }
         }
+    }
+
+    private func isAllowed(fd: Int32) -> Bool {
+        var pid: pid_t = 0
+        var pidSize = socklen_t(MemoryLayout<pid_t>.size)
+        let r = getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &pidSize)
+        guard r == 0, pid > 0 else { return false }
+
+        // Same-user quick check
+        if let callerUID = self.uid(for: pid), callerUID == getuid() {
+            return true
+        }
+
+        return self.teamIDMatches(pid: pid)
+    }
+
+    private func uid(for pid: pid_t) -> uid_t? {
+        var info = kinfo_proc()
+        var size = MemoryLayout.size(ofValue: info)
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        let ok = mib.withUnsafeMutableBufferPointer { mibPtr -> Bool in
+            return sysctl(mibPtr.baseAddress, u_int(mibPtr.count), &info, &size, nil, 0) == 0
+        }
+        return ok ? info.kp_eproc.e_ucred.cr_uid : nil
+    }
+
+    private func teamIDMatches(pid: pid_t) -> Bool {
+        let attrs: NSDictionary = [kSecGuestAttributePid: pid]
+        var secCode: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, attrs, SecCSFlags(), &secCode) == errSecSuccess,
+              let code = secCode else { return false }
+
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
+              let sCode = staticCode else { return false }
+
+        var infoCF: CFDictionary?
+        guard SecCodeCopySigningInformation(sCode, SecCSFlags(), &infoCF) == errSecSuccess,
+              let info = infoCF as? [String: Any],
+              let teamID = info[kSecCodeInfoTeamIdentifier as String] as? String
+        else {
+            return false
+        }
+
+        return self.allowedTeamIDs.contains(teamID)
     }
 }
