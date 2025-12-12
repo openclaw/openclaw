@@ -28,8 +28,8 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
 4) Health checks and Web Chat will now run through this SSH tunnel automatically.
 
 ## Web Chat over SSH
-- The gateway hosts a loopback-only HTTP server (default 18788, see `webchat.port`).
-- The mac app forwards `127.0.0.1:<port>` over SSH (`ssh -L <ephemeral>:127.0.0.1:<port>`), then loads `/webchat/?session=<key>` in-app. Sends go in-process on the gateway (no CLI spawn/PATH issues).
+- The mac app serves the WebChat assets locally (from the app bundle) and connects to the gateway over the forwarded WebSocket control port (default 18789).
+- The gateway’s own loopback WebChat HTTP server (default 18788, see `webchat.port`) is not required in remote mode.
 - Keep the feature enabled in *Settings → Config → Web chat*. Disable it to hide the menu entry entirely.
 
 ## Permissions

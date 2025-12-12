@@ -15,7 +15,7 @@ final class WebChatServer: @unchecked Sendable {
     private var port: NWEndpoint.Port?
 
     /// Start the local HTTP server if it isn't already running. Safe to call multiple times.
-    func start(root: URL) {
+    func start(root: URL, preferredPort: UInt16? = nil) {
         self.queue.async {
             webChatServerLogger.debug("WebChatServer start requested root=\(root.path, privacy: .public)")
             if self.listener != nil { return }
@@ -23,8 +23,9 @@ final class WebChatServer: @unchecked Sendable {
             let params = NWParameters.tcp
             params.allowLocalEndpointReuse = true
             params.requiredInterfaceType = .loopback
+            let prefer = preferredPort.flatMap { NWEndpoint.Port(rawValue: $0) }
             do {
-                let listener = try NWListener(using: params, on: .any)
+                let listener = try NWListener(using: params, on: prefer ?? .any)
                 listener.stateUpdateHandler = { [weak self] state in
                     switch state {
                     case .ready:
@@ -44,8 +45,38 @@ final class WebChatServer: @unchecked Sendable {
                 listener.start(queue: self.queue)
                 self.listener = listener
             } catch {
-                webChatServerLogger
-                    .error("WebChatServer could not start: \(error.localizedDescription, privacy: .public)")
+                if let prefer {
+                    do {
+                        let listener = try NWListener(using: params, on: .any)
+                        listener.stateUpdateHandler = { [weak self] state in
+                            switch state {
+                            case .ready:
+                                self?.port = listener.port
+                                webChatServerLogger.debug(
+                                    "WebChatServer ready on 127.0.0.1:\(listener.port?.rawValue ?? 0)")
+                            case let .failed(error):
+                                webChatServerLogger
+                                    .error("WebChatServer failed: \(error.localizedDescription, privacy: .public)")
+                                self?.listener = nil
+                            default:
+                                break
+                            }
+                        }
+                        listener.newConnectionHandler = { [weak self] connection in
+                            self?.handle(connection: connection)
+                        }
+                        listener.start(queue: self.queue)
+                        self.listener = listener
+                        webChatServerLogger.debug(
+                            "WebChatServer fell back to ephemeral port (preferred \(prefer.rawValue))")
+                    } catch {
+                        webChatServerLogger
+                            .error("WebChatServer could not start: \(error.localizedDescription, privacy: .public)")
+                    }
+                } else {
+                    webChatServerLogger
+                        .error("WebChatServer could not start: \(error.localizedDescription, privacy: .public)")
+                }
             }
         }
     }
@@ -112,8 +143,16 @@ final class WebChatServer: @unchecked Sendable {
         }
         webChatServerLogger.debug("WebChatServer request line=\(requestLine, privacy: .public)")
         let parts = requestLine.split(separator: " ")
-        guard parts.count >= 2, parts[0] == "GET" else {
-            webChatServerLogger.error("WebChatServer non-GET request: \(requestLine, privacy: .public)")
+        guard parts.count >= 2 else {
+            webChatServerLogger.error("WebChatServer invalid request: \(requestLine, privacy: .public)")
+            connection.cancel()
+            return
+        }
+        let method = parts[0]
+        let includeBody = method == "GET"
+        guard includeBody || method == "HEAD" else {
+            webChatServerLogger.error(
+                "WebChatServer unsupported request method: \(requestLine, privacy: .public)")
             connection.cancel()
             return
         }
@@ -137,25 +176,53 @@ final class WebChatServer: @unchecked Sendable {
         webChatServerLogger.debug("WebChatServer resolved file=\(fileURL.path, privacy: .public)")
         // Simple directory traversal guard: served files must live under the bundled web root.
         guard fileURL.path.hasPrefix(root.path) else {
-            self.send(status: 403, mime: "text/plain", body: Data("Forbidden".utf8), over: connection)
+            let forbidden = Data("Forbidden".utf8)
+            self.send(
+                status: 403,
+                mime: "text/plain",
+                body: forbidden,
+                contentLength: forbidden.count,
+                includeBody: includeBody,
+                over: connection)
             return
         }
         guard let data = try? Data(contentsOf: fileURL) else {
             webChatServerLogger.error("WebChatServer 404 missing \(fileURL.lastPathComponent, privacy: .public)")
-            self.send(status: 404, mime: "text/plain", body: Data("Not Found".utf8), over: connection)
+            self.send(
+                status: 404,
+                mime: "text/plain",
+                body: Data("Not Found".utf8),
+                contentLength: "Not Found".utf8.count,
+                includeBody: includeBody,
+                over: connection)
             return
         }
         let mime = self.mimeType(forExtension: fileURL.pathExtension)
-        self.send(status: 200, mime: mime, body: data, over: connection)
+        self.send(
+            status: 200,
+            mime: mime,
+            body: data,
+            contentLength: data.count,
+            includeBody: includeBody,
+            over: connection)
     }
 
-    private func send(status: Int, mime: String, body: Data, over connection: NWConnection) {
+    private func send(
+        status: Int,
+        mime: String,
+        body: Data,
+        contentLength: Int,
+        includeBody: Bool,
+        over connection: NWConnection)
+    {
         let headers = "HTTP/1.1 \(status) \(statusText(status))\r\n" +
-            "Content-Length: \(body.count)\r\n" +
+            "Content-Length: \(contentLength)\r\n" +
             "Content-Type: \(mime)\r\n" +
             "Connection: close\r\n\r\n"
         var response = Data(headers.utf8)
-        response.append(body)
+        if includeBody {
+            response.append(body)
+        }
         connection.send(content: response, completion: .contentProcessed { _ in
             connection.cancel()
         })

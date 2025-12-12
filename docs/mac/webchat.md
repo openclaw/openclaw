@@ -5,7 +5,10 @@ read_when:
 ---
 # Web Chat (macOS app)
 
-The macOS menu bar app opens the gateway’s loopback web chat server in a WKWebView. It reuses the **primary Clawd session** (`main` by default, configurable via `inbound.reply.session.mainKey`). The server is started by the Node gateway (default port 18788, see `webchat.port`).
+The macOS menu bar app embeds the WebChat UI in a WKWebView and reuses the **primary Clawd session** (`main` by default, configurable via `inbound.reply.session.mainKey`).
+
+- **Local mode**: loads the gateway’s loopback WebChat HTTP server (default port 18788, see `webchat.port`).
+- **Remote mode**: serves the WebChat assets locally from the mac app bundle (via `WebChatServer`) and only forwards the gateway WebSocket control port over SSH.
 
 ## Launch & debugging
 - Manual: Lobster menu → “Open Chat”.
@@ -20,7 +23,7 @@ The macOS menu bar app opens the gateway’s loopback web chat server in a WKWeb
 - Debug-only: a native SwiftUI “glass” chat UI (same WS transport, attachments + thinking selector) can replace the WKWebView. Enable it via Debug → “Use SwiftUI web chat (glass, gateway WS)” (default off).
 
 ## Security / surface area
-- Loopback server only; remote mode uses SSH port-forwarding from the gateway host to the Mac. CSP is set to `default-src 'self' 'unsafe-inline' data: blob:`.
+- Loopback server only; remote mode forwards only the gateway WebSocket control port over SSH. CSP is set to `default-src 'self' 'unsafe-inline' data: blob:`.
 - Web Inspector is opt-in via right-click; otherwise WKWebView stays in the app sandbox.
 
 ## Known limitations
