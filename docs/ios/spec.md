@@ -51,10 +51,25 @@ Why:
 - First connection:
   1) iOS generates a keypair (Secure Enclave if available).
   2) iOS connects to the bridge and requests pairing.
-  3) macOS app shows “Approve node” with node name + device metadata.
-  4) On approve, mac stores the node public key + permissions; iOS stores bridge identity + trust anchor in Keychain.
+  3) The bridge forwards the pairing request to the **Gateway** as a *pending request*.
+  4) Approval can happen via:
+     - **macOS UI** (Swift app shows “Approve node”), or
+     - **Terminal/CLI** (headless flows).
+  5) Once approved, the bridge returns a token to iOS; iOS stores it in Keychain.
 - Subsequent connections:
   - The bridge requires the paired identity. Unpaired clients get a structured “not paired” error and no access.
+
+#### Gateway-owned pairing (Option B details)
+Pairing decisions must be owned by the Gateway (`clawd` / Node) so nodes can be approved without the macOS app running.
+
+Key idea:
+- The Swift app may still show an alert, but it is only a **frontend** for pending requests stored in the Gateway.
+
+Desired behavior:
+- If the Swift UI is present: show alert with Approve/Reject/Later.
+- If the Swift UI is not present: `clawdis` CLI can list pending requests and approve/reject.
+
+See `docs/gateway/pairing.md` for the API/events and storage.
 
 ### Authorization / scope control (bridge-side ACL)
 The bridge must not be a raw proxy to every gateway method.
@@ -135,7 +150,7 @@ When iOS is backgrounded:
 Create/expand SwiftPM targets so both apps share:
 - `ClawdisProtocol` (generated models; platform-neutral)
 - `ClawdisGatewayClient` (shared WS framing + connect/req/res + seq-gap handling)
-- `ClawdisNodeKit` (node.invoke command types + error codes)
+- `ClawdisKit` (node/screen command types + deep links + shared utilities)
 
 macOS continues to own:
 - local Canvas implementation details (custom scheme handler serving on-disk HTML, window/panel presentation)
@@ -171,11 +186,16 @@ open ClawdisNode.xcodeproj
   - `~/Library/Application Support/Clawdis/bridge/paired-nodes.json`
   - `~/Library/Application Support/Clawdis/bridge/keys/...`
 
+### Gateway (node)
+- Pairing (source of truth):
+  - `~/.clawdis/nodes/paired.json`
+  - `~/.clawdis/nodes/pending.json` (or `pending/*.json` for auditability)
+
 ## Rollout plan (phased)
 1) **Bridge discovery + pairing (mac + iOS)**
-   - Bonjour browse + resolve
-   - Approve prompt on mac
-   - Persist pairing in Keychain/App Support
+  - Bonjour browse + resolve
+  - Approve prompt on mac
+  - Persist pairing in Keychain/App Support
 2) **Voice-only node**
    - iOS voice wake toggle
    - Forward transcript to Gateway `agent` via bridge
