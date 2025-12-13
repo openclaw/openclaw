@@ -2,6 +2,14 @@ import AVFAudio
 import Foundation
 import Speech
 
+enum SpeechAudioTapFactory {
+    static func makeAppendTap(requestBox: SpeechRequestBox) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
+        { buffer, _ in
+            requestBox.append(buffer)
+        }
+    }
+}
+
 final class SpeechRequestBox: @unchecked Sendable {
     let request: SFSpeechAudioBufferRecognitionRequest
 
@@ -109,19 +117,18 @@ final class VoiceWakeManager: NSObject, ObservableObject {
 
         let requestBox = SpeechRequestBox(request: request)
         let recordingFormat = inputNode.outputFormat(forBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { @Sendable [requestBox] buffer, _ in
-            requestBox.append(buffer)
-        }
+        let tap = SpeechAudioTapFactory.makeAppendTap(requestBox: requestBox)
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat, block: tap)
 
         self.audioEngine.prepare()
         try self.audioEngine.start()
 
-        self.recognitionTask = self.speechRecognizer?.recognitionTask(with: request) { [weak self] result, error in
-            guard let self else { return }
-            Task { @MainActor in
-                self.handleRecognitionCallback(result: result, error: error)
+        self.recognitionTask = self.speechRecognizer?
+            .recognitionTask(with: request) { [weak manager = self] result, error in
+                Task { @MainActor in
+                    manager?.handleRecognitionCallback(result: result, error: error)
+                }
             }
-        }
     }
 
     private func handleRecognitionCallback(result: SFSpeechRecognitionResult?, error: Error?) {
