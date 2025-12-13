@@ -295,6 +295,7 @@ private struct ToolRow: View {
                     }
                     .foregroundColor(.accentColor)
                     .onHover { self.linkHovering = $0 }
+                    .pointingHandCursor()
                     Text(self.tool.description)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
