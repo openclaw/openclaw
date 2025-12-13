@@ -151,8 +151,10 @@ struct SessionsSettings: View {
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                ContextUsageBar(usedTokens: row.tokens.total, contextTokens: row.tokens.contextTokens)
-                    .frame(maxWidth: .infinity)
+                ContextUsageBar(
+                    usedTokens: row.tokens.total,
+                    contextTokens: row.tokens.contextTokens,
+                    width: 260)
             }
 
             HStack(spacing: 10) {

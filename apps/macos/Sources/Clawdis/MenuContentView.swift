@@ -265,8 +265,8 @@ struct MenuContent: View {
                 }
                 ContextUsageBar(
                     usedTokens: row.tokens.total,
-                    contextTokens: row.tokens.contextTokens)
-                    .frame(width: 220)
+                    contextTokens: row.tokens.contextTokens,
+                    width: 220)
             }
             .padding(.vertical, 2)
         } else {
