@@ -117,4 +117,43 @@ describe("CronService", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("does not schedule timers when cron is disabled", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestReplyHeartbeatNow = vi.fn();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: false,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestReplyHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:01.000Z");
+    await cron.add({
+      enabled: true,
+      schedule: { kind: "at", atMs },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    const status = await cron.status();
+    expect(status.enabled).toBe(false);
+    expect(status.nextWakeAtMs).toBeNull();
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestReplyHeartbeatNow).not.toHaveBeenCalled();
+    expect(noopLogger.warn).toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
 });
