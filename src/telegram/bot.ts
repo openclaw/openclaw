@@ -26,11 +26,8 @@ type TelegramMessage = Message.CommonMessage;
 
 type TelegramContext = {
   message: TelegramMessage;
-  me?: { username?: string; token?: string };
-  api?: { token?: string };
+  me?: { username?: string };
   getFile: () => Promise<{
-    getUrl?: (token?: string) => string | Promise<string>;
-    download: () => Promise<Uint8Array | ArrayBuffer>;
     file_path?: string;
   }>;
 };
@@ -113,7 +110,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         return;
       }
 
-      const media = await resolveMedia(ctx, mediaMaxBytes);
+      const media = await resolveMedia(
+        ctx,
+        mediaMaxBytes,
+        opts.token,
+        opts.proxyFetch,
+      );
       const rawBody = (
         msg.text ??
         msg.caption ??
@@ -290,6 +292,8 @@ function hasBotMention(msg: TelegramMessage, botUsername: string) {
 async function resolveMedia(
   ctx: TelegramContext,
   maxBytes: number,
+  token: string,
+  proxyFetch?: typeof fetch,
 ): Promise<{ path: string; contentType?: string; placeholder: string } | null> {
   const msg = ctx.message;
   const m =
@@ -300,17 +304,25 @@ async function resolveMedia(
     msg.voice;
   if (!m?.file_id) return null;
   const file = await ctx.getFile();
-  const url =
-    typeof file.getUrl === "function"
-      ? file.getUrl(ctx.me?.token ?? ctx.api?.token ?? undefined)
-      : undefined;
-  const data =
-    url && typeof fetch !== "undefined"
-      ? Buffer.from(await (await fetch(url)).arrayBuffer())
-      : Buffer.from(await file.download());
+  if (!file.file_path) {
+    throw new Error("Telegram getFile returned no file_path");
+  }
+  const fetchImpl = proxyFetch ?? globalThis.fetch;
+  if (!fetchImpl) {
+    throw new Error("fetch is not available; set telegram.proxy in config");
+  }
+  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+  const res = await fetchImpl(url);
+  if (!res.ok) {
+    throw new Error(
+      `Failed to download telegram file: HTTP ${res.status} ${res.statusText}`,
+    );
+  }
+  const data = Buffer.from(await res.arrayBuffer());
   const mime = detectMime({
     buffer: data,
-    filePath: file.file_path ?? undefined,
+    headerMime: res.headers.get("content-type"),
+    filePath: file.file_path,
   });
   const saved = await saveMediaBuffer(data, mime, "inbound", maxBytes);
   let placeholder = "<media:document>";
