@@ -108,6 +108,16 @@ final class VoiceWakeManager: NSObject, ObservableObject {
         guard self.isEnabled else { return }
         if self.isListening { return }
 
+        if ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] != nil ||
+            ProcessInfo.processInfo.environment["SIMULATOR_UDID"] != nil
+        {
+            // The iOS Simulator’s audio stack is unreliable for long-running microphone capture.
+            // (We’ve observed CoreAudio deadlocks after TCC permission prompts.)
+            self.isListening = false
+            self.statusText = "Voice Wake isn’t supported on Simulator"
+            return
+        }
+
         self.statusText = "Requesting permissions…"
 
         let micOk = await Self.requestMicrophonePermission()
