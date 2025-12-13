@@ -77,6 +77,7 @@ Each job is a JSON object with stable keys (unknown keys ignored for forward com
   - `{"kind":"agentTurn","message":string,"deliver"?:boolean,"channel"?: "last"|"whatsapp"|"telegram","to"?:string,"timeoutSeconds"?:number}`
 - `isolation` (optional; only meaningful for isolated jobs)
   - `{"postToMain"?: boolean, "postToMainPrefix"?: string}`
+  - Note: `postToMain` is deprecated (no-op). Isolated jobs always post a summary; only the prefix is configurable.
 - `runtime` (optional)
   - `{"maxAttempts"?:number,"retryBackoffMs"?:number}` (best-effort retries; defaults off)
 - `state` (runtime-maintained)

@@ -498,7 +498,6 @@ private struct CronJobEditor: View {
     @State private var thinking: String = ""
     @State private var timeoutSeconds: String = ""
     @State private var bestEffortDeliver: Bool = false
-    @State private var postToMain: Bool = false
     @State private var postPrefix: String = "Cron"
 
     var body: some View {
@@ -568,12 +567,12 @@ private struct CronJobEditor: View {
                     }
                 }
 
-                if self.payloadKind == .agentTurn {
-                    Section("Post summary to main (optional)") {
-                        Toggle("Post to main", isOn: self.$postToMain)
-                        if self.postToMain {
-                            TextField("Prefix", text: self.$postPrefix)
-                        }
+                if self.payloadKind == .agentTurn || self.sessionTarget == .isolated {
+                    Section("Main session summary") {
+                        Text("Isolated jobs always post a summary back into the main session when they finish.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextField("Prefix", text: self.$postPrefix)
                     }
                 }
             }
@@ -666,7 +665,6 @@ private struct CronJobEditor: View {
             self.bestEffortDeliver = bestEffortDeliver ?? false
         }
 
-        self.postToMain = job.isolation?.postToMain ?? false
         self.postPrefix = job.isolation?.postToMainPrefix ?? "Cron"
     }
 
@@ -746,17 +744,11 @@ private struct CronJobEditor: View {
         ]
         if !name.isEmpty { root["name"] = name }
 
-        if self.payloadKind == .agentTurn || self.sessionTarget == .isolated {
-            if self.postToMain {
-                root["isolation"] = [
-                    "postToMain": true,
-                    "postToMainPrefix": self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .isEmpty ? "Cron" : self.postPrefix,
-                ]
-            } else if self.job != nil {
-                // Allow clearing isolation on edit.
-                root["isolation"] = ["postToMain": false]
-            }
+        if payload["kind"] as? String == "agentTurn" || self.sessionTarget == .isolated {
+            let trimmed = self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+            root["isolation"] = [
+                "postToMainPrefix": trimmed.isEmpty ? "Cron" : trimmed,
+            ]
         }
 
         return root
@@ -839,7 +831,7 @@ struct CronSettings_Previews: PreviewProvider {
                     channel: "last",
                     to: nil,
                     bestEffortDeliver: true),
-                isolation: CronIsolation(postToMain: true, postToMainPrefix: "Cron"),
+                isolation: CronIsolation(postToMain: nil, postToMainPrefix: "Cron"),
                 state: CronJobState(
                     nextRunAtMs: Int(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000),
                     runningAtMs: nil,
