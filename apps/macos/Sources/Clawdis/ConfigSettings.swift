@@ -18,6 +18,12 @@ struct ConfigSettings: View {
     @AppStorage(webChatEnabledKey) private var webChatEnabled: Bool = true
     @AppStorage(webChatPortKey) private var webChatPort: Int = 18788
 
+    // clawd browser settings (stored in ~/.clawdis/clawdis.json under "browser")
+    @State private var browserEnabled: Bool = true
+    @State private var browserControlUrl: String = "http://127.0.0.1:18790"
+    @State private var browserColorHex: String = "#FF4500"
+    @State private var browserAttachOnly: Bool = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Clawdis CLI config")
@@ -120,6 +126,56 @@ struct ConfigSettings: View {
                 }
             }
 
+            Divider().padding(.vertical, 4)
+
+            LabeledContent("Browser (clawd)") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Enable clawd browser control", isOn: self.$browserEnabled)
+                        .toggleStyle(.switch)
+                        .frame(width: 360, alignment: .leading)
+                        .onChange(of: self.browserEnabled) { _, _ in self.autosaveConfig() }
+
+                    HStack(spacing: 8) {
+                        Text("Control URL")
+                        TextField("http://127.0.0.1:18790", text: self.$browserControlUrl)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 320)
+                            .disabled(!self.browserEnabled)
+                            .onChange(of: self.browserControlUrl) { _, _ in self.autosaveConfig() }
+                    }
+
+                    HStack(spacing: 8) {
+                        Text("Accent")
+                        TextField("#FF4500", text: self.$browserColorHex)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+                            .disabled(!self.browserEnabled)
+                            .onChange(of: self.browserColorHex) { _, _ in self.autosaveConfig() }
+                        Circle()
+                            .fill(self.browserColor)
+                            .frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+                        Text("lobster-orange")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Toggle("Attach only (never launch)", isOn: self.$browserAttachOnly)
+                        .toggleStyle(.switch)
+                        .frame(width: 360, alignment: .leading)
+                        .disabled(!self.browserEnabled)
+                        .onChange(of: self.browserAttachOnly) { _, _ in self.autosaveConfig() }
+                        .help("When enabled, the browser server will only connect if the clawd browser is already running.")
+
+                    Text(
+                        "Clawd uses a separate Chrome profile and ports (default 18790/18791) so it won’t interfere with your daily browser."
+                    )
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: 480, alignment: .leading)
+                }
+            }
+
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -153,6 +209,7 @@ struct ConfigSettings: View {
         let agent = reply?["agent"] as? [String: Any]
         let heartbeatMinutes = reply?["heartbeatMinutes"] as? Int
         let heartbeatBody = reply?["heartbeatBody"] as? String
+        let browser = parsed["browser"] as? [String: Any]
 
         let loadedModel = (agent?["model"] as? String) ?? ""
         if !loadedModel.isEmpty {
@@ -165,6 +222,13 @@ struct ConfigSettings: View {
 
         if let heartbeatMinutes { self.heartbeatMinutes = heartbeatMinutes }
         if let heartbeatBody, !heartbeatBody.isEmpty { self.heartbeatBody = heartbeatBody }
+
+        if let browser {
+            if let enabled = browser["enabled"] as? Bool { self.browserEnabled = enabled }
+            if let url = browser["controlUrl"] as? String, !url.isEmpty { self.browserControlUrl = url }
+            if let color = browser["color"] as? String, !color.isEmpty { self.browserColorHex = color }
+            if let attachOnly = browser["attachOnly"] as? Bool { self.browserAttachOnly = attachOnly }
+        }
     }
 
     private func autosaveConfig() {
@@ -181,6 +245,7 @@ struct ConfigSettings: View {
         var inbound = root["inbound"] as? [String: Any] ?? [:]
         var reply = inbound["reply"] as? [String: Any] ?? [:]
         var agent = reply["agent"] as? [String: Any] ?? [:]
+        var browser = root["browser"] as? [String: Any] ?? [:]
 
         let chosenModel = (self.configModel == "__custom__" ? self.customModel : self.configModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -201,6 +266,14 @@ struct ConfigSettings: View {
         inbound["reply"] = reply
         root["inbound"] = inbound
 
+        browser["enabled"] = self.browserEnabled
+        let trimmedUrl = self.browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedUrl.isEmpty { browser["controlUrl"] = trimmedUrl }
+        let trimmedColor = self.browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedColor.isEmpty { browser["color"] = trimmedColor }
+        browser["attachOnly"] = self.browserAttachOnly
+        root["browser"] = browser
+
         do {
             let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
             let url = self.configURL()
@@ -215,6 +288,16 @@ struct ConfigSettings: View {
         let url = self.configURL()
         guard let data = try? Data(contentsOf: url) else { return [:] }
         return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+    }
+
+    private var browserColor: Color {
+        let raw = self.browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hex = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
+        guard hex.count == 6, let value = Int(hex, radix: 16) else { return .orange }
+        let r = Double((value >> 16) & 0xFF) / 255.0
+        let g = Double((value >> 8) & 0xFF) / 255.0
+        let b = Double(value & 0xFF) / 255.0
+        return Color(red: r, green: g, blue: b)
     }
 
     private func loadModels() async {

@@ -37,6 +37,7 @@ Because every space lobster needs a time-and-space machine. The Doctor has a TAR
 - 🤖 **AI Agent Gateway** — Pi only (Pi CLI in RPC mode)
 - 💬 **Session Management** — Per-sender conversation context
 - 🔔 **Heartbeats** — Periodic check-ins for proactive AI
+- 🧭 **Clawd Browser** — Dedicated Chrome/Chromium profile with tabs + screenshot control (no interference with your daily browser)
 - 👥 **Group Chat Support** — Mention-based triggering
 - 📎 **Media Support** — Images, audio, documents, voice notes
 - 🎤 **Voice Transcription** — Whisper integration
@@ -111,6 +112,18 @@ Create `~/.clawdis/clawdis.json`:
 }
 ```
 
+Optional: enable/configure clawd’s dedicated browser control (defaults are already on):
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://127.0.0.1:18790",
+    color: "#FF4500"
+  }
+}
+```
+
 ## Documentation
 
 - [Configuration Guide](./docs/configuration.md)
@@ -148,6 +161,7 @@ Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebCha
 | `clawdis login` | Link WhatsApp Web via QR |
 | `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode). Always uses the Gateway WS; requires a running gateway. |
 | `clawdis agent` | Talk directly to the agent (no WhatsApp send) |
+| `clawdis browser ...` | Manage clawd’s dedicated browser (status/tabs/open/screenshot). |
 | `clawdis gateway` | Start the Gateway server (WS control plane). Params: `--port`, `--token`, `--force`, `--verbose`. |
 | `clawdis gateway health|status|send|agent|call` | Gateway WS clients; assume a running gateway. |
 | `clawdis wake` | Enqueue a system event and optionally trigger a heartbeat via the Gateway. |

@@ -103,6 +103,28 @@ Example command-mode config:
 }
 ```
 
+### `browser` (clawd-managed Chrome)
+
+Clawdis can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
+
+Defaults:
+- enabled: `true`
+- control URL: `http://127.0.0.1:18790` (CDP uses `18791`)
+- profile color: `#FF4500` (lobster-orange)
+
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://127.0.0.1:18790",
+    color: "#FF4500",
+    // Advanced:
+    // headless: false,
+    // attachOnly: false,
+  }
+}
+```
+
 ## Template variables
 
 Template placeholders are expanded in `inbound.reply.command`, `sessionIntro`, `bodyPrefix`, and other templated strings.

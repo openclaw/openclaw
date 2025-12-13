@@ -8,6 +8,10 @@ import os from "node:os";
 import path from "node:path";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
+import {
+  startBrowserControlServerFromConfig,
+  stopBrowserControlServer,
+} from "../browser/server.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
@@ -2109,6 +2113,11 @@ export async function startGatewayServer(
       logError(`gateway: webchat failed to start: ${String(err)}`);
     });
 
+  // Start clawd browser control server (unless disabled via config).
+  void startBrowserControlServerFromConfig(defaultRuntime).catch((err) => {
+    logError(`gateway: clawd browser server failed to start: ${String(err)}`);
+  });
+
   // Launch configured providers (WhatsApp Web, Telegram) so gateway replies via the
   // surface the message came from. Tests can opt out via CLAWDIS_SKIP_PROVIDERS.
   if (process.env.CLAWDIS_SKIP_PROVIDERS !== "1") {
@@ -2168,6 +2177,7 @@ export async function startGatewayServer(
         }
       }
       clients.clear();
+      await stopBrowserControlServer().catch(() => {});
       await Promise.allSettled(providerTasks);
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) =>

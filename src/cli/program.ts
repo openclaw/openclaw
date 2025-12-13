@@ -1,5 +1,16 @@
 import chalk from "chalk";
 import { Command } from "commander";
+import {
+  browserCloseTab,
+  browserFocusTab,
+  browserOpenTab,
+  browserScreenshot,
+  browserStart,
+  browserStatus,
+  browserStop,
+  browserTabs,
+  resolveBrowserControlUrl,
+} from "../browser/client.js";
 import { agentCommand } from "../commands/agent.js";
 import { healthCommand } from "../commands/health.js";
 import { sendCommand } from "../commands/send.js";
@@ -357,6 +368,219 @@ Shows token usage per session when the agent reports it; set inbound.reply.agent
         defaultRuntime.log(
           info(`webchat listening on http://127.0.0.1:${server.port}/`),
         );
+      }
+    });
+
+  const browser = program
+    .command("browser")
+    .description("Manage clawd's dedicated browser (Chrome/Chromium)")
+    .option(
+      "--url <url>",
+      "Override browser control URL (default from ~/.clawdis/clawdis.json)",
+    )
+    .option("--json", "Output machine-readable JSON", false)
+    .addHelpText(
+      "after",
+      `
+Examples:
+  clawdis browser status
+  clawdis browser start
+  clawdis browser tabs
+  clawdis browser open https://example.com
+  clawdis browser screenshot                # emits MEDIA:<path>
+  clawdis browser screenshot <targetId> --full-page
+`,
+    )
+    .action(() => {
+      defaultRuntime.error(
+        danger('Missing subcommand. Try: "clawdis browser status"'),
+      );
+      defaultRuntime.exit(1);
+    });
+
+  const parentOpts = (cmd: Command) =>
+    cmd.parent?.opts?.() as { url?: string; json?: boolean };
+
+  browser
+    .command("status")
+    .description("Show browser status")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const status = await browserStatus(baseUrl);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(status, null, 2));
+          return;
+        }
+        defaultRuntime.log(
+          [
+            `enabled: ${status.enabled}`,
+            `running: ${status.running}`,
+            `controlUrl: ${status.controlUrl}`,
+            `cdpPort: ${status.cdpPort}`,
+            `browser: ${status.chosenBrowser ?? "unknown"}`,
+            `profileColor: ${status.color}`,
+          ].join("\n"),
+        );
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("start")
+    .description("Start the clawd browser (no-op if already running)")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        await browserStart(baseUrl);
+        const status = await browserStatus(baseUrl);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(status, null, 2));
+          return;
+        }
+        defaultRuntime.log(info(`🦞 clawd browser running: ${status.running}`));
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("stop")
+    .description("Stop the clawd browser (best-effort)")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        await browserStop(baseUrl);
+        const status = await browserStatus(baseUrl);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(status, null, 2));
+          return;
+        }
+        defaultRuntime.log(info(`🦞 clawd browser running: ${status.running}`));
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("tabs")
+    .description("List open tabs")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const tabs = await browserTabs(baseUrl);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
+          return;
+        }
+        if (tabs.length === 0) {
+          defaultRuntime.log("No tabs (browser closed or no targets).");
+          return;
+        }
+        defaultRuntime.log(
+          tabs
+            .map(
+              (t, i) =>
+                `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`,
+            )
+            .join("\n"),
+        );
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("open")
+    .description("Open a URL in a new tab")
+    .argument("<url>", "URL to open")
+    .action(async (url: string, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const tab = await browserOpenTab(baseUrl, url);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(tab, null, 2));
+          return;
+        }
+        defaultRuntime.log(`opened: ${tab.url}\nid: ${tab.targetId}`);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("focus")
+    .description("Focus/activate a tab by target id")
+    .argument("<targetId>", "CDP target id")
+    .action(async (targetId: string, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        await browserFocusTab(baseUrl, targetId);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify({ ok: true }, null, 2));
+          return;
+        }
+        defaultRuntime.log("ok");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("close")
+    .description("Close a tab by target id")
+    .argument("<targetId>", "CDP target id")
+    .action(async (targetId: string, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        await browserCloseTab(baseUrl, targetId);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify({ ok: true }, null, 2));
+          return;
+        }
+        defaultRuntime.log("ok");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("screenshot")
+    .description("Capture a screenshot (defaults to first tab)")
+    .argument("[targetId]", "CDP target id")
+    .option("--full-page", "Capture full page (best-effort)", false)
+    .action(async (targetId: string | undefined, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const result = await browserScreenshot(baseUrl, {
+          targetId: targetId?.trim() || undefined,
+          fullPage: Boolean(opts.fullPage),
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        // Print MEDIA: token so the agent can forward the image as an attachment.
+        defaultRuntime.log(`MEDIA:${result.path}`);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
       }
     });
 

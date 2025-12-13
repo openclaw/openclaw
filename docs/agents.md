@@ -86,6 +86,13 @@ RPC mode emits structured tool lifecycle events (start/result) and assistant out
 - logged to `/tmp/clawdis/…`
 - streamed over the Gateway WS to clients like WebChat and the macOS app
 
+## Browser helpers
+
+If you enable the clawd-managed browser (default on), the agent can use:
+- `clawdis browser status` / `tabs` / `open <url>` / `screenshot [targetId]`
+
+This uses a dedicated Chrome/Chromium profile (lobster-orange by default) so it doesn’t interfere with your daily browser.
+
 ---
 
 *Next: [Group Chats](./group-messages.md)* 🦞

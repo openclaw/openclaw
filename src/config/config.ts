@@ -49,6 +49,18 @@ export type WebChatConfig = {
   port?: number;
 };
 
+export type BrowserConfig = {
+  enabled?: boolean;
+  /** Base URL of the clawd browser control server. Default: http://127.0.0.1:18790 */
+  controlUrl?: string;
+  /** Accent color for the clawd browser profile (hex). Default: #FF4500 */
+  color?: string;
+  /** Start Chrome headless (best-effort). Default: false */
+  headless?: boolean;
+  /** If true: never launch; only attach to an existing browser. Default: false */
+  attachOnly?: boolean;
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
@@ -74,6 +86,7 @@ export type GroupChatConfig = {
 
 export type ClawdisConfig = {
   logging?: LoggingConfig;
+  browser?: BrowserConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
     messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
@@ -201,6 +214,15 @@ const ClawdisSchema = z.object({
         ])
         .optional(),
       file: z.string().optional(),
+    })
+    .optional(),
+  browser: z
+    .object({
+      enabled: z.boolean().optional(),
+      controlUrl: z.string().optional(),
+      color: z.string().optional(),
+      headless: z.boolean().optional(),
+      attachOnly: z.boolean().optional(),
     })
     .optional(),
   inbound: z
