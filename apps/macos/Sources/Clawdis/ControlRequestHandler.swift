@@ -8,13 +8,13 @@ enum ControlRequestHandler {
         notifier: NotificationManager = NotificationManager(),
         logger: Logger = Logger(subsystem: "com.steipete.clawdis", category: "control")) async throws -> Response
     {
-        // Keep `status` responsive even if the main actor is busy.
-        let paused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
-        if paused, case .status = request {
-            // allow status through
-        } else if paused {
-            return Response(ok: false, message: "clawdis paused")
-        }
+	        // Keep `status` responsive even if the main actor is busy.
+	        let paused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
+	        if paused, case .status = request {
+	            // allow status through
+	        } else if paused {
+	            return Response(ok: false, message: "clawdis paused")
+	        }
 
         switch request {
         case let .notify(title, body, sound, priority, delivery):
