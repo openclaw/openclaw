@@ -6,6 +6,13 @@ struct ContextUsageBar: View {
     var width: CGFloat?
     var height: CGFloat = 6
 
+    private static let okGreen: NSColor = .init(name: nil) { appearance in
+        let base = NSColor.systemGreen
+        let match = appearance.bestMatch(from: [.aqua, .darkAqua])
+        if match == .darkAqua { return base }
+        return base.blended(withFraction: 0.24, of: .black) ?? base
+    }
+
     private var clampedFractionUsed: Double {
         guard self.contextTokens > 0 else { return 0 }
         return min(1, max(0, Double(self.usedTokens) / Double(self.contextTokens)))
@@ -21,7 +28,7 @@ struct ContextUsageBar: View {
         if pct >= 95 { return Color(nsColor: .systemRed) }
         if pct >= 80 { return Color(nsColor: .systemOrange) }
         if pct >= 60 { return Color(nsColor: .systemYellow) }
-        return Color(nsColor: .systemGreen)
+        return Color(nsColor: Self.okGreen)
     }
 
     var body: some View {
