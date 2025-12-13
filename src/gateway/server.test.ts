@@ -551,10 +551,12 @@ describe("gateway server", () => {
       jobId?: unknown;
       action?: unknown;
       status?: unknown;
+      summary?: unknown;
     };
     expect(last.action).toBe("finished");
     expect(last.jobId).toBe(jobId);
     expect(last.status).toBe("ok");
+    expect(last.summary).toBe("hello");
 
     ws.send(
       JSON.stringify({
@@ -573,6 +575,9 @@ describe("gateway server", () => {
     const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
     expect(Array.isArray(entries)).toBe(true);
     expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
+    expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe(
+      "hello",
+    );
 
     ws.close();
     await server.close();
@@ -654,9 +659,11 @@ describe("gateway server", () => {
     const last = JSON.parse(line ?? "{}") as {
       jobId?: unknown;
       action?: unknown;
+      summary?: unknown;
     };
     expect(last.action).toBe("finished");
     expect(last.jobId).toBe(jobId);
+    expect(last.summary).toBe("hello");
 
     ws.send(
       JSON.stringify({
@@ -675,6 +682,9 @@ describe("gateway server", () => {
     const entries = (runsRes.payload as { entries?: unknown } | null)?.entries;
     expect(Array.isArray(entries)).toBe(true);
     expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
+    expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe(
+      "hello",
+    );
 
     ws.close();
     await server.close();

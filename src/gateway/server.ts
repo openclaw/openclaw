@@ -418,6 +418,7 @@ export async function startGatewayServer(
           action: "finished",
           status: evt.status,
           error: evt.error,
+          summary: evt.summary,
           runAtMs: evt.runAtMs,
           durationMs: evt.durationMs,
           nextRunAtMs: evt.nextRunAtMs,

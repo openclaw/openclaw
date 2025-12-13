@@ -73,6 +73,7 @@ describe("cron run log", () => {
       action: "finished",
       status: "error",
       error: "nope",
+      summary: "oops",
     });
     await appendCronRunLog(logPath, {
       ts: 3,
@@ -92,6 +93,12 @@ describe("cron run log", () => {
 
     const lastOne = await readCronRunLogEntries(logPath, { limit: 1 });
     expect(lastOne.map((e) => e.ts)).toEqual([3]);
+
+    const onlyB = await readCronRunLogEntries(logPath, {
+      limit: 10,
+      jobId: "b",
+    });
+    expect(onlyB[0]?.summary).toBe("oops");
 
     await fs.rm(dir, { recursive: true, force: true });
   });

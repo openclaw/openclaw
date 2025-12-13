@@ -20,7 +20,6 @@ export type CronPayload =
     };
 
 export type CronIsolation = {
-  postToMain?: boolean;
   postToMainPrefix?: string;
 };
 

@@ -654,6 +654,7 @@ public struct CronRunLogEntry: Codable {
     public let action: String
     public let status: AnyCodable?
     public let error: String?
+    public let summary: String?
     public let runatms: Int?
     public let durationms: Int?
     public let nextrunatms: Int?
@@ -664,6 +665,7 @@ public struct CronRunLogEntry: Codable {
         action: String,
         status: AnyCodable?,
         error: String?,
+        summary: String?,
         runatms: Int?,
         durationms: Int?,
         nextrunatms: Int?
@@ -673,6 +675,7 @@ public struct CronRunLogEntry: Codable {
         self.action = action
         self.status = status
         self.error = error
+        self.summary = summary
         self.runatms = runatms
         self.durationms = durationms
         self.nextrunatms = nextrunatms
@@ -683,6 +686,7 @@ public struct CronRunLogEntry: Codable {
         case action
         case status
         case error
+        case summary
         case runatms = "runAtMs"
         case durationms = "durationMs"
         case nextrunatms = "nextRunAtMs"

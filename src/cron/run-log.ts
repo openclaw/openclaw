@@ -7,6 +7,7 @@ export type CronRunLogEntry = {
   action: "finished";
   status?: "ok" | "error" | "skipped";
   error?: string;
+  summary?: string;
   runAtMs?: number;
   durationMs?: number;
   nextRunAtMs?: number;

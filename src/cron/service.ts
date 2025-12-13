@@ -17,6 +17,7 @@ export type CronEvent = {
   durationMs?: number;
   status?: "ok" | "error" | "skipped";
   error?: string;
+  summary?: string;
   nextRunAtMs?: number;
 };
 
@@ -34,10 +35,11 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   enqueueSystemEvent: (text: string) => void;
   requestReplyHeartbeatNow: (opts?: { reason?: string }) => void;
-  runIsolatedAgentJob: (params: {
-    job: CronJob;
-    message: string;
-  }) => Promise<{ status: "ok" | "error" | "skipped"; summary?: string }>;
+  runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
+    status: "ok" | "error" | "skipped";
+    summary?: string;
+    error?: string;
+  }>;
   onEvent?: (evt: CronEvent) => void;
 };
 
@@ -142,6 +144,7 @@ export class CronService {
           ...input.state,
         },
       };
+      this.assertSupportedJobSpec(job);
       job.state.nextRunAtMs = this.computeJobNextRunAtMs(job, now);
       this.store?.jobs.push(job);
       await this.persist();
@@ -173,6 +176,7 @@ export class CronService {
       if (patch.state) job.state = { ...job.state, ...patch.state };
 
       job.updatedAtMs = now;
+      this.assertSupportedJobSpec(job);
       if (job.enabled) {
         job.state.nextRunAtMs = this.computeJobNextRunAtMs(job, now);
       } else {
@@ -397,14 +401,17 @@ export class CronService {
         action: "finished",
         status,
         error: err,
+        summary,
         runAtMs: startedAt,
         durationMs: job.state.lastDurationMs,
         nextRunAtMs: job.state.nextRunAtMs,
       });
 
-      if (summary && job.sessionTarget === "isolated") {
+      if (job.sessionTarget === "isolated") {
         const prefix = job.isolation?.postToMainPrefix?.trim() || "Cron";
-        this.deps.enqueueSystemEvent(`${prefix}: ${summary}`);
+        const body = (summary ?? err ?? status).trim();
+        const statusPrefix = status === "ok" ? prefix : `${prefix} (${status})`;
+        this.deps.enqueueSystemEvent(`${statusPrefix}: ${body}`);
         if (job.wakeMode === "now") {
           this.deps.requestReplyHeartbeatNow({ reason: `cron:${job.id}:post` });
         }
@@ -413,12 +420,26 @@ export class CronService {
 
     try {
       if (job.sessionTarget === "main") {
+        if (job.payload.kind !== "systemEvent") {
+          await finish(
+            "skipped",
+            'main job requires payload.kind="systemEvent"',
+          );
+          return;
+        }
         const text = normalizePayloadToSystemText(job.payload);
+        if (!text) {
+          await finish(
+            "skipped",
+            "main job requires non-empty systemEvent text",
+          );
+          return;
+        }
         this.deps.enqueueSystemEvent(text);
         if (job.wakeMode === "now") {
           this.deps.requestReplyHeartbeatNow({ reason: `cron:${job.id}` });
         }
-        await finish("ok");
+        await finish("ok", undefined, text);
         return;
       }
 
@@ -434,7 +455,7 @@ export class CronService {
       if (res.status === "ok") await finish("ok", undefined, res.summary);
       else if (res.status === "skipped")
         await finish("skipped", undefined, res.summary);
-      else await finish("error", res.summary ?? "cron job failed");
+      else await finish("error", res.error ?? "cron job failed", res.summary);
     } catch (err) {
       await finish("error", String(err));
     } finally {
@@ -454,6 +475,17 @@ export class CronService {
       this.deps.onEvent?.(evt);
     } catch {
       /* ignore */
+    }
+  }
+
+  private assertSupportedJobSpec(
+    job: Pick<CronJob, "sessionTarget" | "payload">,
+  ) {
+    if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
+      throw new Error('main cron jobs require payload.kind="systemEvent"');
+    }
+    if (job.sessionTarget === "isolated" && job.payload.kind !== "agentTurn") {
+      throw new Error('isolated cron jobs require payload.kind="agentTurn"');
     }
   }
 }

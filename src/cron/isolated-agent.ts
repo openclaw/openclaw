@@ -23,6 +23,7 @@ import type { CronJob } from "./types.js";
 export type RunCronAgentTurnResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
+  error?: string;
 };
 
 function assertCommandReplyConfig(cfg: ClawdisConfig) {
@@ -241,19 +242,24 @@ export async function runCronIsolatedAgentTurn(params: {
 
   const lane = params.lane?.trim() || "cron";
 
-  const runResult = await runCommandReply({
-    reply: { ...replyCfg, mode: "command" },
-    templatingCtx,
-    sendSystemOnce,
-    isNewSession: cronSession.isNewSession,
-    isFirstTurnInSession,
-    systemSent: cronSession.sessionEntry.systemSent ?? false,
-    timeoutMs,
-    timeoutSeconds,
-    thinkLevel,
-    enqueue: (task, opts) => enqueueCommandInLane(lane, task, opts),
-    runId: cronSession.sessionEntry.sessionId,
-  });
+  let runResult: Awaited<ReturnType<typeof runCommandReply>>;
+  try {
+    runResult = await runCommandReply({
+      reply: { ...replyCfg, mode: "command" },
+      templatingCtx,
+      sendSystemOnce,
+      isNewSession: cronSession.isNewSession,
+      isFirstTurnInSession,
+      systemSent: cronSession.sessionEntry.systemSent ?? false,
+      timeoutMs,
+      timeoutSeconds,
+      thinkLevel,
+      enqueue: (task, opts) => enqueueCommandInLane(lane, task, opts),
+      runId: cronSession.sessionEntry.sessionId,
+    });
+  } catch (err) {
+    return { status: "error", error: String(err) };
+  }
 
   const payloads = runResult.payloads ?? [];
   const firstText = payloads[0]?.text ?? "";
@@ -263,12 +269,12 @@ export async function runCronIsolatedAgentTurn(params: {
   if (delivery) {
     if (resolvedDelivery.channel === "whatsapp") {
       if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver) {
+        if (!bestEffortDeliver)
           return {
             status: "error",
-            summary: "Cron delivery to WhatsApp requires a recipient.",
+            summary,
+            error: "Cron delivery to WhatsApp requires a recipient.",
           };
-        }
         return {
           status: "skipped",
           summary: "Delivery skipped (no WhatsApp recipient).",
@@ -292,22 +298,18 @@ export async function runCronIsolatedAgentTurn(params: {
           }
         }
       } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        return {
-          status: "ok",
-          summary: summary
-            ? `${summary} (delivery failed)`
-            : "completed (delivery failed)",
-        };
+        if (!bestEffortDeliver)
+          return { status: "error", summary, error: String(err) };
+        return { status: "ok", summary };
       }
     } else if (resolvedDelivery.channel === "telegram") {
       if (!resolvedDelivery.to) {
-        if (!bestEffortDeliver) {
+        if (!bestEffortDeliver)
           return {
             status: "error",
-            summary: "Cron delivery to Telegram requires a chatId.",
+            summary,
+            error: "Cron delivery to Telegram requires a chatId.",
           };
-        }
         return {
           status: "skipped",
           summary: "Delivery skipped (no Telegram chatId).",
@@ -337,13 +339,9 @@ export async function runCronIsolatedAgentTurn(params: {
           }
         }
       } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        return {
-          status: "ok",
-          summary: summary
-            ? `${summary} (delivery failed)`
-            : "completed (delivery failed)",
-        };
+        if (!bestEffortDeliver)
+          return { status: "error", summary, error: String(err) };
+        return { status: "ok", summary };
       }
     }
   }

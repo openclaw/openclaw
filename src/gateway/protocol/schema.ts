@@ -299,7 +299,6 @@ export const CronPayloadSchema = Type.Union([
 
 export const CronIsolationSchema = Type.Object(
   {
-    postToMain: Type.Optional(Type.Boolean()),
     postToMainPrefix: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -411,6 +410,7 @@ export const CronRunLogEntrySchema = Type.Object(
       ]),
     ),
     error: Type.Optional(Type.String()),
+    summary: Type.Optional(Type.String()),
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

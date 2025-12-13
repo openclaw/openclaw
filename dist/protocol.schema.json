@@ -1093,9 +1093,6 @@
           "additionalProperties": false,
           "type": "object",
           "properties": {
-            "postToMain": {
-              "type": "boolean"
-            },
             "postToMainPrefix": {
               "type": "string"
             }
@@ -1344,9 +1341,6 @@
           "additionalProperties": false,
           "type": "object",
           "properties": {
-            "postToMain": {
-              "type": "boolean"
-            },
             "postToMainPrefix": {
               "type": "string"
             }
@@ -1543,9 +1537,6 @@
               "additionalProperties": false,
               "type": "object",
               "properties": {
-                "postToMain": {
-                  "type": "boolean"
-                },
                 "postToMainPrefix": {
                   "type": "string"
                 }
@@ -1645,6 +1636,9 @@
           ]
         },
         "error": {
+          "type": "string"
+        },
+        "summary": {
           "type": "string"
         },
         "runAtMs": {
