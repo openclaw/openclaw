@@ -482,6 +482,31 @@ public struct NodePairVerifyParams: Codable {
     }
 }
 
+public struct NodeInvokeParams: Codable {
+    public let nodeid: String
+    public let command: String
+    public let params: AnyCodable?
+    public let timeoutms: Int?
+
+    public init(
+        nodeid: String,
+        command: String,
+        params: AnyCodable?,
+        timeoutms: Int?
+    ) {
+        self.nodeid = nodeid
+        self.command = command
+        self.params = params
+        self.timeoutms = timeoutms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case command
+        case params
+        case timeoutms = "timeoutMs"
+    }
+}
+
 public struct SessionsListParams: Codable {
     public let limit: Int?
     public let activeminutes: Int?
