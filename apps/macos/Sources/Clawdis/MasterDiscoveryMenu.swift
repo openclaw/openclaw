@@ -20,4 +20,3 @@ struct MasterDiscoveryMenu: View {
         .help("Discover Clawdis masters on your LAN")
     }
 }
-

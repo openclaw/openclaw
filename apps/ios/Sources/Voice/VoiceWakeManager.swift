@@ -2,23 +2,69 @@ import AVFAudio
 import Foundation
 import Speech
 
-enum SpeechAudioTapFactory {
-    static func makeAppendTap(requestBox: SpeechRequestBox) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
-        { buffer, _ in
-            requestBox.append(buffer)
-        }
+private final class AudioBufferQueue: @unchecked Sendable {
+    private let lock = NSLock()
+    private var buffers: [AVAudioPCMBuffer] = []
+
+    func enqueueCopy(of buffer: AVAudioPCMBuffer) {
+        guard let copy = buffer.deepCopy() else { return }
+        self.lock.lock()
+        self.buffers.append(copy)
+        self.lock.unlock()
+    }
+
+    func drain() -> [AVAudioPCMBuffer] {
+        self.lock.lock()
+        let drained = self.buffers
+        self.buffers.removeAll(keepingCapacity: true)
+        self.lock.unlock()
+        return drained
+    }
+
+    func clear() {
+        self.lock.lock()
+        self.buffers.removeAll(keepingCapacity: false)
+        self.lock.unlock()
     }
 }
 
-final class SpeechRequestBox: @unchecked Sendable {
-    let request: SFSpeechAudioBufferRecognitionRequest
+private extension AVAudioPCMBuffer {
+    func deepCopy() -> AVAudioPCMBuffer? {
+        let format = self.format
+        let frameLength = self.frameLength
+        guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {
+            return nil
+        }
+        copy.frameLength = frameLength
 
-    init(request: SFSpeechAudioBufferRecognitionRequest) {
-        self.request = request
-    }
+        if let src = self.floatChannelData, let dst = copy.floatChannelData {
+            let channels = Int(format.channelCount)
+            let frames = Int(frameLength)
+            for ch in 0..<channels {
+                dst[ch].assign(from: src[ch], count: frames)
+            }
+            return copy
+        }
 
-    func append(_ buffer: AVAudioPCMBuffer) {
-        self.request.append(buffer)
+        if let src = self.int16ChannelData, let dst = copy.int16ChannelData {
+            let channels = Int(format.channelCount)
+            let frames = Int(frameLength)
+            for ch in 0..<channels {
+                dst[ch].assign(from: src[ch], count: frames)
+            }
+            return copy
+        }
+
+        if let src = self.int32ChannelData, let dst = copy.int32ChannelData {
+            let channels = Int(format.channelCount)
+            let frames = Int(frameLength)
+            for ch in 0..<channels {
+                dst[ch].assign(from: src[ch], count: frames)
+            }
+            return copy
+        }
+
+        return nil
     }
 }
 
@@ -32,6 +78,8 @@ final class VoiceWakeManager: NSObject, ObservableObject {
     private var speechRecognizer: SFSpeechRecognizer?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
+    private var tapQueue: AudioBufferQueue?
+    private var tapDrainTask: Task<Void, Never>?
 
     private var lastDispatched: String?
     private var onCommand: (@Sendable (String) async -> Void)?
@@ -92,6 +140,11 @@ final class VoiceWakeManager: NSObject, ObservableObject {
         self.isListening = false
         self.statusText = "Off"
 
+        self.tapDrainTask?.cancel()
+        self.tapDrainTask = nil
+        self.tapQueue?.clear()
+        self.tapQueue = nil
+
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest = nil
@@ -107,6 +160,10 @@ final class VoiceWakeManager: NSObject, ObservableObject {
     private func startRecognition() throws {
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
+        self.tapDrainTask?.cancel()
+        self.tapDrainTask = nil
+        self.tapQueue?.clear()
+        self.tapQueue = nil
 
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
@@ -115,16 +172,33 @@ final class VoiceWakeManager: NSObject, ObservableObject {
         let inputNode = self.audioEngine.inputNode
         inputNode.removeTap(onBus: 0)
 
-        let requestBox = SpeechRequestBox(request: request)
         let recordingFormat = inputNode.outputFormat(forBus: 0)
-        let tap = SpeechAudioTapFactory.makeAppendTap(requestBox: requestBox)
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat, block: tap)
+
+        let queue = AudioBufferQueue()
+        self.tapQueue = queue
+        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak queue] buffer, _ in
+            // `SFSpeechAudioBufferRecognitionRequest.append` is MainActor-isolated on iOS 26.
+            // Copy + enqueue in the realtime callback, drain + append from the MainActor.
+            queue?.enqueueCopy(of: buffer)
+        }
 
         self.audioEngine.prepare()
         try self.audioEngine.start()
 
         let handler = self.makeRecognitionResultHandler()
         self.recognitionTask = self.speechRecognizer?.recognitionTask(with: request, resultHandler: handler)
+
+        self.tapDrainTask = Task { [weak self] in
+            guard let self, let queue = self.tapQueue else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 40_000_000)
+                let drained = queue.drain()
+                if drained.isEmpty { continue }
+                for buf in drained {
+                    request.append(buf)
+                }
+            }
+        }
     }
 
     private nonisolated func makeRecognitionResultHandler() -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
@@ -195,21 +269,17 @@ final class VoiceWakeManager: NSObject, ObservableObject {
     }
 
     private nonisolated static func requestMicrophonePermission() async -> Bool {
-        await withCheckedContinuation { cont in
+        await withCheckedContinuation(isolation: nil) { cont in
             AVAudioApplication.requestRecordPermission { ok in
-                Task { @MainActor in
-                    cont.resume(returning: ok)
-                }
+                cont.resume(returning: ok)
             }
         }
     }
 
     private nonisolated static func requestSpeechPermission() async -> Bool {
-        await withCheckedContinuation { cont in
+        await withCheckedContinuation(isolation: nil) { cont in
             SFSpeechRecognizer.requestAuthorization { status in
-                Task { @MainActor in
-                    cont.resume(returning: status == .authorized)
-                }
+                cont.resume(returning: status == .authorized)
             }
         }
     }

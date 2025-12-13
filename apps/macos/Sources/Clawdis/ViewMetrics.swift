@@ -17,4 +17,3 @@ extension View {
             .onPreferenceChange(ViewWidthPreferenceKey.self, perform: onChange)
     }
 }
-

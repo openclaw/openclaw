@@ -7,7 +7,7 @@ read_when:
 ---
 # iOS Node (internal) — Voice Trigger + Screen/Canvas
 
-Status: design plan (internal/TestFlight) · Date: 2025-12-12
+Status: prototype implemented (internal) · Date: 2025-12-13
 
 ## Goals
 - Build an **iOS app** that acts as a **remote node** for Clawdis:
@@ -43,8 +43,8 @@ Why:
 
 ## Security plan (internal, but still robust)
 ### Transport
-- Bridge listens on LAN and uses **TLS**.
-- Prefer **mutual authentication** (mTLS-like) or explicit public key pinning after pairing.
+- **Current (v0):** bridge is a LAN-facing **TCP** listener with token-based auth after pairing.
+- **Next:** wrap the bridge in **TLS** and prefer key-pinned or mTLS-like auth after pairing.
 
 ### Pairing
 - Bonjour discovery shows a candidate “Clawdis Bridge” on the LAN.
@@ -53,7 +53,7 @@ Why:
   2) iOS connects to the bridge and requests pairing.
   3) The bridge forwards the pairing request to the **Gateway** as a *pending request*.
   4) Approval can happen via:
-     - **macOS UI** (Swift app shows “Approve node”), or
+     - **macOS UI** (Clawdis shows an alert with Approve/Reject/Later, including the node IP), or
      - **Terminal/CLI** (headless flows).
   5) Once approved, the bridge returns a token to iOS; iOS stores it in Keychain.
 - Subsequent connections:
@@ -134,14 +134,13 @@ When iOS is backgrounded:
 
 ## iOS app architecture (SwiftUI)
 ### App structure
-- Tab bar:
-  - **Canvas/Screen** (WKWebView + overlay chrome)
-  - **Voice** (status + last transcript + test)
-  - **Settings** (node name, voice wake toggle, pairing state, debug)
+- Single fullscreen Canvas surface (WKWebView).
+- One settings entry point: a **gear button** that opens a settings sheet.
+- All navigation/mode selection is **agent-driven** (no local URL bar).
 
 ### Components
 - `BridgeDiscovery`: Bonjour browse + resolve (Network.framework `NWBrowser`)
-- `BridgeConnection`: TLS session + pairing handshake + reconnect
+- `BridgeConnection`: TCP session + pairing handshake + reconnect (TLS planned)
 - `NodeRuntime`:
   - Voice pipeline (wake-word + capture + forward)
   - Screen pipeline (WKWebView controller + snapshot + eval)

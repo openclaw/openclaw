@@ -1,0 +1,64 @@
+---
+summary: "Bonjour/mDNS discovery + debugging (Gateway beacons, clients, and common failure modes)"
+read_when:
+  - Debugging Bonjour discovery issues on macOS/iOS
+  - Changing mDNS service types, TXT records, or discovery UX
+---
+# Bonjour / mDNS discovery
+
+Clawdis uses Bonjour (mDNS / DNS-SD) as a **LAN-only convenience** to discover a running Gateway and (optionally) its bridge transport. It is best-effort and does **not** replace SSH or Tailnet-based connectivity.
+
+## What advertises
+
+Only the **Node Gateway** (`clawd` / `clawdis gateway`) advertises Bonjour beacons.
+
+- Implementation: `src/infra/bonjour.ts`
+- Gateway wiring: `src/gateway/server.ts`
+
+## Service types
+
+- `_clawdis-master._tcp` — “master gateway” discovery beacon (primarily for macOS remote-control UX).
+- `_clawdis-bridge._tcp` — bridge transport beacon (used by Iris/iOS nodes).
+
+## TXT keys (non-secret hints)
+
+The Gateway advertises small non-secret hints to make UI flows convenient:
+
+- `role=master`
+- `lanHost=<hostname>.local`
+- `sshPort=<port>` (defaults to 22 when not overridden)
+- `gatewayPort=<port>` (informational; the Gateway WS is typically loopback-only)
+- `bridgePort=<port>` (only when bridge is enabled)
+- `tailnetDns=<magicdns>` (optional hint; may be absent)
+
+## Debugging on macOS
+
+Useful built-in tools:
+
+- Browse instances:
+  - `dns-sd -B _clawdis-master._tcp local.`
+  - `dns-sd -B _clawdis-bridge._tcp local.`
+- Resolve one instance (replace `<instance>`):
+  - `dns-sd -L "<instance>" _clawdis-master._tcp local.`
+  - `dns-sd -L "<instance>" _clawdis-bridge._tcp local.`
+
+If browsing shows instances but resolving fails, you’re usually hitting a LAN policy / multicast issue.
+
+## Common failure modes
+
+- **Bonjour doesn’t cross networks**: London/Vienna style setups require Tailnet (MagicDNS/IP) or SSH.
+- **Multicast blocked**: some Wi‑Fi networks (enterprise/hotels) disable mDNS; expect “no results”.
+- **Sleep / interface churn**: macOS may temporarily drop mDNS results when switching networks; retry.
+
+## Disabling / configuration
+
+- `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.
+- `CLAWDIS_BRIDGE_ENABLED=0` disables the bridge listener (and therefore the bridge beacon).
+- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` control bridge bind/port.
+- `CLAWDIS_SSH_PORT` overrides the SSH port advertised in `_clawdis-master._tcp`.
+- `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in `_clawdis-master._tcp`.
+
+## Related docs
+
+- Discovery policy and transport selection: `docs/discovery.md`
+- Node pairing + approvals: `docs/gateway/pairing.md`

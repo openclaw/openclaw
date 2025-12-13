@@ -42,6 +42,8 @@ Target direction:
 - The **gateway** advertises itself (and/or its bridge) via Bonjour.
 - Clients browse and show a “pick a master” list, then store the chosen endpoint.
 
+Troubleshooting and beacon details: `docs/bonjour.md`.
+
 #### Current implementation
 
 - Service types:
@@ -59,6 +61,8 @@ Disable/override:
 - `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.
 - `CLAWDIS_BRIDGE_ENABLED=0` disables the bridge listener.
 - `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` control bind/port.
+- `CLAWDIS_SSH_PORT` overrides the SSH port advertised in the master beacon (defaults to 22).
+- `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in the master beacon.
 
 ### 2) Tailnet (cross-network)
 

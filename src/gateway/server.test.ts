@@ -12,6 +12,28 @@ import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { startGatewayServer } from "./server.js";
 
+type BridgeClientInfo = {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  remoteIp?: string;
+};
+
+type BridgeStartOpts = {
+  onAuthenticated?: (node: BridgeClientInfo) => Promise<void> | void;
+  onDisconnected?: (node: BridgeClientInfo) => Promise<void> | void;
+  onPairRequested?: (request: unknown) => Promise<void> | void;
+};
+
+const bridgeStartCalls = vi.hoisted(() => [] as BridgeStartOpts[]);
+vi.mock("../infra/bridge/server.js", () => ({
+  startNodeBridgeServer: vi.fn(async (opts: BridgeStartOpts) => {
+    bridgeStartCalls.push(opts);
+    return { port: 0, close: async () => {} };
+  }),
+}));
+
 let testSessionStorePath: string | undefined;
 let testAllowFrom: string[] | undefined;
 let testCronStorePath: string | undefined;
@@ -321,6 +343,75 @@ describe("gateway server", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = prevHome;
+    }
+  });
+
+  test("emits presence updates for bridge connect/disconnect", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+    try {
+      const before = bridgeStartCalls.length;
+      const { server, ws } = await startServerWithClient();
+      try {
+        await connectOk(ws);
+        const bridgeCall = bridgeStartCalls[before];
+        expect(bridgeCall).toBeTruthy();
+
+        const waitPresenceReason = async (reason: string) => {
+          await onceMessage(
+            ws,
+            (o) => {
+              if (o.type !== "event" || o.event !== "presence") return false;
+              const payload = o.payload as { presence?: unknown } | null;
+              const list = payload?.presence;
+              if (!Array.isArray(list)) return false;
+              return list.some(
+                (p) =>
+                  typeof p === "object" &&
+                  p !== null &&
+                  (p as { instanceId?: unknown }).instanceId === "iris-1" &&
+                  (p as { reason?: unknown }).reason === reason,
+              );
+            },
+            3000,
+          );
+        };
+
+        const presenceConnectedP = waitPresenceReason("iris-connected");
+        await bridgeCall?.onAuthenticated?.({
+          nodeId: "iris-1",
+          displayName: "Iris",
+          platform: "ios",
+          version: "1.0",
+          remoteIp: "10.0.0.10",
+        });
+        await presenceConnectedP;
+
+        const presenceDisconnectedP = waitPresenceReason("iris-disconnected");
+        await bridgeCall?.onDisconnected?.({
+          nodeId: "iris-1",
+          displayName: "Iris",
+          platform: "ios",
+          version: "1.0",
+          remoteIp: "10.0.0.10",
+        });
+        await presenceDisconnectedP;
+      } finally {
+        try {
+          ws.close();
+        } catch {
+          /* ignore */
+        }
+        await server.close();
+        await fs.rm(homeDir, { recursive: true, force: true });
+      }
+    } finally {
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
     }
   });
 

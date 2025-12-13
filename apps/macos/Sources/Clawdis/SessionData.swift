@@ -42,7 +42,7 @@ struct SessionTokenStats {
     static func formatKTokens(_ value: Int) -> String {
         if value < 1000 { return "\(value)" }
         let thousands = Double(value) / 1000
-        let decimals = value >= 10_000 ? 0 : 1
+        let decimals = value >= 10000 ? 0 : 1
         return String(format: "%.\(decimals)fk", thousands)
     }
 }
@@ -277,7 +277,9 @@ enum SessionLoader {
                 let input = entry.inputTokens ?? 0
                 let output = entry.outputTokens ?? 0
                 let fallbackTotal = entry.totalTokens ?? input + output
-                let promptTokens = entry.sessionId.flatMap { self.promptTokensFromSessionLog(sessionId: $0, storeDir: storeDir) }
+                let promptTokens = entry.sessionId.flatMap { self.promptTokensFromSessionLog(
+                    sessionId: $0,
+                    storeDir: storeDir) }
                 let total = max(fallbackTotal, promptTokens ?? 0)
                 let context = entry.contextTokens ?? defaults.contextTokens
                 let model = entry.model ?? defaults.model

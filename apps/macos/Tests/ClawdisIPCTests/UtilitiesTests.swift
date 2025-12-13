@@ -9,10 +9,10 @@ import Testing
         #expect(age(from: now.addingTimeInterval(-45), now: now) == "just now")
         #expect(age(from: now.addingTimeInterval(-75), now: now) == "1 minute ago")
         #expect(age(from: now.addingTimeInterval(-10 * 60), now: now) == "10m ago")
-        #expect(age(from: now.addingTimeInterval(-3_600), now: now) == "1 hour ago")
-        #expect(age(from: now.addingTimeInterval(-5 * 3_600), now: now) == "5h ago")
-        #expect(age(from: now.addingTimeInterval(-26 * 3_600), now: now) == "yesterday")
-        #expect(age(from: now.addingTimeInterval(-3 * 86_400), now: now) == "3d ago")
+        #expect(age(from: now.addingTimeInterval(-3600), now: now) == "1 hour ago")
+        #expect(age(from: now.addingTimeInterval(-5 * 3600), now: now) == "5h ago")
+        #expect(age(from: now.addingTimeInterval(-26 * 3600), now: now) == "yesterday")
+        #expect(age(from: now.addingTimeInterval(-3 * 86400), now: now) == "3d ago")
     }
 
     @Test func parseSSHTargetSupportsUserPortAndDefaults() {

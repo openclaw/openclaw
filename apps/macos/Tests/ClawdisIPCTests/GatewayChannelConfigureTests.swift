@@ -7,7 +7,8 @@ import Testing
     private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
         private let connectRequestID = OSAllocatedUnfairLock<String?>(initialState: nil)
         private let pendingReceiveHandler =
-            OSAllocatedUnfairLock<(@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?>(initialState: nil)
+            OSAllocatedUnfairLock<(@Sendable (Result<URLSessionWebSocketTask.Message, Error>)
+                    -> Void)?>(initialState: nil)
         private let cancelCount = OSAllocatedUnfairLock(initialState: 0)
         private let sendCount = OSAllocatedUnfairLock(initialState: 0)
         private let helloDelayMs: Int

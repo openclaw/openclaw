@@ -10,7 +10,6 @@ struct SettingsTab: View {
     @State private var connectStatus: String?
     @State private var isConnecting = false
     @State private var didAutoConnect = false
-    @State private var isShowingBridgeList = false
 
     var body: some View {
         NavigationStack {
@@ -34,16 +33,17 @@ struct SettingsTab: View {
                     LabeledContent("Status", value: self.appModel.bridgeStatusText)
                     if let serverName = self.appModel.bridgeServerName {
                         LabeledContent("Server", value: serverName)
+                        if let addr = self.appModel.bridgeRemoteAddress {
+                            LabeledContent("Address", value: addr)
+                        }
 
                         Button("Disconnect", role: .destructive) {
                             self.appModel.disconnectBridge()
                         }
 
-                        DisclosureGroup("Switch bridge", isExpanded: self.$isShowingBridgeList) {
-                            self.bridgeList(showConnectedRow: true)
-                        }
+                        self.bridgeList(showing: .availableOnly)
                     } else {
-                        self.bridgeList(showConnectedRow: false)
+                        self.bridgeList(showing: .all)
                     }
 
                     if let connectStatus {
@@ -88,22 +88,32 @@ struct SettingsTab: View {
             }
             .onChange(of: self.appModel.bridgeServerName) { _, _ in
                 self.connectStatus = nil
-                self.isShowingBridgeList = false
             }
         }
     }
 
     @ViewBuilder
-    private func bridgeList(showConnectedRow: Bool) -> some View {
+    private func bridgeList(showing: BridgeListMode) -> some View {
         if self.discovery.bridges.isEmpty {
             Text("No bridges found yet.")
                 .foregroundStyle(.secondary)
         } else {
-            ForEach(self.discovery.bridges) { bridge in
-                let isConnected = self.isConnectedBridge(bridge)
-                if isConnected, !showConnectedRow {
-                    EmptyView()
-                } else {
+            let connectedID = self.appModel.connectedBridgeDebugID
+            let rows = self.discovery.bridges.filter { bridge in
+                let isConnected = bridge.debugID == connectedID
+                switch showing {
+                case .all:
+                    return true
+                case .availableOnly:
+                    return !isConnected
+                }
+            }
+
+            if rows.isEmpty, showing == .availableOnly {
+                Text("No other bridges found.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(rows) { bridge in
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(bridge.name)
@@ -114,29 +124,19 @@ struct SettingsTab: View {
                         }
                         Spacer()
 
-                        if isConnected {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                                .accessibilityLabel("Connected")
-                        } else {
-                            Button(self.isConnecting ? "…" : "Connect") {
-                                Task { await self.connect(bridge) }
-                            }
-                            .disabled(self.isConnecting)
+                        Button(self.isConnecting ? "…" : "Connect") {
+                            Task { await self.connect(bridge) }
                         }
+                        .disabled(self.isConnecting)
                     }
                 }
             }
         }
     }
 
-    private func isConnectedBridge(_ bridge: BridgeDiscoveryModel.DiscoveredBridge) -> Bool {
-        guard let serverName = self.appModel.bridgeServerName?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !serverName.isEmpty
-        else {
-            return false
-        }
-        return bridge.name.localizedCaseInsensitiveContains(serverName)
+    private enum BridgeListMode: Equatable {
+        case all
+        case availableOnly
     }
 
     private func keychainAccount() -> String {

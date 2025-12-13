@@ -94,7 +94,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
                 "served \(session, privacy: .public)/\(path, privacy: .public) -> \(standardizedFile.path, privacy: .public)")
             return CanvasResponse(mime: mime, data: data)
         } catch {
-            canvasLogger.error("failed reading \(standardizedFile.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            canvasLogger
+                .error(
+                    "failed reading \(standardizedFile.path, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return self.html("Failed to read file.", title: "Canvas error")
         }
     }

@@ -828,6 +828,84 @@
         "text"
       ]
     },
+    "NodePairRequestParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "displayName": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "platform": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "version": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "remoteIp": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodeId"
+      ]
+    },
+    "NodePairListParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {}
+    },
+    "NodePairApproveParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "NodePairRejectParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "requestId"
+      ]
+    },
+    "NodePairVerifyParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "token": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodeId",
+        "token"
+      ]
+    },
     "CronJob": {
       "additionalProperties": false,
       "type": "object",

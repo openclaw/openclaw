@@ -34,15 +34,15 @@ enum CronSchedule: Codable, Equatable {
         let kind = try container.decode(String.self, forKey: .kind)
         switch kind {
         case "at":
-            self = .at(atMs: try container.decode(Int.self, forKey: .atMs))
+            self = try .at(atMs: container.decode(Int.self, forKey: .atMs))
         case "every":
-            self = .every(
-                everyMs: try container.decode(Int.self, forKey: .everyMs),
-                anchorMs: try container.decodeIfPresent(Int.self, forKey: .anchorMs))
+            self = try .every(
+                everyMs: container.decode(Int.self, forKey: .everyMs),
+                anchorMs: container.decodeIfPresent(Int.self, forKey: .anchorMs))
         case "cron":
-            self = .cron(
-                expr: try container.decode(String.self, forKey: .expr),
-                tz: try container.decodeIfPresent(String.self, forKey: .tz))
+            self = try .cron(
+                expr: container.decode(String.self, forKey: .expr),
+                tz: container.decodeIfPresent(String.self, forKey: .tz))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -94,16 +94,16 @@ enum CronPayload: Codable, Equatable {
         let kind = try container.decode(String.self, forKey: .kind)
         switch kind {
         case "systemEvent":
-            self = .systemEvent(text: try container.decode(String.self, forKey: .text))
+            self = try .systemEvent(text: container.decode(String.self, forKey: .text))
         case "agentTurn":
-            self = .agentTurn(
-                message: try container.decode(String.self, forKey: .message),
-                thinking: try container.decodeIfPresent(String.self, forKey: .thinking),
-                timeoutSeconds: try container.decodeIfPresent(Int.self, forKey: .timeoutSeconds),
-                deliver: try container.decodeIfPresent(Bool.self, forKey: .deliver),
-                channel: try container.decodeIfPresent(String.self, forKey: .channel),
-                to: try container.decodeIfPresent(String.self, forKey: .to),
-                bestEffortDeliver: try container.decodeIfPresent(Bool.self, forKey: .bestEffortDeliver))
+            self = try .agentTurn(
+                message: container.decode(String.self, forKey: .message),
+                thinking: container.decodeIfPresent(String.self, forKey: .thinking),
+                timeoutSeconds: container.decodeIfPresent(Int.self, forKey: .timeoutSeconds),
+                deliver: container.decodeIfPresent(Bool.self, forKey: .deliver),
+                channel: container.decodeIfPresent(String.self, forKey: .channel),
+                to: container.decodeIfPresent(String.self, forKey: .to),
+                bestEffortDeliver: container.decodeIfPresent(Bool.self, forKey: .bestEffortDeliver))
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .kind,
@@ -209,4 +209,3 @@ struct CronListResponse: Codable {
 struct CronRunsResponse: Codable {
     let entries: [CronRunLogEntry]
 }
-

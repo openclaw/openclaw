@@ -11,6 +11,6 @@ enum GatewayPayloadDecoding {
         -> T?
     {
         guard let payload else { return nil }
-        return try decode(payload, as: T.self)
+        return try self.decode(payload, as: T.self)
     }
 }

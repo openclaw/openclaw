@@ -27,4 +27,3 @@ struct MenuHostedItem: NSViewRepresentable {
         hosting.frame = NSRect(origin: .zero, size: NSSize(width: width, height: fitting.height))
     }
 }
-

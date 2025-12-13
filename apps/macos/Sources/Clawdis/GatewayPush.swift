@@ -11,4 +11,3 @@ enum GatewayPush: Sendable {
     /// A detected sequence gap (`expected...received`) for event frames.
     case seqGap(expected: Int, received: Int)
 }
-

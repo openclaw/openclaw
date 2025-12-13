@@ -55,7 +55,9 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
 
         let hosting = NSHostingView(rootView: initial)
         let size = hosting.fittingSize
-        hosting.frame = NSRect(origin: .zero, size: NSSize(width: self.initialCardWidth(for: menu), height: size.height))
+        hosting.frame = NSRect(
+            origin: .zero,
+            size: NSSize(width: self.initialCardWidth(for: menu), height: size.height))
 
         let item = NSMenuItem()
         item.tag = self.tag

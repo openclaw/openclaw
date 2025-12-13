@@ -15,8 +15,8 @@ struct ContextMenuCardView: View {
     init(
         rows: [SessionRow],
         statusText: String? = nil,
-        isLoading: Bool = false
-    ) {
+        isLoading: Bool = false)
+    {
         self.rows = rows
         self.statusText = statusText
         self.isLoading = isLoading

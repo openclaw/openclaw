@@ -1,5 +1,5 @@
-import Foundation
 import CoreServices
+import Foundation
 
 final class CanvasFileWatcher: @unchecked Sendable {
     private let url: URL

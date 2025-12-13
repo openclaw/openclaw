@@ -4,4 +4,3 @@ import ClawdisProtocol
 // We use them across actors via GatewayConnection's event stream, so mark them as unchecked.
 extension HelloOk: @unchecked Sendable {}
 extension EventFrame: @unchecked Sendable {}
-

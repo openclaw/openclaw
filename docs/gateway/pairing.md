@@ -89,7 +89,7 @@ Target direction:
 - The bridge is transport only; it forwards/scopes requests and enforces ACLs, but pairing decisions are made by the gateway.
 
 The macOS UI (Swift) can:
-- Subscribe to `node.pair.requested`, show an alert, and call `node.pair.approve` or `node.pair.reject`.
+- Subscribe to `node.pair.requested`, show an alert (including `remoteIp`), and call `node.pair.approve` or `node.pair.reject`.
 - Or ignore/dismiss (“Later”) and let CLI handle it.
 
 ## Implementation note

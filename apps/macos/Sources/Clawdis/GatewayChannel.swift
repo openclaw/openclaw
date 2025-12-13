@@ -104,12 +104,18 @@ actor GatewayChannelActor {
         self.task?.cancel(with: .goingAway, reason: nil)
         self.task = nil
 
-        await self.failPending(NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+        await self.failPending(NSError(
+            domain: "Gateway",
+            code: 0,
+            userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
         for waiter in waiters {
-            waiter.resume(throwing: NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
+            waiter.resume(throwing: NSError(
+                domain: "Gateway",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "gateway channel shutdown"]))
         }
     }
 
@@ -268,7 +274,6 @@ actor GatewayChannelActor {
             await self.watchTicks()
         }
         await self.pushHandler?(.snapshot(ok))
-        return
     }
 
     private func listen() {

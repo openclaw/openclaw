@@ -666,7 +666,66 @@ export async function startGatewayServer(
       const started = await startNodeBridgeServer({
         host: bridgeHost,
         port: bridgePort,
+        onAuthenticated: (node) => {
+          const host = node.displayName?.trim() || node.nodeId;
+          const ip = node.remoteIp?.trim();
+          const version = node.version?.trim() || "unknown";
+          const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason iris-connected`;
+          upsertPresence(node.nodeId, {
+            host,
+            ip,
+            version,
+            mode: "remote",
+            reason: "iris-connected",
+            lastInputSeconds: 0,
+            instanceId: node.nodeId,
+            text,
+          });
+          presenceVersion += 1;
+          broadcast(
+            "presence",
+            { presence: listSystemPresence() },
+            {
+              dropIfSlow: true,
+              stateVersion: {
+                presence: presenceVersion,
+                health: healthVersion,
+              },
+            },
+          );
+        },
+        onDisconnected: (node) => {
+          const host = node.displayName?.trim() || node.nodeId;
+          const ip = node.remoteIp?.trim();
+          const version = node.version?.trim() || "unknown";
+          const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason iris-disconnected`;
+          upsertPresence(node.nodeId, {
+            host,
+            ip,
+            version,
+            mode: "remote",
+            reason: "iris-disconnected",
+            lastInputSeconds: 0,
+            instanceId: node.nodeId,
+            text,
+          });
+          presenceVersion += 1;
+          broadcast(
+            "presence",
+            { presence: listSystemPresence() },
+            {
+              dropIfSlow: true,
+              stateVersion: {
+                presence: presenceVersion,
+                health: healthVersion,
+              },
+            },
+          );
+        },
         onEvent: handleBridgeEvent,
+        onPairRequested: (request) => {
+          broadcast("node.pair.requested", request, { dropIfSlow: true });
+        },
       });
       if (started.port > 0) {
         bridge = started;
@@ -680,9 +739,22 @@ export async function startGatewayServer(
   }
 
   try {
+    const sshPortEnv = process.env.CLAWDIS_SSH_PORT?.trim();
+    const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
+    const sshPort =
+      Number.isFinite(sshPortParsed) && sshPortParsed > 0
+        ? sshPortParsed
+        : undefined;
+
+    const tailnetDnsEnv = process.env.CLAWDIS_TAILNET_DNS?.trim();
+    const tailnetDns =
+      tailnetDnsEnv && tailnetDnsEnv.length > 0 ? tailnetDnsEnv : undefined;
+
     const bonjour = await startGatewayBonjourAdvertiser({
       gatewayPort: port,
       bridgePort: bridge?.port,
+      sshPort,
+      tailnetDns,
     });
     bonjourStop = bonjour.stop;
   } catch (err) {

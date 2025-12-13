@@ -35,4 +35,3 @@ struct VisualEffectView: NSViewRepresentable {
         nsView.isEmphasized = self.emphasized
     }
 }
-

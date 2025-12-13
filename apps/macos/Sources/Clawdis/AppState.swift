@@ -142,7 +142,9 @@ final class AppState: ObservableObject {
     }
 
     @Published var webChatSwiftUIEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatSwiftUIEnabled, forKey: webChatSwiftUIEnabledKey) } }
+        didSet { self.ifNotPreview { UserDefaults.standard.set(
+            self.webChatSwiftUIEnabled,
+            forKey: webChatSwiftUIEnabledKey) } }
     }
 
     @Published var webChatPort: Int {

@@ -178,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let state {
             Task { await ConnectionModeCoordinator.shared.apply(mode: state.connectionMode, paused: state.isPaused) }
         }
+        NodePairingApprovalPrompter.shared.start()
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
@@ -194,6 +195,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         GatewayProcessManager.shared.stop()
         PresenceReporter.shared.stop()
+        NodePairingApprovalPrompter.shared.stop()
         WebChatManager.shared.close()
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }

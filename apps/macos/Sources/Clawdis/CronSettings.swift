@@ -53,9 +53,9 @@ struct CronSettings: View {
             }
         }
         .onChange(of: self.store.selectedJobId) { _, newValue in
-            guard let newValue else { return }
-            Task { await self.store.refreshRuns(jobId: newValue) }
-        }
+                guard let newValue else { return }
+                Task { await self.store.refreshRuns(jobId: newValue) }
+            }
     }
 
     private var schedulerBanner: some View {
@@ -69,7 +69,8 @@ struct CronSettings: View {
                             .font(.headline)
                         Spacer()
                     }
-                    Text("Jobs are saved, but they will not run automatically until `cron.enabled` is set to `true` and the Gateway restarts.")
+                    Text(
+                        "Jobs are saved, but they will not run automatically until `cron.enabled` is set to `true` and the Gateway restarts.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -246,8 +247,8 @@ struct CronSettings: View {
                 Toggle("Enabled", isOn: Binding(
                     get: { job.enabled },
                     set: { enabled in Task { await self.store.setJobEnabled(id: job.id, enabled: enabled) } }))
-                .toggleStyle(.switch)
-                .labelsHidden()
+                    .toggleStyle(.switch)
+                    .labelsHidden()
                 Button("Run") { Task { await self.store.runJob(id: job.id, force: true) } }
                     .buttonStyle(.borderedProminent)
                 Button("Edit") {
@@ -398,7 +399,7 @@ struct CronSettings: View {
                     HStack(spacing: 8) {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
-                        if (deliver ?? false) {
+                        if deliver ?? false {
                             StatusPill(text: "deliver", tint: .secondary)
                             if let channel, !channel.isEmpty { StatusPill(text: channel, tint: .secondary) }
                             if let to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
@@ -482,7 +483,7 @@ private struct CronJobEditor: View {
 
     enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String { rawValue } }
     @State private var scheduleKind: ScheduleKind = .every
-    @State private var atDate: Date = Date().addingTimeInterval(60 * 5)
+    @State private var atDate: Date = .init().addingTimeInterval(60 * 5)
     @State private var everyText: String = "1h"
     @State private var cronExpr: String = "0 9 * * 3"
     @State private var cronTz: String = ""
@@ -696,7 +697,10 @@ private struct CronJobEditor: View {
         case .cron:
             let expr = self.cronExpr.trimmingCharacters(in: .whitespacesAndNewlines)
             if expr.isEmpty {
-                throw NSError(domain: "Cron", code: 0, userInfo: [NSLocalizedDescriptionKey: "Cron expression is required."])
+                throw NSError(
+                    domain: "Cron",
+                    code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "Cron expression is required."])
             }
             let tz = self.cronTz.trimmingCharacters(in: .whitespacesAndNewlines)
             if tz.isEmpty {
@@ -719,11 +723,17 @@ private struct CronJobEditor: View {
 
         if payload["kind"] as? String == "systemEvent" {
             if (payload["text"] as? String ?? "").isEmpty {
-                throw NSError(domain: "Cron", code: 0, userInfo: [NSLocalizedDescriptionKey: "System event text is required."])
+                throw NSError(
+                    domain: "Cron",
+                    code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "System event text is required."])
             }
         } else if payload["kind"] as? String == "agentTurn" {
             if (payload["message"] as? String ?? "").isEmpty {
-                throw NSError(domain: "Cron", code: 0, userInfo: [NSLocalizedDescriptionKey: "Agent message is required."])
+                throw NSError(
+                    domain: "Cron",
+                    code: 0,
+                    userInfo: [NSLocalizedDescriptionKey: "Agent message is required."])
             }
         }
 
@@ -740,7 +750,8 @@ private struct CronJobEditor: View {
             if self.postToMain {
                 root["isolation"] = [
                     "postToMain": true,
-                    "postToMainPrefix": self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Cron" : self.postPrefix,
+                    "postToMainPrefix": self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty ? "Cron" : self.postPrefix,
                 ]
             } else if self.job != nil {
                 // Allow clearing isolation on edit.
@@ -786,7 +797,7 @@ private struct CronJobEditor: View {
         let factor: Double = switch unit {
         case "ms": 1
         case "s": 1000
-        case "m": 60_000
+        case "m": 60000
         case "h": 3_600_000
         default: 86_400_000
         }
@@ -829,11 +840,25 @@ struct CronSettings_Previews: PreviewProvider {
                     to: nil,
                     bestEffortDeliver: true),
                 isolation: CronIsolation(postToMain: true, postToMainPrefix: "Cron"),
-                state: CronJobState(nextRunAtMs: Int(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000), runningAtMs: nil, lastRunAtMs: nil, lastStatus: nil, lastError: nil, lastDurationMs: nil)),
+                state: CronJobState(
+                    nextRunAtMs: Int(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000),
+                    runningAtMs: nil,
+                    lastRunAtMs: nil,
+                    lastStatus: nil,
+                    lastError: nil,
+                    lastDurationMs: nil)),
         ]
         store.selectedJobId = "job-1"
         store.runEntries = [
-            CronRunLogEntry(ts: Int(Date().timeIntervalSince1970 * 1000), jobId: "job-1", action: "finished", status: "ok", error: nil, runAtMs: nil, durationMs: 1234, nextRunAtMs: nil),
+            CronRunLogEntry(
+                ts: Int(Date().timeIntervalSince1970 * 1000),
+                jobId: "job-1",
+                action: "finished",
+                status: "ok",
+                error: nil,
+                runAtMs: nil,
+                durationMs: 1234,
+                nextRunAtMs: nil),
         ]
         return CronSettings(store: store)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)

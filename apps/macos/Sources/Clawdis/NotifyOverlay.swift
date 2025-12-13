@@ -177,15 +177,12 @@ private struct NotifyOverlayView: View {
         .padding(12)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(.regularMaterial)
-        )
+                .fill(.regularMaterial))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
-        )
+                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
         .onTapGesture {
             self.controller.dismiss()
         }
     }
 }
-

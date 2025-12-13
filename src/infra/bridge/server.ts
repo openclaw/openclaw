@@ -4,6 +4,7 @@ import os from "node:os";
 import {
   getPairedNode,
   listNodePairing,
+  type NodePairingPendingRequest,
   requestNodePairing,
   verifyNodeToken,
 } from "../node-pairing.js";
@@ -64,13 +65,24 @@ export type NodeBridgeServer = {
   close: () => Promise<void>;
 };
 
+export type NodeBridgeClientInfo = {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  remoteIp?: string;
+};
+
 export type NodeBridgeServerOpts = {
   host: string;
   port: number; // 0 = ephemeral
   pairingBaseDir?: string;
   onEvent?: (nodeId: string, evt: BridgeEventFrame) => Promise<void> | void;
-  onAuthenticated?: (nodeId: string) => Promise<void> | void;
-  onDisconnected?: (nodeId: string) => Promise<void> | void;
+  onAuthenticated?: (node: NodeBridgeClientInfo) => Promise<void> | void;
+  onDisconnected?: (node: NodeBridgeClientInfo) => Promise<void> | void;
+  onPairRequested?: (
+    request: NodePairingPendingRequest,
+  ) => Promise<void> | void;
   serverName?: string;
 };
 
@@ -109,6 +121,7 @@ export async function startNodeBridgeServer(
     let buffer = "";
     let isAuthenticated = false;
     let nodeId: string | null = null;
+    let nodeInfo: NodeBridgeClientInfo | null = null;
     const invokeWaiters = new Map<
       string,
       {
@@ -163,15 +176,22 @@ export async function startNodeBridgeServer(
         token,
         opts.pairingBaseDir,
       );
-      if (!verified.ok) {
+      if (!verified.ok || !verified.node) {
         sendError("UNAUTHORIZED", "invalid token");
         return;
       }
 
       isAuthenticated = true;
       connections.set(nodeId, socket);
+      nodeInfo = {
+        nodeId,
+        displayName: verified.node.displayName ?? hello.displayName,
+        platform: verified.node.platform ?? hello.platform,
+        version: verified.node.version ?? hello.version,
+        remoteIp: remoteAddress,
+      };
       send({ type: "hello-ok", serverName } satisfies BridgeHelloOkFrame);
-      await opts.onAuthenticated?.(nodeId);
+      await opts.onAuthenticated?.(nodeInfo);
     };
 
     const waitForApproval = async (request: {
@@ -227,6 +247,9 @@ export async function startNodeBridgeServer(
         },
         opts.pairingBaseDir,
       );
+      if (result.created) {
+        await opts.onPairRequested?.(result.request);
+      }
 
       const wait = await waitForApproval(result.request);
       if (!wait.ok) {
@@ -236,9 +259,16 @@ export async function startNodeBridgeServer(
 
       isAuthenticated = true;
       connections.set(nodeId, socket);
+      nodeInfo = {
+        nodeId,
+        displayName: req.displayName,
+        platform: req.platform,
+        version: req.version,
+        remoteIp: remoteAddress,
+      };
       send({ type: "pair-ok", token: wait.token } satisfies BridgePairOkFrame);
       send({ type: "hello-ok", serverName } satisfies BridgeHelloOkFrame);
-      await opts.onAuthenticated?.(nodeId);
+      await opts.onAuthenticated?.(nodeInfo);
     };
 
     const handleEvent = async (evt: BridgeEventFrame) => {
@@ -319,9 +349,9 @@ export async function startNodeBridgeServer(
     });
 
     socket.on("close", () => {
-      const id = nodeId;
+      const info = nodeInfo;
       stop();
-      if (id && isAuthenticated) void opts.onDisconnected?.(id);
+      if (info && isAuthenticated) void opts.onDisconnected?.(info);
     });
     socket.on("error", () => {
       // close handler will run after close

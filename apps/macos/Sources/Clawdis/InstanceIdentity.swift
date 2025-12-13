@@ -7,6 +7,7 @@ enum InstanceIdentity {
     private static var defaults: UserDefaults {
         UserDefaults(suiteName: suiteName) ?? .standard
     }
+
     static let instanceId: String = {
         let defaults = Self.defaults
         if let existing = defaults.string(forKey: instanceIdKey)?

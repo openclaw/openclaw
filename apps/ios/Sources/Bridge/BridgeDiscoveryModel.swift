@@ -50,8 +50,9 @@ final class BridgeDiscoveryModel: ObservableObject {
                 self.bridges = results.compactMap { result -> DiscoveredBridge? in
                     switch result.endpoint {
                     case let .service(name, _, _, _):
+                        let decodedName = BonjourEscapeDecoder.decode(name)
                         return DiscoveredBridge(
-                            name: name,
+                            name: decodedName,
                             endpoint: result.endpoint,
                             debugID: Self.prettyEndpointDebugID(result.endpoint))
                     default:
@@ -74,35 +75,6 @@ final class BridgeDiscoveryModel: ObservableObject {
     }
 
     private static func prettyEndpointDebugID(_ endpoint: NWEndpoint) -> String {
-        self.decodeBonjourEscapes(String(describing: endpoint))
-    }
-
-    private static func decodeBonjourEscapes(_ input: String) -> String {
-        // mDNS / DNS-SD commonly escapes spaces as `\\032` (decimal byte value 32). Make this human-friendly for UI.
-        var out = ""
-        var i = input.startIndex
-        while i < input.endIndex {
-            if input[i] == "\\",
-               let d0 = input.index(i, offsetBy: 1, limitedBy: input.index(before: input.endIndex)),
-               let d1 = input.index(i, offsetBy: 2, limitedBy: input.index(before: input.endIndex)),
-               let d2 = input.index(i, offsetBy: 3, limitedBy: input.index(before: input.endIndex)),
-               input[d0].isNumber,
-               input[d1].isNumber,
-               input[d2].isNumber
-            {
-                let digits = String(input[d0...d2])
-                if let value = Int(digits),
-                   let scalar = UnicodeScalar(value)
-                {
-                    out.append(Character(scalar))
-                    i = input.index(i, offsetBy: 4)
-                    continue
-                }
-            }
-
-            out.append(input[i])
-            i = input.index(after: i)
-        }
-        return out
+        BonjourEscapeDecoder.decode(String(describing: endpoint))
     }
 }

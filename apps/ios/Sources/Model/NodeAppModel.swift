@@ -8,6 +8,8 @@ final class NodeAppModel: ObservableObject {
     let screen = ScreenController()
     @Published var bridgeStatusText: String = "Not connected"
     @Published var bridgeServerName: String?
+    @Published var bridgeRemoteAddress: String?
+    @Published var connectedBridgeDebugID: String?
 
     private let bridge = BridgeSession()
     private var bridgeTask: Task<Void, Never>?
@@ -55,6 +57,8 @@ final class NodeAppModel: ObservableObject {
         self.bridgeTask?.cancel()
         self.bridgeStatusText = "Connecting…"
         self.bridgeServerName = nil
+        self.bridgeRemoteAddress = nil
+        self.connectedBridgeDebugID = BonjourEscapeDecoder.decode(String(describing: endpoint))
 
         self.bridgeTask = Task {
             do {
@@ -71,6 +75,11 @@ final class NodeAppModel: ObservableObject {
                             self?.bridgeStatusText = "Connected"
                             self?.bridgeServerName = serverName
                         }
+                        if let addr = await self.bridge.currentRemoteAddress() {
+                            await MainActor.run {
+                                self?.bridgeRemoteAddress = addr
+                            }
+                        }
                     },
                     onInvoke: { [weak self] req in
                         guard let self else {
@@ -85,11 +94,15 @@ final class NodeAppModel: ObservableObject {
                 await MainActor.run {
                     self.bridgeStatusText = "Disconnected"
                     self.bridgeServerName = nil
+                    self.bridgeRemoteAddress = nil
+                    self.connectedBridgeDebugID = nil
                 }
             } catch {
                 await MainActor.run {
                     self.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
                     self.bridgeServerName = nil
+                    self.bridgeRemoteAddress = nil
+                    self.connectedBridgeDebugID = nil
                 }
             }
         }
@@ -101,6 +114,8 @@ final class NodeAppModel: ObservableObject {
         Task { await self.bridge.disconnect() }
         self.bridgeStatusText = "Disconnected"
         self.bridgeServerName = nil
+        self.bridgeRemoteAddress = nil
+        self.connectedBridgeDebugID = nil
     }
 
     func sendVoiceTranscript(text: String, sessionKey: String?) async throws {

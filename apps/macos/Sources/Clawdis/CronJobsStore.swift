@@ -106,7 +106,7 @@ final class CronJobsStore: ObservableObject {
             _ = try await self.request(
                 method: "cron.run",
                 params: ["id": id, "mode": force ? "force" : "due"],
-                timeoutMs: 20_000)
+                timeoutMs: 20000)
         } catch {
             self.lastError = error.localizedDescription
         }

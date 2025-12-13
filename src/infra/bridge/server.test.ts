@@ -126,4 +126,131 @@ describe("node bridge server", () => {
 
     await server.close();
   });
+
+  it("calls onPairRequested for newly created pending requests", async () => {
+    let requested: { nodeId?: string; requestId?: string } | null = null;
+    const server = await startNodeBridgeServer({
+      host: "127.0.0.1",
+      port: 0,
+      pairingBaseDir: baseDir,
+      onPairRequested: async (req) => {
+        requested = req;
+      },
+    });
+
+    const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    sendLine(socket, { type: "pair-request", nodeId: "n3", platform: "ios" });
+
+    for (let i = 0; i < 40; i += 1) {
+      if (requested) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    expect(requested?.nodeId).toBe("n3");
+    expect(typeof requested?.requestId).toBe("string");
+
+    socket.destroy();
+    await server.close();
+  });
+
+  it("passes node metadata to onAuthenticated and onDisconnected", async () => {
+    let lastAuthed: {
+      nodeId?: string;
+      displayName?: string;
+      platform?: string;
+      version?: string;
+      remoteIp?: string;
+    } | null = null;
+
+    let disconnected: {
+      nodeId?: string;
+      displayName?: string;
+      platform?: string;
+      version?: string;
+      remoteIp?: string;
+    } | null = null;
+
+    let resolveDisconnected: (() => void) | null = null;
+    const disconnectedP = new Promise<void>((resolve) => {
+      resolveDisconnected = resolve;
+    });
+
+    const server = await startNodeBridgeServer({
+      host: "127.0.0.1",
+      port: 0,
+      pairingBaseDir: baseDir,
+      onAuthenticated: async (node) => {
+        lastAuthed = node;
+      },
+      onDisconnected: async (node) => {
+        disconnected = node;
+        resolveDisconnected?.();
+      },
+    });
+
+    const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    const readLine = createLineReader(socket);
+    sendLine(socket, {
+      type: "pair-request",
+      nodeId: "n4",
+      displayName: "Iris",
+      platform: "ios",
+      version: "1.0",
+    });
+
+    // Approve the pending request from the gateway side.
+    let reqId: string | undefined;
+    for (let i = 0; i < 40; i += 1) {
+      const list = await listNodePairing(baseDir);
+      const req = list.pending.find((p) => p.nodeId === "n4");
+      if (req) {
+        reqId = req.requestId;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(reqId).toBeTruthy();
+    if (!reqId) throw new Error("expected a pending requestId");
+    const approved = await approveNodePairing(reqId, baseDir);
+    const token = approved?.node?.token ?? "";
+    expect(token.length).toBeGreaterThan(0);
+
+    const line1 = JSON.parse(await readLine()) as { type: string };
+    expect(line1.type).toBe("pair-ok");
+    const line2 = JSON.parse(await readLine()) as { type: string };
+    expect(line2.type).toBe("hello-ok");
+    socket.destroy();
+
+    const socket2 = net.connect({ host: "127.0.0.1", port: server.port });
+    const readLine2 = createLineReader(socket2);
+    sendLine(socket2, {
+      type: "hello",
+      nodeId: "n4",
+      token,
+      displayName: "Different name",
+      platform: "ios",
+      version: "2.0",
+    });
+    const line3 = JSON.parse(await readLine2()) as { type: string };
+    expect(line3.type).toBe("hello-ok");
+
+    for (let i = 0; i < 40; i += 1) {
+      if (lastAuthed?.nodeId === "n4") break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+
+    expect(lastAuthed?.nodeId).toBe("n4");
+    // Prefer paired metadata over hello payload (token verifies the stored node record).
+    expect(lastAuthed?.displayName).toBe("Iris");
+    expect(lastAuthed?.platform).toBe("ios");
+    expect(lastAuthed?.version).toBe("1.0");
+    expect(lastAuthed?.remoteIp?.includes("127.0.0.1")).toBe(true);
+
+    socket2.destroy();
+    await disconnectedP;
+    expect(disconnected?.nodeId).toBe("n4");
+    expect(disconnected?.remoteIp?.includes("127.0.0.1")).toBe(true);
+
+    await server.close();
+  });
 });

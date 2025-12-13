@@ -403,6 +403,81 @@ public struct WakeParams: Codable {
     }
 }
 
+public struct NodePairRequestParams: Codable {
+    public let nodeid: String
+    public let displayname: String?
+    public let platform: String?
+    public let version: String?
+    public let remoteip: String?
+
+    public init(
+        nodeid: String,
+        displayname: String?,
+        platform: String?,
+        version: String?,
+        remoteip: String?
+    ) {
+        self.nodeid = nodeid
+        self.displayname = displayname
+        self.platform = platform
+        self.version = version
+        self.remoteip = remoteip
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case displayname = "displayName"
+        case platform
+        case version
+        case remoteip = "remoteIp"
+    }
+}
+
+public struct NodePairListParams: Codable {
+}
+
+public struct NodePairApproveParams: Codable {
+    public let requestid: String
+
+    public init(
+        requestid: String
+    ) {
+        self.requestid = requestid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct NodePairRejectParams: Codable {
+    public let requestid: String
+
+    public init(
+        requestid: String
+    ) {
+        self.requestid = requestid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case requestid = "requestId"
+    }
+}
+
+public struct NodePairVerifyParams: Codable {
+    public let nodeid: String
+    public let token: String
+
+    public init(
+        nodeid: String,
+        token: String
+    ) {
+        self.nodeid = nodeid
+        self.token = token
+    }
+    private enum CodingKeys: String, CodingKey {
+        case nodeid = "nodeId"
+        case token
+    }
+}
+
 public struct CronJob: Codable {
     public let id: String
     public let name: String?

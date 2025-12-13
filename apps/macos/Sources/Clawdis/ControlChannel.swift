@@ -122,7 +122,10 @@ final class ControlChannel: ObservableObject {
     {
         do {
             let rawParams = params?.reduce(into: [String: AnyCodable]()) { $0[$1.key] = AnyCodable($1.value) }
-            let data = try await GatewayConnection.shared.request(method: method, params: rawParams, timeoutMs: timeoutMs)
+            let data = try await GatewayConnection.shared.request(
+                method: method,
+                params: rawParams,
+                timeoutMs: timeoutMs)
             self.state = .connected
             return data
         } catch {

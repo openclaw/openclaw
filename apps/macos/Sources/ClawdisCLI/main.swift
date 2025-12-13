@@ -522,10 +522,10 @@ struct ClawdisCLI {
         switch request {
         case let .runShell(_, _, _, timeoutSec, _):
             // Allow longer for commands; still cap overall to a sane bound.
-            return min(300, max(10, (timeoutSec ?? 10) + 2))
+            min(300, max(10, (timeoutSec ?? 10) + 2))
         default:
             // Fail-fast so callers (incl. SSH tool calls) don't hang forever.
-            return 10
+            10
         }
     }
 

@@ -14,6 +14,9 @@ final class ScreenController: ObservableObject {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         self.webView = WKWebView(frame: .zero, configuration: config)
+        self.webView.isOpaque = false
+        self.webView.backgroundColor = .clear
+        self.webView.scrollView.backgroundColor = .clear
         self.webView.scrollView.contentInsetAdjustmentBehavior = .never
         self.webView.scrollView.contentInset = .zero
         self.webView.scrollView.scrollIndicatorInsets = .zero

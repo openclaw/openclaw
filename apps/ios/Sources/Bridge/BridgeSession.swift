@@ -19,6 +19,20 @@ actor BridgeSession {
 
     private(set) var state: State = .idle
 
+    func currentRemoteAddress() -> String? {
+        guard let endpoint = self.connection?.currentPath?.remoteEndpoint else { return nil }
+        return Self.prettyRemoteEndpoint(endpoint)
+    }
+
+    private static func prettyRemoteEndpoint(_ endpoint: NWEndpoint) -> String? {
+        switch endpoint {
+        case let .hostPort(host, port):
+            return "\(host):\(port)".replacingOccurrences(of: "::ffff:", with: "")
+        default:
+            return String(describing: endpoint)
+        }
+    }
+
     func connect(
         endpoint: NWEndpoint,
         hello: BridgeHello,

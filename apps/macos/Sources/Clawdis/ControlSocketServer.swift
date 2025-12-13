@@ -1,12 +1,12 @@
 import ClawdisIPC
-import Foundation
 import Darwin
+import Foundation
 import OSLog
 
 /// Lightweight UNIX-domain socket server so `clawdis-mac` can talk to the app
 /// without a launchd MachService. Listens on `controlSocketPath`.
 final actor ControlSocketServer {
-    nonisolated private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "control.socket")
+    private nonisolated static let logger = Logger(subsystem: "com.steipete.clawdis", category: "control.socket")
 
     private var listenFD: Int32 = -1
     private var acceptTask: Task<Void, Never>?
@@ -60,7 +60,7 @@ final actor ControlSocketServer {
         }
         addr.sun_len = UInt8(MemoryLayout.size(ofValue: addr))
         let len = socklen_t(MemoryLayout.size(ofValue: addr))
-        if bind(fd, withUnsafePointer(to: &addr, { UnsafePointer<sockaddr>(OpaquePointer($0)) }), len) != 0 {
+        if bind(fd, withUnsafePointer(to: &addr) { UnsafePointer<sockaddr>(OpaquePointer($0)) }, len) != 0 {
             close(fd)
             return
         }
@@ -103,7 +103,7 @@ final actor ControlSocketServer {
     {
         while !Task.isCancelled {
             var addr = sockaddr()
-            var len: socklen_t = socklen_t(MemoryLayout<sockaddr>.size)
+            var len = socklen_t(MemoryLayout<sockaddr>.size)
             let client = accept(listenFD, &addr, &len)
             if client < 0 {
                 if errno == EINTR { continue }

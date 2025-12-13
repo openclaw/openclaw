@@ -166,7 +166,7 @@ final class WebChatViewModel: ObservableObject {
                     text: trimmed,
                     mimeType: nil,
                     fileName: nil,
-                    content: nil)
+                    content: nil),
             ],
             timestamp: Date().timeIntervalSince1970 * 1000)
         self.messages.append(userMessage)
@@ -176,7 +176,7 @@ final class WebChatViewModel: ObservableObject {
                 "type": att.type,
                 "mimeType": att.mimeType,
                 "fileName": att.fileName,
-                "content": att.data.base64EncodedString()
+                "content": att.data.base64EncodedString(),
             ]
         }
 
@@ -188,7 +188,7 @@ final class WebChatViewModel: ObservableObject {
                 "attachments": AnyCodable(attachmentsPayload as Any),
                 "thinking": AnyCodable(self.thinkingLevel),
                 "idempotencyKey": AnyCodable(runId),
-                "timeoutMs": AnyCodable(30_000)
+                "timeoutMs": AnyCodable(30000),
             ]
             let data = try await GatewayConnection.shared.request(method: "chat.send", params: params)
             let response = try JSONDecoder().decode(ChatSendResponse.self, from: data)
@@ -250,9 +250,9 @@ struct WebChatView: View {
                 .ignoresSafeArea()
 
             VStack(spacing: 14) {
-                header
-                messageList
-                composer
+                self.header
+                self.messageList
+                self.composer
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 16)
@@ -262,15 +262,14 @@ struct WebChatView: View {
             LinearGradient(
                 colors: [
                     Color(red: 0.96, green: 0.97, blue: 1.0),
-                    Color(red: 0.93, green: 0.94, blue: 0.98)
+                    Color(red: 0.93, green: 0.94, blue: 0.98),
                 ],
                 startPoint: .top,
                 endPoint: .bottom)
                 .opacity(0.35)
-                .ignoresSafeArea()
-        )
+                .ignoresSafeArea())
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { viewModel.load() }
+        .onAppear { self.viewModel.load() }
     }
 
     private var header: some View {
@@ -278,7 +277,8 @@ struct WebChatView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Clawd Web Chat")
                     .font(.title2.weight(.semibold))
-                Text("Session \(self.viewModel.thinkingLevel.uppercased()) · \(self.viewModel.healthOK ? "Connected" : "Connecting…")")
+                Text(
+                    "Session \(self.viewModel.thinkingLevel.uppercased()) · \(self.viewModel.healthOK ? "Connected" : "Connecting…")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -295,8 +295,7 @@ struct WebChatView: View {
         .background(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .fill(Color(nsColor: .textBackgroundColor))
-                .shadow(color: .black.opacity(0.06), radius: 10, y: 4)
-        )
+                .shadow(color: .black.opacity(0.06), radius: 10, y: 4))
     }
 
     private var messageList: some View {
@@ -311,14 +310,13 @@ struct WebChatView: View {
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(nsColor: .textBackgroundColor))
-                .shadow(color: .black.opacity(0.05), radius: 12, y: 6)
-        )
+                .shadow(color: .black.opacity(0.05), radius: 12, y: 6))
     }
 
     private var composer: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                thinkingPicker
+                self.thinkingPicker
                 Spacer()
                 Button {
                     self.pickFiles()
@@ -355,16 +353,14 @@ struct WebChatView: View {
                 .strokeBorder(Color.secondary.opacity(0.2))
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(nsColor: .textBackgroundColor))
-                )
+                        .fill(Color(nsColor: .textBackgroundColor)))
                 .overlay(
                     TextEditor(text: self.$viewModel.input)
                         .font(.body)
                         .background(Color.clear)
                         .frame(minHeight: 96, maxHeight: 168)
                         .padding(.horizontal, 10)
-                        .padding(.vertical, 8)
-                )
+                        .padding(.vertical, 8))
                 .frame(maxHeight: 180)
 
             HStack {
@@ -388,8 +384,7 @@ struct WebChatView: View {
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(Color(nsColor: .textBackgroundColor))
-                .shadow(color: .black.opacity(0.06), radius: 12, y: 6)
-        )
+                .shadow(color: .black.opacity(0.06), radius: 12, y: 6))
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             self.handleDrop(providers)
         }
@@ -471,8 +466,7 @@ private struct MessageBubble: View {
             .background(self.isUser ? Color.accentColor.opacity(0.12) : Color(nsColor: .textBackgroundColor))
             .overlay(
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(self.isUser ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.15))
-            )
+                    .stroke(self.isUser ? Color.accentColor.opacity(0.35) : Color.secondary.opacity(0.15)))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         }
         .padding(.horizontal, 6)
@@ -482,7 +476,7 @@ private struct MessageBubble: View {
 
     private var primaryText: String? {
         self.message.content?
-            .compactMap { $0.text }
+            .compactMap(\.text)
             .joined(separator: "\n")
     }
 
@@ -508,7 +502,7 @@ final class WebChatSwiftUIWindowController {
         self.presentation = presentation
         let vm = WebChatViewModel(sessionKey: sessionKey)
         self.hosting = NSHostingController(rootView: WebChatView(viewModel: vm))
-        self.window = Self.makeWindow(for: presentation, contentViewController: hosting)
+        self.window = Self.makeWindow(for: presentation, contentViewController: self.hosting)
     }
 
     deinit {}
@@ -580,7 +574,10 @@ final class WebChatSwiftUIWindowController {
         }
     }
 
-    private static func makeWindow(for presentation: WebChatPresentation, contentViewController: NSViewController) -> NSWindow {
+    private static func makeWindow(
+        for presentation: WebChatPresentation,
+        contentViewController: NSViewController) -> NSWindow
+    {
         switch presentation {
         case .window:
             let window = NSWindow(

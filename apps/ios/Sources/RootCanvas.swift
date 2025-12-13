@@ -45,5 +45,6 @@ struct RootCanvas: View {
         .sheet(isPresented: self.$isShowingSettings) {
             SettingsTab()
         }
+        .preferredColorScheme(.dark)
     }
 }
