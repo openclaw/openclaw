@@ -120,7 +120,7 @@ struct ConfigSettings: View {
                             self.gridLabel("Enabled")
                             Toggle("", isOn: self.$webChatEnabled)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(.checkbox)
                         }
                         GridRow {
                             self.gridLabel("Port")
@@ -151,7 +151,7 @@ struct ConfigSettings: View {
                             self.gridLabel("Enabled")
                             Toggle("", isOn: self.$browserEnabled)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(.checkbox)
                                 .onChange(of: self.browserEnabled) { _, _ in self.autosaveConfig() }
                         }
                         GridRow {
@@ -200,7 +200,7 @@ struct ConfigSettings: View {
                             self.gridLabel("Attach only")
                             Toggle("", isOn: self.$browserAttachOnly)
                                 .labelsHidden()
-                                .toggleStyle(.switch)
+                                .toggleStyle(.checkbox)
                                 .disabled(!self.browserEnabled)
                                 .onChange(of: self.browserAttachOnly) { _, _ in self.autosaveConfig() }
                                 .help("When enabled, the browser server will only connect if the clawd browser is already running.")
@@ -224,6 +224,7 @@ struct ConfigSettings: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 24)
             .padding(.vertical, 18)
+            .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
         .onChange(of: self.modelCatalogPath) { _, _ in
             Task { await self.loadModels() }
@@ -418,6 +419,18 @@ struct ConfigSettings: View {
 
         let human = context >= 1000 ? "\(context / 1000)k" : "\(context)"
         return "Context window: \(human) tokens"
+    }
+
+    private struct PlainSettingsGroupBoxStyle: GroupBoxStyle {
+        func makeBody(configuration: Configuration) -> some View {
+            VStack(alignment: .leading, spacing: 10) {
+                configuration.label
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                configuration.content
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
     }
 }
 
