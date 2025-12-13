@@ -207,7 +207,6 @@ function isProfileDecorated(
 
   return nameOk && localSeedOk && prefOk;
 }
-
 /**
  * Best-effort profile decoration (name + lobster-orange). Chrome preference keys
  * vary by version; we keep this conservative and idempotent.
@@ -417,7 +416,6 @@ export async function launchClawdChrome(
   }
 
   const proc = spawnOnce();
-
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {

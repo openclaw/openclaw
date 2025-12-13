@@ -501,7 +501,7 @@ extension GeneralSettings {
     }
 
     @MainActor
-    private func testRemote() async {
+    func testRemote() async {
         self.remoteStatus = .checking
         let settings = CommandResolver.connectionSettings()
         guard !settings.target.isEmpty else {
