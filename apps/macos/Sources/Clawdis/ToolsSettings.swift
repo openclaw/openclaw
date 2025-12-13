@@ -217,9 +217,13 @@ struct ToolsSettings: View {
         .padding(.top, 2)
     }
 
+    @ViewBuilder
     private func section(for kind: ToolEntry.Kind, title: String) -> some View {
         let filtered = self.tools.filter { $0.kind == kind }
-        return VStack(alignment: .leading, spacing: 10) {
+        if filtered.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
             Text(title)
                 .font(.callout.weight(.semibold))
                 .padding(.top, 6)
@@ -238,6 +242,7 @@ struct ToolsSettings: View {
                             RoundedRectangle(cornerRadius: 10)
                                 .stroke(Color.secondary.opacity(0.15), lineWidth: 1))
                 }
+            }
             }
         }
     }
