@@ -270,18 +270,36 @@ enum BrowserCLI {
         }
     }
 
-    private static func printTabs(res: [String: Any]) {
-        let running = (res["running"] as? Bool) ?? false
-        print("Running: \(running)")
-        guard let tabs = res["tabs"] as? [[String: Any]], !tabs.isEmpty else { return }
+    private static func formatTabs(res: [String: Any]) -> [String] {
+        guard let tabs = res["tabs"] as? [[String: Any]], !tabs.isEmpty else { return [] }
+        var lines: [String] = []
+        lines.reserveCapacity(tabs.count * 2)
         for tab in tabs {
             let id = (tab["targetId"] as? String) ?? ""
             let title = (tab["title"] as? String) ?? ""
             let url = (tab["url"] as? String) ?? ""
             let shortId = id.isEmpty ? "" : String(id.prefix(8))
-            print("- \(shortId)  \(title)  \(url)")
+            lines.append("- \(shortId)  \(title)  \(url)")
+            if !id.isEmpty {
+                lines.append("  id: \(id)")
+            }
+        }
+        return lines
+    }
+
+    private static func printTabs(res: [String: Any]) {
+        let running = (res["running"] as? Bool) ?? false
+        print("Running: \(running)")
+        for line in self.formatTabs(res: res) {
+            print(line)
         }
     }
+
+#if SWIFT_PACKAGE
+    static func _testFormatTabs(res: [String: Any]) -> [String] {
+        self.formatTabs(res: res)
+    }
+#endif
 
     private static func printJSON(ok: Bool, result: Any) {
         let obj: [String: Any] = ["ok": ok, "result": result]

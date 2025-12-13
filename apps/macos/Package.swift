@@ -74,4 +74,11 @@ let package = Package(
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),
             ]),
+        .testTarget(
+            name: "ClawdisCLITests",
+            dependencies: ["ClawdisCLI"],
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+                .enableExperimentalFeature("SwiftTesting"),
+            ]),
     ])
