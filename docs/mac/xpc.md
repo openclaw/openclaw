@@ -5,6 +5,8 @@ read_when:
 ---
 # Clawdis macOS XPC architecture (Dec 2025)
 
+Note: the current implementation primarily uses a local UNIX-domain control socket (`controlSocketPath`) between `clawdis-mac` and the app. This doc describes the intended long-term XPC/Mach-service architecture and the security constraints; update it as the implementation converges.
+
 ## Goals
 - Single GUI app instance that owns all TCC-facing work (notifications, screen recording, mic, speech, AppleScript).
 - A small surface for automation: the `clawdis-mac` CLI and the Node gateway talk to the app via a local XPC channel.
@@ -33,6 +35,6 @@ read_when:
 - RunAtLoad without KeepAlive means the app starts once; if it crashes it stays down (no unwanted respawn), but CLI calls will re-spawn via launchd.
 
 ## Hardening notes
-- Audit-token check currently allows same-UID fallback; to lock down further, remove that fallback and require the team ID match.
+- Prefer requiring a TeamID match for all privileged surfaces. The codebase currently has a `DEBUG`-only same-UID escape hatch gated behind `CLAWDIS_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` for local development.
 - All communication remains local-only; no network sockets are exposed.
 - TCC prompts originate only from the GUI app bundle; run scripts/package-mac-app.sh so the signed bundle ID stays stable.

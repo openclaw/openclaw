@@ -58,7 +58,7 @@ final class NodeAppModel: ObservableObject {
         self.bridgeStatusText = "Connecting…"
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
-        self.connectedBridgeDebugID = BonjourEscapeDecoder.decode(String(describing: endpoint))
+        self.connectedBridgeDebugID = BonjourEscapes.decode(String(describing: endpoint))
 
         self.bridgeTask = Task {
             do {
@@ -71,13 +71,14 @@ final class NodeAppModel: ObservableObject {
                         platform: platform,
                         version: version),
                     onConnected: { [weak self] serverName in
+                        guard let self else { return }
                         await MainActor.run {
-                            self?.bridgeStatusText = "Connected"
-                            self?.bridgeServerName = serverName
+                            self.bridgeStatusText = "Connected"
+                            self.bridgeServerName = serverName
                         }
                         if let addr = await self.bridge.currentRemoteAddress() {
                             await MainActor.run {
-                                self?.bridgeRemoteAddress = addr
+                                self.bridgeRemoteAddress = addr
                             }
                         }
                     },

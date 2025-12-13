@@ -30,8 +30,9 @@ Consume only:
 - `PeekabooVisualizer` (overlay visualizations).
 
 Important nuance:
-- `PeekabooVisualizer` currently ships as the `PeekabooVisualizer` product inside `PeekabooCore/Package.swift`. That package declares other dependencies (including a path dependency to Tachikoma). SwiftPM will still need those paths to exist during dependency resolution even if we don’t build those targets.
-  - If this is too annoying for Clawdis, the follow-up is to extract `PeekabooVisualizer` into its own standalone Swift package that depends only on `PeekabooFoundation`/`PeekabooProtocols`/`PeekabooExternalDependencies`.
+- `PeekabooAutomationKit` is a standalone SwiftPM package and does **not** require Tachikoma/MCP/Commander.
+- `PeekabooVisualizer` ships as a product inside `PeekabooCore/Package.swift`. That package declares other dependencies (including a path dependency to Tachikoma). SwiftPM will still need those paths to exist during dependency resolution even if we don’t build those targets.
+  - If this becomes annoying for Clawdis, the follow-up is to extract `PeekabooVisualizer` into its own standalone Swift package that depends only on `PeekabooFoundation`/`PeekabooProtocols`/`PeekabooExternalDependencies`.
 
 ## IPC / CLI surface
 ### Namespacing
@@ -45,6 +46,8 @@ Change `clawdis-mac` to default to human text output:
 - **`--json`**: structured output (for agents/scripts) with stable schemas.
 
 This applies globally, not only `ui` commands.
+
+Note (current state as of 2025-12-13): `clawdis-mac` prints JSON by default. This is a planned behavior change.
 
 ### Timeouts
 Default timeout for UI actions: **10 seconds** end-to-end (CLI already defaults to 10s).
@@ -78,13 +81,17 @@ All “see/click/type/scroll/wait” requests should accept a target (default: f
 Peekaboo already has the core ingredients:
 - element detection yielding stable IDs (e.g., `B1`, `T3`)
 - bounds + labels/values
-- session IDs to allow follow-up actions without re-scanning
+- snapshot IDs to allow follow-up actions without re-scanning
 
 Clawdis’s `ui see` should:
 - capture (optionally targeted) window/screen
-- return a **session id**
+- return a **snapshot id**
 - return a list of elements with `{id, type, label/value?, bounds}`
 - optionally return screenshot path/bytes (pref: path)
+
+Snapshot lifecycle requirement:
+- Clawdis runs long-lived in memory, so “snapshot state” should be **in-memory by default** (no disk-backed JSON concept).
+- Peekaboo already supports this via an `InMemorySnapshotManager` (keep disk-backed snapshots as an optional debug mode later).
 
 ## Visualizer integration
 Visualizer must be user-toggleable via a Clawdis setting.
@@ -96,11 +103,7 @@ Implementation sketch:
 
 Current state:
 - `PeekabooVisualizer` already includes the visualization implementation (SwiftUI overlay views + coordinator).
-
-Open requirement:
-- “Any AX event should be clickable.” Today the visualizer is display-only; the likely follow-up is:
-  - make the annotated element overlays tappable (debug tool)
-  - surface tap → element id → send a `ui click --element <id> --session <sid>` request back through Clawdis’ control channel (or a local callback if the visualizer runs inside the app)
+The visualizer is intentionally display-only (no clickable overlays needed).
 
 ## Screenshots (legacy → Peekaboo takeover)
 Clawdis currently has a legacy `screenshot` request returning raw PNG bytes in `Response.payload`.

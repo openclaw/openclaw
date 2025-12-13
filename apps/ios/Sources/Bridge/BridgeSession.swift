@@ -27,9 +27,9 @@ actor BridgeSession {
     private static func prettyRemoteEndpoint(_ endpoint: NWEndpoint) -> String? {
         switch endpoint {
         case let .hostPort(host, port):
-            return "\(host):\(port)".replacingOccurrences(of: "::ffff:", with: "")
+            "\(host):\(port)".replacingOccurrences(of: "::ffff:", with: "")
         default:
-            return String(describing: endpoint)
+            String(describing: endpoint)
         }
     }
 

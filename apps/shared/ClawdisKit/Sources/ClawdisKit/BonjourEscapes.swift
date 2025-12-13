@@ -1,9 +1,9 @@
 import Foundation
 
-enum BonjourEscapeDecoder {
-    static func decode(_ input: String) -> String {
-        // mDNS / DNS-SD commonly escapes bytes in instance names as `\\DDD`
-        // (decimal-encoded), e.g. spaces are `\\032`.
+public enum BonjourEscapes {
+    /// mDNS / DNS-SD commonly escapes bytes in instance names as `\DDD` (decimal-encoded),
+    /// e.g. spaces are `\032`.
+    public static func decode(_ input: String) -> String {
         var out = ""
         var i = input.startIndex
         while i < input.endIndex {
@@ -31,4 +31,3 @@ enum BonjourEscapeDecoder {
         return out
     }
 }
-

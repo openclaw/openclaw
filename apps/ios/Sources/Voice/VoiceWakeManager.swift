@@ -28,8 +28,8 @@ private final class AudioBufferQueue: @unchecked Sendable {
     }
 }
 
-private extension AVAudioPCMBuffer {
-    func deepCopy() -> AVAudioPCMBuffer? {
+extension AVAudioPCMBuffer {
+    fileprivate func deepCopy() -> AVAudioPCMBuffer? {
         let format = self.format
         let frameLength = self.frameLength
         guard let copy = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameLength) else {

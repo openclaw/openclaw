@@ -42,7 +42,7 @@ enum Request {
 }
 struct Response { ok: Bool; message?: String; payload?: Data }
 ```
-- Listener validates caller `auditToken` == same UID, rejects oversize/unknown cases.
+- Listener rejects oversize/unknown cases and validates the caller by code signature TeamID (with a `DEBUG`-only same-UID escape hatch controlled by `CLAWDIS_ALLOW_UNSIGNED_SOCKET_CLIENTS=1`).
 
 ## App UX (Clawdis)
 - MenuBarExtra icon only (LSUIElement; no Dock).

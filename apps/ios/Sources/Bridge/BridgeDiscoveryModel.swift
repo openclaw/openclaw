@@ -50,7 +50,7 @@ final class BridgeDiscoveryModel: ObservableObject {
                 self.bridges = results.compactMap { result -> DiscoveredBridge? in
                     switch result.endpoint {
                     case let .service(name, _, _, _):
-                        let decodedName = BonjourEscapeDecoder.decode(name)
+                        let decodedName = BonjourEscapes.decode(name)
                         return DiscoveredBridge(
                             name: decodedName,
                             endpoint: result.endpoint,
@@ -75,6 +75,6 @@ final class BridgeDiscoveryModel: ObservableObject {
     }
 
     private static func prettyEndpointDebugID(_ endpoint: NWEndpoint) -> String {
-        BonjourEscapeDecoder.decode(String(describing: endpoint))
+        BonjourEscapes.decode(String(describing: endpoint))
     }
 }
