@@ -10,6 +10,7 @@ struct SettingsTab: View {
     @State private var connectStatus: String?
     @State private var isConnecting = false
     @State private var didAutoConnect = false
+    @State private var isShowingBridgeList = false
 
     var body: some View {
         NavigationStack {
@@ -32,36 +33,23 @@ struct SettingsTab: View {
                     LabeledContent("Discovery", value: self.discovery.statusText)
                     LabeledContent("Status", value: self.appModel.bridgeStatusText)
                     if let serverName = self.appModel.bridgeServerName {
-                        Text("Server: \(serverName)")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                        LabeledContent("Server", value: serverName)
+
+                        Button("Disconnect", role: .destructive) {
+                            self.appModel.disconnectBridge()
+                        }
+
+                        DisclosureGroup("Switch bridge", isExpanded: self.$isShowingBridgeList) {
+                            self.bridgeList(showConnectedRow: true)
+                        }
+                    } else {
+                        self.bridgeList(showConnectedRow: false)
                     }
-                    Button("Disconnect") { self.appModel.disconnectBridge() }
+
                     if let connectStatus {
                         Text(connectStatus)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
-                    }
-                    if self.discovery.bridges.isEmpty {
-                        Text("No bridges found yet.")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(self.discovery.bridges) { bridge in
-                            HStack {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(bridge.name)
-                                    Text(bridge.debugID)
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
-                                Spacer()
-                                Button(self.isConnecting ? "…" : "Connect") {
-                                    Task { await self.connect(bridge) }
-                                }
-                                .disabled(self.isConnecting)
-                            }
-                        }
                     }
                 }
             }
@@ -96,9 +84,59 @@ struct SettingsTab: View {
                     displayName: self.displayName,
                     platform: self.platformString(),
                     version: self.appVersion())
-                self.connectStatus = "Auto-connected"
+                self.connectStatus = nil
+            }
+            .onChange(of: self.appModel.bridgeServerName) { _, _ in
+                self.connectStatus = nil
+                self.isShowingBridgeList = false
             }
         }
+    }
+
+    @ViewBuilder
+    private func bridgeList(showConnectedRow: Bool) -> some View {
+        if self.discovery.bridges.isEmpty {
+            Text("No bridges found yet.")
+                .foregroundStyle(.secondary)
+        } else {
+            ForEach(self.discovery.bridges) { bridge in
+                let isConnected = self.isConnectedBridge(bridge)
+                if isConnected, !showConnectedRow {
+                    EmptyView()
+                } else {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(bridge.name)
+                            Text(bridge.debugID)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+
+                        if isConnected {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                                .accessibilityLabel("Connected")
+                        } else {
+                            Button(self.isConnecting ? "…" : "Connect") {
+                                Task { await self.connect(bridge) }
+                            }
+                            .disabled(self.isConnecting)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func isConnectedBridge(_ bridge: BridgeDiscoveryModel.DiscoveredBridge) -> Bool {
+        guard let serverName = self.appModel.bridgeServerName?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !serverName.isEmpty
+        else {
+            return false
+        }
+        return bridge.name.localizedCaseInsensitiveContains(serverName)
     }
 
     private func keychainAccount() -> String {
