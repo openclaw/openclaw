@@ -18,6 +18,11 @@ vi.mock("@homebridge/ciao", () => {
 const { startGatewayBonjourAdvertiser } = await import("./bonjour.js");
 
 describe("gateway bonjour advertiser", () => {
+  type ServiceCall = {
+    name?: unknown;
+    txt?: unknown;
+  };
+
   const prevEnv = { ...process.env };
 
   afterEach(() => {
@@ -83,5 +88,31 @@ describe("gateway bonjour advertiser", () => {
     await started.stop();
     expect(destroy).toHaveBeenCalledTimes(2);
     expect(shutdown).toHaveBeenCalledTimes(1);
+  });
+
+  it("normalizes hostnames with domains for service names", async () => {
+    // Allow advertiser to run in unit tests.
+    delete process.env.VITEST;
+    process.env.NODE_ENV = "development";
+
+    vi.spyOn(os, "hostname").mockReturnValue("Mac.localdomain");
+
+    const destroy = vi.fn().mockResolvedValue(undefined);
+    const advertise = vi.fn().mockResolvedValue(undefined);
+    createService.mockReturnValue({ advertise, destroy });
+
+    const started = await startGatewayBonjourAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+      bridgePort: 18790,
+    });
+
+    const [masterCall] = createService.mock.calls as Array<[ServiceCall]>;
+    expect(masterCall?.[0]?.name).toBe("Mac (Clawdis)");
+    expect((masterCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
+      "Mac.local",
+    );
+
+    await started.stop();
   });
 });
