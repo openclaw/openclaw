@@ -14,6 +14,10 @@ final class ScreenController: ObservableObject {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         self.webView = WKWebView(frame: .zero, configuration: config)
+        self.webView.scrollView.contentInsetAdjustmentBehavior = .never
+        self.webView.scrollView.contentInset = .zero
+        self.webView.scrollView.scrollIndicatorInsets = .zero
+        self.webView.scrollView.automaticallyAdjustsScrollIndicatorInsets = false
         self.reload()
     }
 
@@ -86,7 +90,7 @@ final class ScreenController: ObservableObject {
     <html>
       <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <title>Canvas</title>
         <style>
           :root { color-scheme: dark; }
