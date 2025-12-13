@@ -27,6 +27,7 @@ struct MenuContent: View {
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
                 }
             }
+            Divider()
             Toggle(isOn: self.heartbeatsBinding) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Send Heartbeats")
