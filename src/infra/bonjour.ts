@@ -74,6 +74,8 @@ export async function startGatewayBonjourAdvertiser(
     type: "clawdis-master",
     protocol: Protocol.TCP,
     port: opts.sshPort ?? 22,
+    domain: "local",
+    hostname,
     txt: {
       ...txtBase,
       sshPort: String(opts.sshPort ?? 22),
@@ -88,6 +90,8 @@ export async function startGatewayBonjourAdvertiser(
       type: "clawdis-bridge",
       protocol: Protocol.TCP,
       port: opts.bridgePort,
+      domain: "local",
+      hostname,
       txt: {
         ...txtBase,
         transport: "bridge",

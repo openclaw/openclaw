@@ -49,6 +49,15 @@ If browsing shows instances but resolving fails, you’re usually hitting a LAN 
 - **Bonjour doesn’t cross networks**: London/Vienna style setups require Tailnet (MagicDNS/IP) or SSH.
 - **Multicast blocked**: some Wi‑Fi networks (enterprise/hotels) disable mDNS; expect “no results”.
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results when switching networks; retry.
+- **Browse works but resolve fails (iOS “NoSuchRecord”)**: make sure the advertiser publishes a valid SRV target hostname.
+  - Implementation detail: `@homebridge/ciao` defaults `hostname` to the *service instance name* when `hostname` is omitted. If your instance name contains spaces/parentheses, some resolvers can fail to resolve the implied A/AAAA record.
+  - Fix: set an explicit DNS-safe `hostname` (single label; no `.local`) in `src/infra/bonjour.ts`.
+
+## Escaped instance names (`\\032`)
+Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\\DDD` sequences (e.g. spaces become `\\032`).
+
+- This is normal at the protocol level.
+- UIs should decode for display (iOS uses `BonjourEscapes.decode` in `apps/shared/ClawdisKit`).
 
 ## Disabling / configuration
 

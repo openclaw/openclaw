@@ -20,6 +20,8 @@ const { startGatewayBonjourAdvertiser } = await import("./bonjour.js");
 describe("gateway bonjour advertiser", () => {
   type ServiceCall = {
     name?: unknown;
+    hostname?: unknown;
+    domain?: unknown;
     txt?: unknown;
   };
 
@@ -66,6 +68,8 @@ describe("gateway bonjour advertiser", () => {
     >;
     expect(masterCall?.[0]?.type).toBe("clawdis-master");
     expect(masterCall?.[0]?.port).toBe(2222);
+    expect(masterCall?.[0]?.domain).toBe("local");
+    expect(masterCall?.[0]?.hostname).toBe("test-host");
     expect((masterCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
       "test-host.local",
     );
@@ -75,6 +79,8 @@ describe("gateway bonjour advertiser", () => {
 
     expect(bridgeCall?.[0]?.type).toBe("clawdis-bridge");
     expect(bridgeCall?.[0]?.port).toBe(18790);
+    expect(bridgeCall?.[0]?.domain).toBe("local");
+    expect(bridgeCall?.[0]?.hostname).toBe("test-host");
     expect((bridgeCall?.[0]?.txt as Record<string, string>)?.bridgePort).toBe(
       "18790",
     );
@@ -109,6 +115,8 @@ describe("gateway bonjour advertiser", () => {
 
     const [masterCall] = createService.mock.calls as Array<[ServiceCall]>;
     expect(masterCall?.[0]?.name).toBe("Mac (Clawdis)");
+    expect(masterCall?.[0]?.domain).toBe("local");
+    expect(masterCall?.[0]?.hostname).toBe("Mac");
     expect((masterCall?.[0]?.txt as Record<string, string>)?.lanHost).toBe(
       "Mac.local",
     );
