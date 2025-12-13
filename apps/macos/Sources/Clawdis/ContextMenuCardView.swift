@@ -6,10 +6,10 @@ struct ContextMenuCardView: View {
     private let rows: [SessionRow]
     private let statusText: String?
     private let isLoading: Bool
-    private let paddingTop: CGFloat = 6
-    private let paddingBottom: CGFloat = 6
-    private let paddingTrailing: CGFloat = 16
-    private let paddingLeading: CGFloat = 22
+    private let paddingTop: CGFloat = 8
+    private let paddingBottom: CGFloat = 8
+    private let paddingTrailing: CGFloat = 18
+    private let paddingLeading: CGFloat = 28
     private let barHeight: CGFloat = 3
 
     init(
