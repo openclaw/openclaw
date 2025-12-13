@@ -8,6 +8,12 @@ import os from "node:os";
 import path from "node:path";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
+import { lookupContextTokens } from "../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
+import {
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+} from "../auto-reply/thinking.js";
 import {
   startBrowserControlServerFromConfig,
   stopBrowserControlServer,
@@ -16,7 +22,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
 import { getStatusSummary } from "../commands/status.js";
-import { loadConfig } from "../config/config.js";
+import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -79,6 +85,8 @@ import {
   formatValidationErrors,
   PROTOCOL_VERSION,
   type RequestFrame,
+  type SessionsListParams,
+  type SessionsPatchParams,
   type Snapshot,
   validateAgentParams,
   validateChatHistoryParams,
@@ -98,6 +106,8 @@ import {
   validateNodePairVerifyParams,
   validateRequestFrame,
   validateSendParams,
+  validateSessionsListParams,
+  validateSessionsPatchParams,
   validateWakeParams,
 } from "./protocol/index.js";
 
@@ -108,9 +118,48 @@ type Client = {
   presenceKey?: string;
 };
 
+type GatewaySessionsDefaults = {
+  model: string | null;
+  contextTokens: number | null;
+};
+
+type GatewaySessionRow = {
+  key: string;
+  kind: "direct" | "group" | "global" | "unknown";
+  updatedAt: number | null;
+  sessionId?: string;
+  systemSent?: boolean;
+  abortedLastRun?: boolean;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  totalTokens?: number;
+  model?: string;
+  contextTokens?: number;
+  syncing?: boolean | string;
+};
+
+type SessionsListResult = {
+  ts: number;
+  path: string;
+  count: number;
+  defaults: GatewaySessionsDefaults;
+  sessions: GatewaySessionRow[];
+};
+
+type SessionsPatchResult = {
+  ok: true;
+  path: string;
+  key: string;
+  entry: SessionEntry;
+};
+
 const METHODS = [
   "health",
   "status",
+  "sessions.list",
+  "sessions.patch",
   "last-heartbeat",
   "set-heartbeats",
   "wake",
@@ -277,6 +326,88 @@ function loadSessionEntry(sessionKey: string) {
   const store = loadSessionStore(storePath);
   const entry = store[sessionKey];
   return { cfg, storePath, store, entry };
+}
+
+function classifySessionKey(key: string): GatewaySessionRow["kind"] {
+  if (key === "global") return "global";
+  if (key.startsWith("group:")) return "group";
+  if (key === "unknown") return "unknown";
+  return "direct";
+}
+
+function getSessionDefaults(cfg: ClawdisConfig): GatewaySessionsDefaults {
+  const model = cfg.inbound?.reply?.agent?.model ?? DEFAULT_MODEL;
+  const contextTokens =
+    cfg.inbound?.reply?.agent?.contextTokens ??
+    lookupContextTokens(model) ??
+    DEFAULT_CONTEXT_TOKENS;
+  return { model: model ?? null, contextTokens: contextTokens ?? null };
+}
+
+function listSessionsFromStore(params: {
+  cfg: ClawdisConfig;
+  storePath: string;
+  store: Record<string, SessionEntry>;
+  opts: SessionsListParams;
+}): SessionsListResult {
+  const { cfg, storePath, store, opts } = params;
+  const now = Date.now();
+
+  const includeGlobal = opts.includeGlobal === true;
+  const includeUnknown = opts.includeUnknown === true;
+  const activeMinutes =
+    typeof opts.activeMinutes === "number" &&
+    Number.isFinite(opts.activeMinutes)
+      ? Math.max(1, Math.floor(opts.activeMinutes))
+      : undefined;
+
+  let sessions = Object.entries(store)
+    .filter(([key]) => {
+      if (!includeGlobal && key === "global") return false;
+      if (!includeUnknown && key === "unknown") return false;
+      return true;
+    })
+    .map(([key, entry]) => {
+      const updatedAt = entry?.updatedAt ?? null;
+      const input = entry?.inputTokens ?? 0;
+      const output = entry?.outputTokens ?? 0;
+      const total = entry?.totalTokens ?? input + output;
+      return {
+        key,
+        kind: classifySessionKey(key),
+        updatedAt,
+        sessionId: entry?.sessionId,
+        systemSent: entry?.systemSent,
+        abortedLastRun: entry?.abortedLastRun,
+        thinkingLevel: entry?.thinkingLevel,
+        verboseLevel: entry?.verboseLevel,
+        inputTokens: entry?.inputTokens,
+        outputTokens: entry?.outputTokens,
+        totalTokens: total,
+        model: entry?.model,
+        contextTokens: entry?.contextTokens,
+        syncing: entry?.syncing,
+      } satisfies GatewaySessionRow;
+    })
+    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
+
+  if (activeMinutes !== undefined) {
+    const cutoff = now - activeMinutes * 60_000;
+    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
+  }
+
+  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
+    const limit = Math.max(1, Math.floor(opts.limit));
+    sessions = sessions.slice(0, limit);
+  }
+
+  return {
+    ts: now,
+    path: storePath,
+    count: sessions.length,
+    defaults: getSessionDefaults(cfg),
+    sessions,
+  };
 }
 
 function logWs(
@@ -1506,6 +1637,128 @@ export async function startGatewayServer(
           case "status": {
             const status = await getStatusSummary();
             respond(true, status, undefined);
+            break;
+          }
+          case "sessions.list": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateSessionsListParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid sessions.list params: ${formatValidationErrors(validateSessionsListParams.errors)}`,
+                ),
+              );
+              break;
+            }
+            const p = params as SessionsListParams;
+            const cfg = loadConfig();
+            const storePath = resolveStorePath(
+              cfg.inbound?.reply?.session?.store,
+            );
+            const store = loadSessionStore(storePath);
+            const result = listSessionsFromStore({
+              cfg,
+              storePath,
+              store,
+              opts: p,
+            });
+            respond(true, result, undefined);
+            break;
+          }
+          case "sessions.patch": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateSessionsPatchParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid sessions.patch params: ${formatValidationErrors(validateSessionsPatchParams.errors)}`,
+                ),
+              );
+              break;
+            }
+            const p = params as SessionsPatchParams;
+            const key = String(p.key ?? "").trim();
+            if (!key) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
+              );
+              break;
+            }
+
+            const cfg = loadConfig();
+            const storePath = resolveStorePath(
+              cfg.inbound?.reply?.session?.store,
+            );
+            const store = loadSessionStore(storePath);
+            const now = Date.now();
+
+            const existing = store[key];
+            const next: SessionEntry = existing
+              ? {
+                  ...existing,
+                  updatedAt: Math.max(existing.updatedAt ?? 0, now),
+                }
+              : { sessionId: randomUUID(), updatedAt: now };
+
+            if ("thinkingLevel" in p) {
+              const raw = p.thinkingLevel;
+              if (raw === null) {
+                delete next.thinkingLevel;
+              } else if (raw !== undefined) {
+                const normalized = normalizeThinkLevel(String(raw));
+                if (!normalized) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(
+                      ErrorCodes.INVALID_REQUEST,
+                      "invalid thinkingLevel (use off|minimal|low|medium|high)",
+                    ),
+                  );
+                  break;
+                }
+                if (normalized === "off") delete next.thinkingLevel;
+                else next.thinkingLevel = normalized;
+              }
+            }
+
+            if ("verboseLevel" in p) {
+              const raw = p.verboseLevel;
+              if (raw === null) {
+                delete next.verboseLevel;
+              } else if (raw !== undefined) {
+                const normalized = normalizeVerboseLevel(String(raw));
+                if (!normalized) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(
+                      ErrorCodes.INVALID_REQUEST,
+                      'invalid verboseLevel (use "on"|"off")',
+                    ),
+                  );
+                  break;
+                }
+                if (normalized === "off") delete next.verboseLevel;
+                else next.verboseLevel = normalized;
+              }
+            }
+
+            store[key] = next;
+            await saveSessionStore(storePath, store);
+            const result: SessionsPatchResult = {
+              ok: true,
+              path: storePath,
+              key,
+              entry: next,
+            };
+            respond(true, result, undefined);
             break;
           }
           case "last-heartbeat": {

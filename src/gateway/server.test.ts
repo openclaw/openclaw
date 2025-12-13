@@ -202,6 +202,22 @@ async function connectOk(
   return res.payload as { type: "hello-ok" };
 }
 
+async function rpcReq<T = unknown>(
+  ws: WebSocket,
+  method: string,
+  params?: unknown,
+) {
+  const id = randomUUID();
+  ws.send(JSON.stringify({ type: "req", id, method, params }));
+  return await onceMessage<{
+    type: "res";
+    id: string;
+    ok: boolean;
+    payload?: T;
+    error?: { message?: string };
+  }>(ws, (o) => o.type === "res" && o.id === id);
+}
+
 describe("gateway server", () => {
   test("supports gateway-owned node pairing methods and events", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
@@ -1649,6 +1665,86 @@ describe("gateway server", () => {
     const presenceRes = await presenceP;
     const entries = presenceRes.payload as Array<Record<string, unknown>>;
     expect(entries.some((e) => e.instanceId === cliId)).toBe(false);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("lists and patches session store via sessions.* RPC", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    const now = Date.now();
+    testSessionStorePath = storePath;
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: now - 60_000,
+            inputTokens: 10,
+            outputTokens: 20,
+            thinkingLevel: "low",
+            verboseLevel: "on",
+          },
+          "group:dev": {
+            sessionId: "sess-group",
+            updatedAt: now - 120_000,
+            totalTokens: 50,
+          },
+          global: {
+            sessionId: "sess-global",
+            updatedAt: now - 10_000,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const list1 = await rpcReq<{
+      path: string;
+      sessions: Array<{
+        key: string;
+        totalTokens?: number;
+        thinkingLevel?: string;
+        verboseLevel?: string;
+      }>;
+    }>(ws, "sessions.list", { includeGlobal: false, includeUnknown: false });
+
+    expect(list1.ok).toBe(true);
+    expect(list1.payload?.path).toBe(storePath);
+    expect(list1.payload?.sessions.some((s) => s.key === "global")).toBe(false);
+    const main = list1.payload?.sessions.find((s) => s.key === "main");
+    expect(main?.totalTokens).toBe(30);
+    expect(main?.thinkingLevel).toBe("low");
+    expect(main?.verboseLevel).toBe("on");
+
+    const patched = await rpcReq<{ ok: true; key: string }>(
+      ws,
+      "sessions.patch",
+      { key: "main", thinkingLevel: "medium", verboseLevel: null },
+    );
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.ok).toBe(true);
+    expect(patched.payload?.key).toBe("main");
+
+    const list2 = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        thinkingLevel?: string;
+        verboseLevel?: string;
+      }>;
+    }>(ws, "sessions.list", {});
+    expect(list2.ok).toBe(true);
+    const main2 = list2.payload?.sessions.find((s) => s.key === "main");
+    expect(main2?.thinkingLevel).toBe("medium");
+    expect(main2?.verboseLevel).toBeUndefined();
 
     ws.close();
     await server.close();

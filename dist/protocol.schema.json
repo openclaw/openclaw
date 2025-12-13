@@ -906,6 +906,61 @@
         "token"
       ]
     },
+    "SessionsListParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "activeMinutes": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "includeGlobal": {
+          "type": "boolean"
+        },
+        "includeUnknown": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SessionsPatchParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "key": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "thinkingLevel": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verboseLevel": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "key"
+      ]
+    },
     "CronJob": {
       "additionalProperties": false,
       "type": "object",

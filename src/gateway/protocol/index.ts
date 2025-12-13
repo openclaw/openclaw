@@ -55,6 +55,10 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
+  type SessionsListParams,
+  SessionsListParamsSchema,
+  type SessionsPatchParams,
+  SessionsPatchParamsSchema,
   type ShutdownEvent,
   ShutdownEventSchema,
   type Snapshot,
@@ -98,6 +102,12 @@ export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
 );
 export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
+);
+export const validateSessionsListParams = ajv.compile<SessionsListParams>(
+  SessionsListParamsSchema,
+);
+export const validateSessionsPatchParams = ajv.compile<SessionsPatchParams>(
+  SessionsPatchParamsSchema,
 );
 export const validateCronListParams =
   ajv.compile<CronListParams>(CronListParamsSchema);
@@ -148,6 +158,8 @@ export {
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairVerifyParamsSchema,
+  SessionsListParamsSchema,
+  SessionsPatchParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
@@ -187,6 +199,8 @@ export type {
   NodePairApproveParams,
   NodePairRejectParams,
   NodePairVerifyParams,
+  SessionsListParams,
+  SessionsPatchParams,
   CronJob,
   CronListParams,
   CronStatusParams,

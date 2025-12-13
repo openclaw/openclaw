@@ -242,6 +242,25 @@ export const NodePairVerifyParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsListParamsSchema = Type.Object(
+  {
+    limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+    includeGlobal: Type.Optional(Type.Boolean()),
+    includeUnknown: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  },
+  { additionalProperties: false },
+);
+
 export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
@@ -477,6 +496,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodePairApproveParams: NodePairApproveParamsSchema,
   NodePairRejectParams: NodePairRejectParamsSchema,
   NodePairVerifyParams: NodePairVerifyParamsSchema,
+  SessionsListParams: SessionsListParamsSchema,
+  SessionsPatchParams: SessionsPatchParamsSchema,
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
   CronStatusParams: CronStatusParamsSchema,
@@ -512,6 +533,8 @@ export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
 export type NodePairApproveParams = Static<typeof NodePairApproveParamsSchema>;
 export type NodePairRejectParams = Static<typeof NodePairRejectParamsSchema>;
 export type NodePairVerifyParams = Static<typeof NodePairVerifyParamsSchema>;
+export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
+export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 export type CronJob = Static<typeof CronJobSchema>;
 export type CronListParams = Static<typeof CronListParamsSchema>;
 export type CronStatusParams = Static<typeof CronStatusParamsSchema>;

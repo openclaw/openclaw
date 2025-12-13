@@ -478,6 +478,52 @@ public struct NodePairVerifyParams: Codable {
     }
 }
 
+public struct SessionsListParams: Codable {
+    public let limit: Int?
+    public let activeminutes: Int?
+    public let includeglobal: Bool?
+    public let includeunknown: Bool?
+
+    public init(
+        limit: Int?,
+        activeminutes: Int?,
+        includeglobal: Bool?,
+        includeunknown: Bool?
+    ) {
+        self.limit = limit
+        self.activeminutes = activeminutes
+        self.includeglobal = includeglobal
+        self.includeunknown = includeunknown
+    }
+    private enum CodingKeys: String, CodingKey {
+        case limit
+        case activeminutes = "activeMinutes"
+        case includeglobal = "includeGlobal"
+        case includeunknown = "includeUnknown"
+    }
+}
+
+public struct SessionsPatchParams: Codable {
+    public let key: String
+    public let thinkinglevel: AnyCodable?
+    public let verboselevel: AnyCodable?
+
+    public init(
+        key: String,
+        thinkinglevel: AnyCodable?,
+        verboselevel: AnyCodable?
+    ) {
+        self.key = key
+        self.thinkinglevel = thinkinglevel
+        self.verboselevel = verboselevel
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case thinkinglevel = "thinkingLevel"
+        case verboselevel = "verboseLevel"
+    }
+}
+
 public struct CronJob: Codable {
     public let id: String
     public let name: String?
