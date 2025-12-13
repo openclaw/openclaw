@@ -32,6 +32,7 @@ Reference (Peekaboo submodule): `docs/bridge-host.md`.
   - **Clawdis.app** (secondary; “thin host” only)
 - **Bridge clients** (trigger single actions):
   - `clawdis-mac ui …`
+  - `clawdis ui …` (Node/TS convenience wrapper; shells out to `clawdis-mac ui …`)
   - Node/Gateway shells out to `clawdis-mac`
 
 ### Host discovery (client-side)

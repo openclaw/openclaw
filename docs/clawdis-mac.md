@@ -94,6 +94,7 @@ UI automation is not part of `ClawdisIPC.Request`:
   - Prefer `ensure-permissions` before actions that need TCC.
   - Use `notify` for desktop toasts; fall back to JS notifier only if CLI missing or platform ≠ macOS.
   - Use `run` for tasks requiring privileged UI context (screen-recorded terminal runs, etc.).
+  - For UI automation, `clawdis ui …` is a convenience passthrough to `clawdis-mac ui …` (text by default; add `--json` to the outer `clawdis` command for structured output).
 
 ## Deep links (URL scheme)
 
