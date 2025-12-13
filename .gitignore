@@ -6,6 +6,7 @@ coverage
 .pnpm-store
 **/.DS_Store
 apps/macos/.build/
+apps/shared/ClawdisKit/.build/
 bin/clawdis-mac
 apps/macos/.build-local/
 apps/macos/.swiftpm/
