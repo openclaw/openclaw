@@ -80,6 +80,7 @@ final class VoiceWakeManager: NSObject, ObservableObject {
     @Published var isEnabled: Bool = false
     @Published var isListening: Bool = false
     @Published var statusText: String = "Off"
+    @Published var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
 
     private let audioEngine = AVAudioEngine()
     private var speechRecognizer: SFSpeechRecognizer?
@@ -90,6 +91,36 @@ final class VoiceWakeManager: NSObject, ObservableObject {
 
     private var lastDispatched: String?
     private var onCommand: (@Sendable (String) async -> Void)?
+
+    override init() {
+        super.init()
+        self.triggerWords = VoiceWakePreferences.loadTriggerWords()
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.handleUserDefaultsDidChange),
+            name: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard)
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(
+            self,
+            name: UserDefaults.didChangeNotification,
+            object: UserDefaults.standard)
+    }
+
+    var activeTriggerWords: [String] {
+        VoiceWakePreferences.sanitizeTriggerWords(self.triggerWords)
+    }
+
+    @objc private func handleUserDefaultsDidChange() {
+        let updated = VoiceWakePreferences.loadTriggerWords()
+        Task { @MainActor in
+            if updated != self.triggerWords {
+                self.triggerWords = updated
+            }
+        }
+    }
 
     func configure(onCommand: @escaping @Sendable (String) async -> Void) {
         self.onCommand = onCommand
@@ -267,12 +298,29 @@ final class VoiceWakeManager: NSObject, ObservableObject {
     }
 
     private func extractCommand(from transcript: String) -> String? {
-        let lower = transcript.lowercased()
-        guard let range = lower.range(of: "clawdis", options: .backwards) else { return nil }
-        let after = lower[range.upperBound...]
+        Self.extractCommand(from: transcript, triggers: self.activeTriggerWords)
+    }
+
+    private static func extractCommand(from transcript: String, triggers: [String]) -> String? {
+        var bestRange: Range<String.Index>?
+        for trigger in triggers {
+            let token = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !token.isEmpty else { continue }
+            guard let range = transcript.range(of: token, options: [.caseInsensitive, .backwards]) else { continue }
+            if let currentBest = bestRange {
+                if range.lowerBound > currentBest.lowerBound {
+                    bestRange = range
+                }
+            } else {
+                bestRange = range
+            }
+        }
+
+        guard let bestRange else { return nil }
+        let after = transcript[bestRange.upperBound...]
         let trimmed = after.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty { return nil }
-        return trimmed
+        guard !trimmed.isEmpty else { return nil }
+        return String(trimmed)
     }
 
     private static func configureAudioSession() throws {
