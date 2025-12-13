@@ -19,7 +19,7 @@
 ```
 ┌─────────────┐      ┌──────────┐      ┌─────────────┐
 │  WhatsApp   │ ───▶ │ CLAWDIS  │ ───▶ │  AI Agent   │
-│  Telegram   │ ───▶ │  🦞⏱️💙   │ ◀─── │   (Pi/Tau)  │
+│  Telegram   │ ───▶ │  🦞⏱️💙   │ ◀─── │    (Pi)     │
 │  (You)      │ ◀─── │          │      │             │
 └─────────────┘      └──────────┘      └─────────────┘
 ```
@@ -34,7 +34,7 @@ Because every space lobster needs a time-and-space machine. The Doctor has a TAR
 
 - 📱 **WhatsApp Integration** — Personal WhatsApp Web (Baileys)
 - ✈️ **Telegram (Bot API)** — DMs and groups via grammY
-- 🤖 **AI Agent Gateway** — Pi/Tau only (Pi CLI in RPC mode)
+- 🤖 **AI Agent Gateway** — Pi only (Pi CLI in RPC mode)
 - 💬 **Session Management** — Per-sender conversation context
 - 🔔 **Heartbeats** — Periodic check-ins for proactive AI
 - 👥 **Group Chat Support** — Mention-based triggering
@@ -43,7 +43,7 @@ Because every space lobster needs a time-and-space machine. The Doctor has a TAR
 - 🔧 **Tool Streaming** — Real-time display (💻📄✍️📝)
 - 🖥️ **macOS Companion (Clawdis.app)** — Menu bar controls, on-device Voice Wake, model/config editor
 
-Only the Pi/Tau CLI is supported now; legacy Claude/Codex/Gemini paths have been removed.
+Only the Pi CLI is supported now; legacy Claude/Codex/Gemini paths have been removed.
 
 ## Quick Start
 Mac signing tip: set `SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` in your shell profile so `scripts/restart-mac.sh` signs with your cert (defaults to ad-hoc). Debug bundle ID remains `com.steipete.clawdis.debug`.
@@ -100,7 +100,7 @@ Create `~/.clawdis/clawdis.json`:
     allowFrom: ["+1234567890"],
     reply: {
       mode: "command",
-      command: ["tau", "--mode", "json", "{{BodyStripped}}"],
+      command: ["pi", "--mode", "rpc", "{{BodyStripped}}"],
       session: {
         scope: "per-sender",
         idleMinutes: 1440
@@ -145,16 +145,17 @@ Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebCha
 
 | Command | Description |
 |---------|-------------|
-| Command | Description |
-|---------|-------------|
 | `clawdis login` | Link WhatsApp Web via QR |
 | `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode). Always uses the Gateway WS; requires a running gateway. |
 | `clawdis agent` | Talk directly to the agent (no WhatsApp send) |
 | `clawdis gateway` | Start the Gateway server (WS control plane). Params: `--port`, `--token`, `--force`, `--verbose`. |
 | `clawdis gateway health|status|send|agent|call` | Gateway WS clients; assume a running gateway. |
+| `clawdis wake` | Enqueue a system event and optionally trigger a heartbeat via the Gateway. |
+| `clawdis cron ...` | Manage scheduled jobs (via Gateway). |
+| `clawdis nodes ...` | Manage Gateway-owned node pairing. |
 | `clawdis status` | Web session health + session store summary |
 | `clawdis health` | Reports cached provider state from the running gateway. |
-| `clawdis heartbeat` | Trigger a heartbeat |
+| `clawdis webchat` | Start the loopback-only WebChat HTTP server |
 
 #### Gateway client params (WS only)
 - `--url` (default `ws://127.0.0.1:18789`)
@@ -175,7 +176,7 @@ In chat, send `/status` to see if the agent is reachable, how much context the s
 ### Sessions, surfaces, and WebChat
 
 - Direct chats now share a canonical session key `main` by default (configurable via `inbound.reply.session.mainKey`). Groups stay isolated as `group:<jid>`.
-- WebChat always attaches to the `main` session and hydrates the full Tau history from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view mirrors WhatsApp/Telegram turns.
+- WebChat always attaches to the `main` session and hydrates the full session history from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view mirrors WhatsApp/Telegram turns.
 - Inbound contexts carry a `Surface` hint (e.g., `whatsapp`, `webchat`, `telegram`) for logging; replies still go back to the originating surface deterministically.
 - Every inbound message is wrapped for the agent as `[Surface FROM HOST/IP TIMESTAMP] body`:
   - WhatsApp: `[WhatsApp +15551234567 2025-12-09 12:34] …`
@@ -186,7 +187,7 @@ In chat, send `/status` to see if the agent is reachable, how much context the s
 ## Credits
 
 - **Peter Steinberger** ([@steipete](https://twitter.com/steipete)) — Creator
-- **Mario Zechner** ([@badlogicgames](https://twitter.com/badlogicgames)) — Tau/Pi, security testing
+- **Mario Zechner** ([@badlogicgames](https://twitter.com/badlogicgames)) — Pi, security testing
 - **Clawd** 🦞 — The space lobster who demanded a better name
 
 ## License
