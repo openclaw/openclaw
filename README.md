@@ -71,7 +71,9 @@ clawdis gateway --port 18789 --verbose
 clawdis gateway --force
 ```
 
-## macOS Companion App (Clawdis.app)
+## Companion Apps
+
+### macOS Companion (Clawdis.app)
 
 - **On-device Voice Wake:** listens for wake words (e.g. “Claude”) using Apple’s on-device speech recognizer (macOS 26+). macOS still shows the standard Speech/Mic permissions prompt, but audio stays on device.
 - **Push-to-talk (Right Option hold):** hold right Option to speak; the voice overlay shows live partials and sends when you release.
@@ -90,6 +92,16 @@ Voice Wake sends messages into the `main` session and replies on the **last used
 If delivery fails (e.g. WhatsApp disconnected / Telegram token missing), Clawdis logs the error and you can still inspect the run via WebChat/session logs.
 
 Build/run the mac app with `./scripts/restart-mac.sh` (packages, installs, and launches), or `swift build --package-path apps/macos && open dist/Clawdis.app`.
+
+### iOS Node (Iris) (internal)
+
+Iris is an internal/prototype iOS app that connects as a **remote node**:
+
+- **Voice trigger:** forwards transcripts into the Gateway `agent` method.
+- **Canvas screen:** a WKWebView + `<canvas>` surface the agent can control (via `screen.eval` / `screen.snapshot` over `node.invoke`).
+- **Discovery + pairing:** finds the gateway bridge via Bonjour (`_clawdis-bridge._tcp`) and uses Gateway-owned pairing (`clawdis nodes pending|approve`).
+
+Runbook: `docs/ios/connect.md`
 
 ## Configuration
 
