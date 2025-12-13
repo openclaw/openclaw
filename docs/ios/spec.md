@@ -9,6 +9,8 @@ read_when:
 
 Status: prototype implemented (internal) · Date: 2025-12-13
 
+Runbook (how to connect/pair + drive Canvas): `docs/ios/connect.md`
+
 ## Goals
 - Build an **iOS app** that acts as a **remote node** for Clawdis:
   - **Voice trigger** (wake-word / always-listening intent) that forwards transcripts to the Gateway `agent` method.
