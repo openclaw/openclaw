@@ -171,7 +171,7 @@ Generate the Xcode project:
 ```bash
 cd apps/ios
 xcodegen generate
-open ClawdisNode.xcodeproj
+open Clawdis.xcodeproj
 ```
 
 ## Storage plan (private by default)

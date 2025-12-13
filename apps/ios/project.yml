@@ -1,4 +1,4 @@
-name: ClawdisNode
+name: Clawdis
 options:
   bundleIdPrefix: com.steipete.clawdis
   deploymentTarget:
@@ -10,7 +10,7 @@ packages:
     path: ../shared/ClawdisKit
 
 targets:
-  ClawdisNode:
+  Clawdis:
     type: application
     platform: iOS
     sources:
@@ -43,14 +43,14 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: ClawdisKit
+        CFBundleDisplayName: Clawdis
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: ClawdisKit discovers and connects to your Clawdis bridge on the local network.
+        NSLocalNetworkUsageDescription: Clawdis discovers and connects to your Clawdis bridge on the local network.
         NSBonjourServices:
           - _clawdis-bridge._tcp
-        NSMicrophoneUsageDescription: ClawdisKit needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: ClawdisKit uses on-device speech recognition for voice wake.
+        NSMicrophoneUsageDescription: Clawdis needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: Clawdis uses on-device speech recognition for voice wake.
