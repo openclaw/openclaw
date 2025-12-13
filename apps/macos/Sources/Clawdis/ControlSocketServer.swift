@@ -272,7 +272,9 @@ final actor ControlSocketServer {
               let sCode = staticCode else { return false }
 
         var infoCF: CFDictionary?
-        guard SecCodeCopySigningInformation(sCode, SecCSFlags(), &infoCF) == errSecSuccess,
+        // `kSecCodeInfoTeamIdentifier` is only included when requesting signing information.
+        let flags = SecCSFlags(rawValue: UInt32(kSecCSSigningInformation))
+        guard SecCodeCopySigningInformation(sCode, flags, &infoCF) == errSecSuccess,
               let info = infoCF as? [String: Any],
               let teamID = info[kSecCodeInfoTeamIdentifier as String] as? String
         else {
@@ -282,3 +284,28 @@ final actor ControlSocketServer {
         return allowedTeamIDs.contains(teamID)
     }
 }
+
+#if SWIFT_PACKAGE
+extension ControlSocketServer {
+    nonisolated static func _testTeamIdentifier(pid: pid_t) -> String? {
+        let attrs: NSDictionary = [kSecGuestAttributePid: pid]
+        var secCode: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, attrs, SecCSFlags(), &secCode) == errSecSuccess,
+              let code = secCode else { return nil }
+
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, SecCSFlags(), &staticCode) == errSecSuccess,
+              let sCode = staticCode else { return nil }
+
+        var infoCF: CFDictionary?
+        let flags = SecCSFlags(rawValue: UInt32(kSecCSSigningInformation))
+        guard SecCodeCopySigningInformation(sCode, flags, &infoCF) == errSecSuccess,
+              let info = infoCF as? [String: Any]
+        else {
+            return nil
+        }
+
+        return info[kSecCodeInfoTeamIdentifier as String] as? String
+    }
+}
+#endif

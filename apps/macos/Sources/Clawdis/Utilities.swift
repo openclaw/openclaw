@@ -264,17 +264,90 @@ enum CommandResolver {
     static func preferredPaths() -> [String] {
         let current = ProcessInfo.processInfo.environment["PATH"]?
             .split(separator: ":").map(String.init) ?? []
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let projectRoot = self.projectRoot()
+        return self.preferredPaths(home: home, current: current, projectRoot: projectRoot)
+    }
+
+    static func preferredPaths(home: URL, current: [String], projectRoot: URL) -> [String] {
         var extras = [
-            FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/pnpm").path,
+            home.appendingPathComponent("Library/pnpm").path,
             "/opt/homebrew/bin",
             "/usr/local/bin",
             "/usr/bin",
             "/bin",
         ]
-        extras.insert(self.projectRoot().appendingPathComponent("node_modules/.bin").path, at: 0)
+        extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
+        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1)
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
+    }
+
+    private static func nodeManagerBinPaths(home: URL) -> [String] {
+        var bins: [String] = []
+
+        // Volta
+        let volta = home.appendingPathComponent(".volta/bin")
+        if FileManager.default.fileExists(atPath: volta.path) {
+            bins.append(volta.path)
+        }
+
+        // asdf
+        let asdf = home.appendingPathComponent(".asdf/shims")
+        if FileManager.default.fileExists(atPath: asdf.path) {
+            bins.append(asdf.path)
+        }
+
+        // fnm
+        bins.append(contentsOf: self.versionedNodeBinPaths(
+            base: home.appendingPathComponent(".local/share/fnm/node-versions"),
+            suffix: "installation/bin"))
+
+        // nvm
+        bins.append(contentsOf: self.versionedNodeBinPaths(
+            base: home.appendingPathComponent(".nvm/versions/node"),
+            suffix: "bin"))
+
+        return bins
+    }
+
+    private static func versionedNodeBinPaths(base: URL, suffix: String) -> [String] {
+        guard FileManager.default.fileExists(atPath: base.path) else { return [] }
+        let entries: [String]
+        do {
+            entries = try FileManager.default.contentsOfDirectory(atPath: base.path)
+        } catch {
+            return []
+        }
+
+        func parseVersion(_ name: String) -> [Int] {
+            let trimmed = name.hasPrefix("v") ? String(name.dropFirst()) : name
+            return trimmed.split(separator: ".").compactMap { Int($0) }
+        }
+
+        let sorted = entries.sorted { a, b in
+            let va = parseVersion(a)
+            let vb = parseVersion(b)
+            let maxCount = max(va.count, vb.count)
+            for i in 0..<maxCount {
+                let ai = i < va.count ? va[i] : 0
+                let bi = i < vb.count ? vb[i] : 0
+                if ai != bi { return ai > bi }
+            }
+            // If identical numerically, keep stable ordering.
+            return a > b
+        }
+
+        var paths: [String] = []
+        for entry in sorted {
+            let binDir = base.appendingPathComponent(entry).appendingPathComponent(suffix)
+            let node = binDir.appendingPathComponent("node")
+            if FileManager.default.isExecutableFile(atPath: node.path) {
+                paths.append(binDir.path)
+            }
+        }
+        return paths
     }
 
     static func findExecutable(named name: String) -> String? {
@@ -565,4 +638,10 @@ enum CommandResolver {
         }
         return URL(fileURLWithPath: expanded)
     }
+
+#if SWIFT_PACKAGE
+    static func _testNodeManagerBinPaths(home: URL) -> [String] {
+        self.nodeManagerBinPaths(home: home)
+    }
+#endif
 }
