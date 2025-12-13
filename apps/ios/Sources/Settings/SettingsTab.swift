@@ -55,14 +55,30 @@ struct SettingsTab: View {
                     if let serverName = self.appModel.bridgeServerName {
                         LabeledContent("Server", value: serverName)
                         if let addr = self.appModel.bridgeRemoteAddress {
+                            let parts = Self.parseHostPort(from: addr)
+                            let urlString = Self.httpURLString(host: parts?.host, port: parts?.port, fallback: addr)
                             LabeledContent("Address") {
-                                Text(addr)
+                                Text(urlString)
                             }
                             .contextMenu {
                                 Button {
-                                    UIPasteboard.general.string = addr
+                                    UIPasteboard.general.string = urlString
                                 } label: {
-                                    Label("Copy", systemImage: "doc.on.doc")
+                                    Label("Copy URL", systemImage: "doc.on.doc")
+                                }
+
+                                if let parts {
+                                    Button {
+                                        UIPasteboard.general.string = parts.host
+                                    } label: {
+                                        Label("Copy Host", systemImage: "doc.on.doc")
+                                    }
+
+                                    Button {
+                                        UIPasteboard.general.string = "\(parts.port)"
+                                    } label: {
+                                        Label("Copy Port", systemImage: "doc.on.doc")
+                                    }
                                 }
                             }
                         }
@@ -286,5 +302,42 @@ struct SettingsTab: View {
         }
 
         return en0 ?? fallback
+    }
+
+    private struct HostPort: Equatable {
+        var host: String
+        var port: Int
+    }
+
+    private static func parseHostPort(from address: String) -> HostPort? {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if trimmed.hasPrefix("["),
+           let close = trimmed.firstIndex(of: "]"),
+           close < trimmed.endIndex
+        {
+            let host = String(trimmed[trimmed.index(after: trimmed.startIndex)..<close])
+            let portStart = trimmed.index(after: close)
+            guard portStart < trimmed.endIndex, trimmed[portStart] == ":" else { return nil }
+            let portString = String(trimmed[trimmed.index(after: portStart)...])
+            guard let port = Int(portString) else { return nil }
+            return HostPort(host: host, port: port)
+        }
+
+        guard let colon = trimmed.lastIndex(of: ":") else { return nil }
+        let host = String(trimmed[..<colon])
+        let portString = String(trimmed[trimmed.index(after: colon)...])
+        guard !host.isEmpty, let port = Int(portString) else { return nil }
+        return HostPort(host: host, port: port)
+    }
+
+    private static func httpURLString(host: String?, port: Int?, fallback: String) -> String {
+        if let host, let port {
+            let needsBrackets = host.contains(":") && !host.hasPrefix("[") && !host.hasSuffix("]")
+            let hostPart = needsBrackets ? "[\(host)]" : host
+            return "http://\(hostPart):\(port)"
+        }
+        return "http://\(fallback)"
     }
 }
