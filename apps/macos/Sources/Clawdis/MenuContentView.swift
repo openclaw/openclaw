@@ -24,7 +24,6 @@ struct MenuContent: View {
     private let contextCardPadding: CGFloat = 10
     private let contextBarHeight: CGFloat = 4
     private let contextFallbackWidth: CGFloat = 320
-    private let contextSessionRowHeight: CGFloat = 18
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -316,32 +315,15 @@ struct MenuContent: View {
     @ViewBuilder
     private func contextSessionRow(_ row: SessionRow) -> some View {
         let width = self.contextPillWidth
-        ZStack(alignment: .bottomLeading) {
-            ContextUsageBar(
-                usedTokens: row.tokens.total,
-                contextTokens: row.tokens.contextTokens,
-                width: width,
-                height: self.contextBarHeight)
-                .padding(.bottom, 0)
-
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(row.key)
-                    .font(.caption.weight(row.key == "main" ? .semibold : .regular))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(1)
-                Spacer(minLength: 8)
-                Text(row.tokens.contextSummaryShort)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
-            }
-            .padding(.bottom, self.contextBarHeight + 4)
-            .frame(width: width)
-        }
-        .frame(width: width, height: self.contextSessionRowHeight, alignment: .bottomLeading)
+        ContextUsageRow(
+            sessionKey: row.key,
+            summary: row.tokens.contextSummaryShort,
+            usedTokens: row.tokens.total,
+            contextTokens: row.tokens.contextTokens,
+            width: width,
+            barHeight: self.contextBarHeight,
+            rowHeight: 18,
+            isMain: row.key == "main")
     }
 
     private var heartbeatStatusRow: some View {
