@@ -21,11 +21,17 @@ struct MenuContent: View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) {
                 let label = self.state.connectionMode == .remote ? "Remote Clawdis Active" : "Clawdis Active"
-                Text(label)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(label)
+                    self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
+                }
             }
-            self.statusRow
-            Toggle(isOn: self.heartbeatsBinding) { Text("Send Heartbeats") }
-            self.heartbeatStatusRow
+            Toggle(isOn: self.heartbeatsBinding) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Send Heartbeats")
+                    self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
+                }
+            }
             Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
@@ -198,93 +204,70 @@ struct MenuContent: View {
         NotificationCenter.default.post(name: .clawdisSelectSettingsTab, object: tab)
     }
 
-    private var statusRow: some View {
-        let (label, color): (String, Color) = {
-            if let activity = self.activityStore.current {
-                let color: Color = activity.role == .main ? .accentColor : .gray
-                let roleLabel = activity.role == .main ? "Main" : "Other"
-                let text = "\(roleLabel) · \(activity.label)"
-                return (text, color)
-            }
+    private var healthStatus: (label: String, color: Color) {
+        if let activity = self.activityStore.current {
+            let color: Color = activity.role == .main ? .accentColor : .gray
+            let roleLabel = activity.role == .main ? "Main" : "Other"
+            let text = "\(roleLabel) · \(activity.label)"
+            return (text, color)
+        }
 
-            let health = self.healthStore.state
-            let isRefreshing = self.healthStore.isRefreshing
-            let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
+        let health = self.healthStore.state
+        let isRefreshing = self.healthStore.isRefreshing
+        let lastAge = self.healthStore.lastSuccess.map { age(from: $0) }
 
-            if isRefreshing {
-                return ("Health check running…", health.tint)
-            }
+        if isRefreshing {
+            return ("Health check running…", health.tint)
+        }
 
-            switch health {
-            case .ok:
-                let ageText = lastAge.map { " · checked \($0)" } ?? ""
-                return ("Health ok\(ageText)", .green)
-            case .linkingNeeded:
-                return ("Health: login required", .red)
-            case let .degraded(reason):
-                let detail = HealthStore.shared.degradedSummary ?? reason
-                let ageText = lastAge.map { " · checked \($0)" } ?? ""
-                return ("\(detail)\(ageText)", .orange)
-            case .unknown:
-                return ("Health pending", .secondary)
-            }
-        }()
-
-        return Button(
-            action: {},
-            label: {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 8, height: 8)
-                    Text(label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                }
-                .padding(.vertical, 4)
-            })
-            .buttonStyle(.plain)
-            .disabled(true)
+        switch health {
+        case .ok:
+            let ageText = lastAge.map { " · checked \($0)" } ?? ""
+            return ("Health ok\(ageText)", .green)
+        case .linkingNeeded:
+            return ("Health: login required", .red)
+        case let .degraded(reason):
+            let detail = HealthStore.shared.degradedSummary ?? reason
+            let ageText = lastAge.map { " · checked \($0)" } ?? ""
+            return ("\(detail)\(ageText)", .orange)
+        case .unknown:
+            return ("Health pending", .secondary)
+        }
     }
 
-    private var heartbeatStatusRow: some View {
-        let (label, color): (String, Color) = {
-            if case .degraded = self.controlChannel.state {
-                return ("Control channel disconnected", .red)
-            } else if let evt = self.heartbeatStore.lastEvent {
-                let ageText = age(from: Date(timeIntervalSince1970: evt.ts / 1000))
-                switch evt.status {
-                case "sent":
-                    return ("Last heartbeat sent · \(ageText)", .blue)
-                case "ok-empty", "ok-token":
-                    return ("Heartbeat ok · \(ageText)", .green)
-                case "skipped":
-                    return ("Heartbeat skipped · \(ageText)", .secondary)
-                case "failed":
-                    return ("Heartbeat failed · \(ageText)", .red)
-                default:
-                    return ("Heartbeat · \(ageText)", .secondary)
-                }
-            } else {
-                return ("No heartbeat yet", .secondary)
+    private var heartbeatStatus: (label: String, color: Color) {
+        if case .degraded = self.controlChannel.state {
+            return ("Control channel disconnected", .red)
+        } else if let evt = self.heartbeatStore.lastEvent {
+            let ageText = age(from: Date(timeIntervalSince1970: evt.ts / 1000))
+            switch evt.status {
+            case "sent":
+                return ("Last heartbeat sent · \(ageText)", .blue)
+            case "ok-empty", "ok-token":
+                return ("Heartbeat ok · \(ageText)", .green)
+            case "skipped":
+                return ("Heartbeat skipped · \(ageText)", .secondary)
+            case "failed":
+                return ("Heartbeat failed · \(ageText)", .red)
+            default:
+                return ("Heartbeat · \(ageText)", .secondary)
             }
-        }()
+        } else {
+            return ("No heartbeat yet", .secondary)
+        }
+    }
 
-        return Button(
-            action: {},
-            label: {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(color)
-                        .frame(width: 8, height: 8)
-                    Text(label)
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.primary)
-                }
-                .padding(.vertical, 2)
-            })
-            .buttonStyle(.plain)
-            .disabled(true)
+    @ViewBuilder
+    private func statusLine(label: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.top, 2)
     }
 
     private var activeBinding: Binding<Bool> {
