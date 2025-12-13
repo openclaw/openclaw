@@ -205,7 +205,8 @@ struct ConfigSettings: View {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
         }
         .onChange(of: self.modelCatalogPath) { _, _ in
             Task { await self.loadModels() }
