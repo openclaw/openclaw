@@ -38,7 +38,7 @@ targets:
           swiftlint lint --config "$SRCROOT/.swiftlint.yml"
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.steipete.clawdis.node
+        PRODUCT_BUNDLE_IDENTIFIER: com.steipete.clawdis.ios
         SWIFT_VERSION: "6.0"
     info:
       path: Sources/Info.plist

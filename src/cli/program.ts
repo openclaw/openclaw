@@ -11,6 +11,7 @@ import {
   browserTabs,
   resolveBrowserControlUrl,
 } from "../browser/client.js";
+import { runClawdisMac } from "../infra/clawdis-mac.js";
 import { agentCommand } from "../commands/agent.js";
 import { healthCommand } from "../commands/health.js";
 import { sendCommand } from "../commands/send.js";
@@ -223,6 +224,44 @@ Examples:
   registerGatewayCli(program);
   registerNodesCli(program);
   registerCronCli(program);
+
+  program
+    .command("ui")
+    .description("macOS UI automation via Clawdis.app (PeekabooBridge)")
+    .option("--json", "Output JSON (passthrough from clawdis-mac)", false)
+    .allowUnknownOption(true)
+    .passThroughOptions()
+    .argument(
+      "<uiArgs...>",
+      "Args passed through to: clawdis-mac ui <command> ...",
+    )
+    .addHelpText(
+      "after",
+      `
+Examples:
+  clawdis ui permissions status
+  clawdis ui frontmost
+  clawdis ui screenshot
+  clawdis ui see --bundle-id com.apple.Safari
+  clawdis ui click --bundle-id com.apple.Safari --on B1
+  clawdis ui --json see --bundle-id com.apple.Safari
+`,
+    )
+    .action(async (uiArgs: string[], opts) => {
+      try {
+        const res = await runClawdisMac(["ui", ...uiArgs], {
+          json: Boolean(opts.json),
+          timeoutMs: 45_000,
+        });
+        if (res.stdout) process.stdout.write(res.stdout);
+        if (res.stderr) process.stderr.write(res.stderr);
+        defaultRuntime.exit(res.code ?? 1);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
   program
     .command("status")
     .description("Show web session health and recent session recipients")

@@ -40,13 +40,32 @@ function jsonError(res: express.Response, status: number, message: string) {
   res.status(status).json({ error: message });
 }
 
-async function fetchJson<T>(url: string, timeoutMs = 1500): Promise<T> {
+async function fetchJson<T>(
+  url: string,
+  timeoutMs = 1500,
+  init?: RequestInit,
+): Promise<T> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { signal: ctrl.signal });
+    const res = await fetch(url, { ...init, signal: ctrl.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return (await res.json()) as T;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+async function fetchOk(
+  url: string,
+  timeoutMs = 1500,
+  init?: RequestInit,
+): Promise<void> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, { ...init, signal: ctrl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
   } finally {
     clearTimeout(t);
   }
@@ -75,13 +94,24 @@ async function listTabs(cdpPort: number): Promise<BrowserTab[]> {
 
 async function openTab(cdpPort: number, url: string): Promise<BrowserTab> {
   const encoded = encodeURIComponent(url);
-  const created = await fetchJson<{
+
+  // Chrome changed /json/new to require PUT (older versions allowed GET).
+  type CdpTarget = {
     id?: string;
     title?: string;
     url?: string;
     webSocketDebuggerUrl?: string;
     type?: string;
-  }>(`http://127.0.0.1:${cdpPort}/json/new?${encoded}`);
+  };
+  const endpoint = `http://127.0.0.1:${cdpPort}/json/new?${encoded}`;
+  const created = await fetchJson<CdpTarget>(endpoint, 1500, {
+    method: "PUT",
+  }).catch(async (err) => {
+    if (String(err).includes("HTTP 405")) {
+      return await fetchJson<CdpTarget>(endpoint, 1500);
+    }
+    throw err;
+  });
 
   if (!created.id) throw new Error("Failed to open tab (missing id)");
   return {
@@ -94,11 +124,13 @@ async function openTab(cdpPort: number, url: string): Promise<BrowserTab> {
 }
 
 async function activateTab(cdpPort: number, targetId: string): Promise<void> {
-  await fetchJson(`http://127.0.0.1:${cdpPort}/json/activate/${targetId}`);
+  // Chrome returns plain text ("Target activated") with an application/json content-type.
+  await fetchOk(`http://127.0.0.1:${cdpPort}/json/activate/${targetId}`);
 }
 
 async function closeTab(cdpPort: number, targetId: string): Promise<void> {
-  await fetchJson(`http://127.0.0.1:${cdpPort}/json/close/${targetId}`);
+  // Chrome returns plain text ("Target is closing") with an application/json content-type.
+  await fetchOk(`http://127.0.0.1:${cdpPort}/json/close/${targetId}`);
 }
 
 async function ensureBrowserAvailable(runtime: RuntimeEnv): Promise<void> {

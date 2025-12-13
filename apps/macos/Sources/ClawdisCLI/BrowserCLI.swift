@@ -62,17 +62,17 @@ enum BrowserCLI {
         case "start":
             self.printResult(
                 jsonOutput: jsonOutput,
-                res: try await self.httpJSON(method: "POST", url: baseURL.appendingPathComponent("/start")))
+                res: try await self.httpJSON(method: "POST", url: baseURL.appendingPathComponent("/start"), timeoutInterval: 15.0))
             return 0
 
         case "stop":
             self.printResult(
                 jsonOutput: jsonOutput,
-                res: try await self.httpJSON(method: "POST", url: baseURL.appendingPathComponent("/stop")))
+                res: try await self.httpJSON(method: "POST", url: baseURL.appendingPathComponent("/stop"), timeoutInterval: 15.0))
             return 0
 
         case "tabs":
-            let res = try await self.httpJSON(method: "GET", url: baseURL.appendingPathComponent("/tabs"))
+            let res = try await self.httpJSON(method: "GET", url: baseURL.appendingPathComponent("/tabs"), timeoutInterval: 3.0)
             if jsonOutput {
                 self.printJSON(ok: true, result: res)
             } else {
@@ -90,7 +90,8 @@ enum BrowserCLI {
                 res: try await self.httpJSON(
                     method: "POST",
                     url: baseURL.appendingPathComponent("/tabs/open"),
-                    body: ["url": url]))
+                    body: ["url": url],
+                    timeoutInterval: 15.0))
             return 0
 
         case "focus":
@@ -103,7 +104,8 @@ enum BrowserCLI {
                 res: try await self.httpJSON(
                     method: "POST",
                     url: baseURL.appendingPathComponent("/tabs/focus"),
-                    body: ["targetId": id]))
+                    body: ["targetId": id],
+                    timeoutInterval: 5.0))
             return 0
 
         case "close":
@@ -115,7 +117,8 @@ enum BrowserCLI {
                 jsonOutput: jsonOutput,
                 res: try await self.httpJSON(
                     method: "DELETE",
-                    url: baseURL.appendingPathComponent("/tabs/\(id)")))
+                    url: baseURL.appendingPathComponent("/tabs/\(id)"),
+                    timeoutInterval: 5.0))
             return 0
 
         case "screenshot":
@@ -130,7 +133,7 @@ enum BrowserCLI {
             if !items.isEmpty {
                 url = self.withQuery(url, items: items)
             }
-            let res = try await self.httpJSON(method: "GET", url: url)
+            let res = try await self.httpJSON(method: "GET", url: url, timeoutInterval: 20.0)
             if jsonOutput {
                 self.printJSON(ok: true, result: res)
             } else if let path = res["path"] as? String, !path.isEmpty {
@@ -173,8 +176,13 @@ enum BrowserCLI {
         return components.url ?? url
     }
 
-    private static func httpJSON(method: String, url: URL, body: [String: Any]? = nil) async throws -> [String: Any] {
-        var req = URLRequest(url: url, timeoutInterval: 2.0)
+    private static func httpJSON(
+        method: String,
+        url: URL,
+        body: [String: Any]? = nil,
+        timeoutInterval: TimeInterval = 2.0
+    ) async throws -> [String: Any] {
+        var req = URLRequest(url: url, timeoutInterval: timeoutInterval)
         req.httpMethod = method
         if let body {
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
