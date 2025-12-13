@@ -19,56 +19,19 @@ struct ScreenTab: View {
                         }
                     }
 
-                Divider()
-
-                VStack(spacing: 10) {
-                    Picker(
-                        "Mode",
-                        selection: Binding(
-                            get: { self.appModel.screen.mode },
-                            set: { self.appModel.screen.setMode($0) }))
-                    {
-                        Text("Web").tag(ClawdisScreenMode.web)
-                        Text("Canvas").tag(ClawdisScreenMode.canvas)
-                    }
-                    .pickerStyle(.segmented)
-
-                    HStack(spacing: 10) {
-                        TextField(
-                            "URL",
-                            text: Binding(
-                                get: { self.appModel.screen.urlString },
-                                set: { self.appModel.screen.urlString = $0 }))
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .keyboardType(.URL)
-                            .textFieldStyle(.roundedBorder)
-                        Button("Go") { self.navigate() }
-                            .buttonStyle(.borderedProminent)
-                    }
-
-                    if self.appModel.isBackgrounded {
-                        Text("Screen commands unavailable while backgrounded.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
+                if self.appModel.isBackgrounded {
+                    Divider()
+                    Text("Screen commands unavailable while backgrounded.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding()
                 }
-                .padding()
             }
             .navigationTitle("Screen")
             .navigationBarTitleDisplayMode(.inline)
         }
     }
 
-    private func navigate() {
-        if self.appModel.isBackgrounded {
-            self.appModel.screen.errorText = ClawdisNodeError(
-                code: .backgroundUnavailable,
-                message: "NODE_BACKGROUND_UNAVAILABLE: screen commands require foreground").message
-            return
-        }
-        self.appModel.screen.errorText = nil
-        self.appModel.screen.reload()
-    }
+    // Navigation/mode selection is agent-driven; no local controls here.
 }
