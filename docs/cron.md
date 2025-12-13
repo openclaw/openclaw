@@ -255,7 +255,7 @@ Add a `cron` command group (all commands should also support `--json` where sens
     - `--cron "<expr>" [--tz "<tz>"]`
   - target flags:
     - `--session main|isolated`
-    - `--wake now|next`
+    - `--wake now|next-heartbeat`
   - payload flags (choose one):
     - `--system-event "<text>"`
     - `--message "<agent message>" [--deliver] [--channel last|whatsapp|telegram] [--to <dest>]`
@@ -264,9 +264,10 @@ Add a `cron` command group (all commands should also support `--json` where sens
 - `clawdis cron rm <id>`
 - `clawdis cron enable <id>` / `clawdis cron disable <id>`
 - `clawdis cron run <id> [--force]` (debug)
+- `clawdis cron status` (scheduler enabled + next wake)
 
 Additionally:
-- `clawdis wake --mode now|next --text "<text>"` as a thin wrapper around `wake` for agents to call.
+- `clawdis wake --mode now|next-heartbeat --text "<text>"` as a thin wrapper around `wake` for agents to call.
 
 ## Examples
 
@@ -317,7 +318,7 @@ clawdis cron add \
 Enqueue a note for the main session but let the existing heartbeat cadence pick it up:
 
 ```bash
-clawdis wake --mode next --text "Next heartbeat: check battery + upcoming meetings."
+clawdis wake --mode next-heartbeat --text "Next heartbeat: check battery + upcoming meetings."
 ```
 
 ## Logging & observability
@@ -336,6 +337,8 @@ Suggested log events:
 - `cron: scheduler started` (jobCount, nextWakeAt)
 - `cron: job started` (jobId, scheduleKind, sessionTarget, wakeMode)
 - `cron: job finished` (status, durationMs, nextRunAtMs)
+- When `cron.enabled` is false, the Gateway logs `cron: disabled` and jobs will not run automatically (the CLI warns on `cron add`/`cron edit`).
+- Use `clawdis cron status` to confirm the scheduler is enabled and see the next wake time.
 
 ## Safety & security
 

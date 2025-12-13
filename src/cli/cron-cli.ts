@@ -1,7 +1,30 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+
+async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
+  try {
+    const res = (await callGatewayFromCli("cron.status", opts, {})) as {
+      enabled?: boolean;
+      storePath?: string;
+    };
+    if (res?.enabled === true) return;
+    const store = typeof res?.storePath === "string" ? res.storePath : "";
+    defaultRuntime.error(
+      [
+        "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
+        "Enable with `cron.enabled: true` in your clawdis config and restart the Gateway.",
+        store ? `store: ${store}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  } catch {
+    // Ignore status failures (older gateway, offline, etc.)
+  }
+}
 
 function parseDurationMs(input: string): number | null {
   const raw = input.trim();
@@ -69,6 +92,22 @@ export function registerCronCli(program: Command) {
   const cron = program
     .command("cron")
     .description("Manage cron jobs (via Gateway)");
+
+  addGatewayClientOptions(
+    cron
+      .command("status")
+      .description("Show cron scheduler status")
+      .option("--json", "Output JSON", false)
+      .action(async (opts) => {
+        try {
+          const res = await callGatewayFromCli("cron.status", opts, {});
+          defaultRuntime.log(JSON.stringify(res, null, 2));
+        } catch (err) {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
 
   addGatewayClientOptions(
     cron
@@ -250,6 +289,7 @@ export function registerCronCli(program: Command) {
 
           const res = await callGatewayFromCli("cron.add", opts, params);
           defaultRuntime.log(JSON.stringify(res, null, 2));
+          await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);
@@ -385,6 +425,7 @@ export function registerCronCli(program: Command) {
             patch,
           });
           defaultRuntime.log(JSON.stringify(res, null, 2));
+          await warnIfCronSchedulerDisabled(opts);
         } catch (err) {
           defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);
