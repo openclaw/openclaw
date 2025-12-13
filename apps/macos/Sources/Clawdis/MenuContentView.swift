@@ -18,11 +18,12 @@ struct MenuContent: View {
     @State private var sessionMenu: [SessionRow] = []
     @State private var contextSessions: [SessionRow] = []
     @State private var contextActiveCount: Int = 0
-    @State private var contextCardWidth: CGFloat = 0
+    @State private var contextCardWidth: CGFloat = 280
 
     private let activeSessionWindowSeconds: TimeInterval = 24 * 60 * 60
     private let contextCardPadding: CGFloat = 10
     private let contextPillHeight: CGFloat = 16
+    private let contextFallbackWidth: CGFloat = 280
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -293,7 +294,7 @@ struct MenuContent: View {
             }
             .onWidthChange { width in
                 // Keep a stable width; menu measurement can be noisy across opens.
-                let next = max(0, width)
+                let next = max(self.contextFallbackWidth, width)
                 if abs(next - self.contextCardWidth) > 1 {
                     self.contextCardWidth = next
                 }
@@ -310,10 +311,9 @@ struct MenuContent: View {
         return "\(count) active sessions"
     }
 
-    private var contextPillWidth: CGFloat? {
-        let width = self.contextCardWidth
-        guard width > 0 else { return nil }
-        return max(1, width - (self.contextCardPadding * 2))
+    private var contextPillWidth: CGFloat {
+        let base = self.contextCardWidth > 0 ? self.contextCardWidth : self.contextFallbackWidth
+        return max(1, base - (self.contextCardPadding * 2))
     }
 
     @ViewBuilder
@@ -321,55 +321,29 @@ struct MenuContent: View {
         let label = row.key
         let summary = row.tokens.contextSummaryShort
 
-        Group {
-            if let width = self.contextPillWidth {
-                ZStack(alignment: .center) {
-                    ContextUsageBar(
-                        usedTokens: row.tokens.total,
-                        contextTokens: row.tokens.contextTokens,
-                        width: width,
-                        height: self.contextPillHeight)
+        let width = self.contextPillWidth
+        ZStack(alignment: .center) {
+            ContextUsageBar(
+                usedTokens: row.tokens.total,
+                contextTokens: row.tokens.contextTokens,
+                width: width,
+                height: self.contextPillHeight)
 
-                    HStack(spacing: 8) {
-                        Text(label)
-                            .font(.caption.weight(row.key == "main" ? .semibold : .regular))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .layoutPriority(1)
-                        Spacer(minLength: 8)
-                        Text(summary)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 1)
-                }
-                .frame(width: width, height: self.contextPillHeight)
-            } else {
-                ZStack(alignment: .center) {
-                    ContextUsageBar(
-                        usedTokens: row.tokens.total,
-                        contextTokens: row.tokens.contextTokens,
-                        width: nil,
-                        height: self.contextPillHeight)
-
-                    HStack(spacing: 8) {
-                        Text(label)
-                            .font(.caption.weight(row.key == "main" ? .semibold : .regular))
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .layoutPriority(1)
-                        Spacer(minLength: 8)
-                        Text(summary)
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 1)
-                }
-                .frame(height: self.contextPillHeight)
+            HStack(spacing: 8) {
+                Text(label)
+                    .font(.caption.weight(row.key == "main" ? .semibold : .regular))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(1)
+                Spacer(minLength: 8)
+                Text(summary)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 1)
         }
+        .frame(width: width, height: self.contextPillHeight)
     }
 
     private var heartbeatStatusRow: some View {
