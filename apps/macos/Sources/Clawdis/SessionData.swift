@@ -238,7 +238,12 @@ enum SessionLoader {
         do {
             data = try await ControlChannel.shared.request(method: "sessions.list", params: params)
         } catch {
-            throw SessionLoadError.gatewayUnavailable(error.localizedDescription)
+            let msg = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+            if msg.localizedCaseInsensitiveContains("unknown method: sessions.list") {
+                throw SessionLoadError.gatewayUnavailable(
+                    "Gateway is too old (missing sessions.list). Restart/update the gateway.")
+            }
+            throw SessionLoadError.gatewayUnavailable(msg)
         }
 
         let decoded: GatewaySessionsListResponse

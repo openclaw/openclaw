@@ -122,7 +122,15 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
             self.cacheUpdatedAt = Date()
         } catch {
             if self.cachedRows.isEmpty {
-                self.cacheErrorText = "Could not load sessions"
+                let raw = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    self.cacheErrorText = "Could not load sessions"
+                } else {
+                    // Keep the menu readable: one line, short.
+                    let firstLine = trimmed.split(whereSeparator: \.isNewline).first.map(String.init) ?? trimmed
+                    self.cacheErrorText = firstLine.count > 90 ? "\(firstLine.prefix(87))…" : firstLine
+                }
             }
             self.cacheUpdatedAt = Date()
         }
