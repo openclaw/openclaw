@@ -6,12 +6,20 @@ actor RemoteTunnelManager {
 
     private var controlTunnel: WebChatTunnel?
 
-    func controlTunnelPortIfRunning() -> UInt16? {
+    func controlTunnelPortIfRunning() async -> UInt16? {
         if let tunnel = self.controlTunnel,
            tunnel.process.isRunning,
            let local = tunnel.localPort
         {
             return local
+        }
+        // If a previous Clawdis run already has an SSH listener on the expected port (common after restarts),
+        // reuse it instead of spawning new ssh processes that immediately fail with "Address already in use".
+        let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
+        if let desc = await PortGuardian.shared.describe(port: Int(desiredPort)),
+           desc.command.lowercased().contains("ssh")
+        {
+            return desiredPort
         }
         return nil
     }
@@ -27,7 +35,7 @@ actor RemoteTunnelManager {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
 
-        if let local = self.controlTunnelPortIfRunning() { return local }
+        if let local = await self.controlTunnelPortIfRunning() { return local }
 
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
         let tunnel = try await WebChatTunnel.create(
