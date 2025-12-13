@@ -1,4 +1,3 @@
-import AppKit
 import SwiftUI
 
 struct ContextUsageBar: View {
@@ -26,27 +25,14 @@ struct ContextUsageBar: View {
     }
 
     var body: some View {
-        // SwiftUI menus (MenuBarExtraStyle.menu) drop certain view types (including ProgressView/Canvas).
-        // Render the bar as an image to reliably display inside the menu.
+        let fraction = self.clampedFractionUsed
         Group {
             if let width = self.width, width > 0 {
-                Image(nsImage: Self.renderBar(
-                    width: width,
-                    height: self.height,
-                    fractionUsed: self.clampedFractionUsed,
-                    percentUsed: self.percentUsed))
-                    .resizable()
-                    .interpolation(.none)
+                self.barBody(width: width, fraction: fraction)
                     .frame(width: width, height: self.height)
             } else {
                 GeometryReader { proxy in
-                    Image(nsImage: Self.renderBar(
-                        width: proxy.size.width,
-                        height: self.height,
-                        fractionUsed: self.clampedFractionUsed,
-                        percentUsed: self.percentUsed))
-                        .resizable()
-                        .interpolation(.none)
+                    self.barBody(width: proxy.size.width, fraction: fraction)
                         .frame(width: proxy.size.width, height: self.height)
                 }
                 .frame(height: self.height)
@@ -62,48 +48,27 @@ struct ContextUsageBar: View {
         return "\(pct) percent used"
     }
 
-    private static func renderBar(
-        width: CGFloat,
-        height: CGFloat,
-        fractionUsed: Double,
-        percentUsed: Int?) -> NSImage
-    {
-        let clamped = min(1, max(0, fractionUsed))
-        let size = NSSize(width: max(1, width), height: max(1, height))
-        let image = NSImage(size: size)
-        image.isTemplate = false
+    @ViewBuilder
+    private func barBody(width: CGFloat, fraction: Double) -> some View {
+        let radius = self.height / 2
+        let trackFill = Color.white.opacity(0.12)
+        let trackStroke = Color.white.opacity(0.18)
+        let fillWidth = max(1, floor(width * CGFloat(fraction)))
 
-        image.lockFocus()
-        defer { image.unlockFocus() }
+        ZStack(alignment: .leading) {
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(trackFill)
+                .overlay {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                        .strokeBorder(trackStroke, lineWidth: 0.75)
+                }
 
-        let rect = NSRect(origin: .zero, size: size)
-        let radius = rect.height / 2
-
-        let background = NSColor.white.withAlphaComponent(0.12)
-        let stroke = NSColor.white.withAlphaComponent(0.18)
-
-        let fill: NSColor = {
-            guard let pct = percentUsed else { return NSColor.secondaryLabelColor }
-            if pct >= 95 { return .systemRed }
-            if pct >= 80 { return .systemOrange }
-            if pct >= 60 { return .systemYellow }
-            return .systemGreen
-        }()
-
-        let track = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        background.setFill()
-        track.fill()
-        stroke.setStroke()
-        track.lineWidth = 0.75
-        track.stroke()
-
-        let fillWidth = max(1, floor(rect.width * clamped))
-        let fillRect = NSRect(x: rect.minX, y: rect.minY, width: fillWidth, height: rect.height)
-        let clip = NSBezierPath(roundedRect: rect, xRadius: radius, yRadius: radius)
-        clip.addClip()
-        fill.setFill()
-        NSBezierPath(rect: fillRect).fill()
-
-        return image
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(self.tint)
+                .frame(width: fillWidth)
+                .mask {
+                    RoundedRectangle(cornerRadius: radius, style: .continuous)
+                }
+        }
     }
 }

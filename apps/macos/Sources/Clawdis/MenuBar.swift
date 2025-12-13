@@ -15,6 +15,7 @@ struct ClawdisApp: App {
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
+    @State private var menuInjector = MenuContextCardInjector.shared
 
     @MainActor
     private func updateStatusHighlight() {
@@ -42,6 +43,7 @@ struct ClawdisApp: App {
             self.statusItem = item
             self.applyStatusItemAppearance(paused: self.state.isPaused)
             self.installStatusItemMouseHandler(for: item)
+            self.menuInjector.install(into: item)
         }
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused)

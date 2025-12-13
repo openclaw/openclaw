@@ -16,14 +16,6 @@ struct MenuContent: View {
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var sessionMenu: [SessionRow] = []
-    @State private var contextSessions: [SessionRow] = []
-    @State private var contextActiveCount: Int = 0
-    @State private var contextCardWidth: CGFloat = 320
-
-    private let activeSessionWindowSeconds: TimeInterval = 24 * 60 * 60
-    private let contextCardPadding: CGFloat = 10
-    private let contextBarHeight: CGFloat = 4
-    private let contextFallbackWidth: CGFloat = 320
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -32,7 +24,6 @@ struct MenuContent: View {
                 Text(label)
             }
             self.statusRow
-            self.contextCardRow
             Toggle(isOn: self.heartbeatsBinding) { Text("Send Heartbeats") }
             self.heartbeatStatusRow
             Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
@@ -191,7 +182,6 @@ struct MenuContent: View {
         }
         .task {
             await self.reloadSessionMenu()
-            await self.reloadContextSessions()
         }
         .task {
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
@@ -255,75 +245,6 @@ struct MenuContent: View {
             })
             .buttonStyle(.plain)
             .disabled(true)
-    }
-
-    @ViewBuilder
-    private var contextCardRow: some View {
-        MenuHostedItem(
-            width: self.contextCardWidth,
-            rootView: AnyView(self.contextCardView))
-    }
-
-    private var contextPillWidth: CGFloat {
-        let base = self.contextCardWidth > 0 ? self.contextCardWidth : self.contextFallbackWidth
-        return max(1, base - (self.contextCardPadding * 2))
-    }
-
-    @ViewBuilder
-    private var contextCardView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Context")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 10)
-                Text(self.contextSubtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if self.contextSessions.isEmpty {
-                Text("No active sessions")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(self.contextSessions) { row in
-                        self.contextSessionRow(row)
-                    }
-                }
-            }
-        }
-        .padding(self.contextCardPadding)
-        .frame(width: self.contextCardWidth, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.white.opacity(0.04))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.06), lineWidth: 1)
-                }
-        }
-    }
-
-    private var contextSubtitle: String {
-        let count = self.contextActiveCount
-        if count == 1 { return "1 session · 24h" }
-        return "\(count) sessions · 24h"
-    }
-
-    @ViewBuilder
-    private func contextSessionRow(_ row: SessionRow) -> some View {
-        let width = self.contextPillWidth
-        ContextUsageRow(
-            sessionKey: row.key,
-            summary: row.tokens.contextSummaryShort,
-            usedTokens: row.tokens.total,
-            contextTokens: row.tokens.contextTokens,
-            width: width,
-            barHeight: self.contextBarHeight,
-            rowHeight: 18,
-            isMain: row.key == "main")
     }
 
     private var heartbeatStatusRow: some View {
@@ -475,40 +396,5 @@ struct MenuContent: View {
         let uid: String
         let name: String
         var id: String { self.uid }
-    }
-
-    private func reloadContextSessions() async {
-        let hints = SessionLoader.configHints()
-        let store = SessionLoader.resolveStorePath(override: hints.storePath)
-        let defaults = SessionDefaults(
-            model: hints.model ?? SessionLoader.fallbackModel,
-            contextTokens: hints.contextTokens ?? SessionLoader.fallbackContextTokens)
-
-        guard let rows = try? await SessionLoader.loadRows(at: store, defaults: defaults) else {
-            self.contextSessions = []
-            return
-        }
-
-        let now = Date()
-        let active = rows.filter { row in
-            guard let updatedAt = row.updatedAt else { return false }
-            return now.timeIntervalSince(updatedAt) <= self.activeSessionWindowSeconds
-        }
-
-        let activeCount = active.count
-        let main = rows.first(where: { $0.key == "main" })
-        var merged = active
-        if let main, !merged.contains(where: { $0.key == "main" }) {
-            merged.insert(main, at: 0)
-        }
-        // Keep stable ordering: main first, then most recent.
-        let sorted = merged.sorted { lhs, rhs in
-            if lhs.key == "main" { return true }
-            if rhs.key == "main" { return false }
-            return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
-        }
-
-        self.contextSessions = sorted
-        self.contextActiveCount = activeCount
     }
 }
