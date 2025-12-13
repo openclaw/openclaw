@@ -15,4 +15,4 @@ open ClawdisNode.xcodeproj
 ```
 
 ## Shared packages
-- `../shared/ClawdisNodeKit` — shared types/constants used by iOS (and later macOS bridge + gateway routing).
+- `../shared/ClawdisKit` — shared types/constants used by iOS (and later macOS bridge + gateway routing).

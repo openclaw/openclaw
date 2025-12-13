@@ -6,8 +6,8 @@ options:
   xcodeVersion: "16.0"
 
 packages:
-  ClawdisNodeKit:
-    path: ../shared/ClawdisNodeKit
+  ClawdisKit:
+    path: ../shared/ClawdisKit
 
 targets:
   ClawdisNode:
@@ -16,7 +16,7 @@ targets:
     sources:
       - path: Sources
     dependencies:
-      - package: ClawdisNodeKit
+      - package: ClawdisKit
     preBuildScripts:
       - name: SwiftFormat (lint)
         script: |
@@ -27,7 +27,7 @@ targets:
           fi
           swiftformat --lint --config "$SRCROOT/../../.swiftformat" \
             "$SRCROOT/Sources" \
-            "$SRCROOT/../shared/ClawdisNodeKit/Sources"
+            "$SRCROOT/../shared/ClawdisKit/Sources"
       - name: SwiftLint
         script: |
           set -euo pipefail

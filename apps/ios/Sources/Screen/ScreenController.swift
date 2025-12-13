@@ -1,4 +1,4 @@
-import ClawdisNodeKit
+import ClawdisKit
 import SwiftUI
 import WebKit
 

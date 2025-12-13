@@ -1,5 +1,5 @@
 import AppKit
-import ClawdisNodeKit
+import ClawdisKit
 import Foundation
 import Network
 import OSLog

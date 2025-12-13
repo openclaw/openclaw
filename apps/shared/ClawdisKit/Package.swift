@@ -3,20 +3,19 @@
 import PackageDescription
 
 let package = Package(
-    name: "ClawdisNodeKit",
+    name: "ClawdisKit",
     platforms: [
         .iOS(.v17),
         .macOS(.v15),
     ],
     products: [
-        .library(name: "ClawdisNodeKit", targets: ["ClawdisNodeKit"]),
+        .library(name: "ClawdisKit", targets: ["ClawdisKit"]),
     ],
     targets: [
         .target(
-            name: "ClawdisNodeKit",
+            name: "ClawdisKit",
             dependencies: [],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
     ])
-
