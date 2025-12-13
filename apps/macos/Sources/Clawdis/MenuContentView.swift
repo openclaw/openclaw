@@ -65,130 +65,10 @@ struct MenuContent: View {
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
+            self.debugMenu
             Button("About Clawdis") { self.open(tab: .about) }
             if let updater, updater.isAvailable {
                 Button("Check for Updates…") { updater.checkForUpdates(nil) }
-            }
-            if self.state.debugPaneEnabled {
-                Menu("Debug") {
-                    Menu {
-                        ForEach(self.sessionMenu) { row in
-                            Menu(row.key) {
-                                Menu("Thinking") {
-                                    ForEach(["low", "medium", "high", "default"], id: \.self) { level in
-                                        let normalized = level == "default" ? nil : level
-                                        Button {
-                                            Task {
-                                                try? await DebugActions.updateSession(
-                                                    key: row.key,
-                                                    thinking: normalized,
-                                                    verbose: row.verboseLevel)
-                                                await self.reloadSessionMenu()
-                                            }
-                                        } label: {
-                                            Label(
-                                                level.capitalized,
-                                                systemImage: row.thinkingLevel == normalized ? "checkmark" : "")
-                                        }
-                                    }
-                                }
-                                Menu("Verbose") {
-                                    ForEach(["on", "off", "default"], id: \.self) { level in
-                                        let normalized = level == "default" ? nil : level
-                                        Button {
-                                            Task {
-                                                try? await DebugActions.updateSession(
-                                                    key: row.key,
-                                                    thinking: row.thinkingLevel,
-                                                    verbose: normalized)
-                                                await self.reloadSessionMenu()
-                                            }
-                                        } label: {
-                                            Label(
-                                                level.capitalized,
-                                                systemImage: row.verboseLevel == normalized ? "checkmark" : "")
-                                        }
-                                    }
-                                }
-                                Button {
-                                    DebugActions.openSessionStoreInCode()
-                                } label: {
-                                    Label("Open Session Log", systemImage: "doc.text")
-                                }
-                            }
-                        }
-                        Divider()
-                    } label: {
-                        Label("Sessions", systemImage: "clock.arrow.circlepath")
-                    }
-                    Divider()
-                    Button {
-                        DebugActions.openConfigFolder()
-                    } label: {
-                        Label("Open Config Folder", systemImage: "folder")
-                    }
-                    Button {
-                        Task { await DebugActions.runHealthCheckNow() }
-                    } label: {
-                        Label("Run Health Check Now", systemImage: "stethoscope")
-                    }
-                    Button {
-                        Task { _ = await DebugActions.sendTestHeartbeat() }
-                    } label: {
-                        Label("Send Test Heartbeat", systemImage: "waveform.path.ecg")
-                    }
-                    Button {
-                        Task { _ = await DebugActions.toggleVerboseLoggingMain() }
-                    } label: {
-                        Label(
-                            DebugActions.verboseLoggingEnabledMain
-                                ? "Verbose Logging (Main): On"
-                                : "Verbose Logging (Main): Off",
-                            systemImage: "text.alignleft")
-                    }
-                    Button {
-                        DebugActions.openSessionStore()
-                    } label: {
-                        Label("Open Session Store", systemImage: "externaldrive")
-                    }
-                    Divider()
-                    Button {
-                        DebugActions.openAgentEventsWindow()
-                    } label: {
-                        Label("Open Agent Events…", systemImage: "bolt.horizontal.circle")
-                    }
-                    Button {
-                        DebugActions.openLog()
-                    } label: {
-                        Label("Open Log", systemImage: "doc.text.magnifyingglass")
-                    }
-                    Button {
-                        Task { _ = await DebugActions.sendDebugVoice() }
-                    } label: {
-                        Label("Send Debug Voice Text", systemImage: "waveform.circle")
-                    }
-                    Button {
-                        Task { await DebugActions.sendTestNotification() }
-                    } label: {
-                        Label("Send Test Notification", systemImage: "bell")
-                    }
-                    Button {
-                        Task { await DebugActions.openChatInBrowser() }
-                    } label: {
-                        Label("Open Chat in Browser…", systemImage: "safari")
-                    }
-                    Divider()
-                    Button {
-                        DebugActions.restartGateway()
-                    } label: {
-                        Label("Restart Gateway", systemImage: "arrow.clockwise")
-                    }
-                    Button {
-                        DebugActions.restartApp()
-                    } label: {
-                        Label("Restart App", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                }
             }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }
@@ -208,6 +88,127 @@ struct MenuContent: View {
         }
         .onAppear {
             self.browserControlEnabled = ClawdisConfigFile.browserControlEnabled()
+        }
+    }
+
+    @ViewBuilder
+    private var debugMenu: some View {
+        if self.state.debugPaneEnabled {
+            Menu("Debug") {
+                Menu {
+                    ForEach(self.sessionMenu) { row in
+                        Menu(row.key) {
+                            Menu("Thinking") {
+                                ForEach(["low", "medium", "high", "default"], id: \.self) { level in
+                                    let normalized = level == "default" ? nil : level
+                                    Button {
+                                        Task {
+                                            try? await DebugActions.updateSession(
+                                                key: row.key,
+                                                thinking: normalized,
+                                                verbose: row.verboseLevel)
+                                            await self.reloadSessionMenu()
+                                        }
+                                    } label: {
+                                        Label(level.capitalized, systemImage: row.thinkingLevel == normalized ? "checkmark" : "")
+                                    }
+                                }
+                            }
+                            Menu("Verbose") {
+                                ForEach(["on", "off", "default"], id: \.self) { level in
+                                    let normalized = level == "default" ? nil : level
+                                    Button {
+                                        Task {
+                                            try? await DebugActions.updateSession(
+                                                key: row.key,
+                                                thinking: row.thinkingLevel,
+                                                verbose: normalized)
+                                            await self.reloadSessionMenu()
+                                        }
+                                    } label: {
+                                        Label(level.capitalized, systemImage: row.verboseLevel == normalized ? "checkmark" : "")
+                                    }
+                                }
+                            }
+                            Button {
+                                DebugActions.openSessionStoreInCode()
+                            } label: {
+                                Label("Open Session Log", systemImage: "doc.text")
+                            }
+                        }
+                    }
+                    Divider()
+                } label: {
+                    Label("Sessions", systemImage: "clock.arrow.circlepath")
+                }
+                Divider()
+                Button {
+                    DebugActions.openConfigFolder()
+                } label: {
+                    Label("Open Config Folder", systemImage: "folder")
+                }
+                Button {
+                    Task { await DebugActions.runHealthCheckNow() }
+                } label: {
+                    Label("Run Health Check Now", systemImage: "stethoscope")
+                }
+                Button {
+                    Task { _ = await DebugActions.sendTestHeartbeat() }
+                } label: {
+                    Label("Send Test Heartbeat", systemImage: "waveform.path.ecg")
+                }
+                Button {
+                    Task { _ = await DebugActions.toggleVerboseLoggingMain() }
+                } label: {
+                    Label(
+                        DebugActions.verboseLoggingEnabledMain
+                            ? "Verbose Logging (Main): On"
+                            : "Verbose Logging (Main): Off",
+                        systemImage: "text.alignleft")
+                }
+                Button {
+                    DebugActions.openSessionStore()
+                } label: {
+                    Label("Open Session Store", systemImage: "externaldrive")
+                }
+                Divider()
+                Button {
+                    DebugActions.openAgentEventsWindow()
+                } label: {
+                    Label("Open Agent Events…", systemImage: "bolt.horizontal.circle")
+                }
+                Button {
+                    DebugActions.openLog()
+                } label: {
+                    Label("Open Log", systemImage: "doc.text.magnifyingglass")
+                }
+                Button {
+                    Task { _ = await DebugActions.sendDebugVoice() }
+                } label: {
+                    Label("Send Debug Voice Text", systemImage: "waveform.circle")
+                }
+                Button {
+                    Task { await DebugActions.sendTestNotification() }
+                } label: {
+                    Label("Send Test Notification", systemImage: "bell")
+                }
+                Button {
+                    Task { await DebugActions.openChatInBrowser() }
+                } label: {
+                    Label("Open Chat in Browser…", systemImage: "safari")
+                }
+                Divider()
+                Button {
+                    DebugActions.restartGateway()
+                } label: {
+                    Label("Restart Gateway", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    DebugActions.restartApp()
+                } label: {
+                    Label("Restart App", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
         }
     }
 
