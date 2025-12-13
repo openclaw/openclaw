@@ -164,10 +164,21 @@ enum GatewayEnvironment {
     static func installGlobal(version: Semver?, statusHandler: @escaping @Sendable (String) -> Void) async {
         let preferred = CommandResolver.preferredPaths().joined(separator: ":")
         let target = version?.description ?? "latest"
-        let pnpm = CommandResolver.findExecutable(named: "pnpm") ?? "pnpm"
-        let cmd = [pnpm, "add", "-g", "clawdis@\(target)"]
+        let npm = CommandResolver.findExecutable(named: "npm")
+        let pnpm = CommandResolver.findExecutable(named: "pnpm")
+        let bun = CommandResolver.findExecutable(named: "bun")
+        let (label, cmd): (String, [String]) =
+            if let npm {
+                ("npm", [npm, "install", "-g", "clawdis@\(target)"])
+            } else if let pnpm {
+                ("pnpm", [pnpm, "add", "-g", "clawdis@\(target)"])
+            } else if let bun {
+                ("bun", [bun, "add", "-g", "clawdis@\(target)"])
+            } else {
+                ("npm", ["npm", "install", "-g", "clawdis@\(target)"])
+            }
 
-        statusHandler("Installing clawdis@\(target) via pnpm…")
+        statusHandler("Installing clawdis@\(target) via \(label)…")
         let response = await ShellExecutor.run(command: cmd, cwd: nil, env: ["PATH": preferred], timeout: 300)
         if response.ok {
             statusHandler("Installed clawdis@\(target)")

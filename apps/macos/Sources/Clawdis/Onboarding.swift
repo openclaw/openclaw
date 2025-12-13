@@ -291,7 +291,8 @@ struct OnboardingView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
                     } else {
-                        Text("Uses \"pnpm add -g clawdis@<version>\" on your PATH. We keep the gateway on port 18789.")
+                        Text(
+                            "Uses \"npm install -g clawdis@<version>\" on your PATH. We keep the gateway on port 18789.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)
