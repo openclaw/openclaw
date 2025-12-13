@@ -156,4 +156,37 @@ describe("CronService", () => {
     cron.stop();
     await store.cleanup();
   });
+
+  it("status reports next wake when enabled", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestReplyHeartbeatNow = vi.fn();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestReplyHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:05.000Z");
+    await cron.add({
+      enabled: true,
+      schedule: { kind: "at", atMs },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    const status = await cron.status();
+    expect(status.enabled).toBe(true);
+    expect(status.jobs).toBe(1);
+    expect(status.nextWakeAtMs).toBe(atMs);
+
+    cron.stop();
+    await store.cleanup();
+  });
 });

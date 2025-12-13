@@ -15,6 +15,7 @@ import { startGatewayServer } from "./server.js";
 let testSessionStorePath: string | undefined;
 let testAllowFrom: string[] | undefined;
 let testCronStorePath: string | undefined;
+let testCronEnabled: boolean | undefined = false;
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
     inbound: {
@@ -25,7 +26,12 @@ vi.mock("../config/config.js", () => ({
         session: { mainKey: "main", store: testSessionStorePath },
       },
     },
-    cron: { enabled: false, store: testCronStorePath },
+    cron: (() => {
+      const cron: Record<string, unknown> = {};
+      if (typeof testCronEnabled === "boolean") cron.enabled = testCronEnabled;
+      if (typeof testCronStorePath === "string") cron.store = testCronStorePath;
+      return Object.keys(cron).length > 0 ? cron : undefined;
+    })(),
   }),
 }));
 
@@ -440,6 +446,120 @@ describe("gateway server", () => {
     await server.close();
     await fs.rm(dir, { recursive: true, force: true });
     testCronStorePath = undefined;
+  });
+
+  test("enables cron scheduler by default and runs due jobs automatically", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdis-gw-cron-default-on-"),
+    );
+    testCronStorePath = path.join(dir, "cron.json");
+    testCronEnabled = undefined; // omitted config => enabled by default
+
+    try {
+      await fs.writeFile(
+        testCronStorePath,
+        JSON.stringify({ version: 1, jobs: [] }),
+      );
+
+      const { server, ws } = await startServerWithClient();
+      await connectOk(ws);
+
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "cron-status-1",
+          method: "cron.status",
+          params: {},
+        }),
+      );
+      const statusRes = await onceMessage<{
+        type: "res";
+        id: string;
+        ok: boolean;
+        payload?: unknown;
+      }>(ws, (o) => o.type === "res" && o.id === "cron-status-1");
+      expect(statusRes.ok).toBe(true);
+      const statusPayload = statusRes.payload as
+        | { enabled?: unknown; storePath?: unknown }
+        | undefined;
+      expect(statusPayload?.enabled).toBe(true);
+      expect(String(statusPayload?.storePath ?? "")).toContain("cron.json");
+
+      const atMs = Date.now() + 80;
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "cron-add-auto-1",
+          method: "cron.add",
+          params: {
+            enabled: true,
+            schedule: { kind: "at", atMs },
+            sessionTarget: "main",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "systemEvent", text: "auto" },
+          },
+        }),
+      );
+      const addRes = await onceMessage<{
+        type: "res";
+        ok: boolean;
+        payload?: unknown;
+      }>(ws, (o) => o.type === "res" && o.id === "cron-add-auto-1");
+      expect(addRes.ok).toBe(true);
+      const jobId = String(
+        (addRes.payload as { id?: unknown } | null)?.id ?? "",
+      );
+      expect(jobId.length > 0).toBe(true);
+
+      const finishedEvt = await onceMessage<{
+        type: "event";
+        event: string;
+        payload?: { jobId?: string; action?: string; status?: string } | null;
+      }>(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "cron" &&
+          (o.payload as { jobId?: unknown } | null)?.jobId === jobId &&
+          (o.payload as { action?: unknown } | null)?.action === "finished",
+        8000,
+      );
+      expect(finishedEvt.payload?.status).toBe("ok");
+
+      const waitForRuns = async () => {
+        for (let i = 0; i < 200; i++) {
+          ws.send(
+            JSON.stringify({
+              type: "req",
+              id: "cron-runs-auto-1",
+              method: "cron.runs",
+              params: { id: jobId, limit: 10 },
+            }),
+          );
+          const runsRes = await onceMessage<{
+            type: "res";
+            ok: boolean;
+            payload?: unknown;
+          }>(ws, (o) => o.type === "res" && o.id === "cron-runs-auto-1", 8000);
+          expect(runsRes.ok).toBe(true);
+          const entries = (runsRes.payload as { entries?: unknown } | null)
+            ?.entries;
+          if (Array.isArray(entries) && entries.length > 0) return entries;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        throw new Error("timeout waiting for cron.runs entries");
+      };
+
+      const entries = (await waitForRuns()) as Array<{ jobId?: unknown }>;
+      expect(entries.at(-1)?.jobId).toBe(jobId);
+
+      ws.close();
+      await server.close();
+    } finally {
+      testCronEnabled = false;
+      testCronStorePath = undefined;
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   test("broadcasts heartbeat events and serves last-heartbeat", async () => {
