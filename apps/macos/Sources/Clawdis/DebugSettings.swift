@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 struct DebugSettings: View {
     private let isPreview = ProcessInfo.processInfo.isPreview
+    private let labelColumnWidth: CGFloat = 140
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
@@ -37,29 +38,194 @@ struct DebugSettings: View {
 
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 10) {
-                LabeledContent("Health") {
+            VStack(alignment: .leading, spacing: 14) {
+                self.header
+
+                self.appInfoSection
+                self.gatewaySection
+                self.logsSection
+                self.portsSection
+                self.pathsSection
+                self.quickActionsSection
+                self.canvasSection
+                self.experimentsSection
+
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 24)
+            .padding(.vertical, 18)
+        }
+        .task {
+            guard !self.isPreview else { return }
+            await self.reloadModels()
+            self.loadSessionStorePath()
+        }
+        .alert(item: self.$pendingKill) { listener in
+            Alert(
+                title: Text("Kill \(listener.command) (\(listener.pid))?"),
+                message: Text("This process looks expected for the current mode. Kill anyway?"),
+                primaryButton: .destructive(Text("Kill")) {
+                    Task { await self.killConfirmed(listener.pid) }
+                },
+                secondaryButton: .cancel())
+        }
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Debug")
+                .font(.title3.weight(.semibold))
+            Text("Tools for diagnosing local issues (Gateway, ports, logs, Canvas).")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func gridLabel(_ text: String) -> some View {
+        Text(text)
+            .foregroundStyle(.secondary)
+            .frame(width: self.labelColumnWidth, alignment: .leading)
+    }
+
+    private var appInfoSection: some View {
+        GroupBox("App") {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                GridRow {
+                    self.gridLabel("Health")
                     HStack(spacing: 8) {
                         Circle().fill(self.healthStore.state.tint).frame(width: 10, height: 10)
                         Text(self.healthStore.summaryLine)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                LabeledContent("CLI helper") {
+                GridRow {
+                    self.gridLabel("CLI helper")
                     let loc = CLIInstaller.installedLocation()
                     Text(loc ?? "missing")
                         .font(.caption.monospaced())
                         .foregroundStyle(loc == nil ? Color.red : Color.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                LabeledContent("PID") { Text("\(ProcessInfo.processInfo.processIdentifier)") }
-                LabeledContent("Log file") {
-                    Button("Open pino log") { DebugActions.openLog() }
-                        .help(DebugActions.pinoLogPath())
-                    Text(DebugActions.pinoLogPath())
+                GridRow {
+                    self.gridLabel("PID")
+                    Text("\(ProcessInfo.processInfo.processIdentifier)")
+                }
+                GridRow {
+                    self.gridLabel("Binary path")
+                    Text(Bundle.main.bundlePath)
                         .font(.caption2.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                LabeledContent("Diagnostics log") {
+            }
+        }
+    }
+
+    private var gatewaySection: some View {
+        GroupBox("Gateway") {
+            VStack(alignment: .leading, spacing: 10) {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        self.gridLabel("Status")
+                        HStack(spacing: 8) {
+                            Text(self.gatewayManager.status.label)
+                            Text("Restarts: \(self.gatewayManager.restartCount)")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    GridRow {
+                        self.gridLabel("Attach only")
+                        Toggle("Only attach (don’t spawn locally)", isOn: self.$attachExistingGatewayOnly)
+                            .toggleStyle(.switch)
+                            .help(
+                                "When enabled in local mode, the mac app will only connect to an already-running gateway and will not start one itself.")
+                    }
+                    GridRow {
+                        self.gridLabel("Deep links")
+                        Toggle("Allow URL scheme (agent)", isOn: self.$deepLinkAgentEnabled)
+                            .toggleStyle(.switch)
+                            .help("Enables handling of clawdis://agent?... deep links to trigger an agent run.")
+                    }
+                }
+
+                let key = DeepLinkHandler.currentKey()
+                HStack(spacing: 8) {
+                    Text("Key")
+                        .foregroundStyle(.secondary)
+                        .frame(width: self.labelColumnWidth, alignment: .leading)
+                    Text(key)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Button("Copy") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(key, forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Copy sample URL") {
+                        let msg = "Hello from deep link"
+                        let encoded = msg.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? msg
+                        let url = "clawdis://agent?message=\(encoded)&key=\(key)"
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(url, forType: .string)
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Stdout / stderr")
+                        .font(.caption.weight(.semibold))
+                    ScrollView {
+                        Text(self.gatewayManager.log.isEmpty ? "—" : self.gatewayManager.log)
+                            .font(.caption.monospaced())
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(height: 180)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+
+                    HStack(spacing: 8) {
+                        Button("Restart Gateway") { DebugActions.restartGateway() }
+                        Button("Clear log") { GatewayProcessManager.shared.clearLog() }
+                        Spacer(minLength: 0)
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+    }
+
+    private var logsSection: some View {
+        GroupBox("Logs") {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                GridRow {
+                    self.gridLabel("Pino log")
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Button("Open") { DebugActions.openLog() }
+                                .buttonStyle(.bordered)
+                            Text(DebugActions.pinoLogPath())
+                                .font(.caption2.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+
+                GridRow {
+                    self.gridLabel("Diagnostics")
                     VStack(alignment: .leading, spacing: 6) {
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.switch)
@@ -79,119 +245,85 @@ struct DebugSettings: View {
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
                     }
                 }
-                LabeledContent("Binary path") { Text(Bundle.main.bundlePath).font(.footnote) }
-                LabeledContent("Gateway status") {
-                    HStack(spacing: 6) {
-                        Text(self.gatewayManager.status.label)
-                        Text("Restarts: \(self.gatewayManager.restartCount)")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Toggle("Only attach to existing gateway (don’t spawn locally)", isOn: self.$attachExistingGatewayOnly)
-                    .toggleStyle(.switch)
-                    .help(
-                        "When enabled in local mode, the mac app will only connect to an already-running gateway and will not start one itself.")
-                LabeledContent("URL scheme") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Allow URL scheme (agent)", isOn: self.$deepLinkAgentEnabled)
-                            .toggleStyle(.switch)
-                            .help("Enables handling of clawdis://agent?... deep links to trigger an agent run.")
-                        let key = DeepLinkHandler.currentKey()
-                        HStack(spacing: 8) {
-                            Text(key)
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                            Button("Copy key") {
-                                NSPasteboard.general.clearContents()
-                                NSPasteboard.general.setString(key, forType: .string)
-                            }
-                            .buttonStyle(.bordered)
-                        }
-                        Button("Copy sample agent URL") {
-                            let msg = "Hello from deep link"
-                            let encoded = msg.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? msg
-                            let url = "clawdis://agent?message=\(encoded)&key=\(key)"
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(url, forType: .string)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Gateway stdout/stderr")
+            }
+        }
+    }
+
+    private var portsSection: some View {
+        GroupBox("Ports") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Text("Port diagnostics")
                         .font(.caption.weight(.semibold))
-                    ScrollView {
-                        Text(self.gatewayManager.log.isEmpty ? "—" : self.gatewayManager.log)
-                            .font(.caption.monospaced())
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .textSelection(.enabled)
+                    if self.portCheckInFlight { ProgressView().controlSize(.small) }
+                    Spacer()
+                    Button("Check gateway ports") {
+                        Task { await self.runPortCheck() }
                     }
-                    .frame(height: 180)
-                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Color.secondary.opacity(0.2)))
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.portCheckInFlight)
                 }
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 8) {
-                        Text("Port diagnostics")
-                            .font(.caption.weight(.semibold))
-                        if self.portCheckInFlight { ProgressView().controlSize(.small) }
-                        Spacer()
-                        Button("Check gateway ports") {
-                            Task { await self.runPortCheck() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(self.portCheckInFlight)
-                    }
-                    if let portKillStatus {
-                        Text(portKillStatus)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
-                    if self.portReports.isEmpty, !self.portCheckInFlight {
-                        Text("Check which process owns 18788/18789 and suggest fixes.")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(self.portReports) { report in
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Port \(report.port)")
-                                    .font(.footnote.weight(.semibold))
-                                Text(report.summary)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                ForEach(report.listeners) { listener in
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        HStack(spacing: 8) {
-                                            Text("\(listener.command) (\(listener.pid))")
-                                                .font(.caption.monospaced())
-                                                .foregroundStyle(listener.expected ? .secondary : Color.red)
-                                                .lineLimit(1)
-                                            Spacer()
-                                            Button("Kill") {
-                                                self.requestKill(listener)
-                                            }
-                                            .buttonStyle(.bordered)
+
+                if let portKillStatus {
+                    Text(portKillStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if self.portReports.isEmpty, !self.portCheckInFlight {
+                    Text("Check which process owns 18788/18789 and suggest fixes.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(self.portReports) { report in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Port \(report.port)")
+                                .font(.footnote.weight(.semibold))
+                            Text(report.summary)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach(report.listeners) { listener in
+                                VStack(alignment: .leading, spacing: 2) {
+                                    HStack(spacing: 8) {
+                                        Text("\(listener.command) (\(listener.pid))")
+                                            .font(.caption.monospaced())
+                                            .foregroundStyle(listener.expected ? .secondary : Color.red)
+                                            .lineLimit(1)
+                                        Spacer()
+                                        Button("Kill") {
+                                            self.requestKill(listener)
                                         }
-                                        Text(listener.fullCommand)
-                                            .font(.caption2.monospaced())
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                            .truncationMode(.middle)
+                                        .buttonStyle(.bordered)
                                     }
-                                    .padding(6)
-                                    .background(Color.secondary.opacity(0.05))
-                                    .cornerRadius(4)
+                                    Text(listener.fullCommand)
+                                        .font(.caption2.monospaced())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                        .truncationMode(.middle)
                                 }
+                                .padding(6)
+                                .background(Color.secondary.opacity(0.05))
+                                .cornerRadius(4)
                             }
-                            .padding(8)
-                            .background(Color.secondary.opacity(0.08))
-                            .cornerRadius(6)
                         }
+                        .padding(8)
+                        .background(Color.secondary.opacity(0.08))
+                        .cornerRadius(6)
                     }
                 }
+            }
+        }
+    }
+
+    private var pathsSection: some View {
+        GroupBox("Paths") {
+            VStack(alignment: .leading, spacing: 12) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Clawdis project root")
                         .font(.caption.weight(.semibold))
@@ -214,73 +346,93 @@ struct DebugSettings: View {
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
-                LabeledContent("Session store") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            TextField("Path", text: self.$sessionStorePath)
-                                .textFieldStyle(.roundedBorder)
-                                .font(.caption.monospaced())
-                                .frame(width: 340)
-                            Button("Save") { self.saveSessionStorePath() }
-                                .buttonStyle(.borderedProminent)
-                        }
-                        if let sessionStoreSaveError {
-                            Text(sessionStoreSaveError)
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Used by the CLI session loader; stored in ~/.clawdis/clawdis.json.")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                LabeledContent("Model catalog") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(self.modelCatalogPath)
-                            .font(.caption.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
-                        HStack(spacing: 8) {
-                            Button {
-                                self.chooseCatalogFile()
-                            } label: {
-                                Label("Choose models.generated.ts…", systemImage: "folder")
-                            }
-                            .buttonStyle(.bordered)
 
-                            Button {
-                                Task { await self.reloadModels() }
-                            } label: {
-                                Label(
-                                    self.modelsLoading ? "Reloading…" : "Reload models",
-                                    systemImage: "arrow.clockwise")
+                Divider()
+
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        self.gridLabel("Session store")
+                        VStack(alignment: .leading, spacing: 6) {
+                            HStack(spacing: 8) {
+                                TextField("Path", text: self.$sessionStorePath)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.caption.monospaced())
+                                    .frame(width: 360)
+                                Button("Save") { self.saveSessionStorePath() }
+                                    .buttonStyle(.borderedProminent)
                             }
-                            .buttonStyle(.bordered)
-                            .disabled(self.modelsLoading)
+                            if let sessionStoreSaveError {
+                                Text(sessionStoreSaveError)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                Text("Used by the CLI session loader; stored in ~/.clawdis/clawdis.json.")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
-                        if let modelsError {
-                            Text(modelsError)
-                                .font(.footnote)
+                    }
+                    GridRow {
+                        self.gridLabel("Model catalog")
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(self.modelCatalogPath)
+                                .font(.caption.monospaced())
                                 .foregroundStyle(.secondary)
-                        } else if let modelsCount {
-                            Text("Loaded \(modelsCount) models")
+                                .lineLimit(2)
+                            HStack(spacing: 8) {
+                                Button {
+                                    self.chooseCatalogFile()
+                                } label: {
+                                    Label("Choose models.generated.ts…", systemImage: "folder")
+                                }
+                                .buttonStyle(.bordered)
+
+                                Button {
+                                    Task { await self.reloadModels() }
+                                } label: {
+                                    Label(
+                                        self.modelsLoading ? "Reloading…" : "Reload models",
+                                        systemImage: "arrow.clockwise")
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(self.modelsLoading)
+                            }
+                            if let modelsError {
+                                Text(modelsError)
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            } else if let modelsCount {
+                                Text("Loaded \(modelsCount) models")
+                                    .font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Text("Used by the Config tab model picker; point at a different build when debugging.")
                                 .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.tertiary)
                         }
-                        Text("Used by the Config tab model picker; point at a different build when debugging.")
-                            .font(.footnote)
-                            .foregroundStyle(.tertiary)
                     }
                 }
-                Button("Send Test Notification") {
-                    Task { await DebugActions.sendTestNotification() }
+            }
+        }
+    }
+
+    private var quickActionsSection: some View {
+        GroupBox("Quick actions") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Button("Send Test Notification") {
+                        Task { await DebugActions.sendTestNotification() }
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button("Open Agent Events") {
+                        DebugActions.openAgentEventsWindow()
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.bordered)
-                Button("Open Agent Events") {
-                    DebugActions.openAgentEventsWindow()
-                }
-                .buttonStyle(.borderedProminent)
+
                 VStack(alignment: .leading, spacing: 6) {
                     Button {
                         Task { await self.sendVoiceDebug() }
@@ -312,126 +464,127 @@ struct DebugSettings: View {
                         }
                     }
                 }
-                HStack {
+
+                HStack(spacing: 8) {
                     Button("Restart app") { DebugActions.restartApp() }
                     Button("Reveal app in Finder") { self.revealApp() }
-                    Button("Restart Gateway") { DebugActions.restartGateway() }
-                    Button("Clear log") { GatewayProcessManager.shared.clearLog() }
+                    Spacer(minLength: 0)
                 }
                 .buttonStyle(.bordered)
-                Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Canvas")
-                        .font(.caption.weight(.semibold))
-                    Toggle("Allow Canvas (agent)", isOn: self.$canvasEnabled)
-                        .toggleStyle(.switch)
-                        .help(
-                            "When off, agent Canvas requests return “Canvas disabled by user”. Manual debug actions still work.")
-                    HStack(spacing: 8) {
-                        TextField("Session", text: self.$canvasSessionKey)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.caption.monospaced())
-                            .frame(width: 160)
-                        Button("Show panel") {
-                            Task { await self.canvasShow() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button("Hide panel") {
-                            CanvasManager.shared.hideAll()
-                            self.canvasStatus = "hidden"
-                            self.canvasError = nil
-                        }
-                        .buttonStyle(.bordered)
-                        Button("Write sample page") {
-                            Task { await self.canvasWriteSamplePage() }
-                        }
-                        .buttonStyle(.bordered)
+            }
+        }
+    }
+
+    private var canvasSection: some View {
+        GroupBox("Canvas") {
+            VStack(alignment: .leading, spacing: 10) {
+                Toggle("Allow Canvas (agent)", isOn: self.$canvasEnabled)
+                    .toggleStyle(.switch)
+                    .help(
+                        "When off, agent Canvas requests return “Canvas disabled by user”. Manual debug actions still work.")
+
+                HStack(spacing: 8) {
+                    TextField("Session", text: self.$canvasSessionKey)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        .frame(width: 160)
+                    Button("Show panel") {
+                        Task { await self.canvasShow() }
                     }
-                    HStack(spacing: 8) {
-                        TextField("Eval JS", text: self.$canvasEvalJS)
-                            .textFieldStyle(.roundedBorder)
-                            .font(.caption.monospaced())
-                            .frame(maxWidth: 420)
-                        Button("Eval") {
-                            Task { await self.canvasEval() }
-                        }
-                        .buttonStyle(.bordered)
-                        Button("Snapshot") {
-                            Task { await self.canvasSnapshot() }
-                        }
-                        .buttonStyle(.bordered)
+                    .buttonStyle(.borderedProminent)
+                    Button("Hide panel") {
+                        CanvasManager.shared.hideAll()
+                        self.canvasStatus = "hidden"
+                        self.canvasError = nil
                     }
-                    if let canvasStatus {
-                        Text(canvasStatus)
+                    .buttonStyle(.bordered)
+                    Button("Write sample page") {
+                        Task { await self.canvasWriteSamplePage() }
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                }
+
+                HStack(spacing: 8) {
+                    TextField("Eval JS", text: self.$canvasEvalJS)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.caption.monospaced())
+                        .frame(maxWidth: 520)
+                    Button("Eval") {
+                        Task { await self.canvasEval() }
+                    }
+                    .buttonStyle(.bordered)
+                    Button("Snapshot") {
+                        Task { await self.canvasSnapshot() }
+                    }
+                    .buttonStyle(.bordered)
+                    Spacer(minLength: 0)
+                }
+
+                if let canvasStatus {
+                    Text(canvasStatus)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                if let canvasEvalResult {
+                    Text("eval → \(canvasEvalResult)")
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+                if let canvasSnapshotPath {
+                    HStack(spacing: 8) {
+                        Text("snapshot → \(canvasSnapshotPath)")
                             .font(.caption2.monospaced())
                             .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
-                    }
-                    if let canvasEvalResult {
-                        Text("eval → \(canvasEvalResult)")
-                            .font(.caption2.monospaced())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+                            .lineLimit(1)
                             .truncationMode(.middle)
                             .textSelection(.enabled)
-                    }
-                    if let canvasSnapshotPath {
-                        HStack(spacing: 8) {
-                            Text("snapshot → \(canvasSnapshotPath)")
-                                .font(.caption2.monospaced())
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                            Button("Reveal") {
-                                NSWorkspace.shared
-                                    .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
-                            }
-                            .buttonStyle(.bordered)
+                        Button("Reveal") {
+                            NSWorkspace.shared
+                                .activateFileViewerSelecting([URL(fileURLWithPath: canvasSnapshotPath)])
                         }
-                    }
-                    if let canvasError {
-                        Text(canvasError)
-                            .font(.caption2)
-                            .foregroundStyle(.red)
-                    } else {
-                        Text("Tip: the session directory is returned by “Show panel”.")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
+                        .buttonStyle(.bordered)
+                        Spacer(minLength: 0)
                     }
                 }
-                LabeledContent("Icon override") {
-                    Picker("Icon override", selection: self.bindingOverride) {
+                if let canvasError {
+                    Text(canvasError)
+                        .font(.caption2)
+                        .foregroundStyle(.red)
+                } else {
+                    Text("Tip: the session directory is returned by “Show panel”.")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    private var experimentsSection: some View {
+        GroupBox("Experiments") {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                GridRow {
+                    self.gridLabel("Icon override")
+                    Picker("", selection: self.bindingOverride) {
                         ForEach(IconOverrideSelection.allCases) { option in
                             Text(option.label).tag(option.rawValue)
                         }
                     }
                     .labelsHidden()
-                    .frame(maxWidth: 280)
+                    .frame(maxWidth: 280, alignment: .leading)
                 }
-                Toggle("Use SwiftUI web chat (glass, gateway WS)", isOn: self.$webChatSwiftUIEnabled)
-                    .toggleStyle(.switch)
-                    .help(
-                        "When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
-                Spacer(minLength: 8)
+                GridRow {
+                    self.gridLabel("Web chat")
+                    Toggle("Use SwiftUI web chat (glass)", isOn: self.$webChatSwiftUIEnabled)
+                        .toggleStyle(.switch)
+                        .help(
+                            "When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the bundled WKWebView.")
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-        }
-        .task {
-            guard !self.isPreview else { return }
-            await self.reloadModels()
-            self.loadSessionStorePath()
-        }
-        .alert(item: self.$pendingKill) { listener in
-            Alert(
-                title: Text("Kill \(listener.command) (\(listener.pid))?"),
-                message: Text("This process looks expected for the current mode. Kill anyway?"),
-                primaryButton: .destructive(Text("Kill")) {
-                    Task { await self.killConfirmed(listener.pid) }
-                },
-                secondaryButton: .cancel())
         }
     }
 
