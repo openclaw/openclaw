@@ -408,34 +408,69 @@ struct ClawdisCLI {
 
     private static func printHelp() {
         let usage = """
-        clawdis-mac — talk to the running Clawdis.app XPC service
+        clawdis-mac — talk to the running Clawdis.app (local control socket)
 
         Usage:
           clawdis-mac [--json] <command> ...
-          clawdis-mac notify --title <t> --body <b> [--sound <name>] [--priority <passive|active|timeSensitive>] [--delivery <system|overlay|auto>]
-          clawdis-mac ensure-permissions
-            [--cap <notifications|accessibility|screenRecording|microphone|speechRecognition>]
-            [--interactive]
-          clawdis-mac ui screens
-          clawdis-mac ui screenshot [--screen-index <n>] [--window-id <u32>]
-          clawdis-mac run [--cwd <path>] [--env KEY=VAL] [--timeout <sec>] [--needs-screen-recording] <command ...>
-          clawdis-mac status
-          clawdis-mac rpc-status
-          clawdis-mac agent --message <text> [--thinking <low|default|high>]
-            [--session <key>] [--deliver] [--to <E.164>]
-          clawdis-mac node list
-          clawdis-mac node invoke --node <id> --command <name> [--params-json <json>]
-          clawdis-mac canvas show [--session <key>] [--path </...>]
-            [--x <screenX> --y <screenY>] [--width <w> --height <h>]
-          clawdis-mac canvas hide [--session <key>]
-          clawdis-mac canvas goto --path </...> [--session <key>]
-            [--x <screenX> --y <screenY>] [--width <w> --height <h>]
-          clawdis-mac canvas eval --js <code> [--session <key>]
-          clawdis-mac canvas snapshot [--out <path>] [--session <key>]
-          clawdis-mac browser status|start|stop|tabs|open|focus|close|screenshot
-          clawdis-mac --help
 
-        Default output is text. Use --json for machine-readable output.
+        Commands:
+          Notifications:
+            clawdis-mac notify --title <t> --body <b> [--sound <name>]
+              [--priority <passive|active|timeSensitive>] [--delivery <system|overlay|auto>]
+
+          Permissions:
+            clawdis-mac ensure-permissions
+              [--cap <notifications|accessibility|screenRecording|microphone|speechRecognition>]
+              [--interactive]
+
+          UI:
+            clawdis-mac ui screens
+            clawdis-mac ui screenshot [--screen-index <n>] [--window-id <u32>]
+
+          Shell:
+            clawdis-mac run [--cwd <path>] [--env KEY=VAL] [--timeout <sec>]
+              [--needs-screen-recording] <command ...>
+
+          Status:
+            clawdis-mac status
+            clawdis-mac rpc-status
+
+          Agent:
+            clawdis-mac agent --message <text> [--thinking <low|default|high>]
+              [--session <key>] [--deliver] [--to <E.164>]
+
+          Nodes:
+            clawdis-mac node list
+            clawdis-mac node invoke --node <id> --command <name> [--params-json <json>]
+
+          Canvas:
+            clawdis-mac canvas show [--session <key>] [--path </...>]
+              [--x <screenX> --y <screenY>] [--width <w> --height <h>]
+            clawdis-mac canvas hide [--session <key>]
+            clawdis-mac canvas goto --path </...> [--session <key>]
+              [--x <screenX> --y <screenY>] [--width <w> --height <h>]
+            clawdis-mac canvas eval --js <code> [--session <key>]
+            clawdis-mac canvas snapshot [--out <path>] [--session <key>]
+
+          Browser (clawd):
+            clawdis-mac browser status|start|stop|tabs|open|focus|close|screenshot
+
+        Browser notes:
+          - Uses clawd’s dedicated Chrome/Chromium profile (separate user-data dir).
+          - Talks to the gateway’s loopback browser-control server (config: ~/.clawdis/clawdis.json).
+          - Keys: browser.enabled, browser.controlUrl (default: http://127.0.0.1:18791).
+
+        Examples:
+          clawdis-mac status
+          clawdis-mac agent --message "Hello from clawd" --thinking low
+          clawdis-mac browser start
+          clawdis-mac browser open https://example.com
+          clawdis-mac browser tabs
+          clawdis-mac browser screenshot --full-page
+
+        Output:
+          Default output is text. Use --json for machine-readable output.
+          In text mode, `browser screenshot` prints MEDIA:<path>.
         """
         print(usage)
     }

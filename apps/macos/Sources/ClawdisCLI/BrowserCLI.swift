@@ -239,6 +239,8 @@ enum BrowserCLI {
 
     private static func printHelp() {
         let usage = """
+        Browser (clawd) — control clawd’s dedicated Chrome/Chromium via the gateway’s loopback server.
+
         Usage:
           clawdis-mac browser status [--url <http://127.0.0.1:18791>]
           clawdis-mac browser start [--url <...>]
@@ -248,8 +250,11 @@ enum BrowserCLI {
           clawdis-mac browser focus <targetId> [--url <...>]
           clawdis-mac browser close <targetId> [--url <...>]
           clawdis-mac browser screenshot [--target-id <id>] [--full-page] [--url <...>]
+
+        Notes:
+          - Config defaults come from ~/.clawdis/clawdis.json (browser.enabled, browser.controlUrl).
+          - `browser screenshot` prints MEDIA:<path> in text mode.
         """
         print(usage)
     }
 }
-
