@@ -4,7 +4,7 @@ import SwiftUI
 struct ContextUsageBar: View {
     let usedTokens: Int
     let contextTokens: Int
-    var width: CGFloat = 220
+    var width: CGFloat?
     var height: CGFloat = 6
 
     private var clampedFractionUsed: Double {
@@ -28,14 +28,30 @@ struct ContextUsageBar: View {
     var body: some View {
         // SwiftUI menus (MenuBarExtraStyle.menu) drop certain view types (including ProgressView/Canvas).
         // Render the bar as an image to reliably display inside the menu.
-        Image(nsImage: Self.renderBar(
-            width: self.width,
-            height: self.height,
-            fractionUsed: self.clampedFractionUsed,
-            percentUsed: self.percentUsed))
-            .resizable()
-            .interpolation(.none)
-            .frame(width: self.width, height: self.height)
+        Group {
+            if let width = self.width, width > 0 {
+                Image(nsImage: Self.renderBar(
+                    width: width,
+                    height: self.height,
+                    fractionUsed: self.clampedFractionUsed,
+                    percentUsed: self.percentUsed))
+                    .resizable()
+                    .interpolation(.none)
+                    .frame(width: width, height: self.height)
+            } else {
+                GeometryReader { proxy in
+                    Image(nsImage: Self.renderBar(
+                        width: proxy.size.width,
+                        height: self.height,
+                        fractionUsed: self.clampedFractionUsed,
+                        percentUsed: self.percentUsed))
+                        .resizable()
+                        .interpolation(.none)
+                        .frame(width: proxy.size.width, height: self.height)
+                }
+                .frame(height: self.height)
+            }
+        }
         .accessibilityLabel("Context usage")
         .accessibilityValue(self.accessibilityValue)
     }

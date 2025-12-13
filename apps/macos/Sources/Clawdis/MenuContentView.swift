@@ -17,6 +17,7 @@ struct MenuContent: View {
     @State private var loadingMics = false
     @State private var sessionMenu: [SessionRow] = []
     @State private var mainSessionRow: SessionRow?
+    @State private var mainSessionContextWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -266,9 +267,15 @@ struct MenuContent: View {
                 ContextUsageBar(
                     usedTokens: row.tokens.total,
                     contextTokens: row.tokens.contextTokens,
-                    width: 220)
+                    width: self.mainSessionContextWidth > 0 ? self.mainSessionContextWidth : nil)
             }
             .padding(.vertical, 2)
+            .onWidthChange { width in
+                let next = max(120, width)
+                if abs(next - self.mainSessionContextWidth) > 1 {
+                    self.mainSessionContextWidth = next
+                }
+            }
         } else {
             HStack(spacing: 8) {
                 Text("Context (main)")
