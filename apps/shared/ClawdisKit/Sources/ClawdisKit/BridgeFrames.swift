@@ -97,19 +97,22 @@ public struct BridgePairRequest: Codable, Sendable {
     public let displayName: String?
     public let platform: String?
     public let version: String?
+    public let remoteAddress: String?
 
     public init(
         type: String = "pair-request",
         nodeId: String,
         displayName: String?,
         platform: String?,
-        version: String?)
+        version: String?,
+        remoteAddress: String? = nil)
     {
         self.type = type
         self.nodeId = nodeId
         self.displayName = displayName
         self.platform = platform
         self.version = version
+        self.remoteAddress = remoteAddress
     }
 }
 

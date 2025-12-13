@@ -73,7 +73,14 @@ actor BridgeConnectionHandler {
                 case "pair-request":
                     let req = try self.decoder.decode(BridgePairRequest.self, from: data)
                     self.nodeId = req.nodeId
-                    let result = await handlePair(req)
+                    let enriched = BridgePairRequest(
+                        type: req.type,
+                        nodeId: req.nodeId,
+                        displayName: req.displayName,
+                        platform: req.platform,
+                        version: req.version,
+                        remoteAddress: self.remoteAddressString())
+                    let result = await handlePair(enriched)
                     await self.handlePairResult(
                         result,
                         serverName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName)
@@ -112,6 +119,16 @@ actor BridgeConnectionHandler {
         }
 
         await self.close(with: onDisconnected)
+    }
+
+    private func remoteAddressString() -> String? {
+        switch self.connection.endpoint {
+        case let .hostPort(host: host, port: _):
+            let value = String(describing: host)
+            return value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : value
+        default:
+            return nil
+        }
     }
 
     private func handlePairResult(_ result: PairResult, serverName: String) async {

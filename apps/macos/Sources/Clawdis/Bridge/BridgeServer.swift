@@ -262,10 +262,12 @@ enum BridgePairingApprover {
     static func approve(request: BridgePairRequest, isRepair: Bool) async -> Bool {
         await withCheckedContinuation { cont in
             let name = request.displayName ?? request.nodeId
+            let remote = request.remoteAddress?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             let alert = NSAlert()
             alert.messageText = isRepair ? "Re-pair Clawdis Node?" : "Pair Clawdis Node?"
             alert.informativeText = """
             Node: \(name)
+            IP: \(remote ?? "unknown")
             Platform: \(request.platform ?? "unknown")
             Version: \(request.version ?? "unknown")
             """

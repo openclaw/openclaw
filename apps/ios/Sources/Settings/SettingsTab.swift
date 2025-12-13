@@ -107,7 +107,7 @@ struct SettingsTab: View {
 
     private func platformString() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "ios \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
     private func appVersion() -> String {
