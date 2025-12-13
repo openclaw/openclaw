@@ -36,6 +36,10 @@ struct SettingsRootView: View {
                 .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
                 .tag(SettingsTab.sessions)
 
+            CronSettings()
+                .tabItem { Label("Cron", systemImage: "calendar") }
+                .tag(SettingsTab.cron)
+
             ToolsSettings()
                 .tabItem { Label("Tools", systemImage: "wrench.and.screwdriver") }
                 .tag(SettingsTab.tools)
@@ -120,7 +124,7 @@ struct SettingsRootView: View {
 }
 
 enum SettingsTab: CaseIterable {
-    case general, tools, sessions, config, instances, voiceWake, permissions, debug, about
+    case general, tools, sessions, cron, config, instances, voiceWake, permissions, debug, about
     static let windowWidth: CGFloat = 598 // +15%
     static let windowHeight: CGFloat = 718 // +15%
     var title: String {
@@ -128,6 +132,7 @@ enum SettingsTab: CaseIterable {
         case .general: "General"
         case .tools: "Tools"
         case .sessions: "Sessions"
+        case .cron: "Cron"
         case .config: "Config"
         case .instances: "Instances"
         case .voiceWake: "Voice Wake"
