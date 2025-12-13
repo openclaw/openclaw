@@ -39,7 +39,15 @@ export async function startGatewayBonjourAdvertiser(
   const { getResponder, Protocol } = await import("@homebridge/ciao");
   const responder = getResponder();
 
-  const hostname = os.hostname().replace(/\.local$/i, "");
+  // mDNS service instance names are single DNS labels; dots in hostnames (like
+  // `Mac.localdomain`) can confuse some resolvers/browsers and break discovery.
+  // Keep only the first label and normalize away a trailing `.local`.
+  const hostname =
+    os
+      .hostname()
+      .replace(/\.local$/i, "")
+      .split(".")[0]
+      .trim() || "clawdis";
   const instanceName =
     typeof opts.instanceName === "string" && opts.instanceName.trim()
       ? opts.instanceName.trim()

@@ -18,4 +18,7 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
+        .testTarget(
+            name: "ClawdisKitTests",
+            dependencies: ["ClawdisKit"]),
     ])

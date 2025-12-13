@@ -487,7 +487,7 @@ struct OnboardingView: View {
             .keyboardShortcut(.return)
             .buttonStyle(.borderedProminent)
         }
-        .padding(.horizontal, 20)
+        .padding(.horizontal, 28)
         .padding(.bottom, 12)
         .frame(height: 60)
     }
@@ -497,6 +497,7 @@ struct OnboardingView: View {
             content()
             Spacer()
         }
+        .padding(.horizontal, 28)
         .frame(width: self.pageWidth, alignment: .top)
     }
 
