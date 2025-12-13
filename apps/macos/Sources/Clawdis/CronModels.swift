@@ -131,7 +131,6 @@ enum CronPayload: Codable, Equatable {
 }
 
 struct CronIsolation: Codable, Equatable {
-    var postToMain: Bool?
     var postToMainPrefix: String?
 }
 
@@ -180,6 +179,7 @@ struct CronEvent: Codable, Sendable {
     let durationMs: Int?
     let status: String?
     let error: String?
+    let summary: String?
     let nextRunAtMs: Int?
 }
 
@@ -191,6 +191,7 @@ struct CronRunLogEntry: Codable, Identifiable, Sendable {
     let action: String
     let status: String?
     let error: String?
+    let summary: String?
     let runAtMs: Int?
     let durationMs: Int?
     let nextRunAtMs: Int?

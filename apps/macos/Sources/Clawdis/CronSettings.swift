@@ -215,6 +215,11 @@ struct CronSettings: View {
     @ViewBuilder
     private func jobContextMenu(_ job: CronJob) -> some View {
         Button("Run now") { Task { await self.store.runJob(id: job.id, force: true) } }
+        if job.sessionTarget == .isolated {
+            Button("Open transcript") {
+                WebChatManager.shared.show(sessionKey: "cron:\(job.id)")
+            }
+        }
         Divider()
         Button(job.enabled ? "Disable" : "Enable") {
             Task { await self.store.setJobEnabled(id: job.id, enabled: !job.enabled) }
@@ -251,6 +256,12 @@ struct CronSettings: View {
                     .labelsHidden()
                 Button("Run") { Task { await self.store.runJob(id: job.id, force: true) } }
                     .buttonStyle(.borderedProminent)
+                if job.sessionTarget == .isolated {
+                    Button("Transcript") {
+                        WebChatManager.shared.show(sessionKey: "cron:\(job.id)")
+                    }
+                    .buttonStyle(.bordered)
+                }
                 Button("Edit") {
                     self.editingJob = job
                     self.editorError = nil
@@ -347,6 +358,13 @@ struct CronSettings: View {
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
+            }
+            if let summary = entry.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
             }
             if let error = entry.error, !error.isEmpty {
                 Text(error)
@@ -567,7 +585,7 @@ private struct CronJobEditor: View {
                     }
                 }
 
-                if self.payloadKind == .agentTurn || self.sessionTarget == .isolated {
+                if self.sessionTarget == .isolated {
                     Section("Main session summary") {
                         Text("Isolated jobs always post a summary back into the main session when they finish.")
                             .font(.caption)
@@ -603,9 +621,16 @@ private struct CronJobEditor: View {
         }
         .padding(18)
         .onAppear { self.hydrateFromJob() }
+        .onChange(of: self.payloadKind) { _, newValue in
+            if newValue == .agentTurn, self.sessionTarget == .main {
+                self.sessionTarget = .isolated
+            }
+        }
         .onChange(of: self.sessionTarget) { _, newValue in
             if newValue == .isolated {
                 self.payloadKind = .agentTurn
+            } else if newValue == .main, self.payloadKind == .agentTurn {
+                self.payloadKind = .systemEvent
             }
         }
     }
@@ -719,6 +744,22 @@ private struct CronJobEditor: View {
             }
         }()
 
+        if self.sessionTarget == .main, payload["kind"] as? String == "agentTurn" {
+            throw NSError(
+                domain: "Cron",
+                code: 0,
+                userInfo: [
+                    NSLocalizedDescriptionKey: "Main session jobs require systemEvent payloads (switch Session target to isolated).",
+                ])
+        }
+
+        if self.sessionTarget == .isolated, payload["kind"] as? String == "systemEvent" {
+            throw NSError(
+                domain: "Cron",
+                code: 0,
+                userInfo: [NSLocalizedDescriptionKey: "Isolated jobs require agentTurn payloads."])
+        }
+
         if payload["kind"] as? String == "systemEvent" {
             if (payload["text"] as? String ?? "").isEmpty {
                 throw NSError(
@@ -744,7 +785,7 @@ private struct CronJobEditor: View {
         ]
         if !name.isEmpty { root["name"] = name }
 
-        if payload["kind"] as? String == "agentTurn" || self.sessionTarget == .isolated {
+        if self.sessionTarget == .isolated {
             let trimmed = self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)
             root["isolation"] = [
                 "postToMainPrefix": trimmed.isEmpty ? "Cron" : trimmed,
@@ -831,7 +872,7 @@ struct CronSettings_Previews: PreviewProvider {
                     channel: "last",
                     to: nil,
                     bestEffortDeliver: true),
-                isolation: CronIsolation(postToMain: nil, postToMainPrefix: "Cron"),
+                isolation: CronIsolation(postToMainPrefix: "Cron"),
                 state: CronJobState(
                     nextRunAtMs: Int(Date().addingTimeInterval(3600).timeIntervalSince1970 * 1000),
                     runningAtMs: nil,
@@ -848,6 +889,7 @@ struct CronSettings_Previews: PreviewProvider {
                 action: "finished",
                 status: "ok",
                 error: nil,
+                summary: "All good.",
                 runAtMs: nil,
                 durationMs: 1234,
                 nextRunAtMs: nil),
