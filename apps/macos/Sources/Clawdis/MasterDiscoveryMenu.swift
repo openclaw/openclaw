@@ -6,13 +6,13 @@ struct MasterDiscoveryInlineList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                 Text(self.discovery.statusText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Spacer()
             }
 
             if self.discovery.masters.isEmpty {

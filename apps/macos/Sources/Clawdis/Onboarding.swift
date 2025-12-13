@@ -175,30 +175,37 @@ struct OnboardingView: View {
                 .frame(width: 360)
 
                 if self.state.connectionMode == .remote {
+                    let labelWidth: CGFloat = 90
+                    let fieldWidth: CGFloat = 300
+                    let contentLeading: CGFloat = labelWidth + 12
+
                     VStack(alignment: .leading, spacing: 8) {
-                        LabeledContent("SSH target") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                TextField("user@host[:22]", text: self.$state.remoteTarget)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: 300)
-                                MasterDiscoveryInlineList(discovery: self.masterDiscovery) { master in
-                                    self.applyDiscoveredMaster(master)
-                                }
-                                .frame(width: 360)
-                            }
+                        HStack(alignment: .center, spacing: 12) {
+                            Text("SSH target")
+                                .font(.callout.weight(.semibold))
+                                .frame(width: labelWidth, alignment: .leading)
+                            TextField("user@host[:22]", text: self.$state.remoteTarget)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: fieldWidth)
                         }
+
+                        MasterDiscoveryInlineList(discovery: self.masterDiscovery) { master in
+                            self.applyDiscoveredMaster(master)
+                        }
+                        .frame(width: fieldWidth, alignment: .leading)
+                        .padding(.leading, contentLeading)
 
                         DisclosureGroup("Advanced") {
                             VStack(alignment: .leading, spacing: 8) {
                                 LabeledContent("Identity file") {
                                     TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
                                         .textFieldStyle(.roundedBorder)
-                                        .frame(width: 300)
+                                        .frame(width: fieldWidth)
                                 }
                                 LabeledContent("Project root") {
                                     TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
                                         .textFieldStyle(.roundedBorder)
-                                        .frame(width: 300)
+                                        .frame(width: fieldWidth)
                                 }
                             }
                             .padding(.top, 4)
