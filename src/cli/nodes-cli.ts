@@ -7,6 +7,10 @@ type NodesRpcOpts = {
   token?: string;
   timeout?: string;
   json?: boolean;
+  node?: string;
+  command?: string;
+  params?: string;
+  invokeTimeout?: string;
 };
 
 type PendingRequest = {
@@ -203,6 +207,52 @@ export function registerNodesCli(program: Command) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
         } catch (err) {
           defaultRuntime.error(`nodes reject failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  nodesCallOpts(
+    nodes
+      .command("invoke")
+      .description("Invoke a command on a connected node")
+      .requiredOption("--node <nodeId>", "Node id (instanceId)")
+      .requiredOption("--command <command>", "Command (e.g. screen.eval)")
+      .option("--params <json>", "JSON object string for params")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 15000)",
+      )
+      .action(async (opts: NodesRpcOpts) => {
+        try {
+          const nodeId = String(opts.node ?? "").trim();
+          const command = String(opts.command ?? "").trim();
+          if (!nodeId || !command) {
+            defaultRuntime.error("--node and --command required");
+            defaultRuntime.exit(1);
+            return;
+          }
+          const params = opts.params
+            ? (JSON.parse(String(opts.params)) as unknown)
+            : undefined;
+          const timeoutMs = opts.invokeTimeout
+            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            : undefined;
+
+          const invokeParams: Record<string, unknown> = { nodeId, command };
+          if (params !== undefined) invokeParams.params = params;
+          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+            invokeParams.timeoutMs = timeoutMs;
+          }
+
+          const result = await callGatewayCli(
+            "node.invoke",
+            opts,
+            invokeParams,
+          );
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(`nodes invoke failed: ${String(err)}`);
           defaultRuntime.exit(1);
         }
       }),

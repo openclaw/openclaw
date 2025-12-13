@@ -242,6 +242,16 @@ export const NodePairVerifyParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const NodeInvokeParamsSchema = Type.Object(
+  {
+    nodeId: NonEmptyString,
+    command: NonEmptyString,
+    params: Type.Optional(Type.Unknown()),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsListParamsSchema = Type.Object(
   {
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -496,6 +506,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodePairApproveParams: NodePairApproveParamsSchema,
   NodePairRejectParams: NodePairRejectParamsSchema,
   NodePairVerifyParams: NodePairVerifyParamsSchema,
+  NodeInvokeParams: NodeInvokeParamsSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,
   CronJob: CronJobSchema,
@@ -533,6 +544,7 @@ export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
 export type NodePairApproveParams = Static<typeof NodePairApproveParamsSchema>;
 export type NodePairRejectParams = Static<typeof NodePairRejectParamsSchema>;
 export type NodePairVerifyParams = Static<typeof NodePairVerifyParamsSchema>;
+export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 export type CronJob = Static<typeof CronJobSchema>;

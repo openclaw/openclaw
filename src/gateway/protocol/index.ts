@@ -36,6 +36,8 @@ import {
   GatewayFrameSchema,
   type HelloOk,
   HelloOkSchema,
+  type NodeInvokeParams,
+  NodeInvokeParamsSchema,
   type NodePairApproveParams,
   NodePairApproveParamsSchema,
   type NodePairListParams,
@@ -103,6 +105,9 @@ export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
 export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
 );
+export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(
+  NodeInvokeParamsSchema,
+);
 export const validateSessionsListParams = ajv.compile<SessionsListParams>(
   SessionsListParamsSchema,
 );
@@ -158,6 +163,7 @@ export {
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairVerifyParamsSchema,
+  NodeInvokeParamsSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
   CronJobSchema,
@@ -199,6 +205,7 @@ export type {
   NodePairApproveParams,
   NodePairRejectParams,
   NodePairVerifyParams,
+  NodeInvokeParams,
   SessionsListParams,
   SessionsPatchParams,
   CronJob,

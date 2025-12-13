@@ -91,4 +91,41 @@ describe("cli program", () => {
     );
     expect(runtime.log).toHaveBeenCalled();
   });
+
+  it("runs nodes invoke and calls node.invoke", async () => {
+    callGateway.mockResolvedValue({
+      ok: true,
+      nodeId: "ios-node",
+      command: "screen.eval",
+      payload: { result: "ok" },
+    });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(
+      [
+        "nodes",
+        "invoke",
+        "--node",
+        "ios-node",
+        "--command",
+        "screen.eval",
+        "--params",
+        '{"javaScript":"1+1"}',
+      ],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "node.invoke",
+        params: {
+          nodeId: "ios-node",
+          command: "screen.eval",
+          params: { javaScript: "1+1" },
+        },
+      }),
+    );
+    expect(runtime.log).toHaveBeenCalled();
+  });
 });

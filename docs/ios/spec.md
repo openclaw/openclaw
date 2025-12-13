@@ -107,7 +107,7 @@ Add to `src/gateway/protocol/schema.ts` (and regenerate Swift models):
 **Methods**
 - `node.list` → list paired/connected nodes + capabilities
 - `node.invoke` → send a command to a specific node
-  - Params: `{ nodeId, command, params, idempotencyKey }`
+  - Params: `{ nodeId, command, params?, timeoutMs? }`
 
 **Events**
 - `node.event` → async node status/errors
@@ -124,6 +124,14 @@ These are values for `node.invoke.command`:
 Result pattern:
 - Request is a standard `req/res` with `ok` / `error`.
 - Long operations (loads, streaming drawing, etc.) may also emit `node.event` progress.
+
+#### Current (implemented)
+As of 2025-12-13, the Gateway supports `node.invoke` for bridge-connected nodes.
+
+Example: draw a diagonal line on the iOS Canvas:
+```bash
+clawdis nodes invoke --node ios-node --command screen.eval --params '{"javaScript":"(() => { const {ctx} = window.__clawdis; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
+```
 
 ### Background behavior requirement
 When iOS is backgrounded:

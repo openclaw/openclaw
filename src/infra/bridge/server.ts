@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import net from "node:net";
 import os from "node:os";
 
@@ -36,6 +37,13 @@ type BridgeEventFrame = {
 type BridgePingFrame = { type: "ping"; id: string };
 type BridgePongFrame = { type: "pong"; id: string };
 
+type BridgeInvokeRequestFrame = {
+  type: "invoke";
+  id: string;
+  command: string;
+  paramsJSON?: string | null;
+};
+
 type BridgeInvokeResponseFrame = {
   type: "invoke-res";
   id: string;
@@ -54,6 +62,7 @@ type AnyBridgeFrame =
   | BridgeEventFrame
   | BridgePingFrame
   | BridgePongFrame
+  | BridgeInvokeRequestFrame
   | BridgeInvokeResponseFrame
   | BridgeHelloOkFrame
   | BridgePairOkFrame
@@ -63,6 +72,13 @@ type AnyBridgeFrame =
 export type NodeBridgeServer = {
   port: number;
   close: () => Promise<void>;
+  invoke: (opts: {
+    nodeId: string;
+    command: string;
+    paramsJSON?: string | null;
+    timeoutMs?: number;
+  }) => Promise<BridgeInvokeResponseFrame>;
+  listConnected: () => NodeBridgeClientInfo[];
 };
 
 export type NodeBridgeClientInfo = {
@@ -105,6 +121,10 @@ export async function startNodeBridgeServer(
     return {
       port: 0,
       close: async () => {},
+      invoke: async () => {
+        throw new Error("bridge disabled in tests");
+      },
+      listConnected: () => [],
     };
   }
 
@@ -113,7 +133,20 @@ export async function startNodeBridgeServer(
       ? opts.serverName.trim()
       : os.hostname();
 
-  const connections = new Map<string, net.Socket>();
+  type ConnectionState = {
+    socket: net.Socket;
+    nodeInfo: NodeBridgeClientInfo;
+    invokeWaiters: Map<
+      string,
+      {
+        resolve: (value: BridgeInvokeResponseFrame) => void;
+        reject: (err: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >;
+  };
+
+  const connections = new Map<string, ConnectionState>();
 
   const server = net.createServer((socket) => {
     socket.setNoDelay(true);
@@ -127,17 +160,22 @@ export async function startNodeBridgeServer(
       {
         resolve: (value: BridgeInvokeResponseFrame) => void;
         reject: (err: Error) => void;
+        timer: ReturnType<typeof setTimeout>;
       }
     >();
 
     const abort = new AbortController();
     const stop = () => {
       if (!abort.signal.aborted) abort.abort();
-      if (nodeId) connections.delete(nodeId);
       for (const [, waiter] of invokeWaiters) {
+        clearTimeout(waiter.timer);
         waiter.reject(new Error("bridge connection closed"));
       }
       invokeWaiters.clear();
+      if (nodeId) {
+        const existing = connections.get(nodeId);
+        if (existing?.socket === socket) connections.delete(nodeId);
+      }
     };
 
     const send = (frame: AnyBridgeFrame) => {
@@ -182,7 +220,14 @@ export async function startNodeBridgeServer(
       }
 
       isAuthenticated = true;
-      connections.set(nodeId, socket);
+      const existing = connections.get(nodeId);
+      if (existing?.socket && existing.socket !== socket) {
+        try {
+          existing.socket.destroy();
+        } catch {
+          /* ignore */
+        }
+      }
       nodeInfo = {
         nodeId,
         displayName: verified.node.displayName ?? hello.displayName,
@@ -190,6 +235,7 @@ export async function startNodeBridgeServer(
         version: verified.node.version ?? hello.version,
         remoteIp: remoteAddress,
       };
+      connections.set(nodeId, { socket, nodeInfo, invokeWaiters });
       send({ type: "hello-ok", serverName } satisfies BridgeHelloOkFrame);
       await opts.onAuthenticated?.(nodeInfo);
     };
@@ -258,7 +304,14 @@ export async function startNodeBridgeServer(
       }
 
       isAuthenticated = true;
-      connections.set(nodeId, socket);
+      const existing = connections.get(nodeId);
+      if (existing?.socket && existing.socket !== socket) {
+        try {
+          existing.socket.destroy();
+        } catch {
+          /* ignore */
+        }
+      }
       nodeInfo = {
         nodeId,
         displayName: req.displayName,
@@ -266,6 +319,7 @@ export async function startNodeBridgeServer(
         version: req.version,
         remoteIp: remoteAddress,
       };
+      connections.set(nodeId, { socket, nodeInfo, invokeWaiters });
       send({ type: "pair-ok", token: wait.token } satisfies BridgePairOkFrame);
       send({ type: "hello-ok", serverName } satisfies BridgeHelloOkFrame);
       await opts.onAuthenticated?.(nodeInfo);
@@ -331,8 +385,14 @@ export async function startNodeBridgeServer(
                 const waiter = invokeWaiters.get(res.id);
                 if (waiter) {
                   invokeWaiters.delete(res.id);
+                  clearTimeout(waiter.timer);
                   waiter.resolve(res);
                 }
+                break;
+              }
+              case "invoke": {
+                // Direction is gateway -> node only.
+                sendError("INVALID_REQUEST", "invoke not allowed from node");
                 break;
               }
               case "pong":
@@ -372,7 +432,7 @@ export async function startNodeBridgeServer(
     close: async () => {
       for (const sock of connections.values()) {
         try {
-          sock.destroy();
+          sock.socket.destroy();
         } catch {
           /* ignore */
         }
@@ -381,6 +441,53 @@ export async function startNodeBridgeServer(
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
+    },
+    listConnected: () => [...connections.values()].map((c) => c.nodeInfo),
+    invoke: async ({ nodeId, command, paramsJSON, timeoutMs }) => {
+      const normalizedNodeId = String(nodeId ?? "").trim();
+      const normalizedCommand = String(command ?? "").trim();
+      if (!normalizedNodeId) {
+        throw new Error("INVALID_REQUEST: nodeId required");
+      }
+      if (!normalizedCommand) {
+        throw new Error("INVALID_REQUEST: command required");
+      }
+
+      const conn = connections.get(normalizedNodeId);
+      if (!conn) {
+        throw new Error(
+          `UNAVAILABLE: node not connected (${normalizedNodeId})`,
+        );
+      }
+
+      const id = randomUUID();
+      const timeout = Number.isFinite(timeoutMs) ? Number(timeoutMs) : 15_000;
+
+      return await new Promise<BridgeInvokeResponseFrame>((resolve, reject) => {
+        const timer = setTimeout(
+          () => {
+            conn.invokeWaiters.delete(id);
+            reject(new Error("UNAVAILABLE: invoke timeout"));
+          },
+          Math.max(0, timeout),
+        );
+
+        conn.invokeWaiters.set(id, { resolve, reject, timer });
+        try {
+          conn.socket.write(
+            encodeLine({
+              type: "invoke",
+              id,
+              command: normalizedCommand,
+              paramsJSON: paramsJSON ?? null,
+            } satisfies BridgeInvokeRequestFrame),
+          );
+        } catch (err) {
+          conn.invokeWaiters.delete(id);
+          clearTimeout(timer);
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
     },
   };
 }

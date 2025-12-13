@@ -100,6 +100,7 @@ import {
   validateCronRunsParams,
   validateCronStatusParams,
   validateCronUpdateParams,
+  validateNodeInvokeParams,
   validateNodePairApproveParams,
   validateNodePairListParams,
   validateNodePairRejectParams,
@@ -176,6 +177,7 @@ const METHODS = [
   "node.pair.approve",
   "node.pair.reject",
   "node.pair.verify",
+  "node.invoke",
   "cron.list",
   "cron.status",
   "cron.add",
@@ -2037,6 +2039,100 @@ export async function startGatewayServer(
             try {
               const result = await verifyNodeToken(nodeId, token);
               respond(true, result, undefined);
+            } catch (err) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+              );
+            }
+            break;
+          }
+          case "node.invoke": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateNodeInvokeParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid node.invoke params: ${formatValidationErrors(validateNodeInvokeParams.errors)}`,
+                ),
+              );
+              break;
+            }
+            if (!bridge) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, "bridge not running"),
+              );
+              break;
+            }
+            const p = params as {
+              nodeId: string;
+              command: string;
+              params?: unknown;
+              timeoutMs?: number;
+            };
+            const nodeId = String(p.nodeId ?? "").trim();
+            const command = String(p.command ?? "").trim();
+            if (!nodeId || !command) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "nodeId and command required",
+                ),
+              );
+              break;
+            }
+
+            try {
+              const paramsJSON =
+                "params" in p && p.params !== undefined
+                  ? JSON.stringify(p.params)
+                  : null;
+              const res = await bridge.invoke({
+                nodeId,
+                command,
+                paramsJSON,
+                timeoutMs: p.timeoutMs,
+              });
+              if (!res.ok) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.UNAVAILABLE,
+                    res.error?.message ?? "node invoke failed",
+                    { details: { nodeError: res.error ?? null } },
+                  ),
+                );
+                break;
+              }
+              const payload =
+                typeof res.payloadJSON === "string" && res.payloadJSON.trim()
+                  ? (() => {
+                      try {
+                        return JSON.parse(res.payloadJSON) as unknown;
+                      } catch {
+                        return { payloadJSON: res.payloadJSON };
+                      }
+                    })()
+                  : undefined;
+              respond(
+                true,
+                {
+                  ok: true,
+                  nodeId,
+                  command,
+                  payload,
+                  payloadJSON: res.payloadJSON ?? null,
+                },
+                undefined,
+              );
             } catch (err) {
               respond(
                 false,

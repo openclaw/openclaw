@@ -253,4 +253,87 @@ describe("node bridge server", () => {
 
     await server.close();
   });
+
+  it("supports invoke roundtrip to a connected node", async () => {
+    const server = await startNodeBridgeServer({
+      host: "127.0.0.1",
+      port: 0,
+      pairingBaseDir: baseDir,
+    });
+
+    const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    const readLine = createLineReader(socket);
+    sendLine(socket, { type: "pair-request", nodeId: "n5", platform: "ios" });
+
+    // Approve the pending request from the gateway side.
+    let reqId: string | undefined;
+    for (let i = 0; i < 40; i += 1) {
+      const list = await listNodePairing(baseDir);
+      const req = list.pending.find((p) => p.nodeId === "n5");
+      if (req) {
+        reqId = req.requestId;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(reqId).toBeTruthy();
+    if (!reqId) throw new Error("expected a pending requestId");
+    await approveNodePairing(reqId, baseDir);
+
+    const pairOk = JSON.parse(await readLine()) as {
+      type: string;
+      token?: string;
+    };
+    expect(pairOk.type).toBe("pair-ok");
+    expect(typeof pairOk.token).toBe("string");
+    if (!pairOk.token) throw new Error("expected pair-ok token");
+    const token = pairOk.token;
+
+    const helloOk = JSON.parse(await readLine()) as { type: string };
+    expect(helloOk.type).toBe("hello-ok");
+
+    const responder = (async () => {
+      while (true) {
+        const frame = JSON.parse(await readLine()) as {
+          type: string;
+          id?: string;
+          command?: string;
+        };
+        if (frame.type !== "invoke") continue;
+        sendLine(socket, {
+          type: "invoke-res",
+          id: frame.id,
+          ok: true,
+          payloadJSON: JSON.stringify({ echo: frame.command }),
+        });
+        break;
+      }
+    })();
+
+    const res = await server.invoke({
+      nodeId: "n5",
+      command: "screen.eval",
+      paramsJSON: JSON.stringify({ javaScript: "1+1" }),
+      timeoutMs: 3000,
+    });
+
+    expect(res.ok).toBe(true);
+    const payload = JSON.parse(String(res.payloadJSON ?? "null")) as {
+      echo?: string;
+    };
+    expect(payload.echo).toBe("screen.eval");
+
+    await responder;
+    socket.destroy();
+
+    // Ensure invoke works only for connected nodes (hello with token on a new socket).
+    const socket2 = net.connect({ host: "127.0.0.1", port: server.port });
+    const readLine2 = createLineReader(socket2);
+    sendLine(socket2, { type: "hello", nodeId: "n5", token });
+    const hello2 = JSON.parse(await readLine2()) as { type: string };
+    expect(hello2.type).toBe("hello-ok");
+    socket2.destroy();
+
+    await server.close();
+  });
 });

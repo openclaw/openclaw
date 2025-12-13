@@ -27,10 +27,24 @@ type BridgeStartOpts = {
 };
 
 const bridgeStartCalls = vi.hoisted(() => [] as BridgeStartOpts[]);
+const bridgeInvoke = vi.hoisted(() =>
+  vi.fn(async () => ({
+    type: "invoke-res",
+    id: "1",
+    ok: true,
+    payloadJSON: JSON.stringify({ ok: true }),
+    error: null,
+  })),
+);
 vi.mock("../infra/bridge/server.js", () => ({
   startNodeBridgeServer: vi.fn(async (opts: BridgeStartOpts) => {
     bridgeStartCalls.push(opts);
-    return { port: 0, close: async () => {} };
+    return {
+      port: 18790,
+      close: async () => {},
+      listConnected: () => [],
+      invoke: bridgeInvoke,
+    };
   }),
 }));
 
@@ -359,6 +373,54 @@ describe("gateway server", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = prevHome;
+    }
+  });
+
+  test("routes node.invoke to the node bridge", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    try {
+      bridgeInvoke.mockResolvedValueOnce({
+        type: "invoke-res",
+        id: "inv-1",
+        ok: true,
+        payloadJSON: JSON.stringify({ result: "4" }),
+        error: null,
+      });
+
+      const { server, ws } = await startServerWithClient();
+      try {
+        await connectOk(ws);
+
+        const res = await rpcReq(ws, "node.invoke", {
+          nodeId: "ios-node",
+          command: "screen.eval",
+          params: { javaScript: "2+2" },
+          timeoutMs: 123,
+        });
+        expect(res.ok).toBe(true);
+
+        expect(bridgeInvoke).toHaveBeenCalledWith(
+          expect.objectContaining({
+            nodeId: "ios-node",
+            command: "screen.eval",
+            paramsJSON: JSON.stringify({ javaScript: "2+2" }),
+            timeoutMs: 123,
+          }),
+        );
+      } finally {
+        ws.close();
+        await server.close();
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
     }
   });
 
