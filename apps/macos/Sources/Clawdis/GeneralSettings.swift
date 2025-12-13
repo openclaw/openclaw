@@ -52,6 +52,11 @@ struct GeneralSettings: View {
                         binding: self.$state.iconAnimationsEnabled)
 
                     SettingsToggleRow(
+                        title: "Allow Canvas",
+                        subtitle: "Allow the agent to show and control the Canvas panel.",
+                        binding: self.$state.canvasEnabled)
+
+                    SettingsToggleRow(
                         title: "Enable debug tools",
                         subtitle: "Show the Debug tab with development utilities.",
                         binding: self.$state.debugPaneEnabled)
@@ -72,6 +77,11 @@ struct GeneralSettings: View {
             guard !self.isPreview else { return }
             self.refreshCLIStatus()
             self.refreshGatewayStatus()
+        }
+        .onChange(of: self.state.canvasEnabled) { _, enabled in
+            if !enabled {
+                CanvasManager.shared.hideAll()
+            }
         }
     }
 
