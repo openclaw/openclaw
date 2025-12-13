@@ -1682,7 +1682,7 @@ describe("gateway server", () => {
         {
           main: {
             sessionId: "sess-main",
-            updatedAt: now - 60_000,
+            updatedAt: now - 30_000,
             inputTokens: 10,
             outputTokens: 20,
             thinkingLevel: "low",
@@ -1705,7 +1705,11 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    const hello = await connectOk(ws);
+    expect(
+      (hello as unknown as { features?: { methods?: string[] } }).features
+        ?.methods,
+    ).toEqual(expect.arrayContaining(["sessions.list", "sessions.patch"]));
 
     const list1 = await rpcReq<{
       path: string;
@@ -1724,6 +1728,27 @@ describe("gateway server", () => {
     expect(main?.totalTokens).toBe(30);
     expect(main?.thinkingLevel).toBe("low");
     expect(main?.verboseLevel).toBe("on");
+
+    const active = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      activeMinutes: 1,
+    });
+    expect(active.ok).toBe(true);
+    expect(active.payload?.sessions.map((s) => s.key)).toEqual(["main"]);
+
+    const limited = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: true,
+      includeUnknown: false,
+      limit: 1,
+    });
+    expect(limited.ok).toBe(true);
+    expect(limited.payload?.sessions).toHaveLength(1);
+    expect(limited.payload?.sessions[0]?.key).toBe("global");
 
     const patched = await rpcReq<{ ok: true; key: string }>(
       ws,
@@ -1745,6 +1770,15 @@ describe("gateway server", () => {
     const main2 = list2.payload?.sessions.find((s) => s.key === "main");
     expect(main2?.thinkingLevel).toBe("medium");
     expect(main2?.verboseLevel).toBeUndefined();
+
+    const badThinking = await rpcReq(ws, "sessions.patch", {
+      key: "main",
+      thinkingLevel: "banana",
+    });
+    expect(badThinking.ok).toBe(false);
+    expect(
+      (badThinking.error as { message?: unknown } | undefined)?.message ?? "",
+    ).toMatch(/invalid thinkinglevel/i);
 
     ws.close();
     await server.close();
