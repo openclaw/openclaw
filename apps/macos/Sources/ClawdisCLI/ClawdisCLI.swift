@@ -15,11 +15,6 @@ struct ClawdisCLI {
                 exit(code)
             }
 
-            if args.first == "ui" {
-                let code = try await UICLI.run(args: Array(args.dropFirst()), jsonOutput: jsonOutput)
-                exit(code)
-            }
-
             let parsed = try parseCommandLine(args: args)
             let response = try await send(request: parsed.request)
 
@@ -386,14 +381,6 @@ struct ClawdisCLI {
               [--cap <notifications|accessibility|screenRecording|microphone|speechRecognition>]
               [--interactive]
 
-          UI:
-            clawdis-mac ui screenshot [...]
-            clawdis-mac ui see [...]
-            clawdis-mac ui click ...
-            clawdis-mac ui type ...
-            clawdis-mac ui wait ...
-            clawdis-mac ui --help
-
           Shell:
             clawdis-mac run [--cwd <path>] [--env KEY=VAL] [--timeout <sec>]
               [--needs-screen-recording] <command ...>
@@ -421,6 +408,10 @@ struct ClawdisCLI {
 
           Browser (clawd):
             clawdis-mac browser status|start|stop|tabs|open|focus|close|screenshot|eval|query|dom|snapshot
+
+        UI Automation (Peekaboo):
+          Install and use the `peekaboo` CLI; it will connect to Peekaboo.app (preferred) or Clawdis.app
+          (fallback) via PeekabooBridge. See `docs/mac/peekaboo.md`.
 
         Browser notes:
           - Uses clawd’s dedicated Chrome/Chromium profile (separate user-data dir).

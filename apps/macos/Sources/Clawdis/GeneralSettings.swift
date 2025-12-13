@@ -60,7 +60,7 @@ struct GeneralSettings: View {
 
                     SettingsToggleRow(
                         title: "Enable Peekaboo Bridge",
-                        subtitle: "Allow signed tools to drive UI automation via `clawdis-mac ui …`.",
+                        subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
                         binding: self.$state.peekabooBridgeEnabled)
 
                     SettingsToggleRow(

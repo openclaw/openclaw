@@ -20,7 +20,6 @@ let package = Package(
         .package(path: "../shared/ClawdisKit"),
         .package(path: "../../Peekaboo/Core/PeekabooCore"),
         .package(path: "../../Peekaboo/Core/PeekabooAutomationKit"),
-        .package(path: "../../Peekaboo/Core/PeekabooVisualizer"),
     ],
     targets: [
         .target(
@@ -47,7 +46,6 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "PeekabooBridge", package: "PeekabooCore"),
                 .product(name: "PeekabooAutomationKit", package: "PeekabooAutomationKit"),
-                .product(name: "PeekabooVisualizer", package: "PeekabooVisualizer"),
             ],
             resources: [
                 .copy("Resources/Clawdis.icns"),
@@ -61,8 +59,6 @@ let package = Package(
             dependencies: [
                 "ClawdisIPC",
                 "ClawdisProtocol",
-                .product(name: "PeekabooBridge", package: "PeekabooCore"),
-                .product(name: "PeekabooAutomationKit", package: "PeekabooAutomationKit"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

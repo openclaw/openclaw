@@ -22,7 +22,6 @@ import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { statusCommand } from "../commands/status.js";
 import { danger, info, setVerbose } from "../globals.js";
-import { runClawdisMac } from "../infra/clawdis-mac.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -229,48 +228,6 @@ Examples:
   registerGatewayCli(program);
   registerNodesCli(program);
   registerCronCli(program);
-
-  program
-    .command("ui")
-    .description("macOS UI automation via Clawdis.app (PeekabooBridge)")
-    .option("--json", "Output JSON (passthrough from clawdis-mac)", false)
-    .allowUnknownOption(true)
-    .argument(
-      "[uiArgs...]",
-      "Args passed through to: clawdis-mac ui <command> ...",
-    )
-    .addHelpText(
-      "after",
-      `
-Examples:
-  clawdis ui permissions status
-  clawdis ui frontmost
-  clawdis ui screenshot
-  clawdis ui see --bundle-id com.apple.Safari
-  clawdis ui click --bundle-id com.apple.Safari --on B1
-  clawdis ui --json see --bundle-id com.apple.Safari
-`,
-    )
-    .action(async (_unused: string[], opts, cmd) => {
-      try {
-        const raw = (cmd.parent?.rawArgs ?? []).map((a: unknown) => String(a));
-        const idx = raw.indexOf("ui");
-        const tail = idx >= 0 ? raw.slice(idx + 1) : [];
-        const forwarded =
-          tail.length > 0 && tail[0] === "--json" ? tail.slice(1) : tail;
-
-        const res = await runClawdisMac(["ui", ...forwarded], {
-          json: Boolean(opts.json),
-          timeoutMs: 45_000,
-        });
-        if (res.stdout) process.stdout.write(res.stdout);
-        if (res.stderr) process.stderr.write(res.stderr);
-        defaultRuntime.exit(res.code ?? 1);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
 
   program
     .command("status")
