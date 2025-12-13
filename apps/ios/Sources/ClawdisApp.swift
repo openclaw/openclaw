@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct ClawdisNodeApp: App {
+struct ClawdisApp: App {
     @StateObject private var appModel = NodeAppModel()
     @Environment(\.scenePhase) private var scenePhase
 

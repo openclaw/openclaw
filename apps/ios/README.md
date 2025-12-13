@@ -1,4 +1,4 @@
-# ClawdisKit (iOS)
+# Clawdis (iOS)
 
 Internal-only SwiftUI app scaffold.
 
@@ -11,7 +11,7 @@ brew install swiftformat swiftlint
 ```bash
 cd apps/ios
 xcodegen generate
-open ClawdisNode.xcodeproj
+open Clawdis.xcodeproj
 ```
 
 ## Shared packages
