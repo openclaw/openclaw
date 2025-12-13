@@ -11,6 +11,7 @@ extension ConnectStatusStore: @unchecked Sendable {}
 
 struct SettingsTab: View {
     @EnvironmentObject private var appModel: NodeAppModel
+    @EnvironmentObject private var voiceWake: VoiceWakeManager
     @Environment(\.dismiss) private var dismiss
     @AppStorage("node.displayName") private var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
@@ -47,6 +48,14 @@ struct SettingsTab: View {
                         .onChange(of: self.voiceWakeEnabled) { _, newValue in
                             self.appModel.setVoiceWakeEnabled(newValue)
                         }
+
+                    NavigationLink {
+                        VoiceWakeWordsSettingsView()
+                    } label: {
+                        LabeledContent(
+                            "Wake Words",
+                            value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+                    }
                 }
 
                 Section("Bridge") {
