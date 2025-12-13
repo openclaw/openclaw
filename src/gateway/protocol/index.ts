@@ -22,6 +22,8 @@ import {
   CronRunParamsSchema,
   type CronRunsParams,
   CronRunsParamsSchema,
+  type CronStatusParams,
+  CronStatusParamsSchema,
   type CronUpdateParams,
   CronUpdateParamsSchema,
   ErrorCodes,
@@ -74,6 +76,9 @@ export const validateAgentParams = ajv.compile(AgentParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateCronListParams =
   ajv.compile<CronListParams>(CronListParamsSchema);
+export const validateCronStatusParams = ajv.compile<CronStatusParams>(
+  CronStatusParamsSchema,
+);
 export const validateCronAddParams =
   ajv.compile<CronAddParams>(CronAddParamsSchema);
 export const validateCronUpdateParams = ajv.compile<CronUpdateParams>(
@@ -115,6 +120,7 @@ export {
   WakeParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
+  CronStatusParamsSchema,
   CronAddParamsSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
@@ -148,6 +154,7 @@ export type {
   WakeParams,
   CronJob,
   CronListParams,
+  CronStatusParams,
   CronAddParams,
   CronUpdateParams,
   CronRemoveParams,

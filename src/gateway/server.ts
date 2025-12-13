@@ -76,6 +76,7 @@ import {
   validateCronRemoveParams,
   validateCronRunParams,
   validateCronRunsParams,
+  validateCronStatusParams,
   validateCronUpdateParams,
   validateRequestFrame,
   validateSendParams,
@@ -96,6 +97,7 @@ const METHODS = [
   "set-heartbeats",
   "wake",
   "cron.list",
+  "cron.status",
   "cron.add",
   "cron.update",
   "cron.remove",
@@ -1114,6 +1116,23 @@ export async function startGatewayServer(
               includeDisabled: p.includeDisabled,
             });
             respond(true, { jobs }, undefined);
+            break;
+          }
+          case "cron.status": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateCronStatusParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid cron.status params: ${formatValidationErrors(validateCronStatusParams.errors)}`,
+                ),
+              );
+              break;
+            }
+            const status = await cron.status();
+            respond(true, status, undefined);
             break;
           }
           case "cron.add": {

@@ -59,6 +59,7 @@ export class CronService {
   private timer: NodeJS.Timeout | null = null;
   private running = false;
   private op: Promise<unknown> = Promise.resolve();
+  private warnedDisabled = false;
 
   constructor(deps: CronServiceDeps) {
     this.deps = {
@@ -94,6 +95,19 @@ export class CronService {
     this.timer = null;
   }
 
+  async status() {
+    return await this.locked(async () => {
+      await this.ensureLoaded();
+      return {
+        enabled: this.deps.cronEnabled,
+        storePath: this.deps.storePath,
+        jobs: this.store?.jobs.length ?? 0,
+        nextWakeAtMs:
+          this.deps.cronEnabled === true ? (this.nextWakeAtMs() ?? null) : null,
+      };
+    });
+  }
+
   async list(opts?: { includeDisabled?: boolean }) {
     return await this.locked(async () => {
       await this.ensureLoaded();
@@ -109,6 +123,7 @@ export class CronService {
 
   async add(input: CronJobCreate) {
     return await this.locked(async () => {
+      this.warnIfDisabled("add");
       await this.ensureLoaded();
       const now = this.deps.nowMs();
       const id = crypto.randomUUID();
@@ -142,6 +157,7 @@ export class CronService {
 
   async update(id: string, patch: CronJobPatch) {
     return await this.locked(async () => {
+      this.warnIfDisabled("update");
       await this.ensureLoaded();
       const job = this.findJobOrThrow(id);
       const now = this.deps.nowMs();
@@ -176,6 +192,7 @@ export class CronService {
 
   async remove(id: string) {
     return await this.locked(async () => {
+      this.warnIfDisabled("remove");
       await this.ensureLoaded();
       const before = this.store?.jobs.length ?? 0;
       if (!this.store) return { ok: false, removed: false };
@@ -190,6 +207,7 @@ export class CronService {
 
   async run(id: string, mode?: "due" | "force") {
     return await this.locked(async () => {
+      this.warnIfDisabled("run");
       await this.ensureLoaded();
       const job = this.findJobOrThrow(id);
       const now = this.deps.nowMs();
@@ -230,6 +248,16 @@ export class CronService {
     if (this.store) return;
     const loaded = await loadCronStore(this.deps.storePath);
     this.store = { version: 1, jobs: loaded.jobs ?? [] };
+  }
+
+  private warnIfDisabled(action: string) {
+    if (this.deps.cronEnabled) return;
+    if (this.warnedDisabled) return;
+    this.warnedDisabled = true;
+    this.deps.log.warn(
+      { enabled: false, action, storePath: this.deps.storePath },
+      "cron: scheduler disabled; jobs will not run automatically",
+    );
   }
 
   private async persist() {

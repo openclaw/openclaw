@@ -386,6 +386,234 @@ public struct AgentParams: Codable {
     }
 }
 
+public struct WakeParams: Codable {
+    public let mode: AnyCodable
+    public let text: String
+
+    public init(
+        mode: AnyCodable,
+        text: String
+    ) {
+        self.mode = mode
+        self.text = text
+    }
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case text
+    }
+}
+
+public struct CronJob: Codable {
+    public let id: String
+    public let name: String?
+    public let enabled: Bool
+    public let createdatms: Int
+    public let updatedatms: Int
+    public let schedule: AnyCodable
+    public let sessiontarget: AnyCodable
+    public let wakemode: AnyCodable
+    public let payload: AnyCodable
+    public let isolation: [String: AnyCodable]?
+    public let state: [String: AnyCodable]
+
+    public init(
+        id: String,
+        name: String?,
+        enabled: Bool,
+        createdatms: Int,
+        updatedatms: Int,
+        schedule: AnyCodable,
+        sessiontarget: AnyCodable,
+        wakemode: AnyCodable,
+        payload: AnyCodable,
+        isolation: [String: AnyCodable]?,
+        state: [String: AnyCodable]
+    ) {
+        self.id = id
+        self.name = name
+        self.enabled = enabled
+        self.createdatms = createdatms
+        self.updatedatms = updatedatms
+        self.schedule = schedule
+        self.sessiontarget = sessiontarget
+        self.wakemode = wakemode
+        self.payload = payload
+        self.isolation = isolation
+        self.state = state
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case enabled
+        case createdatms = "createdAtMs"
+        case updatedatms = "updatedAtMs"
+        case schedule
+        case sessiontarget = "sessionTarget"
+        case wakemode = "wakeMode"
+        case payload
+        case isolation
+        case state
+    }
+}
+
+public struct CronListParams: Codable {
+    public let includedisabled: Bool?
+
+    public init(
+        includedisabled: Bool?
+    ) {
+        self.includedisabled = includedisabled
+    }
+    private enum CodingKeys: String, CodingKey {
+        case includedisabled = "includeDisabled"
+    }
+}
+
+public struct CronStatusParams: Codable {
+}
+
+public struct CronAddParams: Codable {
+    public let name: String?
+    public let enabled: Bool?
+    public let schedule: AnyCodable
+    public let sessiontarget: AnyCodable
+    public let wakemode: AnyCodable
+    public let payload: AnyCodable
+    public let isolation: [String: AnyCodable]?
+
+    public init(
+        name: String?,
+        enabled: Bool?,
+        schedule: AnyCodable,
+        sessiontarget: AnyCodable,
+        wakemode: AnyCodable,
+        payload: AnyCodable,
+        isolation: [String: AnyCodable]?
+    ) {
+        self.name = name
+        self.enabled = enabled
+        self.schedule = schedule
+        self.sessiontarget = sessiontarget
+        self.wakemode = wakemode
+        self.payload = payload
+        self.isolation = isolation
+    }
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case enabled
+        case schedule
+        case sessiontarget = "sessionTarget"
+        case wakemode = "wakeMode"
+        case payload
+        case isolation
+    }
+}
+
+public struct CronUpdateParams: Codable {
+    public let id: String
+    public let patch: [String: AnyCodable]
+
+    public init(
+        id: String,
+        patch: [String: AnyCodable]
+    ) {
+        self.id = id
+        self.patch = patch
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case patch
+    }
+}
+
+public struct CronRemoveParams: Codable {
+    public let id: String
+
+    public init(
+        id: String
+    ) {
+        self.id = id
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+    }
+}
+
+public struct CronRunParams: Codable {
+    public let id: String
+    public let mode: AnyCodable?
+
+    public init(
+        id: String,
+        mode: AnyCodable?
+    ) {
+        self.id = id
+        self.mode = mode
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case mode
+    }
+}
+
+public struct CronRunsParams: Codable {
+    public let id: String?
+    public let limit: Int?
+
+    public init(
+        id: String?,
+        limit: Int?
+    ) {
+        self.id = id
+        self.limit = limit
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case limit
+    }
+}
+
+public struct CronRunLogEntry: Codable {
+    public let ts: Int
+    public let jobid: String
+    public let action: String
+    public let status: AnyCodable?
+    public let error: String?
+    public let runatms: Int?
+    public let durationms: Int?
+    public let nextrunatms: Int?
+
+    public init(
+        ts: Int,
+        jobid: String,
+        action: String,
+        status: AnyCodable?,
+        error: String?,
+        runatms: Int?,
+        durationms: Int?,
+        nextrunatms: Int?
+    ) {
+        self.ts = ts
+        self.jobid = jobid
+        self.action = action
+        self.status = status
+        self.error = error
+        self.runatms = runatms
+        self.durationms = durationms
+        self.nextrunatms = nextrunatms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case ts
+        case jobid = "jobId"
+        case action
+        case status
+        case error
+        case runatms = "runAtMs"
+        case durationms = "durationMs"
+        case nextrunatms = "nextRunAtMs"
+    }
+}
+
 public struct ChatHistoryParams: Codable {
     public let sessionkey: String
 

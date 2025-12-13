@@ -802,6 +802,792 @@
         "idempotencyKey"
       ]
     },
+    "WakeParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "mode": {
+          "anyOf": [
+            {
+              "const": "now",
+              "type": "string"
+            },
+            {
+              "const": "next-heartbeat",
+              "type": "string"
+            }
+          ]
+        },
+        "text": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "mode",
+        "text"
+      ]
+    },
+    "CronJob": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "createdAtMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "updatedAtMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "at",
+                  "type": "string"
+                },
+                "atMs": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "atMs"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "every",
+                  "type": "string"
+                },
+                "everyMs": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "anchorMs": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "everyMs"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "cron",
+                  "type": "string"
+                },
+                "expr": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "tz": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "expr"
+              ]
+            }
+          ]
+        },
+        "sessionTarget": {
+          "anyOf": [
+            {
+              "const": "main",
+              "type": "string"
+            },
+            {
+              "const": "isolated",
+              "type": "string"
+            }
+          ]
+        },
+        "wakeMode": {
+          "anyOf": [
+            {
+              "const": "next-heartbeat",
+              "type": "string"
+            },
+            {
+              "const": "now",
+              "type": "string"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "systemEvent",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "agentTurn",
+                  "type": "string"
+                },
+                "message": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "thinking": {
+                  "type": "string"
+                },
+                "timeoutSeconds": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "deliver": {
+                  "type": "boolean"
+                },
+                "channel": {
+                  "anyOf": [
+                    {
+                      "const": "last",
+                      "type": "string"
+                    },
+                    {
+                      "const": "whatsapp",
+                      "type": "string"
+                    },
+                    {
+                      "const": "telegram",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "to": {
+                  "type": "string"
+                },
+                "bestEffortDeliver": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ]
+            }
+          ]
+        },
+        "isolation": {
+          "additionalProperties": false,
+          "type": "object",
+          "properties": {
+            "postToMain": {
+              "type": "boolean"
+            },
+            "postToMainPrefix": {
+              "type": "string"
+            }
+          }
+        },
+        "state": {
+          "additionalProperties": false,
+          "type": "object",
+          "properties": {
+            "nextRunAtMs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "runningAtMs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lastRunAtMs": {
+              "minimum": 0,
+              "type": "integer"
+            },
+            "lastStatus": {
+              "anyOf": [
+                {
+                  "const": "ok",
+                  "type": "string"
+                },
+                {
+                  "const": "error",
+                  "type": "string"
+                },
+                {
+                  "const": "skipped",
+                  "type": "string"
+                }
+              ]
+            },
+            "lastError": {
+              "type": "string"
+            },
+            "lastDurationMs": {
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        }
+      },
+      "required": [
+        "id",
+        "enabled",
+        "createdAtMs",
+        "updatedAtMs",
+        "schedule",
+        "sessionTarget",
+        "wakeMode",
+        "payload",
+        "state"
+      ]
+    },
+    "CronListParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "includeDisabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "CronStatusParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {}
+    },
+    "CronAddParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "schedule": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "at",
+                  "type": "string"
+                },
+                "atMs": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "atMs"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "every",
+                  "type": "string"
+                },
+                "everyMs": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "anchorMs": {
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "kind",
+                "everyMs"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "cron",
+                  "type": "string"
+                },
+                "expr": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "tz": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "expr"
+              ]
+            }
+          ]
+        },
+        "sessionTarget": {
+          "anyOf": [
+            {
+              "const": "main",
+              "type": "string"
+            },
+            {
+              "const": "isolated",
+              "type": "string"
+            }
+          ]
+        },
+        "wakeMode": {
+          "anyOf": [
+            {
+              "const": "next-heartbeat",
+              "type": "string"
+            },
+            {
+              "const": "now",
+              "type": "string"
+            }
+          ]
+        },
+        "payload": {
+          "anyOf": [
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "systemEvent",
+                  "type": "string"
+                },
+                "text": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ]
+            },
+            {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "const": "agentTurn",
+                  "type": "string"
+                },
+                "message": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "thinking": {
+                  "type": "string"
+                },
+                "timeoutSeconds": {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "deliver": {
+                  "type": "boolean"
+                },
+                "channel": {
+                  "anyOf": [
+                    {
+                      "const": "last",
+                      "type": "string"
+                    },
+                    {
+                      "const": "whatsapp",
+                      "type": "string"
+                    },
+                    {
+                      "const": "telegram",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "to": {
+                  "type": "string"
+                },
+                "bestEffortDeliver": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "kind",
+                "message"
+              ]
+            }
+          ]
+        },
+        "isolation": {
+          "additionalProperties": false,
+          "type": "object",
+          "properties": {
+            "postToMain": {
+              "type": "boolean"
+            },
+            "postToMainPrefix": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "schedule",
+        "sessionTarget",
+        "wakeMode",
+        "payload"
+      ]
+    },
+    "CronUpdateParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "patch": {
+          "additionalProperties": false,
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "enabled": {
+              "type": "boolean"
+            },
+            "schedule": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "at",
+                      "type": "string"
+                    },
+                    "atMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "atMs"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "every",
+                      "type": "string"
+                    },
+                    "everyMs": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "anchorMs": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "everyMs"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "cron",
+                      "type": "string"
+                    },
+                    "expr": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "tz": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "expr"
+                  ]
+                }
+              ]
+            },
+            "sessionTarget": {
+              "anyOf": [
+                {
+                  "const": "main",
+                  "type": "string"
+                },
+                {
+                  "const": "isolated",
+                  "type": "string"
+                }
+              ]
+            },
+            "wakeMode": {
+              "anyOf": [
+                {
+                  "const": "next-heartbeat",
+                  "type": "string"
+                },
+                {
+                  "const": "now",
+                  "type": "string"
+                }
+              ]
+            },
+            "payload": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "systemEvent",
+                      "type": "string"
+                    },
+                    "text": {
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "text"
+                  ]
+                },
+                {
+                  "additionalProperties": false,
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "const": "agentTurn",
+                      "type": "string"
+                    },
+                    "message": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "thinking": {
+                      "type": "string"
+                    },
+                    "timeoutSeconds": {
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "deliver": {
+                      "type": "boolean"
+                    },
+                    "channel": {
+                      "anyOf": [
+                        {
+                          "const": "last",
+                          "type": "string"
+                        },
+                        {
+                          "const": "whatsapp",
+                          "type": "string"
+                        },
+                        {
+                          "const": "telegram",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "bestEffortDeliver": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "message"
+                  ]
+                }
+              ]
+            },
+            "isolation": {
+              "additionalProperties": false,
+              "type": "object",
+              "properties": {
+                "postToMain": {
+                  "type": "boolean"
+                },
+                "postToMainPrefix": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "id",
+        "patch"
+      ]
+    },
+    "CronRemoveParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "CronRunParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "const": "due",
+              "type": "string"
+            },
+            {
+              "const": "force",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "CronRunsParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "id": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "limit": {
+          "minimum": 1,
+          "maximum": 5000,
+          "type": "integer"
+        }
+      }
+    },
+    "CronRunLogEntry": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "ts": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "jobId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "action": {
+          "const": "finished",
+          "type": "string"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "const": "ok",
+              "type": "string"
+            },
+            {
+              "const": "error",
+              "type": "string"
+            },
+            {
+              "const": "skipped",
+              "type": "string"
+            }
+          ]
+        },
+        "error": {
+          "type": "string"
+        },
+        "runAtMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "durationMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "nextRunAtMs": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "ts",
+        "jobId",
+        "action"
+      ]
+    },
     "ChatHistoryParams": {
       "additionalProperties": false,
       "type": "object",

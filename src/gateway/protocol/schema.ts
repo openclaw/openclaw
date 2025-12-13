@@ -316,6 +316,11 @@ export const CronListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const CronStatusParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
+
 export const CronAddParamsSchema = Type.Object(
   {
     name: Type.Optional(Type.String()),
@@ -438,6 +443,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   WakeParams: WakeParamsSchema,
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
+  CronStatusParams: CronStatusParamsSchema,
   CronAddParams: CronAddParamsSchema,
   CronUpdateParams: CronUpdateParamsSchema,
   CronRemoveParams: CronRemoveParamsSchema,
@@ -467,6 +473,7 @@ export type AgentEvent = Static<typeof AgentEventSchema>;
 export type WakeParams = Static<typeof WakeParamsSchema>;
 export type CronJob = Static<typeof CronJobSchema>;
 export type CronListParams = Static<typeof CronListParamsSchema>;
+export type CronStatusParams = Static<typeof CronStatusParamsSchema>;
 export type CronAddParams = Static<typeof CronAddParamsSchema>;
 export type CronUpdateParams = Static<typeof CronUpdateParamsSchema>;
 export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
