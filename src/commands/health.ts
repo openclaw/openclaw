@@ -21,6 +21,12 @@ type TelegramProbe = {
 };
 
 export type HealthSummary = {
+  /**
+   * Convenience top-level flag for UIs (e.g. WebChat) that only need a binary
+   * "can talk to the gateway" signal. If this payload exists, the gateway RPC
+   * succeeded, so this is always `true`.
+   */
+  ok: true;
   ts: number;
   durationMs: number;
   web: {
@@ -169,6 +175,7 @@ export async function getHealthSnapshot(
     : undefined;
 
   const summary: HealthSummary = {
+    ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     web: { linked, authAgeMs },
