@@ -97,7 +97,8 @@ function safeReadJson(filePath: string): Record<string, unknown> | null {
     if (!exists(filePath)) return null;
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as unknown;
-    if (typeof parsed !== "object" || parsed === null) return null;
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return null;
     return parsed as Record<string, unknown>;
   } catch {
     return null;
