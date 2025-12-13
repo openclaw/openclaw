@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Clawdis Node</string>
+	<string>ClawdisKit</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -25,11 +25,11 @@
 		<string>_clawdis-bridge._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clawdis Node discovers and connects to your Clawdis bridge on the local network.</string>
+	<string>ClawdisKit discovers and connects to your Clawdis bridge on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clawdis Node needs microphone access for voice wake.</string>
+	<string>ClawdisKit needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clawdis Node uses on-device speech recognition for voice wake.</string>
+	<string>ClawdisKit uses on-device speech recognition for voice wake.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

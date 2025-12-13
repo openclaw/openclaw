@@ -74,6 +74,12 @@ CLI must be able to fully operate without any GUI:
 Optional interactive helper:
 - `clawdis nodes watch` (subscribe to `node.pair.requested` and prompt in-place)
 
+Implementation pointers:
+- CLI commands: `src/cli/nodes-cli.ts`
+- Gateway handlers + events: `src/gateway/server.ts`
+- Pairing store: `src/infra/node-pairing.ts` (under `~/.clawdis/nodes/`)
+- Optional macOS UI prompt (frontend only): `apps/macos/Sources/Clawdis/NodePairingApprovalPrompter.swift`
+
 ## Storage (private, local)
 Gateway stores the authoritative state under `~/.clawdis/`:
 - `~/.clawdis/nodes/paired.json`

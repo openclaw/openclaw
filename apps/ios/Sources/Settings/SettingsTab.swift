@@ -98,9 +98,9 @@ struct SettingsTab: View {
             Text("No bridges found yet.")
                 .foregroundStyle(.secondary)
         } else {
-            let connectedID = self.appModel.connectedBridgeDebugID
+            let connectedID = self.appModel.connectedBridgeID
             let rows = self.discovery.bridges.filter { bridge in
-                let isConnected = bridge.debugID == connectedID
+                let isConnected = bridge.stableID == connectedID
                 switch showing {
                 case .all:
                     return true
@@ -117,10 +117,6 @@ struct SettingsTab: View {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(bridge.name)
-                            Text(bridge.debugID)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
                         }
                         Spacer()
 

@@ -2,6 +2,13 @@ import AVFAudio
 import Foundation
 import Speech
 
+private func makeAudioTapEnqueueCallback(queue: AudioBufferQueue) -> AVAudioNodeTapBlock {
+    { buffer, _ in
+        // This callback is invoked on a realtime audio thread/queue. Keep it tiny and nonisolated.
+        queue.enqueueCopy(of: buffer)
+    }
+}
+
 private final class AudioBufferQueue: @unchecked Sendable {
     private let lock = NSLock()
     private var buffers: [AVAudioPCMBuffer] = []
@@ -41,7 +48,7 @@ extension AVAudioPCMBuffer {
             let channels = Int(format.channelCount)
             let frames = Int(frameLength)
             for ch in 0..<channels {
-                dst[ch].assign(from: src[ch], count: frames)
+                dst[ch].update(from: src[ch], count: frames)
             }
             return copy
         }
@@ -50,7 +57,7 @@ extension AVAudioPCMBuffer {
             let channels = Int(format.channelCount)
             let frames = Int(frameLength)
             for ch in 0..<channels {
-                dst[ch].assign(from: src[ch], count: frames)
+                dst[ch].update(from: src[ch], count: frames)
             }
             return copy
         }
@@ -59,7 +66,7 @@ extension AVAudioPCMBuffer {
             let channels = Int(format.channelCount)
             let frames = Int(frameLength)
             for ch in 0..<channels {
-                dst[ch].assign(from: src[ch], count: frames)
+                dst[ch].update(from: src[ch], count: frames)
             }
             return copy
         }
@@ -176,11 +183,11 @@ final class VoiceWakeManager: NSObject, ObservableObject {
 
         let queue = AudioBufferQueue()
         self.tapQueue = queue
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak queue] buffer, _ in
-            // `SFSpeechAudioBufferRecognitionRequest.append` is MainActor-isolated on iOS 26.
-            // Copy + enqueue in the realtime callback, drain + append from the MainActor.
-            queue?.enqueueCopy(of: buffer)
-        }
+        inputNode.installTap(
+            onBus: 0,
+            bufferSize: 1024,
+            format: recordingFormat,
+            block: makeAudioTapEnqueueCallback(queue: queue))
 
         self.audioEngine.prepare()
         try self.audioEngine.start()

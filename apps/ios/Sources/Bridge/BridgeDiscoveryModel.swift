@@ -5,9 +5,10 @@ import Network
 @MainActor
 final class BridgeDiscoveryModel: ObservableObject {
     struct DiscoveredBridge: Identifiable, Equatable {
-        var id: String { self.debugID }
+        var id: String { self.stableID }
         var name: String
         var endpoint: NWEndpoint
+        var stableID: String
         var debugID: String
     }
 
@@ -54,7 +55,8 @@ final class BridgeDiscoveryModel: ObservableObject {
                         return DiscoveredBridge(
                             name: decodedName,
                             endpoint: result.endpoint,
-                            debugID: Self.prettyEndpointDebugID(result.endpoint))
+                            stableID: BridgeEndpointID.stableID(result.endpoint),
+                            debugID: BridgeEndpointID.prettyDescription(result.endpoint))
                     default:
                         return nil
                     }
@@ -72,9 +74,5 @@ final class BridgeDiscoveryModel: ObservableObject {
         self.browser = nil
         self.bridges = []
         self.statusText = "Stopped"
-    }
-
-    private static func prettyEndpointDebugID(_ endpoint: NWEndpoint) -> String {
-        BonjourEscapes.decode(String(describing: endpoint))
     }
 }

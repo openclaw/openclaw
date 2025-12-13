@@ -43,14 +43,14 @@ targets:
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Clawdis Node
+        CFBundleDisplayName: ClawdisKit
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: Clawdis Node discovers and connects to your Clawdis bridge on the local network.
+        NSLocalNetworkUsageDescription: ClawdisKit discovers and connects to your Clawdis bridge on the local network.
         NSBonjourServices:
           - _clawdis-bridge._tcp
-        NSMicrophoneUsageDescription: Clawdis Node needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: Clawdis Node uses on-device speech recognition for voice wake.
+        NSMicrophoneUsageDescription: ClawdisKit needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: ClawdisKit uses on-device speech recognition for voice wake.

@@ -9,7 +9,7 @@ final class NodeAppModel: ObservableObject {
     @Published var bridgeStatusText: String = "Not connected"
     @Published var bridgeServerName: String?
     @Published var bridgeRemoteAddress: String?
-    @Published var connectedBridgeDebugID: String?
+    @Published var connectedBridgeID: String?
 
     private let bridge = BridgeSession()
     private var bridgeTask: Task<Void, Never>?
@@ -58,7 +58,7 @@ final class NodeAppModel: ObservableObject {
         self.bridgeStatusText = "Connecting…"
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
-        self.connectedBridgeDebugID = BonjourEscapes.decode(String(describing: endpoint))
+        self.connectedBridgeID = BridgeEndpointID.stableID(endpoint)
 
         self.bridgeTask = Task {
             do {
@@ -96,14 +96,14 @@ final class NodeAppModel: ObservableObject {
                     self.bridgeStatusText = "Disconnected"
                     self.bridgeServerName = nil
                     self.bridgeRemoteAddress = nil
-                    self.connectedBridgeDebugID = nil
+                    self.connectedBridgeID = nil
                 }
             } catch {
                 await MainActor.run {
                     self.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
                     self.bridgeServerName = nil
                     self.bridgeRemoteAddress = nil
-                    self.connectedBridgeDebugID = nil
+                    self.connectedBridgeID = nil
                 }
             }
         }
@@ -116,7 +116,7 @@ final class NodeAppModel: ObservableObject {
         self.bridgeStatusText = "Disconnected"
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
-        self.connectedBridgeDebugID = nil
+        self.connectedBridgeID = nil
     }
 
     func sendVoiceTranscript(text: String, sessionKey: String?) async throws {

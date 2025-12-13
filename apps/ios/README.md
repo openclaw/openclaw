@@ -1,4 +1,4 @@
-# ClawdisNode (iOS)
+# ClawdisKit (iOS)
 
 Internal-only SwiftUI app scaffold.
 
