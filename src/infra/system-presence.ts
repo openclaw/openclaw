@@ -4,6 +4,7 @@ export type SystemPresence = {
   host?: string;
   ip?: string;
   version?: string;
+  platform?: string;
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;
@@ -46,11 +47,19 @@ function initSelfPresence() {
   const ip = resolvePrimaryIPv4() ?? undefined;
   const version =
     process.env.CLAWDIS_VERSION ?? process.env.npm_package_version ?? "unknown";
+  const platform = (() => {
+    const p = os.platform();
+    const rel = os.release();
+    if (p === "darwin") return `macos ${rel}`;
+    if (p === "win32") return `windows ${rel}`;
+    return `${p} ${rel}`;
+  })();
   const text = `Gateway: ${host}${ip ? ` (${ip})` : ""} · app ${version} · mode gateway · reason self`;
   const selfEntry: SystemPresence = {
     host,
     ip,
     version,
+    platform,
     mode: "gateway",
     reason: "self",
     text,
@@ -113,6 +122,7 @@ type SystemPresencePayload = {
   host?: string;
   ip?: string;
   version?: string;
+  platform?: string;
   lastInputSeconds?: number;
   mode?: string;
   reason?: string;
@@ -136,6 +146,7 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
     host: payload.host ?? parsed.host ?? existing.host,
     ip: payload.ip ?? parsed.ip ?? existing.ip,
     version: payload.version ?? parsed.version ?? existing.version,
+    platform: payload.platform ?? existing.platform,
     mode: payload.mode ?? parsed.mode ?? existing.mode,
     lastInputSeconds:
       payload.lastInputSeconds ??

@@ -7,6 +7,7 @@ export const PresenceEntrySchema = Type.Object(
     host: Type.Optional(NonEmptyString),
     ip: Type.Optional(NonEmptyString),
     version: Type.Optional(NonEmptyString),
+    platform: Type.Optional(NonEmptyString),
     mode: Type.Optional(NonEmptyString),
     lastInputSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     reason: Type.Optional(NonEmptyString),

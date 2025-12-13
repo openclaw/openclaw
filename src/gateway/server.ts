@@ -819,11 +819,13 @@ export async function startGatewayServer(
           const host = node.displayName?.trim() || node.nodeId;
           const ip = node.remoteIp?.trim();
           const version = node.version?.trim() || "unknown";
+          const platform = node.platform?.trim() || undefined;
           const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason iris-connected`;
           upsertPresence(node.nodeId, {
             host,
             ip,
             version,
+            platform,
             mode: "remote",
             reason: "iris-connected",
             lastInputSeconds: 0,
@@ -847,11 +849,13 @@ export async function startGatewayServer(
           const host = node.displayName?.trim() || node.nodeId;
           const ip = node.remoteIp?.trim();
           const version = node.version?.trim() || "unknown";
+          const platform = node.platform?.trim() || undefined;
           const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason iris-disconnected`;
           upsertPresence(node.nodeId, {
             host,
             ip,
             version,
+            platform,
             mode: "remote",
             reason: "iris-disconnected",
             lastInputSeconds: 0,
@@ -1206,6 +1210,7 @@ export async function startGatewayServer(
               host: connectParams.client.name || os.hostname(),
               ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
               version: connectParams.client.version,
+              platform: connectParams.client.platform,
               mode: connectParams.client.mode,
               instanceId: connectParams.client.instanceId,
               reason: "connect",
@@ -1824,6 +1829,8 @@ export async function startGatewayServer(
               typeof params.mode === "string" ? params.mode : undefined;
             const version =
               typeof params.version === "string" ? params.version : undefined;
+            const platform =
+              typeof params.platform === "string" ? params.platform : undefined;
             const lastInputSeconds =
               typeof params.lastInputSeconds === "number" &&
               Number.isFinite(params.lastInputSeconds)
@@ -1843,6 +1850,7 @@ export async function startGatewayServer(
               ip,
               mode,
               version,
+              platform,
               lastInputSeconds,
               reason,
               tags,

@@ -8,6 +8,7 @@ struct InstanceInfo: Identifiable, Codable {
     let host: String?
     let ip: String?
     let version: String?
+    let platform: String?
     let lastInputSeconds: Int?
     let mode: String?
     let reason: String?
@@ -145,6 +146,8 @@ final class InstancesStore: ObservableObject {
         let host = Host.current().localizedName ?? "this-mac"
         let ip = Self.primaryIPv4Address()
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let osVersion = ProcessInfo.processInfo.operatingSystemVersion
+        let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let text = "Local node: \(host)\(ip.map { " (\($0))" } ?? "") · app \(version ?? "dev")"
         let ts = Date().timeIntervalSince1970 * 1000
         return InstanceInfo(
@@ -152,6 +155,7 @@ final class InstancesStore: ObservableObject {
             host: host,
             ip: ip,
             version: version,
+            platform: platform,
             lastInputSeconds: Self.lastInputSeconds(),
             mode: "local",
             reason: reason,
@@ -228,6 +232,7 @@ final class InstancesStore: ObservableObject {
                 host: "gateway (health)",
                 ip: nil,
                 version: nil,
+                platform: nil,
                 lastInputSeconds: nil,
                 mode: "health",
                 reason: "health probe",
@@ -276,6 +281,7 @@ final class InstancesStore: ObservableObject {
                 host: entry.host,
                 ip: entry.ip,
                 version: entry.version,
+                platform: entry.platform,
                 lastInputSeconds: entry.lastinputseconds,
                 mode: entry.mode,
                 reason: entry.reason,
@@ -299,6 +305,7 @@ extension InstancesStore {
             host: "steipete-mac",
             ip: "10.0.0.12",
             version: "1.2.3",
+            platform: "macos 26.2.0",
             lastInputSeconds: 12,
             mode: "local",
             reason: "preview",
@@ -309,6 +316,7 @@ extension InstancesStore {
             host: "gateway",
             ip: "100.64.0.2",
             version: "1.2.3",
+            platform: "linux 6.6.0",
             lastInputSeconds: 45,
             mode: "remote",
             reason: "preview",
