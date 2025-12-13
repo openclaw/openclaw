@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SettingsTab: View {
     @EnvironmentObject private var appModel: NodeAppModel
+    @Environment(\.dismiss) private var dismiss
     @AppStorage("node.displayName") private var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
@@ -65,6 +66,16 @@ struct SettingsTab: View {
                 }
             }
             .navigationTitle("Settings")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        self.dismiss()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .accessibilityLabel("Close")
+                }
+            }
             .onAppear { self.discovery.start() }
             .onDisappear { self.discovery.stop() }
             .onChange(of: self.discovery.bridges) { _, newValue in
