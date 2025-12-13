@@ -174,6 +174,12 @@ final class ControlChannel: ObservableObject {
             case .cancelled:
                 return "Gateway connection was closed; start the gateway (localhost:\(port)) and retry."
             case .cannotFindHost, .cannotConnectToHost:
+                if AppStateStore.attachExistingGatewayOnly {
+                    return """
+                    Cannot reach gateway at localhost:\(port) and “Attach existing gateway only” is enabled.
+                    Disable it in Debug Settings or start a gateway on that port.
+                    """
+                }
                 return "Cannot reach gateway at localhost:\(port); ensure the gateway is running."
             case .networkConnectionLost:
                 return "Gateway connection dropped; gateway likely restarted—retry."
