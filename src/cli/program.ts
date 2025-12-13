@@ -11,13 +11,13 @@ import {
   browserTabs,
   resolveBrowserControlUrl,
 } from "../browser/client.js";
-import { runClawdisMac } from "../infra/clawdis-mac.js";
 import { agentCommand } from "../commands/agent.js";
 import { healthCommand } from "../commands/health.js";
 import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { statusCommand } from "../commands/status.js";
 import { danger, info, setVerbose } from "../globals.js";
+import { runClawdisMac } from "../infra/clawdis-mac.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -230,9 +230,8 @@ Examples:
     .description("macOS UI automation via Clawdis.app (PeekabooBridge)")
     .option("--json", "Output JSON (passthrough from clawdis-mac)", false)
     .allowUnknownOption(true)
-    .passThroughOptions()
     .argument(
-      "<uiArgs...>",
+      "[uiArgs...]",
       "Args passed through to: clawdis-mac ui <command> ...",
     )
     .addHelpText(
@@ -247,9 +246,15 @@ Examples:
   clawdis ui --json see --bundle-id com.apple.Safari
 `,
     )
-    .action(async (uiArgs: string[], opts) => {
+    .action(async (_unused: string[], opts, cmd) => {
       try {
-        const res = await runClawdisMac(["ui", ...uiArgs], {
+        const raw = (cmd.parent?.rawArgs ?? []).map((a: unknown) => String(a));
+        const idx = raw.indexOf("ui");
+        const tail = idx >= 0 ? raw.slice(idx + 1) : [];
+        const forwarded =
+          tail.length > 0 && tail[0] === "--json" ? tail.slice(1) : tail;
+
+        const res = await runClawdisMac(["ui", ...forwarded], {
           json: Boolean(opts.json),
           timeoutMs: 45_000,
         });

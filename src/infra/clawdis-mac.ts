@@ -63,4 +63,3 @@ export async function runClawdisMac(
   const res = await runCommandWithTimeout(argv, opts?.timeoutMs ?? 30_000);
   return { stdout: res.stdout, stderr: res.stderr, code: res.code };
 }
-

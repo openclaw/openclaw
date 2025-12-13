@@ -98,13 +98,7 @@ describe("gateway SIGTERM", () => {
     child.stdout?.on("data", (d) => out.push(String(d)));
     child.stderr?.on("data", (d) => err.push(String(d)));
 
-    await waitForPortOpen(
-      proc,
-      out,
-      err,
-      port,
-      20_000,
-    );
+    await waitForPortOpen(proc, out, err, port, 20_000);
 
     proc.kill("SIGTERM");
 
