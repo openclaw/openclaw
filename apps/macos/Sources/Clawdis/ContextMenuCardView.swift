@@ -8,8 +8,8 @@ struct ContextMenuCardView: View {
     private let isLoading: Bool
     private let paddingTop: CGFloat = 8
     private let paddingBottom: CGFloat = 8
-    private let paddingTrailing: CGFloat = 18
-    private let paddingLeading: CGFloat = 28
+    private let paddingTrailing: CGFloat = 10
+    private let paddingLeading: CGFloat = 20
     private let barHeight: CGFloat = 3
 
     init(
