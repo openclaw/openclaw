@@ -71,6 +71,7 @@
     "lit": "^3.3.1",
     "lucide": "^0.561.0",
     "ollama": "^0.6.3",
+    "playwright-core": "1.57.0",
     "quicktype-core": "^23.2.6",
     "rolldown": "1.0.0-beta.54",
     "tsx": "^4.21.0",
