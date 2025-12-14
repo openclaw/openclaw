@@ -81,6 +81,15 @@ final class WebChatServer: @unchecked Sendable {
         }
     }
 
+    func stop() {
+        self.queue.async {
+            self.listener?.cancel()
+            self.listener = nil
+            self.root = nil
+            self.port = nil
+        }
+    }
+
     /// Returns the base URL once the server is ready, otherwise nil.
     func baseURL() -> URL? {
         var url: URL?
@@ -174,8 +183,10 @@ final class WebChatServer: @unchecked Sendable {
         }
         let fileURL = root.appendingPathComponent(path)
         webChatServerLogger.debug("WebChatServer resolved file=\(fileURL.path, privacy: .public)")
-        // Simple directory traversal guard: served files must live under the bundled web root.
-        guard fileURL.path.hasPrefix(root.path) else {
+        // Directory traversal + symlink escape guard: served files must resolve under the bundled web root.
+        let rootPath = root.standardizedFileURL.resolvingSymlinksInPath().path
+        let resolvedPath = fileURL.standardizedFileURL.resolvingSymlinksInPath().path
+        guard resolvedPath == rootPath || resolvedPath.hasPrefix(rootPath + "/") else {
             let forbidden = Data("Forbidden".utf8)
             self.send(
                 status: 403,

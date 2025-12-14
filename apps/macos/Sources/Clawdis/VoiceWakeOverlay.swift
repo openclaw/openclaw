@@ -9,6 +9,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     static let shared = VoiceWakeOverlayController()
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.overlay")
+    private let enableUI: Bool
 
     /// Keep the voice wake overlay above any other Clawdis windows, but below the system’s pop-up menus.
     /// (Menu bar menus typically live at `.popUpMenu`.)
@@ -46,6 +47,10 @@ final class VoiceWakeOverlayController: ObservableObject {
     private let maxHeight: CGFloat = 400
     private let minHeight: CGFloat = 48
     let closeOverflow: CGFloat = 10
+
+    init(enableUI: Bool = true) {
+        self.enableUI = enableUI
+    }
 
     @discardableResult
     func startSession(
@@ -207,7 +212,23 @@ final class VoiceWakeOverlayController: ObservableObject {
         self.autoSendTask?.cancel(); self.autoSendToken = nil
         self.model.isSending = false
         self.model.isEditing = false
-        guard let window else { return }
+
+        if !self.enableUI {
+            self.model.isVisible = false
+            self.model.level = 0
+            self.activeToken = nil
+            self.activeSource = nil
+            return
+        }
+        guard let window else {
+            if ProcessInfo.processInfo.isRunningTests {
+                self.model.isVisible = false
+                self.model.level = 0
+                self.activeToken = nil
+                self.activeSource = nil
+            }
+            return
+        }
         let target = self.dismissTargetFrame(for: window.frame, reason: reason, outcome: outcome)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.18
@@ -273,6 +294,12 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 
     private func present() {
+        if !self.enableUI || ProcessInfo.processInfo.isRunningTests {
+            if !self.model.isVisible {
+                self.model.isVisible = true
+            }
+            return
+        }
         self.ensureWindow()
         self.hostingView?.rootView = VoiceWakeOverlayView(controller: self)
         let target = self.targetFrame()
@@ -437,7 +464,7 @@ final class VoiceWakeOverlayController: ObservableObject {
     }
 }
 
-private struct VoiceWakeOverlayView: View {
+struct VoiceWakeOverlayView: View {
     @ObservedObject var controller: VoiceWakeOverlayController
     @FocusState private var textFocused: Bool
     @State private var isHovering: Bool = false
@@ -554,7 +581,7 @@ private struct VoiceWakeOverlayView: View {
     }
 }
 
-private struct TranscriptTextView: NSViewRepresentable {
+struct TranscriptTextView: NSViewRepresentable {
     @Binding var text: String
     var attributed: NSAttributedString
     var isFinal: Bool
@@ -651,7 +678,7 @@ private struct TranscriptTextView: NSViewRepresentable {
 
 // MARK: - Vibrant display label
 
-private struct VibrantLabelView: NSViewRepresentable {
+struct VibrantLabelView: NSViewRepresentable {
     var attributed: NSAttributedString
     var onTap: () -> Void
 
@@ -708,7 +735,7 @@ private final class ClickCatcher: NSView {
     }
 }
 
-private struct CloseHoverButton: View {
+struct CloseHoverButton: View {
     var onClose: () -> Void
 
     var body: some View {
@@ -728,7 +755,7 @@ private struct CloseHoverButton: View {
     }
 }
 
-private struct CloseButtonOverlay: View {
+struct CloseButtonOverlay: View {
     var isVisible: Bool
     var onHover: (Bool) -> Void
     var onClose: () -> Void

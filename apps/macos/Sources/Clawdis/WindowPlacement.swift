@@ -4,6 +4,19 @@ import AppKit
 enum WindowPlacement {
     static func centeredFrame(size: NSSize, on screen: NSScreen? = NSScreen.main) -> NSRect {
         let bounds = (screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? .zero)
+        return self.centeredFrame(size: size, in: bounds)
+    }
+
+    static func topRightFrame(
+        size: NSSize,
+        padding: CGFloat,
+        on screen: NSScreen? = NSScreen.main) -> NSRect
+    {
+        let bounds = (screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? .zero)
+        return self.topRightFrame(size: size, padding: padding, in: bounds)
+    }
+
+    static func centeredFrame(size: NSSize, in bounds: NSRect) -> NSRect {
         if bounds == .zero {
             return NSRect(origin: .zero, size: size)
         }
@@ -16,12 +29,7 @@ enum WindowPlacement {
         return NSRect(x: x, y: y, width: clampedWidth, height: clampedHeight)
     }
 
-    static func topRightFrame(
-        size: NSSize,
-        padding: CGFloat,
-        on screen: NSScreen? = NSScreen.main) -> NSRect
-    {
-        let bounds = (screen?.visibleFrame ?? NSScreen.screens.first?.visibleFrame ?? .zero)
+    static func topRightFrame(size: NSSize, padding: CGFloat, in bounds: NSRect) -> NSRect {
         if bounds == .zero {
             return NSRect(origin: .zero, size: size)
         }

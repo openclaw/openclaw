@@ -3,6 +3,7 @@ import Testing
 
 #if canImport(Darwin)
 import Darwin
+import Foundation
 
 @Suite struct WebChatTunnelTests {
     @Test func portIsFreeDetectsIPv4Listener() {
@@ -46,7 +47,19 @@ import Darwin
 
         _ = Darwin.close(fd)
         fd = -1
-        #expect(WebChatTunnel._testPortIsFree(port) == true)
+
+        // In parallel test runs, another test may briefly grab the same ephemeral port.
+        // Poll for a short window to avoid flakiness.
+        let deadline = Date().addingTimeInterval(0.5)
+        var free = false
+        while Date() < deadline {
+            if WebChatTunnel._testPortIsFree(port) {
+                free = true
+                break
+            }
+            usleep(10_000) // 10ms
+        }
+        #expect(free == true)
     }
 }
 #endif

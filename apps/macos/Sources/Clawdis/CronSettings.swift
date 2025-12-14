@@ -473,7 +473,7 @@ struct CronSettings: View {
     }
 }
 
-private struct StatusPill: View {
+struct StatusPill: View {
     let text: String
     let tint: Color
 
@@ -488,7 +488,7 @@ private struct StatusPill: View {
     }
 }
 
-private struct CronJobEditor: View {
+struct CronJobEditor: View {
     let job: CronJob?
     @Binding var isSaving: Bool
     @Binding var error: String?

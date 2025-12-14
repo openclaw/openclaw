@@ -8,6 +8,7 @@ struct DebugSettings: View {
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
+    @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
     @State private var modelsError: String?
