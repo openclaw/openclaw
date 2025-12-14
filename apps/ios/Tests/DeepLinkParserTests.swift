@@ -3,6 +3,24 @@ import Foundation
 import Testing
 
 @Suite struct DeepLinkParserTests {
+    @Test func parseRejectsUnknownHost() {
+        let url = URL(string: "clawdis://nope?message=hi")!
+        #expect(DeepLinkParser.parse(url) == nil)
+    }
+
+    @Test func parseHostIsCaseInsensitive() {
+        let url = URL(string: "clawdis://AGENT?message=Hello")!
+        #expect(DeepLinkParser.parse(url) == .agent(.init(
+            message: "Hello",
+            sessionKey: nil,
+            thinking: nil,
+            deliver: false,
+            to: nil,
+            channel: nil,
+            timeoutSeconds: nil,
+            key: nil)))
+    }
+
     @Test func parseRejectsNonClawdisScheme() {
         let url = URL(string: "https://example.com/agent?message=hi")!
         #expect(DeepLinkParser.parse(url) == nil)
@@ -26,6 +44,21 @@ import Testing
                     channel: nil,
                     timeoutSeconds: 30,
                     key: nil)))
+    }
+
+    @Test func parseAgentLinkParsesTargetRoutingFields() {
+        let url = URL(string: "clawdis://agent?message=Hello%20World&deliver=1&to=%2B15551234567&channel=whatsapp&key=secret")!
+        #expect(
+            DeepLinkParser.parse(url) == .agent(
+                .init(
+                    message: "Hello World",
+                    sessionKey: nil,
+                    thinking: nil,
+                    deliver: true,
+                    to: "+15551234567",
+                    channel: "whatsapp",
+                    timeoutSeconds: nil,
+                    key: "secret")))
     }
 
     @Test func parseRejectsNegativeTimeoutSeconds() {
