@@ -157,3 +157,38 @@ jobs:
           set -euo pipefail
           RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
           xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
+
+      - name: iOS coverage gate (40%)
+        run: |
+          set -euo pipefail
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          target_name = "Clawdis.app"
+          minimum = 0.40
+
+          report = json.loads(
+              subprocess.check_output(
+                  ["xcrun", "xccov", "view", "--report", "--json", os.environ["RESULT_BUNDLE_PATH"]],
+                  text=True,
+              )
+          )
+
+          target_coverage = None
+          for target in report.get("targets", []):
+              if target.get("name") == target_name:
+                  target_coverage = float(target["lineCoverage"])
+                  break
+
+          if target_coverage is None:
+              print(f"Could not find coverage for target: {target_name}")
+              sys.exit(1)
+
+          print(f"{target_name} line coverage: {target_coverage * 100:.2f}% (min {minimum * 100:.2f}%)")
+          if target_coverage + 1e-12 < minimum:
+              sys.exit(1)
+          PY
