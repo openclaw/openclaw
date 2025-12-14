@@ -18,7 +18,7 @@ struct RootTabs: View {
         }
         .background(TabBarControllerAccessor { tabBarController in
             guard let item = tabBarController.tabBar.items?[Self.settingsTabIndex] else { return }
-            item.badgeValue = " "
+            item.badgeValue = ""
             item.badgeColor = self.settingsBadgeColor
         })
         .onAppear { self.updateConnectingPulse(for: self.bridgeIndicatorState) }
