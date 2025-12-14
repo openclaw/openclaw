@@ -14,6 +14,7 @@ final class NodeAppModel: ObservableObject {
 
     private let bridge = BridgeSession()
     private var bridgeTask: Task<Void, Never>?
+    private var voiceWakeSyncTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
 
     var bridgeSession: BridgeSession { self.bridge }
@@ -57,6 +58,8 @@ final class NodeAppModel: ObservableObject {
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
         self.connectedBridgeID = BridgeEndpointID.stableID(endpoint)
+        self.voiceWakeSyncTask?.cancel()
+        self.voiceWakeSyncTask = nil
 
         self.bridgeTask = Task {
             var attempt = 0
@@ -86,6 +89,7 @@ final class NodeAppModel: ObservableObject {
                                     self.bridgeRemoteAddress = addr
                                 }
                             }
+                            await self.startVoiceWakeSync()
                         },
                         onInvoke: { [weak self] req in
                             guard let self else {
@@ -126,11 +130,59 @@ final class NodeAppModel: ObservableObject {
     func disconnectBridge() {
         self.bridgeTask?.cancel()
         self.bridgeTask = nil
+        self.voiceWakeSyncTask?.cancel()
+        self.voiceWakeSyncTask = nil
         Task { await self.bridge.disconnect() }
         self.bridgeStatusText = "Disconnected"
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
         self.connectedBridgeID = nil
+    }
+
+    func setGlobalWakeWords(_ words: [String]) async {
+        let sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
+
+        struct Payload: Codable {
+            var triggers: [String]
+        }
+        let payload = Payload(triggers: sanitized)
+        guard let data = try? JSONEncoder().encode(payload),
+              let json = String(data: data, encoding: .utf8)
+        else { return }
+
+        do {
+            _ = try await self.bridge.request(method: "voicewake.set", paramsJSON: json, timeoutSeconds: 12)
+        } catch {
+            // Best-effort only.
+        }
+    }
+
+    private func startVoiceWakeSync() async {
+        self.voiceWakeSyncTask?.cancel()
+        self.voiceWakeSyncTask = Task { [weak self] in
+            guard let self else { return }
+
+            await self.refreshWakeWordsFromGateway()
+
+            let stream = await self.bridge.subscribeServerEvents(bufferingNewest: 200)
+            for await evt in stream {
+                if Task.isCancelled { return }
+                guard evt.event == "voicewake.changed" else { continue }
+                guard let payloadJSON = evt.payloadJSON else { continue }
+                guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: payloadJSON) else { continue }
+                VoiceWakePreferences.saveTriggerWords(triggers)
+            }
+        }
+    }
+
+    private func refreshWakeWordsFromGateway() async {
+        do {
+            let data = try await self.bridge.request(method: "voicewake.get", paramsJSON: "{}", timeoutSeconds: 8)
+            guard let triggers = VoiceWakePreferences.decodeGatewayTriggers(from: data) else { return }
+            VoiceWakePreferences.saveTriggerWords(triggers)
+        } catch {
+            // Best-effort only.
+        }
     }
 
     func sendVoiceTranscript(text: String, sessionKey: String?) async throws {

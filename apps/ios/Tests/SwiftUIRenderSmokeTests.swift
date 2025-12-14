@@ -48,13 +48,18 @@ import UIKit
     }
 
     @Test @MainActor func voiceWakeWordsViewBuildsAViewHierarchy() {
+        let appModel = NodeAppModel()
         let root = NavigationStack { VoiceWakeWordsSettingsView() }
+            .environmentObject(appModel)
         _ = Self.host(root)
     }
 
     @Test @MainActor func chatSheetBuildsAViewHierarchy() {
+        let appModel = NodeAppModel()
         let bridge = BridgeSession()
         let root = ChatSheet(bridge: bridge, sessionKey: "test")
+            .environmentObject(appModel)
+            .environmentObject(appModel.voiceWake)
         _ = Self.host(root)
     }
 
