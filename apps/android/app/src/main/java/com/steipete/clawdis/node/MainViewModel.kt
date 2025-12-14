@@ -23,6 +23,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val instanceId: StateFlow<String> = runtime.instanceId
   val displayName: StateFlow<String> = runtime.displayName
   val cameraEnabled: StateFlow<Boolean> = runtime.cameraEnabled
+  val wakeWords: StateFlow<List<String>> = runtime.wakeWords
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
@@ -55,6 +56,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setManualPort(value)
   }
 
+  fun setWakeWords(words: List<String>) {
+    runtime.setWakeWords(words)
+  }
+
+  fun resetWakeWordsDefaults() {
+    runtime.resetWakeWordsDefaults()
+  }
+
   fun connect(endpoint: BridgeEndpoint) {
     runtime.connect(endpoint)
   }
@@ -75,4 +84,3 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.sendChat(sessionKey, message)
   }
 }
-

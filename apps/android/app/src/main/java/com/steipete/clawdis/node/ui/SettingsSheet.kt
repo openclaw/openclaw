@@ -22,8 +22,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -37,6 +40,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val instanceId by viewModel.instanceId.collectAsState()
   val displayName by viewModel.displayName.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
+  val wakeWords by viewModel.wakeWords.collectAsState()
+  val isConnected by viewModel.isConnected.collectAsState()
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
@@ -45,6 +50,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val bridges by viewModel.bridges.collectAsState()
   val listState = rememberLazyListState()
+
+  val (wakeWordsText, setWakeWordsText) = remember { mutableStateOf("") }
+  LaunchedEffect(wakeWords) { setWakeWordsText(wakeWords.joinToString(", ")) }
 
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
@@ -68,6 +76,43 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
     item { Text("Instance ID: $instanceId") }
+
+    item { HorizontalDivider() }
+
+    item { Text("Wake Words") }
+    item {
+      OutlinedTextField(
+        value = wakeWordsText,
+        onValueChange = setWakeWordsText,
+        label = { Text("Comma-separated (global)") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+      )
+    }
+    item {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Button(
+          onClick = {
+            val parsed = com.steipete.clawdis.node.WakeWords.parseCommaSeparated(wakeWordsText)
+            viewModel.setWakeWords(parsed)
+          },
+          enabled = isConnected,
+        ) {
+          Text("Save + Sync")
+        }
+
+        Button(onClick = viewModel::resetWakeWordsDefaults) { Text("Reset defaults") }
+      }
+    }
+    item {
+      Text(
+        if (isConnected) {
+          "Any node can edit wake words. Changes sync via the gateway bridge."
+        } else {
+          "Connect to a gateway to sync wake words globally."
+        },
+      )
+    }
 
     item { HorizontalDivider() }
 

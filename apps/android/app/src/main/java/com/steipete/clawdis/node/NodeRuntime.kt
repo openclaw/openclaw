@@ -9,7 +9,9 @@ import com.steipete.clawdis.node.node.CameraCaptureManager
 import com.steipete.clawdis.node.node.CanvasController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -57,6 +59,7 @@ class NodeRuntime(context: Context) {
         _serverName.value = name
         _remoteAddress.value = remote
         _isConnected.value = true
+        scope.launch { refreshWakeWordsFromGateway() }
       },
       onDisconnected = { message ->
         _statusText.value = message
@@ -75,12 +78,15 @@ class NodeRuntime(context: Context) {
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
   val cameraEnabled: StateFlow<Boolean> = prefs.cameraEnabled
+  val wakeWords: StateFlow<List<String>> = prefs.wakeWords
   val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
 
   private var didAutoConnect = false
+  private var suppressWakeWordsSync = false
+  private var wakeWordsSyncJob: Job? = null
 
   data class ChatMessage(val id: String, val role: String, val text: String, val timestampMs: Long?)
 
@@ -149,6 +155,15 @@ class NodeRuntime(context: Context) {
 
   fun setManualPort(value: Int) {
     prefs.setManualPort(value)
+  }
+
+  fun setWakeWords(words: List<String>) {
+    prefs.setWakeWords(words)
+    scheduleWakeWordsSyncIfNeeded()
+  }
+
+  fun resetWakeWordsDefaults() {
+    setWakeWords(SecurePrefs.defaultWakeWords)
   }
 
   fun connect(endpoint: BridgeEndpoint) {
@@ -257,7 +272,22 @@ class NodeRuntime(context: Context) {
   }
 
   private fun handleBridgeEvent(event: String, payloadJson: String?) {
-    if (event != "chat" || payloadJson.isNullOrBlank()) return
+    if (payloadJson.isNullOrBlank()) return
+
+    if (event == "voicewake.changed") {
+      try {
+        val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+        val array = payload["triggers"] as? JsonArray ?: return
+        val triggers = array.mapNotNull { it.asStringOrNull() }
+        applyWakeWordsFromGateway(triggers)
+      } catch (_: Throwable) {
+        // ignore
+      }
+      return
+    }
+
+    if (event != "chat") return
+
     try {
       val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
       val state = payload["state"].asStringOrNull()
@@ -287,6 +317,44 @@ class NodeRuntime(context: Context) {
           _chatError.value = payload["errorMessage"].asStringOrNull() ?: "Chat failed"
         }
       }
+    } catch (_: Throwable) {
+      // ignore
+    }
+  }
+
+  private fun applyWakeWordsFromGateway(words: List<String>) {
+    suppressWakeWordsSync = true
+    prefs.setWakeWords(words)
+    suppressWakeWordsSync = false
+  }
+
+  private fun scheduleWakeWordsSyncIfNeeded() {
+    if (suppressWakeWordsSync) return
+    if (!_isConnected.value) return
+
+    val snapshot = prefs.wakeWords.value
+    wakeWordsSyncJob?.cancel()
+    wakeWordsSyncJob =
+      scope.launch {
+        delay(650)
+        val jsonList = snapshot.joinToString(separator = ",") { it.toJsonString() }
+        val params = """{"triggers":[$jsonList]}"""
+        try {
+          session.request("voicewake.set", params)
+        } catch (_: Throwable) {
+          // ignore
+        }
+      }
+  }
+
+  private suspend fun refreshWakeWordsFromGateway() {
+    if (!_isConnected.value) return
+    try {
+      val res = session.request("voicewake.get", "{}")
+      val payload = json.parseToJsonElement(res).asObjectOrNull() ?: return
+      val array = payload["triggers"] as? JsonArray ?: return
+      val triggers = array.mapNotNull { it.asStringOrNull() }
+      applyWakeWordsFromGateway(triggers)
     } catch (_: Throwable) {
       // ignore
     }

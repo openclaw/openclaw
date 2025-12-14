@@ -5,9 +5,19 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import java.util.UUID
 
 class SecurePrefs(context: Context) {
+  companion object {
+    val defaultWakeWords: List<String> = listOf("clawd", "claude")
+  }
+
+  private val json = Json { ignoreUnknownKeys = true }
+
   private val masterKey =
     MasterKey.Builder(context)
       .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
@@ -43,6 +53,9 @@ class SecurePrefs(context: Context) {
   private val _lastDiscoveredStableId =
     MutableStateFlow(prefs.getString("bridge.lastDiscoveredStableId", "")!!)
   val lastDiscoveredStableId: StateFlow<String> = _lastDiscoveredStableId
+
+  private val _wakeWords = MutableStateFlow(loadWakeWords())
+  val wakeWords: StateFlow<List<String>> = _wakeWords
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -93,5 +106,33 @@ class SecurePrefs(context: Context) {
     val fresh = UUID.randomUUID().toString()
     prefs.edit().putString("node.instanceId", fresh).apply()
     return fresh
+  }
+
+  fun setWakeWords(words: List<String>) {
+    val sanitized = WakeWords.sanitize(words, defaultWakeWords)
+    val encoded =
+      JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
+    prefs.edit().putString("voiceWake.triggerWords", encoded).apply()
+    _wakeWords.value = sanitized
+  }
+
+  private fun loadWakeWords(): List<String> {
+    val raw = prefs.getString("voiceWake.triggerWords", null)?.trim()
+    if (raw.isNullOrEmpty()) return defaultWakeWords
+    return try {
+      val element = json.parseToJsonElement(raw)
+      val array = element as? JsonArray ?: return defaultWakeWords
+      val decoded =
+        array.mapNotNull { item ->
+          when (item) {
+            is JsonNull -> null
+            is JsonPrimitive -> item.content.trim().takeIf { it.isNotEmpty() }
+            else -> null
+          }
+        }
+      WakeWords.sanitize(decoded, defaultWakeWords)
+    } catch (_: Throwable) {
+      defaultWakeWords
+    }
   }
 }
