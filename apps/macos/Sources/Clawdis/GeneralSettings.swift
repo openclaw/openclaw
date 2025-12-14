@@ -151,7 +151,7 @@ struct GeneralSettings: View {
                     .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
 
-            MasterDiscoveryInlineList(discovery: self.masterDiscovery) { master in
+            MasterDiscoveryInlineList(discovery: self.masterDiscovery, currentTarget: self.state.remoteTarget) { master in
                 self.applyDiscoveredMaster(master)
             }
             .padding(.leading, 58)
