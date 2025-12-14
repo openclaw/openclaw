@@ -1,5 +1,5 @@
 title: "CLAWDIS Docs"
-description: "A WhatsApp + Telegram gateway for AI agents (Pi)."
+description: "A TypeScript/Node gateway + macOS/iOS companions for WhatsApp (web) and Telegram (bot)."
 markdown: kramdown
 highlighter: rouge
 
@@ -22,14 +22,26 @@ defaults:
 nav:
   - title: "Home"
     url: "/"
+  - title: "Clawd Setup"
+    url: "/clawd.html"
   - title: "Gateway"
     url: "/gateway.html"
+  - title: "Remote"
+    url: "/remote.html"
+  - title: "Discovery"
+    url: "/discovery.html"
   - title: "Configuration"
     url: "/configuration.html"
   - title: "WebChat"
     url: "/webchat.html"
+  - title: "macOS App"
+    url: "/clawdis-mac.html"
+  - title: "iOS Node"
+    url: "/ios/connect.html"
   - title: "Telegram"
     url: "/telegram.html"
+  - title: "Security"
+    url: "/security.html"
   - title: "Troubleshooting"
     url: "/troubleshooting.html"
 
