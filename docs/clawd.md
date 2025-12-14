@@ -24,8 +24,16 @@ Start conservative:
 ## Prerequisites
 
 - Node **22+**
-- CLAWDIS installed: `npm install -g clawdis`
+- CLAWDIS available on PATH (recommended during development: from source + global link)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
+
+From source (recommended while the npm package is still settling):
+
+```bash
+pnpm install
+pnpm build
+pnpm link --global
+```
 
 ## The two-phone setup (recommended)
 
@@ -121,7 +129,7 @@ Example:
 ## Sessions and memory
 
 - Session files: `~/.clawdis/sessions/{{SessionId}}.jsonl`
-- Session metadata (token usage, last route, etc): `~/.clawdis/sessions.json`
+- Session metadata (token usage, last route, etc): `~/.clawdis/sessions/sessions.json` (legacy: `~/.clawdis/sessions.json`)
 - `/new` starts a fresh session for that chat (configurable via `resetTriggers`)
 
 ## Heartbeats (proactive mode)
