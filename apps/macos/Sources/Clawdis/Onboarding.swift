@@ -311,6 +311,12 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
+            Text("Pi supports any model — we strongly recommend Opus 4.5 for the best experience.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 540)
+                .fixedSize(horizontal: false, vertical: true)
 
             self.onboardingCard(spacing: 12, padding: 16) {
                 HStack(alignment: .center, spacing: 10) {
