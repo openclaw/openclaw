@@ -87,10 +87,10 @@ actor BridgeSession {
         }
 
         guard let line = try await Self.withTimeout(seconds: 6, operation: {
-                  try await self.receiveLine()
-              }),
-              let data = line.data(using: .utf8),
-              let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
+            try await self.receiveLine()
+        }),
+            let data = line.data(using: .utf8),
+            let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
         else {
             await self.disconnect()
             throw NSError(domain: "Bridge", code: 1, userInfo: [
@@ -310,7 +310,7 @@ actor BridgeSession {
         }
     }
 
-    private static func withTimeout<T>(
+    private static func withTimeout<T: Sendable>(
         seconds: Double,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
@@ -354,7 +354,7 @@ actor BridgeSession {
         _ stateStream: AsyncStream<NWConnection.State>,
         timeoutSeconds: Double) async throws
     {
-        try await Self.withTimeout(seconds: timeoutSeconds) {
+        try await self.withTimeout(seconds: timeoutSeconds) {
             for await state in stateStream {
                 switch state {
                 case .ready:
