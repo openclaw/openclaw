@@ -7,7 +7,7 @@ read_when:
 
 Updated: 2025-12-07
 
-Status: ready for bot-mode use with grammY (long-poll + webhook). Text + media send, proxy, and webhook helpers all ship in-tree.
+Status: ready for bot-mode use with grammY (long-polling by default; webhook supported when configured). Text + media send, mention-gated group replies, and optional proxy support are implemented.
 
 ## Goals
 - Let you talk to Clawdis via a Telegram bot in DMs and groups.
@@ -17,7 +17,11 @@ Status: ready for bot-mode use with grammY (long-poll + webhook). Text + media s
 ## How it will work (Bot API)
 1) Create a bot with @BotFather and grab the token.
 2) Configure Clawdis with `TELEGRAM_BOT_TOKEN` (or `telegram.botToken` in `~/.clawdis/clawdis.json`).
-3) Run the gateway; it auto-starts Telegram when the bot token is set. To force Telegram-only: `clawdis gateway --provider telegram`. Webhook mode: `clawdis gateway --provider telegram --webhook --port 8787 --webhook-secret <secret>` (optionally `--webhook-url` when the public URL differs).
+3) Run the gateway; it auto-starts Telegram when the bot token is set.
+   - **Long-polling** is the default.
+   - **Webhook mode** is enabled by setting `telegram.webhookUrl` (optionally `telegram.webhookSecret` / `telegram.webhookPath`).
+     - The webhook listener currently binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
+     - If you need a different public port/host, set `telegram.webhookUrl` to the externally reachable URL and use a reverse proxy to forward to `:8787`.
 4) Direct chats: user sends the first message; all subsequent turns land in the shared `main` session (default, no extra config).
 5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `group:<chatId>` and require mention/command to trigger replies.
 6) Optional allowlist: reuse `inbound.allowFrom` for direct chats by chat id (`123456789` or `telegram:123456789`).
@@ -32,7 +36,7 @@ Status: ready for bot-mode use with grammY (long-poll + webhook). Text + media s
 - Library: grammY is the only client for send + gateway (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
 - Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, and `Timestamp`; groups require @bot mention by default.
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
-- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.requireMention`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl` supported.
+- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.requireMention`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
 
 Example config:
 ```json5
@@ -44,6 +48,7 @@ Example config:
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
     webhookSecret: "mysecret",
+    webhookPath: "/telegram-webhook",
     webhookUrl: "https://yourdomain.com/telegram-webhook"
   }
 }
@@ -62,6 +67,6 @@ Example config:
 - ⏳ Add more grammY coverage (webhook payloads, media edge cases)
 
 ## Safety & ops
-- Treat the bot token as a secret (equivalent to account control); store under `~/.clawdis/credentials/` with 0600 perms.
-- Respect Telegram rate limits (429s); we’ll add throttling in the provider to stay below flood thresholds.
+- Treat the bot token as a secret (equivalent to account control); prefer `TELEGRAM_BOT_TOKEN` or a locked-down config file (`chmod 600 ~/.clawdis/clawdis.json`).
+- Respect Telegram rate limits (429s); grammY throttling is enabled by default.
 - Use a test bot for development to avoid hitting production chats.
