@@ -166,14 +166,16 @@ enum PiOAuthStore {
             attributes: [.posixPermissions: 0o700])
 
         let url = self.oauthURL()
-        let data = try JSONSerialization.data(withJSONObject: storage, options: [.prettyPrinted, .sortedKeys])
+        let data = try JSONSerialization.data(
+            withJSONObject: storage,
+            options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 }
 
 extension Data {
-    fileprivate func base64URLEncodedString() -> String {
+    private func base64URLEncodedString() -> String {
         self.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
