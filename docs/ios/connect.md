@@ -54,13 +54,13 @@ More debugging notes: `docs/bonjour.md`.
 In Iris:
 - Pick the discovered bridge (or hit refresh).
 - If not paired yet, Iris will initiate pairing automatically.
-- After the first successful pairing, Iris will auto-reconnect to the **last bridge** on launch (including after reinstall), as long as the iOS Keychain entry is still present.
+- After the first successful pairing, Iris will auto-reconnect **strictly to the last discovered gateway** on launch (including after reinstall), as long as the iOS Keychain entry is still present.
 
 ### Connection indicator (always visible)
 
 The Settings tab icon shows a small status dot:
 - **Green**: connected to the bridge
-- **Yellow**: connecting
+- **Yellow**: connecting (subtle pulse)
 - **Red**: not connected / error
 
 ## 4) Approve pairing (CLI)

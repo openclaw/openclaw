@@ -19,6 +19,7 @@ struct SettingsTab: View {
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("bridge.preferredStableID") private var preferredBridgeStableID: String = ""
+    @AppStorage("bridge.lastDiscoveredStableID") private var lastDiscoveredBridgeStableID: String = ""
     @StateObject private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
@@ -207,6 +208,8 @@ struct SettingsTab: View {
         self.connectingBridgeID = bridge.id
         self.preferredBridgeStableID = bridge.stableID
         BridgeSettingsStore.savePreferredBridgeStableID(bridge.stableID)
+        self.lastDiscoveredBridgeStableID = bridge.stableID
+        BridgeSettingsStore.saveLastDiscoveredBridgeStableID(bridge.stableID)
         defer { self.connectingBridgeID = nil }
 
         do {

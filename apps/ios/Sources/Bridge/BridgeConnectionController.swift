@@ -13,6 +13,7 @@ final class BridgeConnectionController: ObservableObject {
     private weak var appModel: NodeAppModel?
     private var cancellables = Set<AnyCancellable>()
     private var didAutoConnect = false
+    private var seenStableIDs = Set<String>()
 
     init(appModel: NodeAppModel) {
         self.appModel = appModel
@@ -23,6 +24,7 @@ final class BridgeConnectionController: ObservableObject {
             .sink { [weak self] newValue in
                 guard let self else { return }
                 self.bridges = newValue
+                self.updateLastDiscoveredBridge(from: newValue)
                 self.maybeAutoConnect()
             }
             .store(in: &self.cancellables)
@@ -50,9 +52,9 @@ final class BridgeConnectionController: ObservableObject {
         guard appModel.bridgeServerName == nil else { return }
 
         let defaults = UserDefaults.standard
-        let preferredStableID = defaults.string(forKey: "bridge.preferredStableID")?
+        let targetStableID = defaults.string(forKey: "bridge.lastDiscoveredStableID")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !preferredStableID.isEmpty else { return }
+        guard !targetStableID.isEmpty else { return }
 
         let instanceId = defaults.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -64,10 +66,18 @@ final class BridgeConnectionController: ObservableObject {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !token.isEmpty else { return }
 
-        guard let target = self.bridges.first(where: { $0.stableID == preferredStableID }) else { return }
+        guard let target = self.bridges.first(where: { $0.stableID == targetStableID }) else { return }
 
         self.didAutoConnect = true
         appModel.connectToBridge(endpoint: target.endpoint, hello: self.makeHello(token: token))
+    }
+
+    private func updateLastDiscoveredBridge(from bridges: [BridgeDiscoveryModel.DiscoveredBridge]) {
+        let newlyDiscovered = bridges.filter { self.seenStableIDs.insert($0.stableID).inserted }
+        guard let last = newlyDiscovered.last else { return }
+
+        UserDefaults.standard.set(last.stableID, forKey: "bridge.lastDiscoveredStableID")
+        BridgeSettingsStore.saveLastDiscoveredBridgeStableID(last.stableID)
     }
 
     private func makeHello(token: String) -> BridgeHello {

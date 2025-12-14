@@ -6,13 +6,16 @@ enum BridgeSettingsStore {
 
     private static let instanceIdDefaultsKey = "node.instanceId"
     private static let preferredBridgeStableIDDefaultsKey = "bridge.preferredStableID"
+    private static let lastDiscoveredBridgeStableIDDefaultsKey = "bridge.lastDiscoveredStableID"
 
     private static let instanceIdAccount = "instanceId"
     private static let preferredBridgeStableIDAccount = "preferredStableID"
+    private static let lastDiscoveredBridgeStableIDAccount = "lastDiscoveredStableID"
 
     static func bootstrapPersistence() {
         self.ensureStableInstanceID()
         self.ensurePreferredBridgeStableID()
+        self.ensureLastDiscoveredBridgeStableID()
     }
 
     static func loadStableInstanceID() -> String? {
@@ -34,6 +37,18 @@ enum BridgeSettingsStore {
             stableID,
             service: self.bridgeService,
             account: self.preferredBridgeStableIDAccount)
+    }
+
+    static func loadLastDiscoveredBridgeStableID() -> String? {
+        KeychainStore.loadString(service: self.bridgeService, account: self.lastDiscoveredBridgeStableIDAccount)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func saveLastDiscoveredBridgeStableID(_ stableID: String) {
+        _ = KeychainStore.saveString(
+            stableID,
+            service: self.bridgeService,
+            account: self.lastDiscoveredBridgeStableIDAccount)
     }
 
     private static func ensureStableInstanceID() {
@@ -74,6 +89,24 @@ enum BridgeSettingsStore {
 
         if let stored = self.loadPreferredBridgeStableID(), !stored.isEmpty {
             defaults.set(stored, forKey: self.preferredBridgeStableIDDefaultsKey)
+        }
+    }
+
+    private static func ensureLastDiscoveredBridgeStableID() {
+        let defaults = UserDefaults.standard
+
+        if let existing = defaults.string(forKey: self.lastDiscoveredBridgeStableIDDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !existing.isEmpty
+        {
+            if self.loadLastDiscoveredBridgeStableID() == nil {
+                self.saveLastDiscoveredBridgeStableID(existing)
+            }
+            return
+        }
+
+        if let stored = self.loadLastDiscoveredBridgeStableID(), !stored.isEmpty {
+            defaults.set(stored, forKey: self.lastDiscoveredBridgeStableIDDefaultsKey)
         }
     }
 }
