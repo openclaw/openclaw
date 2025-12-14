@@ -9,7 +9,7 @@ read_when:
 ## What Clawdis Does
 - Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run tools via the host Mac.
 - macOS app manages permissions (screen recording, notifications, microphone) and exposes a CLI helper `clawdis-mac` for scripts.
-- Sessions are per-sender; heartbeats keep background tasks alive.
+- Direct chats collapse into the shared `main` session by default; groups stay isolated as `group:<jid>`; heartbeats keep background tasks alive.
 
 ## Core Tools (enable in Settings → Tools)
 - **mcporter** — MCP runtime/CLI to list, call, and sync Model Context Protocol servers.
