@@ -108,6 +108,31 @@ enum PiOAuthStore {
     static let oauthFilename = "oauth.json"
     private static let providerKey = "anthropic"
 
+    enum AnthropicOAuthStatus: Equatable {
+        case missingFile
+        case unreadableFile
+        case invalidJSON
+        case missingProviderEntry
+        case missingTokens
+        case connected(expiresAtMs: Int64?)
+
+        var isConnected: Bool {
+            if case .connected = self { return true }
+            return false
+        }
+
+        var shortDescription: String {
+            switch self {
+            case .missingFile: "oauth.json not found"
+            case .unreadableFile: "oauth.json not readable"
+            case .invalidJSON: "oauth.json invalid"
+            case .missingProviderEntry: "oauth.json has no anthropic entry"
+            case .missingTokens: "anthropic entry missing tokens"
+            case .connected: "OAuth credentials found"
+            }
+        }
+    }
+
     static func oauthDir() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".pi", isDirectory: true)
@@ -118,21 +143,46 @@ enum PiOAuthStore {
         self.oauthDir().appendingPathComponent(self.oauthFilename)
     }
 
-    static func hasAnthropicOAuth() -> Bool {
-        let url = self.oauthURL()
-        guard FileManager.default.fileExists(atPath: url.path) else { return false }
+    static func anthropicOAuthStatus() -> AnthropicOAuthStatus {
+        self.anthropicOAuthStatus(at: self.oauthURL())
+    }
 
-        guard let data = try? Data(contentsOf: url),
-              let json = try? JSONSerialization.jsonObject(with: data, options: []),
-              let storage = json as? [String: Any],
-              let entry = storage[self.providerKey] as? [String: Any]
-        else {
-            return false
+    static func hasAnthropicOAuth() -> Bool {
+        self.anthropicOAuthStatus().isConnected
+    }
+
+    static func anthropicOAuthStatus(at url: URL) -> AnthropicOAuthStatus {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .missingFile }
+
+        guard let data = try? Data(contentsOf: url) else { return .unreadableFile }
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else { return .invalidJSON }
+        guard let storage = json as? [String: Any] else { return .invalidJSON }
+        guard let rawEntry = storage[self.providerKey] else { return .missingProviderEntry }
+        guard let entry = rawEntry as? [String: Any] else { return .invalidJSON }
+
+        let refresh = self.firstString(in: entry, keys: ["refresh", "refresh_token", "refreshToken"])
+        let access = self.firstString(in: entry, keys: ["access", "access_token", "accessToken"])
+        guard refresh?.isEmpty == false, access?.isEmpty == false else { return .missingTokens }
+
+        let expiresAny = entry["expires"] ?? entry["expires_at"] ?? entry["expiresAt"]
+        let expiresAtMs: Int64? = if let ms = expiresAny as? Int64 {
+            ms
+        } else if let number = expiresAny as? NSNumber {
+            number.int64Value
+        } else if let ms = expiresAny as? Double {
+            Int64(ms)
+        } else {
+            nil
         }
 
-        let refresh = entry["refresh"] as? String
-        let access = entry["access"] as? String
-        return (refresh?.isEmpty == false) && (access?.isEmpty == false)
+        return .connected(expiresAtMs: expiresAtMs)
+    }
+
+    private static func firstString(in dict: [String: Any], keys: [String]) -> String? {
+        for key in keys {
+            if let value = dict[key] as? String { return value }
+        }
+        return nil
     }
 
     static func saveAnthropicOAuth(_ creds: AnthropicOAuthCredentials) throws {

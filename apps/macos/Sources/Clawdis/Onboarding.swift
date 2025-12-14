@@ -58,6 +58,7 @@ struct OnboardingView: View {
     @State private var anthropicAuthStatus: String?
     @State private var anthropicAuthBusy = false
     @State private var anthropicAuthConnected = false
+    @State private var anthropicAuthDetectedStatus: PiOAuthStore.AnthropicOAuthStatus = .missingFile
     @State private var monitoringAuth = false
     @State private var authMonitorTask: Task<Void, Never>?
     @State private var identityName: String = ""
@@ -323,6 +324,13 @@ struct OnboardingView: View {
                     Spacer()
                 }
 
+                if !self.anthropicAuthConnected {
+                    Text(self.anthropicAuthDetectedStatus.shortDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
                 Text(
                     "This writes Pi-compatible credentials to `~/.pi/agent/oauth.json` (owner-only). " +
                         "You can redo this anytime.")
@@ -451,7 +459,9 @@ struct OnboardingView: View {
     }
 
     private func refreshAnthropicOAuthStatus() {
-        self.anthropicAuthConnected = PiOAuthStore.hasAnthropicOAuth()
+        let status = PiOAuthStore.anthropicOAuthStatus()
+        self.anthropicAuthDetectedStatus = status
+        self.anthropicAuthConnected = status.isConnected
     }
 
     private func identityPage() -> some View {
