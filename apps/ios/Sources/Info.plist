@@ -8,6 +8,8 @@
 	<string>Clawdis</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIconName</key>
+	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>
@@ -24,10 +26,10 @@
 	<array>
 		<string>_clawdis-bridge._tcp</string>
 	</array>
-	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clawdis discovers and connects to your Clawdis bridge on the local network.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Clawdis can capture photos or short video clips when requested via the bridge.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Clawdis discovers and connects to your Clawdis bridge on the local network.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clawdis needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
