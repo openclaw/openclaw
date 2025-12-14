@@ -15,7 +15,7 @@ final class BridgeConnectionController: ObservableObject {
     private var didAutoConnect = false
     private var seenStableIDs = Set<String>()
 
-    init(appModel: NodeAppModel) {
+    init(appModel: NodeAppModel, startDiscovery: Bool = true) {
         self.appModel = appModel
 
         BridgeSettingsStore.bootstrapPersistence()
@@ -32,7 +32,9 @@ final class BridgeConnectionController: ObservableObject {
         self.discovery.$statusText
             .assign(to: &self.$discoveryStatusText)
 
-        self.discovery.start()
+        if startDiscovery {
+            self.discovery.start()
+        }
     }
 
     func setScenePhase(_ phase: ScenePhase) {
