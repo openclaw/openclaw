@@ -52,6 +52,16 @@ struct OnboardingView: View {
     @State private var workspacePath: String = ""
     @State private var workspaceStatus: String?
     @State private var workspaceApplying = false
+    @State private var anthropicAuthPKCE: AnthropicOAuth.PKCE?
+    @State private var anthropicAuthCode: String = ""
+    @State private var anthropicAuthStatus: String?
+    @State private var anthropicAuthBusy = false
+    @State private var anthropicAuthConnected = false
+    @State private var identityName: String = ""
+    @State private var identityTheme: String = ""
+    @State private var identityEmoji: String = ""
+    @State private var identityStatus: String?
+    @State private var identityApplying = false
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var gatewayInstalling = false
     @State private var gatewayInstallMessage: String?
@@ -63,14 +73,14 @@ struct OnboardingView: View {
     private let pageWidth: CGFloat = 680
     private let contentHeight: CGFloat = 520
     private let connectionPageIndex = 1
-    private let permissionsPageIndex = 3
+    private let permissionsPageIndex = 5
     private var pageOrder: [Int] {
         if self.state.connectionMode == .remote {
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            return [0, 1, 3, 7]
+            return [0, 1, 5, 9]
         }
-        return [0, 1, 2, 3, 4, 5, 6, 7]
+        return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     }
 
     private var pageCount: Int { self.pageOrder.count }
@@ -102,6 +112,8 @@ struct OnboardingView: View {
                 HStack(spacing: 0) {
                     self.welcomePage().frame(width: self.pageWidth)
                     self.connectionPage().frame(width: self.pageWidth)
+                    self.anthropicAuthPage().frame(width: self.pageWidth)
+                    self.identityPage().frame(width: self.pageWidth)
                     self.gatewayPage().frame(width: self.pageWidth)
                     self.permissionsPage().frame(width: self.pageWidth)
                     self.cliPage().frame(width: self.pageWidth)
@@ -143,6 +155,8 @@ struct OnboardingView: View {
             self.refreshCLIStatus()
             self.refreshGatewayStatus()
             self.loadWorkspaceDefaults()
+            self.refreshAnthropicOAuthStatus()
+            self.loadIdentityDefaults()
         }
     }
 
@@ -275,6 +289,230 @@ struct OnboardingView: View {
                             .lineLimit(1)
                     }
                     .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+        }
+    }
+
+    private func anthropicAuthPage() -> some View {
+        self.onboardingPage {
+            Text("Connect Claude")
+                .font(.largeTitle.weight(.semibold))
+            Text(
+                "Optional, but recommended: authenticate via Claude (Anthropic) so Pi can answer immediately. " +
+                    "Clawdis will always pass --provider/--model when invoking Pi.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 540)
+                .fixedSize(horizontal: false, vertical: true)
+
+            self.onboardingCard(spacing: 12, padding: 16) {
+                HStack(alignment: .center, spacing: 10) {
+                    Circle()
+                        .fill(self.anthropicAuthConnected ? Color.green : Color.orange)
+                        .frame(width: 10, height: 10)
+                    Text(self.anthropicAuthConnected ? "Anthropic OAuth connected" : "Not connected yet")
+                        .font(.headline)
+                    Spacer()
+                }
+
+                Text(
+                    "This writes Pi-compatible credentials to `~/.pi/agent/oauth.json` (owner-only). " +
+                        "You can redo this anytime.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Divider().padding(.vertical, 2)
+
+                HStack(spacing: 12) {
+                    Button {
+                        self.startAnthropicOAuth()
+                    } label: {
+                        if self.anthropicAuthBusy {
+                            ProgressView()
+                        } else {
+                            Text("Open Claude login (OAuth)")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.anthropicAuthBusy)
+
+                    Button("Skip for now") {
+                        self.anthropicAuthStatus = "Skipped. The agent may not respond until you authenticate."
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.anthropicAuthBusy)
+                }
+
+                if self.anthropicAuthPKCE != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Paste `code#state`")
+                            .font(.headline)
+                        TextField("code#state", text: self.$anthropicAuthCode)
+                            .textFieldStyle(.roundedBorder)
+
+                        Button("Finish connection") {
+                            Task { await self.finishAnthropicOAuth() }
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(
+                            self.anthropicAuthBusy ||
+                                self.anthropicAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+
+                self.onboardingCard(spacing: 8, padding: 12) {
+                    Text("API key (advanced)")
+                        .font(.headline)
+                    Text(
+                        "You can also use an Anthropic API key, but this is instructions-only for now " +
+                            "(GUI-launched processes don’t automatically inherit your shell env vars).")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .shadow(color: .clear, radius: 0)
+                .background(Color.clear)
+
+                if let status = self.anthropicAuthStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private func startAnthropicOAuth() {
+        guard !self.anthropicAuthBusy else { return }
+        self.anthropicAuthBusy = true
+        defer { self.anthropicAuthBusy = false }
+
+        do {
+            let pkce = try AnthropicOAuth.generatePKCE()
+            self.anthropicAuthPKCE = pkce
+            let url = AnthropicOAuth.buildAuthorizeURL(pkce: pkce)
+            NSWorkspace.shared.open(url)
+            self.anthropicAuthStatus = "Opened browser. After approving, paste the `code#state` here."
+        } catch {
+            self.anthropicAuthStatus = "Failed to start OAuth: \(error.localizedDescription)"
+        }
+    }
+
+    @MainActor
+    private func finishAnthropicOAuth() async {
+        guard !self.anthropicAuthBusy else { return }
+        guard let pkce = self.anthropicAuthPKCE else { return }
+        self.anthropicAuthBusy = true
+        defer { self.anthropicAuthBusy = false }
+
+        let trimmed = self.anthropicAuthCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        let splits = trimmed.split(separator: "#", maxSplits: 1).map(String.init)
+        let code = splits.first ?? ""
+        let state = splits.count > 1 ? splits[1] : ""
+
+        do {
+            let creds = try await AnthropicOAuth.exchangeCode(code: code, state: state, verifier: pkce.verifier)
+            try PiOAuthStore.saveAnthropicOAuth(creds)
+            self.refreshAnthropicOAuthStatus()
+            self.anthropicAuthStatus = "Connected. Pi can now use Claude via Anthropic OAuth."
+        } catch {
+            self.anthropicAuthStatus = "OAuth failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func refreshAnthropicOAuthStatus() {
+        self.anthropicAuthConnected = PiOAuthStore.hasAnthropicOAuth()
+    }
+
+    private func identityPage() -> some View {
+        self.onboardingPage {
+            Text("Identity")
+                .font(.largeTitle.weight(.semibold))
+            Text("Name your agent, pick a theme, and we’ll suggest an emoji.")
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 520)
+                .fixedSize(horizontal: false, vertical: true)
+
+            self.onboardingCard(spacing: 12, padding: 16) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Agent name")
+                        .font(.headline)
+                    TextField("Samantha", text: self.$identityName)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Theme")
+                        .font(.headline)
+                    TextField("space lobster", text: self.$identityTheme)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Emoji")
+                        .font(.headline)
+                    HStack(spacing: 12) {
+                        TextField("🦞", text: self.$identityEmoji)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 120)
+
+                        Button("Suggest") {
+                            let suggested = AgentIdentityEmoji.suggest(theme: self.identityTheme)
+                            self.identityEmoji = suggested
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+
+                Divider().padding(.vertical, 2)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Workspace")
+                        .font(.headline)
+                    Text(self.workspacePath.isEmpty ? AgentWorkspace.displayPath(for: ClawdisConfigFile.defaultWorkspaceURL()) : self.workspacePath)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await self.applyIdentity() }
+                    } label: {
+                        if self.identityApplying {
+                            ProgressView()
+                        } else {
+                            Text("Save identity")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.identityApplying || self.identityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+                    Button("Open workspace") {
+                        let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+                        NSWorkspace.shared.open(url)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.identityApplying)
+                }
+
+                Text(
+                    "This writes your identity to `~/.clawdis/clawdis.json` and into `AGENTS.md` inside the workspace. " +
+                        "Treat that workspace as the agent’s “memory” and consider making it a (private) git repo.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let status = self.identityStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -899,6 +1137,17 @@ struct OnboardingView: View {
         self.workspacePath = AgentWorkspace.displayPath(for: url)
     }
 
+    private func loadIdentityDefaults() {
+        guard self.identityName.isEmpty, self.identityTheme.isEmpty, self.identityEmoji.isEmpty else { return }
+        if let identity = ClawdisConfigFile.loadIdentity() {
+            self.identityName = identity.name
+            self.identityTheme = identity.theme
+            self.identityEmoji = identity.emoji
+            return
+        }
+        self.identityEmoji = AgentIdentityEmoji.suggest(theme: "")
+    }
+
     private var workspaceBootstrapCommand: String {
         let template = AgentWorkspace.defaultTemplate().trimmingCharacters(in: .whitespacesAndNewlines)
         return """
@@ -921,6 +1170,37 @@ struct OnboardingView: View {
             self.workspaceStatus = "Workspace ready at \(self.workspacePath)"
         } catch {
             self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
+        }
+    }
+
+    private func applyIdentity() async {
+        guard !self.identityApplying else { return }
+        self.identityApplying = true
+        defer { self.identityApplying = false }
+
+        if self.identityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.identityStatus = "Please enter a name first."
+            return
+        }
+
+        var identity = AgentIdentity(
+            name: self.identityName,
+            theme: self.identityTheme,
+            emoji: self.identityEmoji)
+
+        if identity.emoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            identity.emoji = AgentIdentityEmoji.suggest(theme: identity.theme)
+            self.identityEmoji = identity.emoji
+        }
+
+        do {
+            let workspaceURL = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+            try AgentWorkspace.upsertIdentity(workspaceURL: workspaceURL, identity: identity)
+            ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: workspaceURL))
+            ClawdisConfigFile.setIdentity(identity)
+            self.identityStatus = "Saved identity to AGENTS.md and ~/.clawdis/clawdis.json"
+        } catch {
+            self.identityStatus = "Failed to save identity: \(error.localizedDescription)"
         }
     }
 }

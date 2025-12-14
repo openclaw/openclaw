@@ -2,7 +2,7 @@ import Foundation
 
 let launchdLabel = "com.steipete.clawdis"
 let onboardingVersionKey = "clawdis.onboardingVersion"
-let currentOnboardingVersion = 5
+let currentOnboardingVersion = 6
 let pauseDefaultsKey = "clawdis.pauseEnabled"
 let iconAnimationsEnabledKey = "clawdis.iconAnimationsEnabled"
 let swabbleEnabledKey = "clawdis.swabbleEnabled"
