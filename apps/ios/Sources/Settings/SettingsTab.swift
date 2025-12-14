@@ -24,6 +24,7 @@ struct SettingsTab: View {
     @AppStorage("bridge.manual.enabled") private var manualBridgeEnabled: Bool = false
     @AppStorage("bridge.manual.host") private var manualBridgeHost: String = ""
     @AppStorage("bridge.manual.port") private var manualBridgePort: Int = 18790
+    @AppStorage("bridge.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
     @StateObject private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
@@ -151,6 +152,15 @@ struct SettingsTab: View {
                                 + "The bridge runs on the gateway (default port 18790).")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+
+                        Toggle("Discovery Debug Logs", isOn: self.$discoveryDebugLogsEnabled)
+                            .onChange(of: self.discoveryDebugLogsEnabled) { _, newValue in
+                                self.bridgeController.setDiscoveryDebugLoggingEnabled(newValue)
+                            }
+
+                        NavigationLink("Discovery Logs") {
+                            BridgeDiscoveryDebugLogView()
+                        }
                     }
                 }
             }

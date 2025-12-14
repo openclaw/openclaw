@@ -8,6 +8,7 @@ import SwiftUI
 final class BridgeConnectionController: ObservableObject {
     @Published private(set) var bridges: [BridgeDiscoveryModel.DiscoveredBridge] = []
     @Published private(set) var discoveryStatusText: String = "Idle"
+    @Published private(set) var discoveryDebugLog: [BridgeDiscoveryModel.DebugLogEntry] = []
 
     private let discovery = BridgeDiscoveryModel()
     private weak var appModel: NodeAppModel?
@@ -19,6 +20,8 @@ final class BridgeConnectionController: ObservableObject {
         self.appModel = appModel
 
         BridgeSettingsStore.bootstrapPersistence()
+        self.discovery.setDebugLoggingEnabled(
+            UserDefaults.standard.bool(forKey: "bridge.discovery.debugLogs"))
 
         self.discovery.$bridges
             .sink { [weak self] newValue in
@@ -32,9 +35,16 @@ final class BridgeConnectionController: ObservableObject {
         self.discovery.$statusText
             .assign(to: &self.$discoveryStatusText)
 
+        self.discovery.$debugLog
+            .assign(to: &self.$discoveryDebugLog)
+
         if startDiscovery {
             self.discovery.start()
         }
+    }
+
+    func setDiscoveryDebugLoggingEnabled(_ enabled: Bool) {
+        self.discovery.setDebugLoggingEnabled(enabled)
     }
 
     func setScenePhase(_ phase: ScenePhase) {

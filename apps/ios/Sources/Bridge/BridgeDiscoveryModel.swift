@@ -4,6 +4,12 @@ import Network
 
 @MainActor
 final class BridgeDiscoveryModel: ObservableObject {
+    struct DebugLogEntry: Identifiable, Equatable {
+        var id = UUID()
+        var ts: Date
+        var message: String
+    }
+
     struct DiscoveredBridge: Identifiable, Equatable {
         var id: String { self.stableID }
         var name: String
@@ -14,11 +20,26 @@ final class BridgeDiscoveryModel: ObservableObject {
 
     @Published var bridges: [DiscoveredBridge] = []
     @Published var statusText: String = "Idle"
+    @Published private(set) var debugLog: [DebugLogEntry] = []
 
     private var browser: NWBrowser?
+    private var debugLoggingEnabled = false
+    private var lastStableIDs = Set<String>()
+
+    func setDebugLoggingEnabled(_ enabled: Bool) {
+        let wasEnabled = self.debugLoggingEnabled
+        self.debugLoggingEnabled = enabled
+        if !enabled {
+            self.debugLog = []
+        } else if !wasEnabled {
+            self.appendDebugLog("debug logging enabled")
+            self.appendDebugLog("snapshot: status=\(self.statusText) bridges=\(self.bridges.count)")
+        }
+    }
 
     func start() {
         if self.browser != nil { return }
+        self.appendDebugLog("start()")
         let params = NWParameters.tcp
         params.includePeerToPeer = true
         let browser = NWBrowser(
@@ -31,16 +52,25 @@ final class BridgeDiscoveryModel: ObservableObject {
                 switch state {
                 case .setup:
                     self.statusText = "Setup"
+                    self.appendDebugLog("state: setup")
                 case .ready:
                     self.statusText = "Searching…"
+                    self.appendDebugLog("state: ready")
                 case let .failed(err):
                     self.statusText = "Failed: \(err)"
+                    self.appendDebugLog("state: failed (\(err))")
+                    self.browser?.cancel()
+                    self.browser = nil
                 case .cancelled:
                     self.statusText = "Stopped"
+                    self.appendDebugLog("state: cancelled")
+                    self.browser = nil
                 case let .waiting(err):
                     self.statusText = "Waiting: \(err)"
+                    self.appendDebugLog("state: waiting (\(err))")
                 @unknown default:
                     self.statusText = "Unknown"
+                    self.appendDebugLog("state: unknown")
                 }
             }
         }
@@ -48,7 +78,7 @@ final class BridgeDiscoveryModel: ObservableObject {
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             Task { @MainActor in
                 guard let self else { return }
-                self.bridges = results.compactMap { result -> DiscoveredBridge? in
+                let next = results.compactMap { result -> DiscoveredBridge? in
                     switch result.endpoint {
                     case let .service(name, _, _, _):
                         let decodedName = BonjourEscapes.decode(name)
@@ -67,6 +97,16 @@ final class BridgeDiscoveryModel: ObservableObject {
                     }
                 }
                 .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+                let nextIDs = Set(next.map(\.stableID))
+                let added = nextIDs.subtracting(self.lastStableIDs)
+                let removed = self.lastStableIDs.subtracting(nextIDs)
+                if !added.isEmpty || !removed.isEmpty {
+                    self.appendDebugLog(
+                        "results: total=\(next.count) added=\(added.count) removed=\(removed.count)")
+                }
+                self.lastStableIDs = nextIDs
+                self.bridges = next
             }
         }
 
@@ -75,10 +115,19 @@ final class BridgeDiscoveryModel: ObservableObject {
     }
 
     func stop() {
+        self.appendDebugLog("stop()")
         self.browser?.cancel()
         self.browser = nil
         self.bridges = []
         self.statusText = "Stopped"
+    }
+
+    private func appendDebugLog(_ message: String) {
+        guard self.debugLoggingEnabled else { return }
+        self.debugLog.append(DebugLogEntry(ts: Date(), message: message))
+        if self.debugLog.count > 200 {
+            self.debugLog.removeFirst(self.debugLog.count - 200)
+        }
     }
 
     private static func prettifyInstanceName(_ decodedName: String) -> String {
