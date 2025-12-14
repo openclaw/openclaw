@@ -186,7 +186,7 @@ enum ControlRequestHandler {
     }
 
     private static func cameraEnabled() -> Bool {
-        UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+        UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? true
     }
 
     private static func handleCanvasShow(

@@ -3,6 +3,7 @@ import SwiftUI
 
 struct GeneralSettings: View {
     @ObservedObject var state: AppState
+    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = true
     @ObservedObject private var healthStore = HealthStore.shared
     @ObservedObject private var gatewayManager = GatewayProcessManager.shared
     // swiftlint:disable:next inclusive_language
@@ -57,6 +58,11 @@ struct GeneralSettings: View {
                         title: "Allow Canvas",
                         subtitle: "Allow the agent to show and control the Canvas panel.",
                         binding: self.$state.canvasEnabled)
+
+                    SettingsToggleRow(
+                        title: "Allow Camera",
+                        subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
+                        binding: self.$cameraEnabled)
 
                     SettingsToggleRow(
                         title: "Enable Peekaboo Bridge",

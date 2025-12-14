@@ -9,7 +9,6 @@ struct DebugSettings: View {
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
     @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
-    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
     @AppStorage(deepLinkAgentEnabledKey) private var deepLinkAgentEnabled: Bool = false
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
@@ -49,7 +48,6 @@ struct DebugSettings: View {
                 self.pathsSection
                 self.quickActionsSection
                 self.canvasSection
-                self.cameraSection
                 self.experimentsSection
 
                 Spacer(minLength: 0)
@@ -569,20 +567,6 @@ struct DebugSettings: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
-            }
-        }
-    }
-
-    private var cameraSection: some View {
-        GroupBox("Camera") {
-            VStack(alignment: .leading, spacing: 10) {
-                Toggle("Allow Camera (agent)", isOn: self.$cameraEnabled)
-                    .toggleStyle(.checkbox)
-                    .help("When off, camera requests return “Camera disabled by user”.")
-
-                Text("Allows Clawdis to capture a photo or short video via the built-in camera.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
