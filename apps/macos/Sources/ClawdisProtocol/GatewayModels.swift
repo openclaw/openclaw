@@ -777,14 +777,18 @@ public struct CronRunLogEntry: Codable {
 
 public struct ChatHistoryParams: Codable {
     public let sessionkey: String
+    public let limit: Int?
 
     public init(
-        sessionkey: String
+        sessionkey: String,
+        limit: Int?
     ) {
         self.sessionkey = sessionkey
+        self.limit = limit
     }
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case limit
     }
 }
 

@@ -1770,6 +1770,11 @@
         "sessionKey": {
           "minLength": 1,
           "type": "string"
+        },
+        "limit": {
+          "minimum": 1,
+          "maximum": 500,
+          "type": "integer"
         }
       },
       "required": [
