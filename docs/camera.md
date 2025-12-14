@@ -28,7 +28,7 @@ All camera access is gated behind **user-controlled settings**.
 - `camera.snap`
   - Params:
     - `facing`: `front|back` (default: `front`)
-    - `maxWidth`: number (optional)
+    - `maxWidth`: number (optional; default `1600` on the iOS node)
     - `quality`: `0..1` (optional; default `0.9`)
     - `format`: currently `jpg`
   - Response payload:
@@ -111,6 +111,9 @@ clawdis-mac camera snap --max-width 1280
 clawdis-mac camera clip --duration-ms 3000      # prints MEDIA:<path>
 clawdis-mac camera clip --no-audio
 ```
+
+Notes:
+- `clawdis-mac camera snap` defaults to `maxWidth=1600` unless overridden.
 
 ## Safety + practical limits
 

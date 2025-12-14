@@ -1,7 +1,6 @@
 import AVFoundation
 import ClawdisKit
 import Foundation
-import UIKit
 
 actor CameraController {
     enum CameraError: LocalizedError, Sendable {
@@ -37,7 +36,9 @@ actor CameraController {
         height: Int)
     {
         let facing = params.facing ?? .front
-        let maxWidth = params.maxWidth.flatMap { $0 > 0 ? $0 : nil }
+        // Default to a reasonable max width to keep bridge payload sizes manageable.
+        // If you need the full-res photo, explicitly request a larger maxWidth.
+        let maxWidth = params.maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
         let quality = Self.clampQuality(params.quality)
 
         try await self.ensureAccess(for: .video)
@@ -77,16 +78,16 @@ actor CameraController {
             output.capturePhoto(with: settings, delegate: PhotoCaptureDelegate(cont))
         }
 
-        let (finalData, size) = try Self.reencodeJPEG(
+        let res = try JPEGTranscoder.transcodeToJPEG(
             imageData: rawData,
-            maxWidth: maxWidth,
+            maxWidthPx: maxWidth,
             quality: quality)
 
         return (
             format: "jpg",
-            base64: finalData.base64EncodedString(),
-            width: Int(size.width.rounded()),
-            height: Int(size.height.rounded()))
+            base64: res.data.base64EncodedString(),
+            width: res.widthPx,
+            height: res.heightPx)
     }
 
     func clip(params: ClawdisCameraClipParams) async throws -> (
@@ -197,45 +198,6 @@ actor CameraController {
         return min(15000, max(250, v))
     }
 
-    private nonisolated static func reencodeJPEG(
-        imageData: Data,
-        maxWidth: Int?,
-        quality: Double) throws -> (data: Data, size: CGSize)
-    {
-        guard let image = UIImage(data: imageData) else {
-            throw CameraError.captureFailed("Failed to decode captured image")
-        }
-
-        let finalImage: UIImage = if let maxWidth, maxWidth > 0 {
-            Self.downscale(image: image, maxWidth: CGFloat(maxWidth))
-        } else {
-            image
-        }
-
-        guard let out = finalImage.jpegData(compressionQuality: quality) else {
-            throw CameraError.captureFailed("Failed to encode JPEG")
-        }
-
-        return (out, finalImage.size)
-    }
-
-    private nonisolated static func downscale(image: UIImage, maxWidth: CGFloat) -> UIImage {
-        let w = image.size.width
-        let h = image.size.height
-        guard w > 0, h > 0 else { return image }
-        guard w > maxWidth else { return image }
-
-        let scale = maxWidth / w
-        let target = CGSize(width: maxWidth, height: max(1, h * scale))
-
-        let format = UIGraphicsImageRendererFormat.default()
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: target, format: format)
-        return renderer.image { _ in
-            image.draw(in: CGRect(origin: .zero, size: target))
-        }
-    }
-
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {
         let asset = AVAsset(url: inputURL)
         guard let exporter = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
@@ -290,6 +252,17 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
             return
         }
         self.continuation.resume(returning: data)
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+        error: Error?)
+    {
+        guard let error else { return }
+        guard !self.didResume else { return }
+        self.didResume = true
+        self.continuation.resume(throwing: error)
     }
 }
 
