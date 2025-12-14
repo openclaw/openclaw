@@ -101,6 +101,7 @@ import {
   validateCronStatusParams,
   validateCronUpdateParams,
   validateNodeInvokeParams,
+  validateNodeListParams,
   validateNodePairApproveParams,
   validateNodePairListParams,
   validateNodePairRejectParams,
@@ -177,6 +178,7 @@ const METHODS = [
   "node.pair.approve",
   "node.pair.reject",
   "node.pair.verify",
+  "node.list",
   "node.invoke",
   "cron.list",
   "cron.status",
@@ -2056,6 +2058,49 @@ export async function startGatewayServer(
             }
             break;
           }
+          case "node.list": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!validateNodeListParams(params)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `invalid node.list params: ${formatValidationErrors(validateNodeListParams.errors)}`,
+                ),
+              );
+              break;
+            }
+
+            try {
+              const list = await listNodePairing();
+              const connected = bridge?.listConnected?.() ?? [];
+              const connectedById = new Map(
+                connected.map((n) => [n.nodeId, n]),
+              );
+
+              const nodes = list.paired.map((n) => {
+                const live = connectedById.get(n.nodeId);
+                return {
+                  nodeId: n.nodeId,
+                  displayName: live?.displayName ?? n.displayName,
+                  platform: live?.platform ?? n.platform,
+                  version: live?.version ?? n.version,
+                  remoteIp: live?.remoteIp ?? n.remoteIp,
+                  connected: Boolean(live),
+                };
+              });
+
+              respond(true, { ts: Date.now(), nodes }, undefined);
+            } catch (err) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+              );
+            }
+            break;
+          }
           case "node.invoke": {
             const params = (req.params ?? {}) as Record<string, unknown>;
             if (!validateNodeInvokeParams(params)) {
@@ -2082,6 +2127,7 @@ export async function startGatewayServer(
               command: string;
               params?: unknown;
               timeoutMs?: number;
+              idempotencyKey: string;
             };
             const nodeId = String(p.nodeId ?? "").trim();
             const command = String(p.command ?? "").trim();

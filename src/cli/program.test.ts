@@ -22,6 +22,7 @@ vi.mock("../provider-web.js", () => ({
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
+  randomIdempotencyKey: () => "idem-test",
 }));
 vi.mock("../webchat/server.js", () => ({
   startWebChatServer,
@@ -93,12 +94,24 @@ describe("cli program", () => {
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
-    callGateway.mockResolvedValue({
-      ok: true,
-      nodeId: "ios-node",
-      command: "screen.eval",
-      payload: { result: "ok" },
-    });
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "ios-node",
+            displayName: "iOS Node",
+            remoteIp: "192.168.0.88",
+            connected: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "ios-node",
+        command: "screen.eval",
+        payload: { result: "ok" },
+      });
 
     const program = buildProgram();
     runtime.log.mockClear();
@@ -116,13 +129,20 @@ describe("cli program", () => {
       { from: "user" },
     );
 
-    expect(callGateway).toHaveBeenCalledWith(
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "node.list", params: {} }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
       expect.objectContaining({
         method: "node.invoke",
         params: {
           nodeId: "ios-node",
           command: "screen.eval",
           params: { javaScript: "1+1" },
+          timeoutMs: 15000,
+          idempotencyKey: "idem-test",
         },
       }),
     );

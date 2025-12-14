@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-import { callGateway } from "../gateway/call.js";
+import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
 
 type NodesRpcOpts = {
@@ -11,6 +11,16 @@ type NodesRpcOpts = {
   command?: string;
   params?: string;
   invokeTimeout?: string;
+  idempotencyKey?: string;
+};
+
+type NodeListNode = {
+  nodeId: string;
+  displayName?: string;
+  platform?: string;
+  version?: string;
+  remoteIp?: string;
+  connected?: boolean;
 };
 
 type PendingRequest = {
@@ -40,11 +50,15 @@ type PairingList = {
   paired: PairedNode[];
 };
 
-const nodesCallOpts = (cmd: Command) =>
+const nodesCallOpts = (cmd: Command, defaults?: { timeoutMs?: number }) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL", "ws://127.0.0.1:18789")
     .option("--token <token>", "Gateway token (if required)")
-    .option("--timeout <ms>", "Timeout in ms", "10000")
+    .option(
+      "--timeout <ms>",
+      "Timeout in ms",
+      String(defaults?.timeoutMs ?? 10_000),
+    )
     .option("--json", "Output JSON", false);
 
 const callGatewayCli = async (
@@ -83,6 +97,67 @@ function parsePairingList(value: unknown): PairingList {
     : [];
   const paired = Array.isArray(obj.paired) ? (obj.paired as PairedNode[]) : [];
   return { pending, paired };
+}
+
+function parseNodeList(value: unknown): NodeListNode[] {
+  const obj =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
+  return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
+}
+
+function normalizeNodeKey(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+}
+
+async function resolveNodeId(opts: NodesRpcOpts, query: string) {
+  const q = String(query ?? "").trim();
+  if (!q) throw new Error("node required");
+
+  let nodes: NodeListNode[] = [];
+  try {
+    const res = (await callGatewayCli("node.list", opts, {})) as unknown;
+    nodes = parseNodeList(res);
+  } catch {
+    const res = (await callGatewayCli("node.pair.list", opts, {})) as unknown;
+    const { paired } = parsePairingList(res);
+    nodes = paired.map((n) => ({
+      nodeId: n.nodeId,
+      displayName: n.displayName,
+      platform: n.platform,
+      version: n.version,
+      remoteIp: n.remoteIp,
+    }));
+  }
+
+  const qNorm = normalizeNodeKey(q);
+  const matches = nodes.filter((n) => {
+    if (n.nodeId === q) return true;
+    if (typeof n.remoteIp === "string" && n.remoteIp === q) return true;
+    const name = typeof n.displayName === "string" ? n.displayName : "";
+    if (name && normalizeNodeKey(name) === qNorm) return true;
+    if (q.length >= 6 && n.nodeId.startsWith(q)) return true;
+    return false;
+  });
+
+  if (matches.length === 1) return matches[0].nodeId;
+  if (matches.length === 0) {
+    const known = nodes
+      .map((n) => n.displayName || n.remoteIp || n.nodeId)
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(`unknown node: ${q}${known ? ` (known: ${known})` : ""}`);
+  }
+  throw new Error(
+    `ambiguous node: ${q} (matches: ${matches
+      .map((n) => n.displayName || n.remoteIp || n.nodeId)
+      .join(", ")})`,
+  );
 }
 
 export function registerNodesCli(program: Command) {
@@ -215,32 +290,38 @@ export function registerNodesCli(program: Command) {
   nodesCallOpts(
     nodes
       .command("invoke")
-      .description("Invoke a command on a connected node")
-      .requiredOption("--node <nodeId>", "Node id (instanceId)")
+      .description("Invoke a command on a paired node")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .requiredOption("--command <command>", "Command (e.g. screen.eval)")
-      .option("--params <json>", "JSON object string for params")
+      .option("--params <json>", "JSON object string for params", "{}")
       .option(
         "--invoke-timeout <ms>",
         "Node invoke timeout in ms (default 15000)",
+        "15000",
       )
+      .option("--idempotency-key <key>", "Idempotency key (optional)")
       .action(async (opts: NodesRpcOpts) => {
         try {
-          const nodeId = String(opts.node ?? "").trim();
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
           const command = String(opts.command ?? "").trim();
           if (!nodeId || !command) {
             defaultRuntime.error("--node and --command required");
             defaultRuntime.exit(1);
             return;
           }
-          const params = opts.params
-            ? (JSON.parse(String(opts.params)) as unknown)
-            : undefined;
+          const params = JSON.parse(String(opts.params ?? "{}")) as unknown;
           const timeoutMs = opts.invokeTimeout
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
 
-          const invokeParams: Record<string, unknown> = { nodeId, command };
-          if (params !== undefined) invokeParams.params = params;
+          const invokeParams: Record<string, unknown> = {
+            nodeId,
+            command,
+            params,
+            idempotencyKey: String(
+              opts.idempotencyKey ?? randomIdempotencyKey(),
+            ),
+          };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;
           }
@@ -250,11 +331,13 @@ export function registerNodesCli(program: Command) {
             opts,
             invokeParams,
           );
+
           defaultRuntime.log(JSON.stringify(result, null, 2));
         } catch (err) {
           defaultRuntime.error(`nodes invoke failed: ${String(err)}`);
           defaultRuntime.exit(1);
         }
       }),
+    { timeoutMs: 30_000 },
   );
 }

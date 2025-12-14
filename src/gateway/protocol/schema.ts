@@ -243,12 +243,18 @@ export const NodePairVerifyParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const NodeListParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
+
 export const NodeInvokeParamsSchema = Type.Object(
   {
     nodeId: NonEmptyString,
     command: NonEmptyString,
     params: Type.Optional(Type.Unknown()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
 );
@@ -507,6 +513,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   NodePairApproveParams: NodePairApproveParamsSchema,
   NodePairRejectParams: NodePairRejectParamsSchema,
   NodePairVerifyParams: NodePairVerifyParamsSchema,
+  NodeListParams: NodeListParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,
   SessionsListParams: SessionsListParamsSchema,
   SessionsPatchParams: SessionsPatchParamsSchema,
@@ -545,6 +552,7 @@ export type NodePairListParams = Static<typeof NodePairListParamsSchema>;
 export type NodePairApproveParams = Static<typeof NodePairApproveParamsSchema>;
 export type NodePairRejectParams = Static<typeof NodePairRejectParamsSchema>;
 export type NodePairVerifyParams = Static<typeof NodePairVerifyParamsSchema>;
+export type NodeListParams = Static<typeof NodeListParamsSchema>;
 export type NodeInvokeParams = Static<typeof NodeInvokeParamsSchema>;
 export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;

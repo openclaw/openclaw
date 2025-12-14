@@ -399,6 +399,7 @@ describe("gateway server", () => {
           command: "screen.eval",
           params: { javaScript: "2+2" },
           timeoutMs: 123,
+          idempotencyKey: "idem-1",
         });
         expect(res.ok).toBe(true);
 

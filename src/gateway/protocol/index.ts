@@ -38,6 +38,8 @@ import {
   HelloOkSchema,
   type NodeInvokeParams,
   NodeInvokeParamsSchema,
+  type NodeListParams,
+  NodeListParamsSchema,
   type NodePairApproveParams,
   NodePairApproveParamsSchema,
   type NodePairListParams,
@@ -105,6 +107,8 @@ export const validateNodePairRejectParams = ajv.compile<NodePairRejectParams>(
 export const validateNodePairVerifyParams = ajv.compile<NodePairVerifyParams>(
   NodePairVerifyParamsSchema,
 );
+export const validateNodeListParams =
+  ajv.compile<NodeListParams>(NodeListParamsSchema);
 export const validateNodeInvokeParams = ajv.compile<NodeInvokeParams>(
   NodeInvokeParamsSchema,
 );
@@ -163,6 +167,7 @@ export {
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,
   NodePairVerifyParamsSchema,
+  NodeListParamsSchema,
   NodeInvokeParamsSchema,
   SessionsListParamsSchema,
   SessionsPatchParamsSchema,
@@ -205,6 +210,7 @@ export type {
   NodePairApproveParams,
   NodePairRejectParams,
   NodePairVerifyParams,
+  NodeListParams,
   NodeInvokeParams,
   SessionsListParams,
   SessionsPatchParams,
