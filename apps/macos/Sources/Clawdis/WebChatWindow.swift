@@ -91,6 +91,7 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
             window.title = "Clawd Web Chat"
             window.contentView = wrappedContent
             window.center()
+            WindowPlacement.ensureOnScreen(window: window, defaultSize: WebChatLayout.windowSize)
             window.minSize = NSSize(width: 880, height: 680)
             return window
         case .panel:
@@ -110,6 +111,11 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
             panel.isOpaque = false
             panel.contentView = wrappedContent
             panel.becomesKeyOnlyIfNeeded = true
+            panel.setFrame(
+                WindowPlacement.topRightFrame(
+                    size: WebChatLayout.panelSize,
+                    padding: WebChatLayout.anchorPadding),
+                display: false)
             return panel
         }
     }
@@ -339,7 +345,14 @@ final class WebChatWindowController: NSWindowController, WKNavigationDelegate, N
 
     private func repositionPanel(using anchorProvider: () -> NSRect?) {
         guard let panel = self.window else { return }
-        guard let anchor = anchorProvider() else { return }
+        guard let anchor = anchorProvider() else {
+            panel.setFrame(
+                WindowPlacement.topRightFrame(
+                    size: WebChatLayout.panelSize,
+                    padding: WebChatLayout.anchorPadding),
+                display: false)
+            return
+        }
 
         var frame = panel.frame
         let screen = NSScreen.screens.first { screen in

@@ -163,7 +163,14 @@ final class WebChatSwiftUIWindowController {
 
     private func reposition(using anchorProvider: () -> NSRect?) {
         guard let window else { return }
-        guard let anchor = anchorProvider() else { return }
+        guard let anchor = anchorProvider() else {
+            window.setFrame(
+                WindowPlacement.topRightFrame(
+                    size: WebChatSwiftUILayout.panelSize,
+                    padding: WebChatSwiftUILayout.anchorPadding),
+                display: false)
+            return
+        }
         let screen = NSScreen.screens.first { screen in
             screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
         } ?? NSScreen.main
@@ -227,6 +234,7 @@ final class WebChatSwiftUIWindowController {
             window.backgroundColor = .windowBackgroundColor
             window.isOpaque = true
             window.center()
+            WindowPlacement.ensureOnScreen(window: window, defaultSize: WebChatSwiftUILayout.windowSize)
             window.minSize = NSSize(width: 880, height: 680)
             return window
         case .panel:
@@ -246,6 +254,11 @@ final class WebChatSwiftUIWindowController {
             panel.isOpaque = false
             panel.contentViewController = contentViewController
             panel.becomesKeyOnlyIfNeeded = true
+            panel.setFrame(
+                WindowPlacement.topRightFrame(
+                    size: WebChatSwiftUILayout.panelSize,
+                    padding: WebChatSwiftUILayout.anchorPadding),
+                display: false)
             return panel
         }
     }
