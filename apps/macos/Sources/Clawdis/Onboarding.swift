@@ -303,11 +303,9 @@ struct OnboardingView: View {
 
     private func anthropicAuthPage() -> some View {
         self.onboardingPage {
-            Text("Connect Claude")
+            Text("Sign in to Claude")
                 .font(.largeTitle.weight(.semibold))
-            Text(
-                "Optional, but recommended: authenticate via Claude (Anthropic) so Pi can answer immediately. " +
-                    "Clawdis will always pass --provider/--model when invoking Pi.")
+            Text("Give your model the token it needs!")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
