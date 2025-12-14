@@ -26,6 +26,7 @@ import {
   TOOL_RESULT_FLUSH_COUNT,
 } from "./tool-meta.js";
 import type { ReplyPayload } from "./types.js";
+import { stripJsonEventLines } from "./strip-json-events.js";
 
 function stripStructuralPrefixes(text: string): string {
   return text
@@ -993,10 +994,12 @@ export async function runCommandReply(
         mediaUrls = filtered;
       }
 
+      // Filter out internal JSON events before building payload
+      const cleanedText = item.text ? stripJsonEventLines(item.text) : undefined;
       const payload =
-        item.text || mediaUrls?.length
+        cleanedText || mediaUrls?.length
           ? {
-              text: item.text || undefined,
+              text: cleanedText || undefined,
               mediaUrl: mediaUrls?.[0],
               mediaUrls,
             }
