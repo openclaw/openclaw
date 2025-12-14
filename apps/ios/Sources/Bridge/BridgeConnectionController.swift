@@ -52,9 +52,7 @@ final class BridgeConnectionController: ObservableObject {
         guard appModel.bridgeServerName == nil else { return }
 
         let defaults = UserDefaults.standard
-        let targetStableID = defaults.string(forKey: "bridge.lastDiscoveredStableID")?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !targetStableID.isEmpty else { return }
+        let manualEnabled = defaults.bool(forKey: "bridge.manual.enabled")
 
         let instanceId = defaults.string(forKey: "node.instanceId")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -65,6 +63,26 @@ final class BridgeConnectionController: ObservableObject {
             account: "bridge-token.\(instanceId)")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !token.isEmpty else { return }
+
+        if manualEnabled {
+            let manualHost = defaults.string(forKey: "bridge.manual.host")?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard !manualHost.isEmpty else { return }
+
+            let manualPort = defaults.integer(forKey: "bridge.manual.port")
+            let resolvedPort = manualPort > 0 ? manualPort : 18790
+            guard let port = NWEndpoint.Port(rawValue: UInt16(resolvedPort)) else { return }
+
+            self.didAutoConnect = true
+            appModel.connectToBridge(
+                endpoint: .hostPort(host: NWEndpoint.Host(manualHost), port: port),
+                hello: self.makeHello(token: token))
+            return
+        }
+
+        let targetStableID = defaults.string(forKey: "bridge.lastDiscoveredStableID")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !targetStableID.isEmpty else { return }
 
         guard let target = self.bridges.first(where: { $0.stableID == targetStableID }) else { return }
 

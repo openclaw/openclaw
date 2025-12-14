@@ -1,4 +1,5 @@
 import ClawdisKit
+import Network
 import SwiftUI
 import UIKit
 
@@ -20,6 +21,9 @@ struct SettingsTab: View {
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("bridge.preferredStableID") private var preferredBridgeStableID: String = ""
     @AppStorage("bridge.lastDiscoveredStableID") private var lastDiscoveredBridgeStableID: String = ""
+    @AppStorage("bridge.manual.enabled") private var manualBridgeEnabled: Bool = false
+    @AppStorage("bridge.manual.host") private var manualBridgeHost: String = ""
+    @AppStorage("bridge.manual.port") private var manualBridgePort: Int = 18790
     @StateObject private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
@@ -111,6 +115,40 @@ struct SettingsTab: View {
 
                     if let text = self.connectStatus.text {
                         Text(text)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    DisclosureGroup("Advanced") {
+                        Toggle("Use Manual Bridge", isOn: self.$manualBridgeEnabled)
+
+                        TextField("Host", text: self.$manualBridgeHost)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+
+                        TextField("Port", value: self.$manualBridgePort, format: .number)
+                            .keyboardType(.numberPad)
+
+                        Button {
+                            Task { await self.connectManual() }
+                        } label: {
+                            if self.connectingBridgeID == "manual" {
+                                HStack(spacing: 8) {
+                                    ProgressView()
+                                        .progressViewStyle(.circular)
+                                    Text("Connecting…")
+                                }
+                            } else {
+                                Text("Connect (Manual)")
+                            }
+                        }
+                        .disabled(self.connectingBridgeID != nil || self.manualBridgeHost
+                            .trimmingCharacters(in: .whitespacesAndNewlines)
+                            .isEmpty || self.manualBridgePort <= 0 || self.manualBridgePort > 65535)
+
+                        Text(
+                            "Use this when mDNS/Bonjour discovery is blocked. "
+                                + "The bridge runs on the gateway (default port 18790).")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
@@ -206,6 +244,7 @@ struct SettingsTab: View {
 
     private func connect(_ bridge: BridgeDiscoveryModel.DiscoveredBridge) async {
         self.connectingBridgeID = bridge.id
+        self.manualBridgeEnabled = false
         self.preferredBridgeStableID = bridge.stableID
         BridgeSettingsStore.savePreferredBridgeStableID(bridge.stableID)
         self.lastDiscoveredBridgeStableID = bridge.stableID
@@ -245,6 +284,72 @@ struct SettingsTab: View {
 
             self.appModel.connectToBridge(
                 endpoint: bridge.endpoint,
+                hello: BridgeHello(
+                    nodeId: self.instanceId,
+                    displayName: self.displayName,
+                    token: token,
+                    platform: self.platformString(),
+                    version: self.appVersion()))
+
+        } catch {
+            self.connectStatus.text = "Failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func connectManual() async {
+        let host = self.manualBridgeHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !host.isEmpty else {
+            self.connectStatus.text = "Failed: host required"
+            return
+        }
+        guard self.manualBridgePort > 0, self.manualBridgePort <= 65535 else {
+            self.connectStatus.text = "Failed: invalid port"
+            return
+        }
+        guard let port = NWEndpoint.Port(rawValue: UInt16(self.manualBridgePort)) else {
+            self.connectStatus.text = "Failed: invalid port"
+            return
+        }
+
+        self.connectingBridgeID = "manual"
+        self.manualBridgeEnabled = true
+        defer { self.connectingBridgeID = nil }
+
+        let endpoint: NWEndpoint = .hostPort(host: NWEndpoint.Host(host), port: port)
+
+        do {
+            let existing = KeychainStore.loadString(
+                service: "com.steipete.clawdis.bridge",
+                account: self.keychainAccount())
+            let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
+                existing :
+                nil
+
+            let hello = BridgeHello(
+                nodeId: self.instanceId,
+                displayName: self.displayName,
+                token: existingToken,
+                platform: self.platformString(),
+                version: self.appVersion())
+            let token = try await BridgeClient().pairAndHello(
+                endpoint: endpoint,
+                hello: hello,
+                onStatus: { status in
+                    let store = self.connectStatus
+                    Task { @MainActor in
+                        store.text = status
+                    }
+                })
+
+            if !token.isEmpty, token != existingToken {
+                _ = KeychainStore.saveString(
+                    token,
+                    service: "com.steipete.clawdis.bridge",
+                    account: self.keychainAccount())
+            }
+
+            self.appModel.connectToBridge(
+                endpoint: endpoint,
                 hello: BridgeHello(
                     nodeId: self.instanceId,
                     displayName: self.displayName,

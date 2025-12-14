@@ -54,51 +54,71 @@ final class NodeAppModel: ObservableObject {
         hello: BridgeHello)
     {
         self.bridgeTask?.cancel()
-        self.bridgeStatusText = "Connecting…"
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
         self.connectedBridgeID = BridgeEndpointID.stableID(endpoint)
 
         self.bridgeTask = Task {
-            do {
-                try await self.bridge.connect(
-                    endpoint: endpoint,
-                    hello: hello,
-                    onConnected: { [weak self] serverName in
-                        guard let self else { return }
-                        await MainActor.run {
-                            self.bridgeStatusText = "Connected"
-                            self.bridgeServerName = serverName
-                        }
-                        if let addr = await self.bridge.currentRemoteAddress() {
-                            await MainActor.run {
-                                self.bridgeRemoteAddress = addr
-                            }
-                        }
-                    },
-                    onInvoke: { [weak self] req in
-                        guard let self else {
-                            return BridgeInvokeResponse(
-                                id: req.id,
-                                ok: false,
-                                error: ClawdisNodeError(code: .unavailable, message: "UNAVAILABLE: node not ready"))
-                        }
-                        return await self.handleInvoke(req)
-                    })
+            var attempt = 0
+            while !Task.isCancelled {
+                await MainActor.run {
+                    if attempt == 0 {
+                        self.bridgeStatusText = "Connecting…"
+                    } else {
+                        self.bridgeStatusText = "Reconnecting…"
+                    }
+                    self.bridgeServerName = nil
+                    self.bridgeRemoteAddress = nil
+                }
 
-                await MainActor.run {
-                    self.bridgeStatusText = "Disconnected"
-                    self.bridgeServerName = nil
-                    self.bridgeRemoteAddress = nil
-                    self.connectedBridgeID = nil
+                do {
+                    try await self.bridge.connect(
+                        endpoint: endpoint,
+                        hello: hello,
+                        onConnected: { [weak self] serverName in
+                            guard let self else { return }
+                            await MainActor.run {
+                                self.bridgeStatusText = "Connected"
+                                self.bridgeServerName = serverName
+                            }
+                            if let addr = await self.bridge.currentRemoteAddress() {
+                                await MainActor.run {
+                                    self.bridgeRemoteAddress = addr
+                                }
+                            }
+                        },
+                        onInvoke: { [weak self] req in
+                            guard let self else {
+                                return BridgeInvokeResponse(
+                                    id: req.id,
+                                    ok: false,
+                                    error: ClawdisNodeError(code: .unavailable, message: "UNAVAILABLE: node not ready"))
+                            }
+                            return await self.handleInvoke(req)
+                        })
+
+                    if Task.isCancelled { break }
+                    attempt += 1
+                    let sleepSeconds = min(6.0, 0.35 * pow(1.7, Double(attempt)))
+                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
+                } catch {
+                    if Task.isCancelled { break }
+                    attempt += 1
+                    await MainActor.run {
+                        self.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
+                        self.bridgeServerName = nil
+                        self.bridgeRemoteAddress = nil
+                    }
+                    let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
+                    try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
                 }
-            } catch {
-                await MainActor.run {
-                    self.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
-                    self.bridgeServerName = nil
-                    self.bridgeRemoteAddress = nil
-                    self.connectedBridgeID = nil
-                }
+            }
+
+            await MainActor.run {
+                self.bridgeStatusText = "Disconnected"
+                self.bridgeServerName = nil
+                self.bridgeRemoteAddress = nil
+                self.connectedBridgeID = nil
             }
         }
     }
