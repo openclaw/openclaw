@@ -189,15 +189,10 @@ struct OnboardingView: View {
                             Text("Security notice")
                                 .font(.headline)
                             Text(
-                                """
-                                The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac,
-                                including running
-                                commands, reading/writing files, and capturing screenshots — depending on the
-                                permissions you grant.
-
-                                Only enable Clawdis if you understand the risks and trust the prompts
-                                and integrations you use.
-                                """)
+                                "The connected AI agent (e.g. Claude) can trigger powerful actions on your Mac, " +
+                                    "including running commands, reading/writing files, and capturing screenshots — " +
+                                    "depending on the permissions you grant.\n\n" +
+                                    "Only enable Clawdis if you understand the risks and trust the prompts and integrations you use.")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
