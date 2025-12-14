@@ -16,11 +16,15 @@ read_when:
 - **Peekaboo** — Fast macOS screenshots with optional AI vision analysis.
 - **camsnap** — Capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
 - **oracle** — OpenAI-ready agent CLI with session replay and browser control.
-- **eightctl** — Control Eight Sleep Pod temperature, alarms, schedules, and metrics.
-- **imsg** — macOS Messages CLI to read/tail chats and send iMessage/SMS.
+- **qmd** — Hybrid markdown search (BM25 + vectors + rerank) with an MCP server for agents.
+- **eightctl** — Control your sleep, from the terminal.
+- **imsg** — Send, read, stream iMessage & SMS.
+- **wacli** — WhatsApp CLI: sync, search, send.
+- **gog** — Google Suite CLI: Gmail, Calendar, Drive, Contacts.
 - **spotify-player** — Terminal Spotify client to search/queue/control playback.
+- **sag** — ElevenLabs speech with mac-style say UX; streams to speakers by default.
+- **Sonos CLI** — Control Sonos speakers (discover/status/playback/volume/grouping) from scripts.
 - **OpenHue CLI** — Philips Hue lighting control for scenes and automations.
-- **OpenAI Whisper** — Local speech-to-text for quick dictation and voicemail transcripts.
 - **Gemini CLI** — Google Gemini models from the terminal for fast Q&A.
 - **bird** — X/Twitter CLI to tweet, reply, read threads, and search without a browser.
 - **agent-tools** — Utility toolkit for automations and MCP-friendly scripts.

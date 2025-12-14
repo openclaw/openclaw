@@ -115,15 +115,22 @@ struct ToolsSettings: View {
             id: "eightctl",
             name: "eightctl",
             url: URL(string: "https://github.com/steipete/eightctl")!,
-            description: "Control Eight Sleep Pods (temp, alarms, schedules, metrics) from scripts or cron.",
+            description: "Control your sleep, from the terminal.",
             method: .go(module: "github.com/steipete/eightctl/cmd/eightctl@latest", binary: "eightctl"),
             kind: .tool),
         ToolEntry(
             id: "imsg",
             name: "imsg",
             url: URL(string: "https://github.com/steipete/imsg")!,
-            description: "CLI for macOS Messages: read/tail chats and send iMessage/SMS with attachments.",
+            description: "Send, read, stream iMessage & SMS.",
             method: .go(module: "github.com/steipete/imsg/cmd/imsg@latest", binary: "imsg"),
+            kind: .tool),
+        ToolEntry(
+            id: "wacli",
+            name: "wacli",
+            url: URL(string: "https://github.com/steipete/wacli")!,
+            description: "WhatsApp CLI: sync, search, send.",
+            method: .go(module: "github.com/steipete/wacli/cmd/wacli@latest", binary: "wacli"),
             kind: .tool),
         ToolEntry(
             id: "spotify-player",
@@ -133,10 +140,17 @@ struct ToolsSettings: View {
             method: .brew(formula: "spotify_player", binary: "spotify_player"),
             kind: .tool),
         ToolEntry(
+            id: "sonoscli",
+            name: "Sonos CLI",
+            url: URL(string: "https://github.com/steipete/sonoscli")!,
+            description: "Control Sonos speakers (discover, status, play/pause, volume, grouping) from scripts.",
+            method: .go(module: "github.com/steipete/sonoscli/cmd/sonos@latest", binary: "sonos"),
+            kind: .tool),
+        ToolEntry(
             id: "sag",
             name: "sag",
             url: URL(string: "https://github.com/steipete/sag")!,
-            description: "ElevenLabs TTS with mac-style flags; stream to speakers or save audio.",
+            description: "ElevenLabs speech with mac-style say UX; streams to speakers by default.",
             method: .brew(formula: "steipete/tap/sag", binary: "sag"),
             kind: .tool),
         ToolEntry(
@@ -149,9 +163,9 @@ struct ToolsSettings: View {
         ToolEntry(
             id: "gog",
             name: "gog",
-            url: URL(string: "https://github.com/steipete/gog")!,
-            description: "Unified Google CLI for Gmail, Calendar, Drive, and Contacts. Replaces MCP servers.",
-            method: .brew(formula: "steipete/tap/gog", binary: "gog"),
+            url: URL(string: "https://github.com/steipete/gogcli")!,
+            description: "Google Suite CLI: Gmail, Calendar, Drive, Contacts.",
+            method: .brew(formula: "steipete/tap/gogcli", binary: "gog"),
             kind: .tool),
         ToolEntry(
             id: "gemini-cli",
