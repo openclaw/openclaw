@@ -4,6 +4,7 @@ import SwiftUI
 @MainActor
 struct SessionsSettings: View {
     private let isPreview: Bool
+    @ObservedObject private var state = AppStateStore.shared
     @State private var rows: [SessionRow]
     @State private var storePath: String = SessionLoader.defaultStorePath
     @State private var lastLoaded: Date?
@@ -62,10 +63,12 @@ struct SessionsSettings: View {
                     }
                 }
                 Spacer()
-                Text(self.storePath)
-                    .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
+                if self.state.connectionMode == .local {
+                    Text(self.storePath)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
             }
 
             HStack(spacing: 10) {
@@ -79,13 +82,15 @@ struct SessionsSettings: View {
                 .buttonStyle(.bordered)
                 .help("Refresh session store")
 
-                Button {
-                    self.revealStore()
-                } label: {
-                    Label("Reveal", systemImage: "folder")
-                        .labelStyle(.titleAndIcon)
+                if self.state.connectionMode == .local {
+                    Button {
+                        self.revealStore()
+                    } label: {
+                        Label("Reveal", systemImage: "folder")
+                            .labelStyle(.titleAndIcon)
+                    }
+                    .disabled(!FileManager.default.fileExists(atPath: self.storePath))
                 }
-                .disabled(!FileManager.default.fileExists(atPath: self.storePath))
 
                 if self.loading {
                     ProgressView().controlSize(.small)
