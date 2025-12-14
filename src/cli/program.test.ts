@@ -290,4 +290,166 @@ describe("cli program", () => {
       await fs.unlink(mediaPath).catch(() => {});
     }
   });
+
+  it("runs nodes camera snap with facing front and passes params", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "ios-node",
+            displayName: "iOS Node",
+            remoteIp: "192.168.0.88",
+            connected: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "ios-node",
+        command: "camera.snap",
+        payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+      });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(
+      [
+        "nodes",
+        "camera",
+        "snap",
+        "--node",
+        "ios-node",
+        "--facing",
+        "front",
+        "--max-width",
+        "640",
+        "--quality",
+        "0.8",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "node.invoke",
+        params: expect.objectContaining({
+          nodeId: "ios-node",
+          command: "camera.snap",
+          timeoutMs: 20000,
+          idempotencyKey: "idem-test",
+          params: expect.objectContaining({
+            facing: "front",
+            maxWidth: 640,
+            quality: 0.8,
+          }),
+        }),
+      }),
+    );
+
+    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const mediaPath = out.replace(/^MEDIA:/, "").trim();
+
+    try {
+      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
+    } finally {
+      await fs.unlink(mediaPath).catch(() => {});
+    }
+  });
+
+  it("runs nodes camera clip with --no-audio", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "ios-node",
+            displayName: "iOS Node",
+            remoteIp: "192.168.0.88",
+            connected: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "ios-node",
+        command: "camera.clip",
+        payload: {
+          format: "mp4",
+          base64: "aGk=",
+          durationMs: 3000,
+          hasAudio: false,
+        },
+      });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(
+      [
+        "nodes",
+        "camera",
+        "clip",
+        "--node",
+        "ios-node",
+        "--duration",
+        "3000",
+        "--no-audio",
+      ],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "node.invoke",
+        params: expect.objectContaining({
+          nodeId: "ios-node",
+          command: "camera.clip",
+          timeoutMs: 45000,
+          idempotencyKey: "idem-test",
+          params: expect.objectContaining({
+            includeAudio: false,
+          }),
+        }),
+      }),
+    );
+
+    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const mediaPath = out.replace(/^MEDIA:/, "").trim();
+
+    try {
+      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
+    } finally {
+      await fs.unlink(mediaPath).catch(() => {});
+    }
+  });
+
+  it("fails nodes camera snap on invalid facing", async () => {
+    callGateway.mockResolvedValueOnce({
+      ts: Date.now(),
+      nodes: [
+        {
+          nodeId: "ios-node",
+          displayName: "iOS Node",
+          remoteIp: "192.168.0.88",
+          connected: true,
+        },
+      ],
+    });
+
+    const program = buildProgram();
+    runtime.error.mockClear();
+
+    await expect(
+      program.parseAsync(
+        ["nodes", "camera", "snap", "--node", "ios-node", "--facing", "nope"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow(/exit/i);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringMatching(/invalid facing/i),
+    );
+  });
 });
