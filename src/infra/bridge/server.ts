@@ -34,6 +34,21 @@ type BridgeEventFrame = {
   payloadJSON?: string | null;
 };
 
+type BridgeRPCRequestFrame = {
+  type: "req";
+  id: string;
+  method: string;
+  paramsJSON?: string | null;
+};
+
+type BridgeRPCResponseFrame = {
+  type: "res";
+  id: string;
+  ok: boolean;
+  payloadJSON?: string | null;
+  error?: { code: string; message: string; details?: unknown } | null;
+};
+
 type BridgePingFrame = { type: "ping"; id: string };
 type BridgePongFrame = { type: "pong"; id: string };
 
@@ -60,6 +75,8 @@ type AnyBridgeFrame =
   | BridgeHelloFrame
   | BridgePairRequestFrame
   | BridgeEventFrame
+  | BridgeRPCRequestFrame
+  | BridgeRPCResponseFrame
   | BridgePingFrame
   | BridgePongFrame
   | BridgeInvokeRequestFrame
@@ -78,6 +95,11 @@ export type NodeBridgeServer = {
     paramsJSON?: string | null;
     timeoutMs?: number;
   }) => Promise<BridgeInvokeResponseFrame>;
+  sendEvent: (opts: {
+    nodeId: string;
+    event: string;
+    payloadJSON?: string | null;
+  }) => void;
   listConnected: () => NodeBridgeClientInfo[];
 };
 
@@ -94,6 +116,13 @@ export type NodeBridgeServerOpts = {
   port: number; // 0 = ephemeral
   pairingBaseDir?: string;
   onEvent?: (nodeId: string, evt: BridgeEventFrame) => Promise<void> | void;
+  onRequest?: (
+    nodeId: string,
+    req: BridgeRPCRequestFrame,
+  ) => Promise<
+    | { ok: true; payloadJSON?: string | null }
+    | { ok: false; error: { code: string; message: string; details?: unknown } }
+  >;
   onAuthenticated?: (node: NodeBridgeClientInfo) => Promise<void> | void;
   onDisconnected?: (node: NodeBridgeClientInfo) => Promise<void> | void;
   onPairRequested?: (
@@ -124,6 +153,7 @@ export async function startNodeBridgeServer(
       invoke: async () => {
         throw new Error("bridge disabled in tests");
       },
+      sendEvent: () => {},
       listConnected: () => [],
     };
   }
@@ -333,6 +363,71 @@ export async function startNodeBridgeServer(
       await opts.onEvent?.(nodeId, evt);
     };
 
+    const handleRequest = async (req: BridgeRPCRequestFrame) => {
+      if (!isAuthenticated || !nodeId) {
+        send({
+          type: "res",
+          id: String(req.id ?? ""),
+          ok: false,
+          error: { code: "UNAUTHORIZED", message: "not authenticated" },
+        } satisfies BridgeRPCResponseFrame);
+        return;
+      }
+
+      if (!opts.onRequest) {
+        send({
+          type: "res",
+          id: String(req.id ?? ""),
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "RPC not supported" },
+        } satisfies BridgeRPCResponseFrame);
+        return;
+      }
+
+      const id = String(req.id ?? "");
+      const method = String(req.method ?? "");
+      if (!id || !method) {
+        send({
+          type: "res",
+          id: id || "invalid",
+          ok: false,
+          error: { code: "INVALID_REQUEST", message: "id and method required" },
+        } satisfies BridgeRPCResponseFrame);
+        return;
+      }
+
+      try {
+        const result = await opts.onRequest(nodeId, {
+          type: "req",
+          id,
+          method,
+          paramsJSON: req.paramsJSON ?? null,
+        });
+        if (result.ok) {
+          send({
+            type: "res",
+            id,
+            ok: true,
+            payloadJSON: result.payloadJSON ?? null,
+          } satisfies BridgeRPCResponseFrame);
+        } else {
+          send({
+            type: "res",
+            id,
+            ok: false,
+            error: result.error,
+          } satisfies BridgeRPCResponseFrame);
+        }
+      } catch (err) {
+        send({
+          type: "res",
+          id,
+          ok: false,
+          error: { code: "UNAVAILABLE", message: String(err) },
+        } satisfies BridgeRPCResponseFrame);
+      }
+    };
+
     socket.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
       while (true) {
@@ -363,6 +458,9 @@ export async function startNodeBridgeServer(
                 break;
               case "event":
                 await handleEvent(frame as BridgeEventFrame);
+                break;
+              case "req":
+                await handleRequest(frame as BridgeRPCRequestFrame);
                 break;
               case "ping": {
                 if (!isAuthenticated) {
@@ -395,6 +493,10 @@ export async function startNodeBridgeServer(
                 sendError("INVALID_REQUEST", "invoke not allowed from node");
                 break;
               }
+              case "res":
+                // Direction is node -> gateway only.
+                sendError("INVALID_REQUEST", "res not allowed from node");
+                break;
               case "pong":
                 // ignore
                 break;
@@ -443,6 +545,24 @@ export async function startNodeBridgeServer(
       );
     },
     listConnected: () => [...connections.values()].map((c) => c.nodeInfo),
+    sendEvent: ({ nodeId, event, payloadJSON }) => {
+      const normalizedNodeId = String(nodeId ?? "").trim();
+      const normalizedEvent = String(event ?? "").trim();
+      if (!normalizedNodeId || !normalizedEvent) return;
+      const conn = connections.get(normalizedNodeId);
+      if (!conn) return;
+      try {
+        conn.socket.write(
+          encodeLine({
+            type: "event",
+            event: normalizedEvent,
+            payloadJSON: payloadJSON ?? null,
+          } satisfies BridgeEventFrame),
+        );
+      } catch {
+        // ignore
+      }
+    },
     invoke: async ({ nodeId, command, paramsJSON, timeoutMs }) => {
       const normalizedNodeId = String(nodeId ?? "").trim();
       const normalizedCommand = String(command ?? "").trim();

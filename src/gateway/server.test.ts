@@ -24,6 +24,17 @@ type BridgeStartOpts = {
   onAuthenticated?: (node: BridgeClientInfo) => Promise<void> | void;
   onDisconnected?: (node: BridgeClientInfo) => Promise<void> | void;
   onPairRequested?: (request: unknown) => Promise<void> | void;
+  onEvent?: (
+    nodeId: string,
+    evt: { event: string; payloadJSON?: string | null },
+  ) => Promise<void> | void;
+  onRequest?: (
+    nodeId: string,
+    req: { id: string; method: string; paramsJSON?: string | null },
+  ) => Promise<
+    | { ok: true; payloadJSON?: string | null }
+    | { ok: false; error: { code: string; message: string; details?: unknown } }
+  >;
 };
 
 const bridgeStartCalls = vi.hoisted(() => [] as BridgeStartOpts[]);
@@ -36,6 +47,7 @@ const bridgeInvoke = vi.hoisted(() =>
     error: null,
   })),
 );
+const bridgeSendEvent = vi.hoisted(() => vi.fn());
 vi.mock("../infra/bridge/server.js", () => ({
   startNodeBridgeServer: vi.fn(async (opts: BridgeStartOpts) => {
     bridgeStartCalls.push(opts);
@@ -44,6 +56,7 @@ vi.mock("../infra/bridge/server.js", () => ({
       close: async () => {},
       listConnected: () => [],
       invoke: bridgeInvoke,
+      sendEvent: bridgeSendEvent,
     };
   }),
 }));
@@ -1660,6 +1673,138 @@ describe("gateway server", () => {
     expect(stored.main?.lastTo).toBe("+1555");
 
     ws.close();
+    await server.close();
+  });
+
+  test("bridge RPC chat.history returns session messages", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "hi" }],
+            timestamp: Date.now(),
+          },
+        }),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const res = await bridgeCall?.onRequest?.("ios-node", {
+      id: "r1",
+      method: "chat.history",
+      paramsJSON: JSON.stringify({ sessionKey: "main" }),
+    });
+
+    expect(res?.ok).toBe(true);
+    const payload = JSON.parse(
+      String((res as { payloadJSON?: string }).payloadJSON ?? "{}"),
+    ) as {
+      sessionKey?: string;
+      sessionId?: string;
+      messages?: unknown[];
+    };
+    expect(payload.sessionKey).toBe("main");
+    expect(payload.sessionId).toBe("sess-main");
+    expect(Array.isArray(payload.messages)).toBe(true);
+    expect(payload.messages?.length).toBeGreaterThan(0);
+
+    await server.close();
+  });
+
+  test("bridge chat events are pushed to subscribed nodes", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onEvent).toBeDefined();
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    // Subscribe the node to chat events for main.
+    await bridgeCall?.onEvent?.("ios-node", {
+      event: "chat.subscribe",
+      payloadJSON: JSON.stringify({ sessionKey: "main" }),
+    });
+
+    bridgeSendEvent.mockClear();
+
+    // Trigger a chat.send, then simulate agent bus completion for the sessionId.
+    const reqRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "s1",
+      method: "chat.send",
+      paramsJSON: JSON.stringify({
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-bridge-chat",
+        timeoutMs: 30_000,
+      }),
+    });
+    expect(reqRes?.ok).toBe(true);
+
+    emitAgentEvent({
+      runId: "sess-main",
+      seq: 1,
+      ts: Date.now(),
+      stream: "assistant",
+      data: { text: "hi from agent" },
+    });
+    emitAgentEvent({
+      runId: "sess-main",
+      seq: 2,
+      ts: Date.now(),
+      stream: "job",
+      data: { state: "done" },
+    });
+
+    // Wait a tick for the bridge send to happen.
+    await new Promise((r) => setTimeout(r, 25));
+
+    expect(bridgeSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "ios-node",
+        event: "chat",
+      }),
+    );
+
     await server.close();
   });
 

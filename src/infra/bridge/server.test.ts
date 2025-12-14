@@ -153,6 +153,72 @@ describe("node bridge server", () => {
     await server.close();
   });
 
+  it("handles req/res RPC after authentication", async () => {
+    let lastRequest: { nodeId?: string; id?: string; method?: string } | null =
+      null;
+
+    const server = await startNodeBridgeServer({
+      host: "127.0.0.1",
+      port: 0,
+      pairingBaseDir: baseDir,
+      onRequest: async (nodeId, req) => {
+        lastRequest = { nodeId, id: req.id, method: req.method };
+        return { ok: true, payloadJSON: JSON.stringify({ ok: true }) };
+      },
+    });
+
+    const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    const readLine = createLineReader(socket);
+    sendLine(socket, {
+      type: "pair-request",
+      nodeId: "n3-rpc",
+      platform: "ios",
+    });
+
+    // Approve the pending request from the gateway side.
+    let reqId: string | undefined;
+    for (let i = 0; i < 40; i += 1) {
+      const list = await listNodePairing(baseDir);
+      const req = list.pending.find((p) => p.nodeId === "n3-rpc");
+      if (req) {
+        reqId = req.requestId;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(reqId).toBeTruthy();
+    if (!reqId) throw new Error("expected a pending requestId");
+    await approveNodePairing(reqId, baseDir);
+
+    const line1 = JSON.parse(await readLine()) as { type: string };
+    expect(line1.type).toBe("pair-ok");
+    const line2 = JSON.parse(await readLine()) as { type: string };
+    expect(line2.type).toBe("hello-ok");
+
+    sendLine(socket, { type: "req", id: "r1", method: "health" });
+    const res = JSON.parse(await readLine()) as {
+      type: string;
+      id?: string;
+      ok?: boolean;
+      payloadJSON?: string | null;
+      error?: unknown;
+    };
+    expect(res.type).toBe("res");
+    expect(res.id).toBe("r1");
+    expect(res.ok).toBe(true);
+    expect(res.payloadJSON).toBe(JSON.stringify({ ok: true }));
+    expect(res.error).toBeUndefined();
+
+    expect(lastRequest).toEqual({
+      nodeId: "n3-rpc",
+      id: "r1",
+      method: "health",
+    });
+
+    socket.destroy();
+    await server.close();
+  });
+
   it("passes node metadata to onAuthenticated and onDisconnected", async () => {
     let lastAuthed: {
       nodeId?: string;
