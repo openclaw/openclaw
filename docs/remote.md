@@ -3,48 +3,50 @@ summary: "Remote mode topology using SSH control channels between gateway and ma
 read_when:
   - Running or troubleshooting remote gateway setups
 ---
-# Remote mode with control channel
+# Remote access (SSH, tunnels, and tailnets)
 
-This repo supports “remote over SSH” by keeping a single gateway (the master) running on a host (e.g., your Mac Studio) and connecting one or more macOS menu bar clients to it. The menu app no longer shells out to `pnpm clawdis …`; it talks to the gateway over a persistent control channel that is tunneled through SSH.
+This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a host (e.g., your Mac Studio) and connecting clients to it.
 
-Remote mode is the SSH fallback transport. As Clawdis adds a direct “bridge” transport for LAN/tailnet setups, SSH remains supported for universal reach.
-See `docs/discovery.md` for how clients choose between direct vs SSH.
+- For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.
+- For **nodes (Iris/iOS and future devices)**: prefer the Gateway **Bridge** when on the same LAN/tailnet (see `docs/discovery.md`).
 
-## Topology
-- Master: runs the gateway + control server on `127.0.0.1:18789` (in-process TCP server).
-- Clients: when “Remote over SSH” is selected, the app opens one SSH tunnel:
-  - `ssh -N -L <localPort>:127.0.0.1:18789 <user>@<host>`
-  - The app then connects to `localhost:<localPort>` and keeps that socket open.
-- Messages are newline-delimited JSON (documented in `docs/control-api.md`).
+## The core idea
 
-## Connection flow (clients)
-1) Establish SSH tunnel.
-2) Open TCP socket to the local forwarded port.
-3) Send `ping` to verify connectivity.
-4) Issue `health`, `status`, and `last-heartbeat` requests to seed UI.
-5) Listen for `event` frames (heartbeat updates, gateway status).
+- The Gateway WebSocket binds to **loopback**: `ws://127.0.0.1:18789`.
+- For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
-## Heartbeats
-- Heartbeats always run on the master gateway.
-- The control server emits `event: "heartbeat"` after each heartbeat attempt and keeps the latest in memory for `last-heartbeat` requests.
-- No file-based heartbeat logs/state are required when the control stream is available.
+## SSH tunnel (CLI + tools)
 
-## Local mode
-- The menu app skips SSH and connects directly to `127.0.0.1:18789` with the same protocol.
+Create a local tunnel to the remote Gateway WS:
 
-## Failure handling
-- If the tunnel drops, the client reconnects and re-issues `ping`, `health`, and `last-heartbeat` to refresh state (the mac app shows “Control channel disconnected”).
-- If the control port is unavailable (older gateway), the app can optionally fall back to the legacy CLI path, but the goal is to rely solely on the control channel.
+```bash
+ssh -N -L 18789:127.0.0.1:18789 user@host
+```
 
-## Test Remote (in the mac app)
-1) SSH reachability check (`ssh -o BatchMode=yes … echo ok`).
-2) If SSH succeeds, the app opens the control tunnel and issues a `health` request; success marks the remote as ready.
+With the tunnel up:
+- `clawdis health` and `clawdis status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
+- `clawdis gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
 
-## Security
-- Control server listens only on localhost.
-- SSH tunneling reuses existing keys/agent; no additional auth is added by the control server.
+## WebChat over SSH
 
-## Files to keep in sync
-- Protocol definition: `docs/control-api.md`.
-- App connection logic: macOS `Remote over SSH` plumbing.
-- Gateway control server: lives inside the Node gateway process.
+Forward both the WebChat HTTP port and the Gateway WS port:
+
+```bash
+ssh -N \
+  -L 18788:127.0.0.1:18788 \
+  -L 18789:127.0.0.1:18789 \
+  user@host
+```
+
+Then open `http://127.0.0.1:18788/webchat/` locally. (Details: `docs/webchat.md`.)
+
+## macOS app “Remote over SSH”
+
+The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
+
+Runbook: `docs/mac/remote.md`.
+
+## Legacy control channel
+
+Older builds experimented with a newline-delimited TCP control channel on the same port.
+That API is deprecated and should not be relied on. (Historical reference: `docs/control-api.md`.)
