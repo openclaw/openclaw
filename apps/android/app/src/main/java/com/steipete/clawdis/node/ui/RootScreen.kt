@@ -3,9 +3,12 @@ package com.steipete.clawdis.node.ui
 import android.annotation.SuppressLint
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -26,7 +29,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.zIndex
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.steipete.clawdis.node.MainViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -37,23 +41,22 @@ fun RootScreen(viewModel: MainViewModel) {
   val safeButtonInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
   Box(modifier = Modifier.fillMaxSize()) {
-    CanvasView(viewModel = viewModel, modifier = Modifier.fillMaxSize().zIndex(0f))
+    CanvasView(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+  }
 
-    Box(
+  // Keep the overlay buttons above the WebView canvas (AndroidView), otherwise they may not receive touches.
+  Popup(alignment = Alignment.TopCenter, properties = PopupProperties(focusable = false)) {
+    Row(
       modifier =
         Modifier
-          .fillMaxSize()
-          .zIndex(1f)
+          .fillMaxWidth()
           .windowInsetsPadding(safeButtonInsets)
           .padding(12.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
     ) {
-      Box(modifier = Modifier.align(Alignment.TopStart)) {
-        Button(onClick = { sheet = Sheet.Chat }) { Text("Chat") }
-      }
-
-      Box(modifier = Modifier.align(Alignment.TopEnd)) {
-        Button(onClick = { sheet = Sheet.Settings }) { Text("Settings") }
-      }
+      Button(onClick = { sheet = Sheet.Chat }) { Text("Chat") }
+      Button(onClick = { sheet = Sheet.Settings }) { Text("Settings") }
     }
   }
 
@@ -65,7 +68,6 @@ fun RootScreen(viewModel: MainViewModel) {
       when (sheet) {
         Sheet.Chat -> ChatSheet(viewModel = viewModel)
         Sheet.Settings -> SettingsSheet(viewModel = viewModel)
-        null -> {}
       }
     }
   }
