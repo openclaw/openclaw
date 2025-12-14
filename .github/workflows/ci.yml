@@ -138,36 +138,38 @@ jobs:
           RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
           DEST_ID="$(
             python3 - <<'PY'
-import json
-import re
-import subprocess
-import sys
+          import json
+          import re
+          import subprocess
+          import sys
 
-data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True))
-runtimes = []
-for runtime in data.get("devices", {}).keys():
-  m = re.search(r"\\.iOS-(\\d+)-(\\d+)$", runtime)
-  if m:
-    runtimes.append((int(m.group(1)), int(m.group(2)), runtime))
+          data = json.loads(
+            subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"], text=True)
+          )
+          runtimes = []
+          for runtime in data.get("devices", {}).keys():
+            m = re.search(r"\\.iOS-(\\d+)-(\\d+)$", runtime)
+            if m:
+              runtimes.append((int(m.group(1)), int(m.group(2)), runtime))
 
-runtimes.sort(reverse=True)
+          runtimes.sort(reverse=True)
 
-def pick_device(devices):
-  iphones = [d for d in devices if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
-  if not iphones:
-    return None
-  prefer = [d for d in iphones if "iPhone 16" in d.get("name", "")]
-  return (prefer[0] if prefer else iphones[0]).get("udid")
+          def pick_device(devices):
+            iphones = [d for d in devices if d.get("isAvailable") and d.get("name", "").startswith("iPhone")]
+            if not iphones:
+              return None
+            prefer = [d for d in iphones if "iPhone 16" in d.get("name", "")]
+            return (prefer[0] if prefer else iphones[0]).get("udid")
 
-for _, __, runtime in runtimes:
-  udid = pick_device(data["devices"].get(runtime, []))
-  if udid:
-    print(udid)
-    sys.exit(0)
+          for _, __, runtime in runtimes:
+            udid = pick_device(data["devices"].get(runtime, []))
+            if udid:
+              print(udid)
+              sys.exit(0)
 
-print("No available iPhone simulators found.", file=sys.stderr)
-sys.exit(1)
-PY
+          print("No available iPhone simulators found.", file=sys.stderr)
+          sys.exit(1)
+          PY
           )"
           echo "Using iOS Simulator id: $DEST_ID"
           xcodebuild test \
@@ -188,35 +190,35 @@ PY
           set -euo pipefail
           RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
           RESULT_BUNDLE_PATH="$RESULT_BUNDLE_PATH" python3 - <<'PY'
-import json
-import os
-import subprocess
-import sys
+          import json
+          import os
+          import subprocess
+          import sys
 
-target_name = "Clawdis.app"
-minimum = 0.50
+          target_name = "Clawdis.app"
+          minimum = 0.50
 
-report = json.loads(
-    subprocess.check_output(
-        ["xcrun", "xccov", "view", "--report", "--json", os.environ["RESULT_BUNDLE_PATH"]],
-        text=True,
-    )
-)
+          report = json.loads(
+            subprocess.check_output(
+              ["xcrun", "xccov", "view", "--report", "--json", os.environ["RESULT_BUNDLE_PATH"]],
+              text=True,
+            )
+          )
 
-target_coverage = None
-for target in report.get("targets", []):
-    if target.get("name") == target_name:
-        target_coverage = float(target["lineCoverage"])
-        break
+          target_coverage = None
+          for target in report.get("targets", []):
+            if target.get("name") == target_name:
+              target_coverage = float(target["lineCoverage"])
+              break
 
-if target_coverage is None:
-    print(f"Could not find coverage for target: {target_name}")
-    sys.exit(1)
+          if target_coverage is None:
+            print(f"Could not find coverage for target: {target_name}")
+            sys.exit(1)
 
-print(f"{target_name} line coverage: {target_coverage * 100:.2f}% (min {minimum * 100:.2f}%)")
-if target_coverage + 1e-12 < minimum:
-    sys.exit(1)
-PY
+          print(f"{target_name} line coverage: {target_coverage * 100:.2f}% (min {minimum * 100:.2f}%)")
+          if target_coverage + 1e-12 < minimum:
+            sys.exit(1)
+          PY
 
   android:
     runs-on: ubuntu-latest
