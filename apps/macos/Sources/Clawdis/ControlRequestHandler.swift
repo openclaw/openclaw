@@ -3,6 +3,8 @@ import Foundation
 import OSLog
 
 enum ControlRequestHandler {
+    private static let cameraCapture = CameraCaptureService()
+
     static func process(
         request: Request,
         notifier: NotificationManager = NotificationManager(),
@@ -77,6 +79,16 @@ enum ControlRequestHandler {
                 command: command,
                 paramsJSON: paramsJSON,
                 logger: logger)
+
+        case let .cameraSnap(facing, maxWidth, quality, outPath):
+            return await self.handleCameraSnap(facing: facing, maxWidth: maxWidth, quality: quality, outPath: outPath)
+
+        case let .cameraClip(facing, durationMs, includeAudio, outPath):
+            return await self.handleCameraClip(
+                facing: facing,
+                durationMs: durationMs,
+                includeAudio: includeAudio,
+                outPath: outPath)
         }
     }
 
@@ -173,6 +185,10 @@ enum ControlRequestHandler {
         UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
     }
 
+    private static func cameraEnabled() -> Bool {
+        UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+    }
+
     private static func handleCanvasShow(
         session: String,
         path: String?,
@@ -251,6 +267,48 @@ enum ControlRequestHandler {
             return Response(ok: false, message: errText)
         } catch {
             logger.error("node invoke failed: \(error.localizedDescription, privacy: .public)")
+            return Response(ok: false, message: error.localizedDescription)
+        }
+    }
+
+    private static func handleCameraSnap(
+        facing: CameraFacing?,
+        maxWidth: Int?,
+        quality: Double?,
+        outPath: String?) async -> Response
+    {
+        guard self.cameraEnabled() else { return Response(ok: false, message: "Camera disabled by user") }
+        do {
+            let res = try await self.cameraCapture.snap(facing: facing, maxWidth: maxWidth, quality: quality)
+            let url: URL = if let outPath, !outPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                URL(fileURLWithPath: outPath)
+            } else {
+                FileManager.default.temporaryDirectory
+                    .appendingPathComponent("clawdis-camera-snap-\(UUID().uuidString).jpg")
+            }
+
+            try res.data.write(to: url, options: [.atomic])
+            return Response(ok: true, message: url.path)
+        } catch {
+            return Response(ok: false, message: error.localizedDescription)
+        }
+    }
+
+    private static func handleCameraClip(
+        facing: CameraFacing?,
+        durationMs: Int?,
+        includeAudio: Bool,
+        outPath: String?) async -> Response
+    {
+        guard self.cameraEnabled() else { return Response(ok: false, message: "Camera disabled by user") }
+        do {
+            let res = try await self.cameraCapture.clip(
+                facing: facing,
+                durationMs: durationMs,
+                includeAudio: includeAudio,
+                outPath: outPath)
+            return Response(ok: true, message: res.path)
+        } catch {
             return Response(ok: false, message: error.localizedDescription)
         }
     }

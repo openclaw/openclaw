@@ -205,6 +205,37 @@ final class VoiceWakeManager: NSObject, ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
+    /// Temporarily releases the microphone so other subsystems (e.g. camera video capture) can record audio.
+    /// Returns `true` when listening was active and was suspended.
+    func suspendForExternalAudioCapture() -> Bool {
+        guard self.isEnabled, self.isListening else { return false }
+
+        self.isListening = false
+        self.statusText = "Paused"
+
+        self.tapDrainTask?.cancel()
+        self.tapDrainTask = nil
+        self.tapQueue?.clear()
+        self.tapQueue = nil
+
+        self.recognitionTask?.cancel()
+        self.recognitionTask = nil
+        self.recognitionRequest = nil
+
+        if self.audioEngine.isRunning {
+            self.audioEngine.stop()
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+        }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        return true
+    }
+
+    func resumeAfterExternalAudioCapture(wasSuspended: Bool) {
+        guard wasSuspended else { return }
+        Task { await self.start() }
+    }
+
     private func startRecognition() throws {
         self.recognitionTask?.cancel()
         self.recognitionTask = nil

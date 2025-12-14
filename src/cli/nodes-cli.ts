@@ -1,6 +1,13 @@
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  type CameraFacing,
+  cameraTempPath,
+  parseCameraClipPayload,
+  parseCameraSnapPayload,
+  writeBase64ToFile,
+} from "./nodes-camera.js";
 
 type NodesRpcOpts = {
   url?: string;
@@ -12,6 +19,11 @@ type NodesRpcOpts = {
   params?: string;
   invokeTimeout?: string;
   idempotencyKey?: string;
+  facing?: string;
+  maxWidth?: string;
+  quality?: string;
+  duration?: string;
+  audio?: boolean;
 };
 
 type NodeListNode = {
@@ -339,5 +351,204 @@ export function registerNodesCli(program: Command) {
         }
       }),
     { timeoutMs: 30_000 },
+  );
+
+  const parseFacing = (value: string): CameraFacing => {
+    const v = String(value ?? "")
+      .trim()
+      .toLowerCase();
+    if (v === "front" || v === "back") return v;
+    throw new Error(`invalid facing: ${value} (expected front|back)`);
+  };
+
+  const camera = nodes
+    .command("camera")
+    .description("Capture camera media from a paired node");
+
+  nodesCallOpts(
+    camera
+      .command("snap")
+      .description("Capture a photo from a node camera (prints MEDIA:<path>)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--facing <front|back|both>", "Camera facing", "both")
+      .option("--max-width <px>", "Max width in px (optional)")
+      .option("--quality <0-1>", "JPEG quality (default 0.9)")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 20000)",
+        "20000",
+      )
+      .action(async (opts: NodesRpcOpts) => {
+        try {
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const facingOpt = String(opts.facing ?? "both")
+            .trim()
+            .toLowerCase();
+          const facings: CameraFacing[] =
+            facingOpt === "both"
+              ? ["front", "back"]
+              : facingOpt === "front" || facingOpt === "back"
+                ? [facingOpt]
+                : (() => {
+                    throw new Error(
+                      `invalid facing: ${String(opts.facing)} (expected front|back|both)`,
+                    );
+                  })();
+
+          const maxWidth = opts.maxWidth
+            ? Number.parseInt(String(opts.maxWidth), 10)
+            : undefined;
+          const quality = opts.quality
+            ? Number.parseFloat(String(opts.quality))
+            : undefined;
+          const timeoutMs = opts.invokeTimeout
+            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            : undefined;
+
+          const results: Array<{
+            facing: CameraFacing;
+            path: string;
+            width: number;
+            height: number;
+          }> = [];
+
+          for (const facing of facings) {
+            const invokeParams: Record<string, unknown> = {
+              nodeId,
+              command: "camera.snap",
+              params: {
+                facing,
+                maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
+                quality: Number.isFinite(quality) ? quality : undefined,
+                format: "jpg",
+              },
+              idempotencyKey: randomIdempotencyKey(),
+            };
+            if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+              invokeParams.timeoutMs = timeoutMs;
+            }
+
+            const raw = (await callGatewayCli(
+              "node.invoke",
+              opts,
+              invokeParams,
+            )) as unknown;
+
+            const res =
+              typeof raw === "object" && raw !== null
+                ? (raw as { payload?: unknown })
+                : {};
+            const payload = parseCameraSnapPayload(res.payload);
+            const filePath = cameraTempPath({
+              kind: "snap",
+              facing,
+              ext: payload.format === "jpeg" ? "jpg" : payload.format,
+            });
+            await writeBase64ToFile(filePath, payload.base64);
+            results.push({
+              facing,
+              path: filePath,
+              width: payload.width,
+              height: payload.height,
+            });
+          }
+
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify({ files: results }, null, 2));
+            return;
+          }
+          defaultRuntime.log(results.map((r) => `MEDIA:${r.path}`).join("\n"));
+        } catch (err) {
+          defaultRuntime.error(`nodes camera snap failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+    { timeoutMs: 60_000 },
+  );
+
+  nodesCallOpts(
+    camera
+      .command("clip")
+      .description(
+        "Capture a short video clip from a node camera (prints MEDIA:<path>)",
+      )
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--facing <front|back>", "Camera facing", "front")
+      .option("--duration <ms>", "Duration in ms (default 3000)", "3000")
+      .option("--no-audio", "Disable audio capture")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 45000)",
+        "45000",
+      )
+      .action(async (opts: NodesRpcOpts & { audio?: boolean }) => {
+        try {
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const facing = parseFacing(String(opts.facing ?? "front"));
+          const durationMs = Number.parseInt(
+            String(opts.duration ?? "3000"),
+            10,
+          );
+          const includeAudio = opts.audio !== false;
+          const timeoutMs = opts.invokeTimeout
+            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            : undefined;
+
+          const invokeParams: Record<string, unknown> = {
+            nodeId,
+            command: "camera.clip",
+            params: {
+              facing,
+              durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+              includeAudio,
+              format: "mp4",
+            },
+            idempotencyKey: randomIdempotencyKey(),
+          };
+          if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
+            invokeParams.timeoutMs = timeoutMs;
+          }
+
+          const raw = (await callGatewayCli(
+            "node.invoke",
+            opts,
+            invokeParams,
+          )) as unknown;
+          const res =
+            typeof raw === "object" && raw !== null
+              ? (raw as { payload?: unknown })
+              : {};
+          const payload = parseCameraClipPayload(res.payload);
+          const filePath = cameraTempPath({
+            kind: "clip",
+            facing,
+            ext: payload.format,
+          });
+          await writeBase64ToFile(filePath, payload.base64);
+
+          if (opts.json) {
+            defaultRuntime.log(
+              JSON.stringify(
+                {
+                  file: {
+                    facing,
+                    path: filePath,
+                    durationMs: payload.durationMs,
+                    hasAudio: payload.hasAudio,
+                  },
+                },
+                null,
+                2,
+              ),
+            );
+            return;
+          }
+          defaultRuntime.log(`MEDIA:${filePath}`);
+        } catch (err) {
+          defaultRuntime.error(`nodes camera clip failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+    { timeoutMs: 90_000 },
   );
 }

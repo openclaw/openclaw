@@ -98,6 +98,8 @@ cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
     <string>Clawdis needs notification permission to show alerts for agent actions.</string>
     <key>NSScreenCaptureDescription</key>
     <string>Clawdis captures the screen when the agent needs screenshots for context.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Clawdis can capture photos or short video clips when requested by the agent.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Clawdis needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

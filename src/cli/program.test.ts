@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendCommand = vi.fn();
@@ -147,5 +148,146 @@ describe("cli program", () => {
       }),
     );
     expect(runtime.log).toHaveBeenCalled();
+  });
+
+  it("runs nodes camera snap and prints two MEDIA paths", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "ios-node",
+            displayName: "iOS Node",
+            remoteIp: "192.168.0.88",
+            connected: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "ios-node",
+        command: "camera.snap",
+        payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "ios-node",
+        command: "camera.snap",
+        payload: { format: "jpg", base64: "aGk=", width: 1, height: 1 },
+      });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(
+      ["nodes", "camera", "snap", "--node", "ios-node"],
+      {
+        from: "user",
+      },
+    );
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "node.invoke",
+        params: expect.objectContaining({
+          nodeId: "ios-node",
+          command: "camera.snap",
+          timeoutMs: 20000,
+          idempotencyKey: "idem-test",
+          params: expect.objectContaining({ facing: "front", format: "jpg" }),
+        }),
+      }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        method: "node.invoke",
+        params: expect.objectContaining({
+          nodeId: "ios-node",
+          command: "camera.snap",
+          timeoutMs: 20000,
+          idempotencyKey: "idem-test",
+          params: expect.objectContaining({ facing: "back", format: "jpg" }),
+        }),
+      }),
+    );
+
+    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const mediaPaths = out
+      .split("\n")
+      .filter((l) => l.startsWith("MEDIA:"))
+      .map((l) => l.replace(/^MEDIA:/, ""))
+      .filter(Boolean);
+    expect(mediaPaths).toHaveLength(2);
+
+    try {
+      for (const p of mediaPaths) {
+        await expect(fs.readFile(p, "utf8")).resolves.toBe("hi");
+      }
+    } finally {
+      await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
+    }
+  });
+
+  it("runs nodes camera clip and prints one MEDIA path", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "ios-node",
+            displayName: "iOS Node",
+            remoteIp: "192.168.0.88",
+            connected: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "ios-node",
+        command: "camera.clip",
+        payload: {
+          format: "mp4",
+          base64: "aGk=",
+          durationMs: 3000,
+          hasAudio: true,
+        },
+      });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(
+      ["nodes", "camera", "clip", "--node", "ios-node", "--duration", "3000"],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "node.invoke",
+        params: expect.objectContaining({
+          nodeId: "ios-node",
+          command: "camera.clip",
+          timeoutMs: 45000,
+          idempotencyKey: "idem-test",
+          params: expect.objectContaining({
+            facing: "front",
+            durationMs: 3000,
+            includeAudio: true,
+            format: "mp4",
+          }),
+        }),
+      }),
+    );
+
+    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const mediaPath = out.replace(/^MEDIA:/, "").trim();
+    expect(mediaPath).toMatch(/clawdis-camera-clip-front-.*\.mp4$/);
+
+    try {
+      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
+    } finally {
+      await fs.unlink(mediaPath).catch(() => {});
+    }
   });
 });

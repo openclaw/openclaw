@@ -6,6 +6,7 @@ import SwiftUI
 final class NodeAppModel: ObservableObject {
     @Published var isBackgrounded: Bool = false
     let screen = ScreenController()
+    let camera = CameraController()
     @Published var bridgeStatusText: String = "Not connected"
     @Published var bridgeServerName: String?
     @Published var bridgeRemoteAddress: String?
@@ -182,13 +183,22 @@ final class NodeAppModel: ObservableObject {
     }
 
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
-        if req.command.hasPrefix("screen."), self.isBackgrounded {
+        if req.command.hasPrefix("screen.") || req.command.hasPrefix("camera."), self.isBackgrounded {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
                 error: ClawdisNodeError(
                     code: .backgroundUnavailable,
-                    message: "NODE_BACKGROUND_UNAVAILABLE: screen commands require foreground"))
+                    message: "NODE_BACKGROUND_UNAVAILABLE: screen/camera commands require foreground"))
+        }
+
+        if req.command.hasPrefix("camera."), !self.isCameraEnabled() {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdisNodeError(
+                    code: .unavailable,
+                    message: "CAMERA_DISABLED: enable Camera in iOS Settings → Camera → Allow Camera"))
         }
 
         do {
@@ -222,6 +232,46 @@ final class NodeAppModel: ObservableObject {
                 let payload = try Self.encodePayload(["format": "png", "base64": base64])
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
+            case ClawdisCameraCommand.snap.rawValue:
+                let params = (try? Self.decodeParams(ClawdisCameraSnapParams.self, from: req.paramsJSON)) ??
+                    ClawdisCameraSnapParams()
+                let res = try await self.camera.snap(params: params)
+
+                struct Payload: Codable {
+                    var format: String
+                    var base64: String
+                    var width: Int
+                    var height: Int
+                }
+                let payload = try Self.encodePayload(Payload(
+                    format: res.format,
+                    base64: res.base64,
+                    width: res.width,
+                    height: res.height))
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisCameraCommand.clip.rawValue:
+                let params = (try? Self.decodeParams(ClawdisCameraClipParams.self, from: req.paramsJSON)) ??
+                    ClawdisCameraClipParams()
+
+                let suspended = (params.includeAudio ?? true) ? self.voiceWake.suspendForExternalAudioCapture() : false
+                defer { self.voiceWake.resumeAfterExternalAudioCapture(wasSuspended: suspended) }
+
+                let res = try await self.camera.clip(params: params)
+
+                struct Payload: Codable {
+                    var format: String
+                    var base64: String
+                    var durationMs: Int
+                    var hasAudio: Bool
+                }
+                let payload = try Self.encodePayload(Payload(
+                    format: res.format,
+                    base64: res.base64,
+                    durationMs: res.durationMs,
+                    hasAudio: res.hasAudio))
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
             default:
                 return BridgeInvokeResponse(
                     id: req.id,
@@ -253,5 +303,11 @@ final class NodeAppModel: ObservableObject {
             ])
         }
         return json
+    }
+
+    private func isCameraEnabled() -> Bool {
+        // Default-on: if the key doesn't exist yet, treat it as enabled.
+        if UserDefaults.standard.object(forKey: "camera.enabled") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "camera.enabled")
     }
 }

@@ -54,5 +54,6 @@ targets:
         NSLocalNetworkUsageDescription: Clawdis discovers and connects to your Clawdis bridge on the local network.
         NSBonjourServices:
           - _clawdis-bridge._tcp
+        NSCameraUsageDescription: Clawdis can capture photos or short video clips when requested via the bridge.
         NSMicrophoneUsageDescription: Clawdis needs microphone access for voice wake.
         NSSpeechRecognitionUsageDescription: Clawdis uses on-device speech recognition for voice wake.

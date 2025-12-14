@@ -52,6 +52,7 @@ struct ClawdisCLI {
 
         enum Kind {
             case generic
+            case mediaPath
         }
     }
 
@@ -90,6 +91,9 @@ struct ClawdisCLI {
 
         case "canvas":
             return try self.parseCanvas(args: &args)
+
+        case "camera":
+            return try self.parseCamera(args: &args)
 
         default:
             throw CLIError.help
@@ -292,6 +296,62 @@ struct ClawdisCLI {
         }
     }
 
+    private static func parseCamera(args: inout [String]) throws -> ParsedCLIRequest {
+        guard let sub = args.popFirst() else { throw CLIError.help }
+        switch sub {
+        case "snap":
+            var facing: CameraFacing?
+            var maxWidth: Int?
+            var quality: Double?
+            var outPath: String?
+            while !args.isEmpty {
+                let arg = args.removeFirst()
+                switch arg {
+                case "--facing":
+                    if let val = args.popFirst(), let f = CameraFacing(rawValue: val) { facing = f }
+                case "--max-width":
+                    maxWidth = args.popFirst().flatMap(Int.init)
+                case "--quality":
+                    quality = args.popFirst().flatMap(Double.init)
+                case "--out":
+                    outPath = args.popFirst()
+                default:
+                    break
+                }
+            }
+            return ParsedCLIRequest(
+                request: .cameraSnap(facing: facing, maxWidth: maxWidth, quality: quality, outPath: outPath),
+                kind: .mediaPath)
+
+        case "clip":
+            var facing: CameraFacing?
+            var durationMs: Int?
+            var includeAudio = true
+            var outPath: String?
+            while !args.isEmpty {
+                let arg = args.removeFirst()
+                switch arg {
+                case "--facing":
+                    if let val = args.popFirst(), let f = CameraFacing(rawValue: val) { facing = f }
+                case "--duration-ms":
+                    durationMs = args.popFirst().flatMap(Int.init)
+                case "--no-audio":
+                    includeAudio = false
+                case "--out":
+                    outPath = args.popFirst()
+                default:
+                    break
+                }
+            }
+            return ParsedCLIRequest(
+                request: .cameraClip(facing: facing, durationMs: durationMs, includeAudio: includeAudio, outPath: outPath),
+                kind: .mediaPath)
+
+        default:
+            throw CLIError.help
+        }
+    }
+
     private static func parseCanvasPlacement(
         args: inout [String],
         session: inout String,
@@ -334,6 +394,10 @@ struct ClawdisCLI {
             if let message = response.message, !message.isEmpty {
                 FileHandle.standardOutput.write(Data((message + "\n").utf8))
             }
+        case .mediaPath:
+            if let message = response.message, !message.isEmpty {
+                print("MEDIA:\(message)")
+            }
         }
     }
 
@@ -352,6 +416,8 @@ struct ClawdisCLI {
                     output["payload"] = text
                 }
             }
+        case .mediaPath:
+            break
         }
 
         let json = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted])
@@ -406,6 +472,10 @@ struct ClawdisCLI {
             clawdis-mac canvas eval --js <code> [--session <key>]
             clawdis-mac canvas snapshot [--out <path>] [--session <key>]
 
+          Camera:
+            clawdis-mac camera snap [--facing <front|back>] [--max-width <px>] [--quality <0-1>] [--out <path>]
+            clawdis-mac camera clip [--facing <front|back>] [--duration-ms <ms>] [--no-audio] [--out <path>]
+
           Browser (clawd):
             clawdis-mac browser status|start|stop|tabs|open|focus|close|screenshot|eval|query|dom|snapshot
 
@@ -433,6 +503,7 @@ struct ClawdisCLI {
         Output:
           Default output is text. Use --json for machine-readable output.
           In text mode, `browser screenshot` prints MEDIA:<path>.
+          In text mode, `camera snap` and `camera clip` print MEDIA:<path>.
         """
         print(usage)
     }

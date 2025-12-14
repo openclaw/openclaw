@@ -26,6 +26,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Clawdis discovers and connects to your Clawdis bridge on the local network.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Clawdis can capture photos or short video clips when requested via the bridge.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clawdis needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

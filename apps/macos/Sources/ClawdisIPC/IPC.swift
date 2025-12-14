@@ -13,6 +13,11 @@ public enum Capability: String, Codable, CaseIterable, Sendable {
     case speechRecognition
 }
 
+public enum CameraFacing: String, Codable, Sendable {
+    case front
+    case back
+}
+
 // MARK: - Requests
 
 /// Notification interruption level (maps to UNNotificationInterruptionLevel)
@@ -74,6 +79,8 @@ public enum Request: Sendable {
     case canvasSnapshot(session: String, outPath: String?)
     case nodeList
     case nodeInvoke(nodeId: String, command: String, paramsJSON: String?)
+    case cameraSnap(facing: CameraFacing?, maxWidth: Int?, quality: Double?, outPath: String?)
+    case cameraClip(facing: CameraFacing?, durationMs: Int?, includeAudio: Bool, outPath: String?)
 }
 
 // MARK: - Responses
@@ -104,6 +111,11 @@ extension Request: Codable {
         case path
         case javaScript
         case outPath
+        case facing
+        case maxWidth
+        case quality
+        case durationMs
+        case includeAudio
         case placement
         case nodeId
         case nodeCommand
@@ -124,6 +136,8 @@ extension Request: Codable {
         case canvasSnapshot
         case nodeList
         case nodeInvoke
+        case cameraSnap
+        case cameraClip
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -198,6 +212,20 @@ extension Request: Codable {
             try container.encode(nodeId, forKey: .nodeId)
             try container.encode(command, forKey: .nodeCommand)
             try container.encodeIfPresent(paramsJSON, forKey: .paramsJSON)
+
+        case let .cameraSnap(facing, maxWidth, quality, outPath):
+            try container.encode(Kind.cameraSnap, forKey: .type)
+            try container.encodeIfPresent(facing, forKey: .facing)
+            try container.encodeIfPresent(maxWidth, forKey: .maxWidth)
+            try container.encodeIfPresent(quality, forKey: .quality)
+            try container.encodeIfPresent(outPath, forKey: .outPath)
+
+        case let .cameraClip(facing, durationMs, includeAudio, outPath):
+            try container.encode(Kind.cameraClip, forKey: .type)
+            try container.encodeIfPresent(facing, forKey: .facing)
+            try container.encodeIfPresent(durationMs, forKey: .durationMs)
+            try container.encode(includeAudio, forKey: .includeAudio)
+            try container.encodeIfPresent(outPath, forKey: .outPath)
         }
     }
 
@@ -274,6 +302,20 @@ extension Request: Codable {
             let command = try container.decode(String.self, forKey: .nodeCommand)
             let paramsJSON = try container.decodeIfPresent(String.self, forKey: .paramsJSON)
             self = .nodeInvoke(nodeId: nodeId, command: command, paramsJSON: paramsJSON)
+
+        case .cameraSnap:
+            let facing = try container.decodeIfPresent(CameraFacing.self, forKey: .facing)
+            let maxWidth = try container.decodeIfPresent(Int.self, forKey: .maxWidth)
+            let quality = try container.decodeIfPresent(Double.self, forKey: .quality)
+            let outPath = try container.decodeIfPresent(String.self, forKey: .outPath)
+            self = .cameraSnap(facing: facing, maxWidth: maxWidth, quality: quality, outPath: outPath)
+
+        case .cameraClip:
+            let facing = try container.decodeIfPresent(CameraFacing.self, forKey: .facing)
+            let durationMs = try container.decodeIfPresent(Int.self, forKey: .durationMs)
+            let includeAudio = (try? container.decode(Bool.self, forKey: .includeAudio)) ?? true
+            let outPath = try container.decodeIfPresent(String.self, forKey: .outPath)
+            self = .cameraClip(facing: facing, durationMs: durationMs, includeAudio: includeAudio, outPath: outPath)
         }
     }
 }
