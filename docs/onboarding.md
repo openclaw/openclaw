@@ -79,7 +79,7 @@ If the user skips auth, onboarding should be clear: the agent likely won’t res
 After auth (or skip), onboarding asks:
 
 1) Agent **name** (e.g. “Samantha”)
-2) Agent **theme/persona** (e.g. “space lobster”, “helpful sloth”)
+2) Agent **theme/persona** (e.g. “helpful lobster”, “helpful sloth”)
 3) Suggested **emoji** (based on theme; user can override)
 
 Persist identity in two places:

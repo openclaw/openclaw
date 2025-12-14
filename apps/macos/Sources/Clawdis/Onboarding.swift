@@ -476,7 +476,7 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Theme")
                         .font(.headline)
-                    TextField("space lobster", text: self.$identityTheme)
+                    TextField("helpful lobster", text: self.$identityTheme)
                         .textFieldStyle(.roundedBorder)
                 }
 

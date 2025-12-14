@@ -69,6 +69,16 @@ enum AgentWorkspace {
 
         This folder is the assistant’s working directory.
 
+        ## Backup tip (recommended)
+        If you treat this workspace as the agent’s “memory”, make it a git repo (ideally private) so your identity
+        and notes are backed up.
+
+        ```bash
+        git init
+        git add AGENTS.md
+        git commit -m "Add agent workspace"
+        ```
+
         ## Safety defaults
         - Don’t exfiltrate secrets or private data.
         - Don’t run destructive commands unless explicitly asked.
