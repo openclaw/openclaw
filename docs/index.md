@@ -20,7 +20,7 @@ read_when:
 <p align="center">
   <a href="https://github.com/steipete/clawdis">GitHub</a> ·
   <a href="https://github.com/steipete/clawdis/releases">Releases</a> ·
-  <a href="./clawd.md">Clawd setup</a>
+  <a href="./clawd">Clawd setup</a>
 </p>
 
 CLAWDIS bridges WhatsApp (via WhatsApp Web / Baileys) and Telegram (Bot API / grammY) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
