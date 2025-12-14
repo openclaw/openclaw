@@ -48,21 +48,34 @@ struct OnboardingView: View {
     @State private var monitoringDiscovery = false
     @State private var cliInstalled = false
     @State private var cliInstallLocation: String?
+    @State private var workspacePath: String = ""
+    @State private var workspaceStatus: String?
+    @State private var workspaceApplying = false
     @State private var gatewayStatus: GatewayEnvironmentStatus = .checking
     @State private var gatewayInstalling = false
     @State private var gatewayInstallMessage: String?
     // swiftlint:disable:next inclusive_language
-    @StateObject private var masterDiscovery = MasterDiscoveryModel()
-    @ObservedObject private var state = AppStateStore.shared
-    @ObservedObject private var permissionMonitor = PermissionMonitor.shared
+    @StateObject private var masterDiscovery: MasterDiscoveryModel
+    @ObservedObject private var state: AppState
+    @ObservedObject private var permissionMonitor: PermissionMonitor
 
     private let pageWidth: CGFloat = 680
     private let contentHeight: CGFloat = 520
     private let connectionPageIndex = 1
     private let permissionsPageIndex = 3
-    private var pageCount: Int { 7 }
+    private var pageCount: Int { 8 }
     private var buttonTitle: String { self.currentPage == self.pageCount - 1 ? "Finish" : "Next" }
     private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
+
+    init(
+        state: AppState = AppStateStore.shared,
+        permissionMonitor: PermissionMonitor = .shared,
+        masterDiscovery: MasterDiscoveryModel = MasterDiscoveryModel())
+    {
+        self._state = ObservedObject(wrappedValue: state)
+        self._permissionMonitor = ObservedObject(wrappedValue: permissionMonitor)
+        self._masterDiscovery = StateObject(wrappedValue: masterDiscovery)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -78,6 +91,7 @@ struct OnboardingView: View {
                     self.gatewayPage().frame(width: self.pageWidth)
                     self.permissionsPage().frame(width: self.pageWidth)
                     self.cliPage().frame(width: self.pageWidth)
+                    self.workspacePage().frame(width: self.pageWidth)
                     self.whatsappPage().frame(width: self.pageWidth)
                     self.readyPage().frame(width: self.pageWidth)
                 }
@@ -112,6 +126,7 @@ struct OnboardingView: View {
             await self.refreshPerms()
             self.refreshCLIStatus()
             self.refreshGatewayStatus()
+            self.loadWorkspaceDefaults()
         }
     }
 
@@ -409,6 +424,90 @@ struct OnboardingView: View {
                         """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func workspacePage() -> some View {
+        self.onboardingPage {
+            Text("Agent workspace")
+                .font(.largeTitle.weight(.semibold))
+            Text(
+                """
+                Clawdis runs the agent from a dedicated workspace so it can load AGENTS.md
+                and write files without touching your other folders.
+                """)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 560)
+                .fixedSize(horizontal: false, vertical: true)
+
+            self.onboardingCard(spacing: 10) {
+                if self.state.connectionMode == .remote {
+                    Text("Remote gateway detected")
+                        .font(.headline)
+                    Text(
+                        "Create the workspace on the remote host (SSH in first). " +
+                            "The macOS app can’t write files on your gateway over SSH yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    Button(self.copied ? "Copied" : "Copy setup command") {
+                        self.copyToPasteboard(self.workspaceBootstrapCommand)
+                    }
+                    .buttonStyle(.bordered)
+                } else {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Workspace folder")
+                            .font(.headline)
+                        TextField(
+                            AgentWorkspace.displayPath(for: ClawdisConfigFile.defaultWorkspaceURL()),
+                            text: self.$workspacePath)
+                            .textFieldStyle(.roundedBorder)
+
+                        HStack(spacing: 12) {
+                            Button {
+                                Task { await self.applyWorkspace() }
+                            } label: {
+                                if self.workspaceApplying {
+                                    ProgressView()
+                                } else {
+                                    Text("Create workspace")
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(self.workspaceApplying)
+
+                            Button("Open folder") {
+                                let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+                                NSWorkspace.shared.open(url)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(self.workspaceApplying)
+
+                            Button("Save in config") {
+                                let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+                                ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: url))
+                                self.workspaceStatus = "Saved to ~/.clawdis/clawdis.json (inbound.workspace)"
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(self.workspaceApplying)
+                        }
+                    }
+
+                    if let workspaceStatus {
+                        Text(workspaceStatus)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    } else {
+                        Text("Tip: edit AGENTS.md in this folder to shape the assistant’s behavior.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
             }
         }
@@ -754,6 +853,38 @@ struct OnboardingView: View {
         pb.setString(text, forType: .string)
         self.copied = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { self.copied = false }
+    }
+
+    private func loadWorkspaceDefaults() {
+        guard self.workspacePath.isEmpty else { return }
+        let configured = ClawdisConfigFile.inboundWorkspace()
+        let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
+        self.workspacePath = AgentWorkspace.displayPath(for: url)
+    }
+
+    private var workspaceBootstrapCommand: String {
+        let template = AgentWorkspace.defaultTemplate().trimmingCharacters(in: .whitespacesAndNewlines)
+        return """
+        mkdir -p ~/.clawdis/workspace
+        cat > ~/.clawdis/workspace/AGENTS.md <<'EOF'
+        \(template)
+        EOF
+        """
+    }
+
+    private func applyWorkspace() async {
+        guard !self.workspaceApplying else { return }
+        self.workspaceApplying = true
+        defer { self.workspaceApplying = false }
+
+        do {
+            let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+            _ = try AgentWorkspace.bootstrap(workspaceURL: url)
+            self.workspacePath = AgentWorkspace.displayPath(for: url)
+            self.workspaceStatus = "Workspace ready at \(self.workspacePath)"
+        } catch {
+            self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
+        }
     }
 }
 

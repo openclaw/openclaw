@@ -90,23 +90,23 @@ Now message the assistant number from your allowlisted phone.
 
 ## Give the agent a workspace (AGENTS.md)
 
-Pi (the bundled coding agent) will read operating instructions and “memory” from the current working directory. For a good first-run experience, create a dedicated workspace and drop an `AGENTS.md` there.
+Pi (the bundled coding agent) will read operating instructions and “memory” from its current working directory.
+
+By default, Clawdis uses `~/.clawdis/workspace` as the agent workspace, and will create it (plus a starter `AGENTS.md`) automatically on first agent run.
 
 From the CLAWDIS repo:
 
 ```bash
-mkdir -p ~/clawd
-cp docs/AGENTS.default.md ~/clawd/AGENTS.md
+mkdir -p ~/.clawdis/workspace
+cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
 ```
 
-Then set `inbound.reply.cwd` to that directory (supports `~`):
+Optional: choose a different workspace with `inbound.workspace` (supports `~`). `inbound.reply.cwd` still works and overrides it.
 
 ```json5
 {
   inbound: {
-    reply: {
-      cwd: "~/clawd"
-    }
+    workspace: "~/clawd"
   }
 }
 ```
@@ -133,8 +133,6 @@ Example:
       mode: "command",
       // Pi is bundled; CLAWDIS forces --mode rpc for Pi runs.
       command: ["pi", "--mode", "rpc", "{{BodyStripped}}"],
-      // Run the agent from your dedicated workspace (AGENTS.md, memory files, etc).
-      cwd: "~/clawd",
       timeoutSeconds: 1800,
       bodyPrefix: "/think:high ",
       session: {

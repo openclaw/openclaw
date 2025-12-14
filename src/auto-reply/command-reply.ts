@@ -362,6 +362,15 @@ export async function runCommandReply(
     typeof reply.cwd === "string" && reply.cwd.trim()
       ? resolveUserPath(reply.cwd)
       : undefined;
+  if (resolvedCwd) {
+    try {
+      await fs.mkdir(resolvedCwd, { recursive: true });
+    } catch (err) {
+      throw new Error(
+        `Failed to create reply.cwd directory (${resolvedCwd}): ${String(err)}`,
+      );
+    }
+  }
 
   if (!reply.command?.length) {
     throw new Error("reply.command is required for mode=command");

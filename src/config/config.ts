@@ -89,6 +89,8 @@ export type ClawdisConfig = {
   browser?: BrowserConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
+    /** Agent working directory (preferred). Used as the default cwd for agent runs. */
+    workspace?: string;
     messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
     responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
     timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
@@ -228,6 +230,7 @@ const ClawdisSchema = z.object({
   inbound: z
     .object({
       allowFrom: z.array(z.string()).optional(),
+      workspace: z.string().optional(),
       messagePrefix: z.string().optional(),
       responsePrefix: z.string().optional(),
       timestampPrefix: z.union([z.boolean(), z.string()]).optional(),

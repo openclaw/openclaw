@@ -17,7 +17,7 @@ If you don’t configure `inbound.reply`, CLAWDIS uses the bundled Pi binary in 
 
 This is usually enough for a personal assistant setup; add `inbound.allowFrom` to restrict who can trigger it.
 
-If you keep an `AGENTS.md` (and optional “memory” files) for the agent, set `inbound.reply.cwd` to that workspace so Pi runs with the right context.
+If you keep an `AGENTS.md` (and optional “memory” files) for the agent, set `inbound.workspace` (preferred) or `inbound.reply.cwd` so Pi runs with the right context.
 
 ## Custom agent command (still Pi)
 

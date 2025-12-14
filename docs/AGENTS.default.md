@@ -8,26 +8,26 @@ read_when:
 
 ## First run (recommended)
 
-1) Create a dedicated workspace for your assistant (where it can read/write files):
+Clawdis uses a dedicated workspace directory for the agent. Default: `~/.clawdis/workspace`.
+
+1) Create the workspace (if it doesn’t already exist):
 
 ```bash
-mkdir -p ~/clawd
+mkdir -p ~/.clawdis/workspace
 ```
 
-2) Copy this template to your workspace root as `AGENTS.md`:
+2) Copy this template into the workspace as `AGENTS.md` (overwrites any existing file):
 
 ```bash
-cp docs/AGENTS.default.md ~/clawd/AGENTS.md
+cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
 ```
 
-3) Point CLAWDIS at that workspace so Pi runs with the right context:
+3) Optional: choose a different workspace by setting `inbound.workspace` (supports `~`):
 
 ```json5
 {
   inbound: {
-    reply: {
-      cwd: "~/clawd"
-    }
+    workspace: "~/clawd"
   }
 }
 ```

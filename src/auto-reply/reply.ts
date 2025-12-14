@@ -3,6 +3,10 @@ import crypto from "node:crypto";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
 import { resolveBundledPiBinary } from "../agents/pi-path.js";
+import {
+  DEFAULT_AGENT_WORKSPACE_DIR,
+  ensureAgentWorkspace,
+} from "../agents/workspace.js";
 import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
@@ -18,6 +22,7 @@ import { buildProviderSummary } from "../infra/provider-summary.js";
 import { triggerClawdisRestart } from "../infra/restart.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
 import { runCommandReply } from "./command-reply.js";
@@ -43,6 +48,8 @@ const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
 
 type ReplyConfig = NonNullable<ClawdisConfig["inbound"]>["reply"];
+
+type ResolvedReplyConfig = NonNullable<ReplyConfig>;
 
 export function extractThinkDirective(body?: string): {
   cleaned: string;
@@ -136,7 +143,7 @@ function stripMentions(
   return result.replace(/\s+/g, " ").trim();
 }
 
-function makeDefaultPiReply(): ReplyConfig {
+function makeDefaultPiReply(): ResolvedReplyConfig {
   const piBin = resolveBundledPiBinary() ?? "pi";
   const defaultContext =
     lookupContextTokens(DEFAULT_MODEL) ?? DEFAULT_CONTEXT_TOKENS;
@@ -165,8 +172,21 @@ export async function getReplyFromConfig(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   // Choose reply from config: static text or external command stdout.
   const cfg = configOverride ?? loadConfig();
-  const reply: ReplyConfig = cfg.inbound?.reply ?? makeDefaultPiReply();
-  const timeoutSeconds = Math.max(reply?.timeoutSeconds ?? 600, 1);
+  const workspaceDir = cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const configuredReply = cfg.inbound?.reply as ResolvedReplyConfig | undefined;
+  const reply: ResolvedReplyConfig = configuredReply
+    ? { ...configuredReply, cwd: configuredReply.cwd ?? workspaceDir }
+    : { ...makeDefaultPiReply(), cwd: workspaceDir };
+
+  // Bootstrap the workspace (and a starter AGENTS.md) only when we actually run from it.
+  if (reply.mode === "command" && typeof reply.cwd === "string") {
+    const resolvedWorkspace = resolveUserPath(workspaceDir);
+    const resolvedCwd = resolveUserPath(reply.cwd);
+    if (resolvedCwd === resolvedWorkspace) {
+      await ensureAgentWorkspace({ dir: workspaceDir, ensureAgentsFile: true });
+    }
+  }
+  const timeoutSeconds = Math.max(reply.timeoutSeconds ?? 600, 1);
   const timeoutMs = timeoutSeconds * 1000;
   let started = false;
   const triggerTyping = async () => {

@@ -7,6 +7,12 @@ enum ClawdisConfigFile {
             .appendingPathComponent("clawdis.json")
     }
 
+    static func defaultWorkspaceURL() -> URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".clawdis")
+            .appendingPathComponent("workspace", isDirectory: true)
+    }
+
     static func loadDict() -> [String: Any] {
         let url = self.url()
         guard let data = try? Data(contentsOf: url) else { return [:] }
@@ -35,6 +41,25 @@ enum ClawdisConfigFile {
         var browser = root["browser"] as? [String: Any] ?? [:]
         browser["enabled"] = enabled
         root["browser"] = browser
+        self.saveDict(root)
+    }
+
+    static func inboundWorkspace() -> String? {
+        let root = self.loadDict()
+        let inbound = root["inbound"] as? [String: Any]
+        return inbound?["workspace"] as? String
+    }
+
+    static func setInboundWorkspace(_ workspace: String?) {
+        var root = self.loadDict()
+        var inbound = root["inbound"] as? [String: Any] ?? [:]
+        let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            inbound.removeValue(forKey: "workspace")
+        } else {
+            inbound["workspace"] = trimmed
+        }
+        root["inbound"] = inbound
         self.saveDict(root)
     }
 }

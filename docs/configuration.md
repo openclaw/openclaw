@@ -77,13 +77,15 @@ Example command-mode config:
 ```json5
 {
   inbound: {
+    // Preferred: the agent workspace directory (used as default cwd for agent runs; supports ~).
+    workspace: "~/.clawdis/workspace",
     reply: {
       mode: "command",
       // Example: run the bundled agent (Pi) in RPC mode
       command: ["pi", "--mode", "rpc", "{{BodyStripped}}"],
-      // Optional: run the agent from a specific working directory (supports ~).
-      // Useful when you keep an AGENTS.md + memory files in a dedicated workspace.
-      cwd: "~/clawd",
+      // Optional override: working directory for this reply command (supports ~).
+      // If omitted, `inbound.workspace` is used.
+      cwd: "~/.clawdis/workspace",
       timeoutSeconds: 1800,
       heartbeatMinutes: 30,
       // Optional: override the command used for heartbeat runs
@@ -107,8 +109,8 @@ Example command-mode config:
 ```
 
 Notes:
-- `inbound.reply.cwd` sets the working directory for the reply command (and Pi RPC). It supports `~` and is resolved to an absolute path.
-- If you don’t set it, the agent runs from the Gateway’s current directory (often not what you want for a “personal assistant” workspace).
+- `inbound.workspace` sets the default working directory for agent runs (supports `~` and is resolved to an absolute path).
+- `inbound.reply.cwd` overrides the working directory for that specific reply command.
 
 ### `browser` (clawd-managed Chrome)
 
