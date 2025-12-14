@@ -137,15 +137,14 @@ enum PiOAuthStore {
 
     static func saveAnthropicOAuth(_ creds: AnthropicOAuthCredentials) throws {
         let url = self.oauthURL()
-        let existing: [String: Any]
-        if FileManager.default.fileExists(atPath: url.path),
-           let data = try? Data(contentsOf: url),
-           let json = try? JSONSerialization.jsonObject(with: data, options: []),
-           let dict = json as? [String: Any]
+        let existing: [String: Any] = if FileManager.default.fileExists(atPath: url.path),
+                                         let data = try? Data(contentsOf: url),
+                                         let json = try? JSONSerialization.jsonObject(with: data, options: []),
+                                         let dict = json as? [String: Any]
         {
-            existing = dict
+            dict
         } else {
-            existing = [:]
+            [:]
         }
 
         var updated = existing

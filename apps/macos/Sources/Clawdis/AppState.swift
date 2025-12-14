@@ -333,7 +333,7 @@ final class AppState {
                 _ = try await GatewayConnection.shared.request(
                     method: "voicewake.set",
                     params: ["triggers": AnyCodable(sanitized)],
-                    timeoutMs: 10_000)
+                    timeoutMs: 10000)
             } catch {
                 // Best-effort only.
             }
