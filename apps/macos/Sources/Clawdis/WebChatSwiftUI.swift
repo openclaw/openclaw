@@ -33,7 +33,7 @@ struct MacGatewayChatTransport: ClawdisChatTransport, Sendable {
             "message": AnyCodable(message),
             "thinking": AnyCodable(thinking),
             "idempotencyKey": AnyCodable(idempotencyKey),
-            "timeoutMs": AnyCodable(30_000),
+            "timeoutMs": AnyCodable(30000),
         ]
 
         if !attachments.isEmpty {

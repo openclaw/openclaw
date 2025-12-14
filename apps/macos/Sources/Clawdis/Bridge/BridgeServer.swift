@@ -1,6 +1,6 @@
 import AppKit
-import ClawdisProtocol
 import ClawdisKit
+import ClawdisProtocol
 import Foundation
 import Network
 import OSLog
@@ -174,6 +174,7 @@ actor BridgeServer {
                 deliver: false,
                 to: nil,
                 channel: "last")
+
         case "agent.request":
             guard let json = evt.payloadJSON, let data = json.data(using: .utf8) else {
                 return
@@ -199,6 +200,7 @@ actor BridgeServer {
                 deliver: link.deliver,
                 to: to,
                 channel: channel ?? "last")
+
         default:
             break
         }
@@ -234,7 +236,7 @@ actor BridgeServer {
         }
 
         do {
-            let data = try await GatewayConnection.shared.request(method: req.method, params: params, timeoutMs: 30_000)
+            let data = try await GatewayConnection.shared.request(method: req.method, params: params, timeoutMs: 30000)
             guard let json = String(data: data, encoding: .utf8) else {
                 return BridgeRPCResponse(
                     id: req.id,
@@ -303,7 +305,8 @@ actor BridgeServer {
                 let payloadJSON = payloadData.flatMap { String(data: $0, encoding: .utf8) }
 
                 struct MinimalChat: Codable { var sessionKey: String }
-                let sessionKey = payloadData.flatMap { try? JSONDecoder().decode(MinimalChat.self, from: $0) }?.sessionKey
+                let sessionKey = payloadData.flatMap { try? JSONDecoder().decode(MinimalChat.self, from: $0) }?
+                    .sessionKey
                 if let sessionKey {
                     for nodeId in subscribedNodes {
                         guard self.chatSubscriptions[nodeId]?.contains(sessionKey) == true else { continue }

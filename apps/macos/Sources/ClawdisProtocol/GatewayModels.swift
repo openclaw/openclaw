@@ -482,28 +482,35 @@ public struct NodePairVerifyParams: Codable {
     }
 }
 
+public struct NodeListParams: Codable {
+}
+
 public struct NodeInvokeParams: Codable {
     public let nodeid: String
     public let command: String
     public let params: AnyCodable?
     public let timeoutms: Int?
+    public let idempotencykey: String
 
     public init(
         nodeid: String,
         command: String,
         params: AnyCodable?,
-        timeoutms: Int?
+        timeoutms: Int?,
+        idempotencykey: String
     ) {
         self.nodeid = nodeid
         self.command = command
         self.params = params
         self.timeoutms = timeoutms
+        self.idempotencykey = idempotencykey
     }
     private enum CodingKeys: String, CodingKey {
         case nodeid = "nodeId"
         case command
         case params
         case timeoutms = "timeoutMs"
+        case idempotencykey = "idempotencyKey"
     }
 }
 

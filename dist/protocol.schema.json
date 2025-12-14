@@ -181,6 +181,10 @@
                     "minLength": 1,
                     "type": "string"
                   },
+                  "platform": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
                   "mode": {
                     "minLength": 1,
                     "type": "string"
@@ -530,6 +534,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "platform": {
+          "minLength": 1,
+          "type": "string"
+        },
         "mode": {
           "minLength": 1,
           "type": "string"
@@ -602,6 +610,10 @@
                 "type": "string"
               },
               "version": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "platform": {
                 "minLength": 1,
                 "type": "string"
               },
@@ -904,6 +916,39 @@
       "required": [
         "nodeId",
         "token"
+      ]
+    },
+    "NodeListParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {}
+    },
+    "NodeInvokeParams": {
+      "additionalProperties": false,
+      "type": "object",
+      "properties": {
+        "nodeId": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "command": {
+          "minLength": 1,
+          "type": "string"
+        },
+        "params": {},
+        "timeoutMs": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "idempotencyKey": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "nodeId",
+        "command",
+        "idempotencyKey"
       ]
     },
     "SessionsListParams": {
