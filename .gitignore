@@ -4,6 +4,7 @@ dist
 pnpm-lock.yaml
 coverage
 .pnpm-store
+.worktrees/
 .DS_Store
 **/.DS_Store
 apps/macos/.build/

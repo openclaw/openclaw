@@ -175,7 +175,7 @@ enum PiOAuthStore {
 }
 
 extension Data {
-    private func base64URLEncodedString() -> String {
+    fileprivate func base64URLEncodedString() -> String {
         self.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")

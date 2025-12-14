@@ -18,9 +18,9 @@ import UIKit
         let bridgeController = BridgeConnectionController(appModel: appModel, startDiscovery: false)
 
         let root = SettingsTab()
-            .environmentObject(appModel)
-            .environmentObject(appModel.voiceWake)
-            .environmentObject(bridgeController)
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(bridgeController)
 
         _ = Self.host(root)
     }
@@ -30,9 +30,9 @@ import UIKit
         let bridgeController = BridgeConnectionController(appModel: appModel, startDiscovery: false)
 
         let root = RootTabs()
-            .environmentObject(appModel)
-            .environmentObject(appModel.voiceWake)
-            .environmentObject(bridgeController)
+            .environment(appModel)
+            .environment(appModel.voiceWake)
+            .environment(bridgeController)
 
         _ = Self.host(root)
     }
@@ -41,8 +41,8 @@ import UIKit
         let appModel = NodeAppModel()
 
         let root = VoiceTab()
-            .environmentObject(appModel)
-            .environmentObject(appModel.voiceWake)
+            .environment(appModel)
+            .environment(appModel.voiceWake)
 
         _ = Self.host(root)
     }
@@ -50,7 +50,7 @@ import UIKit
     @Test @MainActor func voiceWakeWordsViewBuildsAViewHierarchy() {
         let appModel = NodeAppModel()
         let root = NavigationStack { VoiceWakeWordsSettingsView() }
-            .environmentObject(appModel)
+            .environment(appModel)
         _ = Self.host(root)
     }
 
@@ -58,8 +58,8 @@ import UIKit
         let appModel = NodeAppModel()
         let bridge = BridgeSession()
         let root = ChatSheet(bridge: bridge, sessionKey: "test")
-            .environmentObject(appModel)
-            .environmentObject(appModel.voiceWake)
+            .environment(appModel)
+            .environment(appModel.voiceWake)
         _ = Self.host(root)
     }
 
