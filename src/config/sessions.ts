@@ -62,9 +62,38 @@ export async function saveSessionStore(
   store: Record<string, SessionEntry>,
 ) {
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+  const json = JSON.stringify(store, null, 2);
   const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
-  await fs.promises.writeFile(tmp, JSON.stringify(store, null, 2), "utf-8");
-  await fs.promises.rename(tmp, storePath);
+  try {
+    await fs.promises.writeFile(tmp, json, "utf-8");
+    await fs.promises.rename(tmp, storePath);
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code)
+        : null;
+
+    if (code === "ENOENT") {
+      // In tests the temp session-store directory may be deleted while writes are in-flight.
+      // Best-effort: try a direct write (recreating the parent dir), otherwise ignore.
+      try {
+        await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
+        await fs.promises.writeFile(storePath, json, "utf-8");
+      } catch (err2) {
+        const code2 =
+          err2 && typeof err2 === "object" && "code" in err2
+            ? String((err2 as { code?: unknown }).code)
+            : null;
+        if (code2 === "ENOENT") return;
+        throw err2;
+      }
+      return;
+    }
+
+    throw err;
+  } finally {
+    await fs.promises.rm(tmp, { force: true });
+  }
 }
 
 export async function updateLastRoute(params: {
