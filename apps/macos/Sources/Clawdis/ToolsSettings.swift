@@ -161,6 +161,13 @@ struct ToolsSettings: View {
             method: .brew(formula: "openhue/cli/openhue-cli", binary: "openhue"),
             kind: .tool),
         ToolEntry(
+            id: "openai-whisper",
+            name: "OpenAI Whisper",
+            url: URL(string: "https://github.com/openai/whisper")!,
+            description: "Local speech-to-text for quick dictation and voicemail transcripts.",
+            method: .brew(formula: "openai-whisper", binary: "whisper"),
+            kind: .tool),
+        ToolEntry(
             id: "gog",
             name: "gog",
             url: URL(string: "https://github.com/steipete/gogcli")!,

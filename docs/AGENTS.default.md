@@ -25,6 +25,7 @@ read_when:
 - **sag** — ElevenLabs speech with mac-style say UX; streams to speakers by default.
 - **Sonos CLI** — Control Sonos speakers (discover/status/playback/volume/grouping) from scripts.
 - **OpenHue CLI** — Philips Hue lighting control for scenes and automations.
+- **OpenAI Whisper** — Local speech-to-text for quick dictation and voicemail transcripts.
 - **Gemini CLI** — Google Gemini models from the terminal for fast Q&A.
 - **bird** — X/Twitter CLI to tweet, reply, read threads, and search without a browser.
 - **agent-tools** — Utility toolkit for automations and MCP-friendly scripts.
