@@ -7,9 +7,9 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -34,17 +34,26 @@ import com.steipete.clawdis.node.MainViewModel
 fun RootScreen(viewModel: MainViewModel) {
   var sheet by remember { mutableStateOf<Sheet?>(null) }
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-  val safeButtonInsets = WindowInsets.statusBars.only(WindowInsetsSides.Top)
+  val safeButtonInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
   Box(modifier = Modifier.fillMaxSize()) {
     CanvasView(viewModel = viewModel, modifier = Modifier.fillMaxSize().zIndex(0f))
 
-    Box(modifier = Modifier.align(Alignment.TopEnd).zIndex(1f).windowInsetsPadding(safeButtonInsets).padding(12.dp)) {
-      Button(onClick = { sheet = Sheet.Settings }) { Text("Settings") }
-    }
+    Box(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .zIndex(1f)
+          .windowInsetsPadding(safeButtonInsets)
+          .padding(12.dp),
+    ) {
+      Box(modifier = Modifier.align(Alignment.TopStart)) {
+        Button(onClick = { sheet = Sheet.Chat }) { Text("Chat") }
+      }
 
-    Box(modifier = Modifier.align(Alignment.TopStart).zIndex(1f).windowInsetsPadding(safeButtonInsets).padding(12.dp)) {
-      Button(onClick = { sheet = Sheet.Chat }) { Text("Chat") }
+      Box(modifier = Modifier.align(Alignment.TopEnd)) {
+        Button(onClick = { sheet = Sheet.Settings }) { Text("Settings") }
+      }
     }
   }
 

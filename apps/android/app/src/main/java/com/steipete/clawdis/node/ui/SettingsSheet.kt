@@ -4,17 +4,18 @@ import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.OutlinedTextField
@@ -43,7 +44,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
   val bridges by viewModel.bridges.collectAsState()
-  val scrollState = rememberScrollState()
+  val listState = rememberLazyListState()
 
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
@@ -51,125 +52,138 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(cameraOk)
     }
 
-  Column(
-    modifier = Modifier.fillMaxWidth().verticalScroll(scrollState).padding(16.dp),
+  LazyColumn(
+    state = listState,
+    modifier = Modifier.fillMaxWidth().imePadding(),
+    contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(14.dp),
   ) {
-    Text("Node")
-    OutlinedTextField(
-      value = displayName,
-      onValueChange = viewModel::setDisplayName,
-      label = { Text("Name") },
-      modifier = Modifier.fillMaxWidth(),
-    )
-    Text("Instance ID: $instanceId")
-
-    HorizontalDivider()
-
-    Text("Camera")
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-      Switch(
-        checked = cameraEnabled,
-        onCheckedChange = { enabled ->
-          if (!enabled) {
-            viewModel.setCameraEnabled(false)
-            return@Switch
-          }
-
-          val cameraOk =
-            ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
-              PackageManager.PERMISSION_GRANTED
-          if (cameraOk) {
-            viewModel.setCameraEnabled(true)
-          } else {
-            permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
-          }
-        },
+    item { Text("Node") }
+    item {
+      OutlinedTextField(
+        value = displayName,
+        onValueChange = viewModel::setDisplayName,
+        label = { Text("Name") },
+        modifier = Modifier.fillMaxWidth(),
       )
-      Text(if (cameraEnabled) "Allow Camera" else "Camera Disabled")
     }
-    Text("Tip: grant Microphone permission for video clips with audio.")
+    item { Text("Instance ID: $instanceId") }
 
-    HorizontalDivider()
+    item { HorizontalDivider() }
 
-    Text("Bridge")
-    Text("Status: $statusText")
-    if (serverName != null) Text("Server: $serverName")
-    if (remoteAddress != null) Text("Address: $remoteAddress")
+    item { Text("Camera") }
+    item {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Switch(
+          checked = cameraEnabled,
+          onCheckedChange = { enabled ->
+            if (!enabled) {
+              viewModel.setCameraEnabled(false)
+              return@Switch
+            }
 
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-      Button(
-        onClick = {
-          viewModel.disconnect()
-          NodeForegroundService.stop(context)
-        },
-      ) {
-        Text("Disconnect")
+            val cameraOk =
+              ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                PackageManager.PERMISSION_GRANTED
+            if (cameraOk) {
+              viewModel.setCameraEnabled(true)
+            } else {
+              permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+            }
+          },
+        )
+        Text(if (cameraEnabled) "Allow Camera" else "Camera Disabled")
       }
     }
+    item { Text("Tip: grant Microphone permission for video clips with audio.") }
 
-    HorizontalDivider()
+    item { HorizontalDivider() }
 
-    Text("Advanced")
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-      Switch(checked = manualEnabled, onCheckedChange = viewModel::setManualEnabled)
-      Text(if (manualEnabled) "Manual Bridge Enabled" else "Manual Bridge Disabled")
-    }
-    OutlinedTextField(
-      value = manualHost,
-      onValueChange = viewModel::setManualHost,
-      label = { Text("Host") },
-      modifier = Modifier.fillMaxWidth(),
-      enabled = manualEnabled,
-    )
-    OutlinedTextField(
-      value = manualPort.toString(),
-      onValueChange = { v -> viewModel.setManualPort(v.toIntOrNull() ?: 0) },
-      label = { Text("Port") },
-      modifier = Modifier.fillMaxWidth(),
-      enabled = manualEnabled,
-    )
-    Button(
-      onClick = {
-        NodeForegroundService.start(context)
-        viewModel.connectManual()
-      },
-      enabled = manualEnabled,
-    ) {
-      Text("Connect (Manual)")
-    }
-
-    HorizontalDivider()
-
-    Text("Discovered Bridges")
-    if (bridges.isEmpty()) {
-      Text("No bridges found yet.")
-    } else {
-      LazyColumn(modifier = Modifier.fillMaxWidth().height(240.dp)) {
-        items(bridges) { bridge ->
-          Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-          ) {
-            Column(modifier = Modifier.weight(1f)) {
-              Text(bridge.name)
-              Text("${bridge.host}:${bridge.port}")
-            }
-            Spacer(modifier = Modifier.padding(4.dp))
-            Button(
-              onClick = {
-                NodeForegroundService.start(context)
-                viewModel.connect(bridge)
-              },
-            ) {
-              Text("Connect")
-            }
-          }
-          HorizontalDivider()
+    item { Text("Bridge") }
+    item { Text("Status: $statusText") }
+    item { if (serverName != null) Text("Server: $serverName") }
+    item { if (remoteAddress != null) Text("Address: $remoteAddress") }
+    item {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Button(
+          onClick = {
+            viewModel.disconnect()
+            NodeForegroundService.stop(context)
+          },
+        ) {
+          Text("Disconnect")
         }
       }
     }
 
-    Spacer(modifier = Modifier.height(20.dp))
+    item { HorizontalDivider() }
+
+    item { Text("Advanced") }
+    item {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+        Switch(checked = manualEnabled, onCheckedChange = viewModel::setManualEnabled)
+        Text(if (manualEnabled) "Manual Bridge Enabled" else "Manual Bridge Disabled")
+      }
+    }
+    item {
+      OutlinedTextField(
+        value = manualHost,
+        onValueChange = viewModel::setManualHost,
+        label = { Text("Host") },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = manualEnabled,
+      )
+    }
+    item {
+      OutlinedTextField(
+        value = manualPort.toString(),
+        onValueChange = { v -> viewModel.setManualPort(v.toIntOrNull() ?: 0) },
+        label = { Text("Port") },
+        modifier = Modifier.fillMaxWidth(),
+        enabled = manualEnabled,
+      )
+    }
+    item {
+      Button(
+        onClick = {
+          NodeForegroundService.start(context)
+          viewModel.connectManual()
+        },
+        enabled = manualEnabled,
+      ) {
+        Text("Connect (Manual)")
+      }
+    }
+
+    item { HorizontalDivider() }
+
+    item { Text("Discovered Bridges") }
+    if (bridges.isEmpty()) {
+      item { Text("No bridges found yet.") }
+    } else {
+      items(items = bridges, key = { it.stableId }) { bridge ->
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Column(modifier = Modifier.weight(1f)) {
+            Text(bridge.name)
+            Text("${bridge.host}:${bridge.port}")
+          }
+          Spacer(modifier = Modifier.padding(4.dp))
+          Button(
+            onClick = {
+              NodeForegroundService.start(context)
+              viewModel.connect(bridge)
+            },
+          ) {
+            Text("Connect")
+          }
+        }
+        HorizontalDivider()
+      }
+    }
+
+    item { Spacer(modifier = Modifier.height(20.dp)) }
   }
 }
