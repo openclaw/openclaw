@@ -44,6 +44,27 @@ Useful built-in tools:
 
 If browsing shows instances but resolving fails, you’re usually hitting a LAN policy / multicast issue.
 
+## Debugging in Gateway logs
+
+The Gateway writes a rolling log file (printed on startup as `gateway log file: ...`).
+
+Look for `bonjour:` lines, especially:
+
+- `bonjour: advertise failed ...` (probing/announce failure)
+- `bonjour: ... name conflict resolved` / `hostname conflict resolved`
+- `bonjour: watchdog detected non-announced service; attempting re-advertise ...` (self-heal attempt after sleep/interface churn)
+
+## Debugging on iOS (Iris)
+
+Iris discovers bridges via `NWBrowser` browsing `_clawdis-bridge._tcp`.
+
+To capture what the browser is doing:
+
+- Settings → Bridge → Advanced → enable **Discovery Debug Logs**
+- Settings → Bridge → Advanced → open **Discovery Logs** → reproduce the “Searching…” / “No bridges found” case → **Copy**
+
+The log includes browser state transitions (`ready`, `waiting`, `failed`, `cancelled`) and result-set changes (added/removed counts).
+
 ## Common failure modes
 
 - **Bonjour doesn’t cross networks**: London/Vienna style setups require Tailnet (MagicDNS/IP) or SSH.
