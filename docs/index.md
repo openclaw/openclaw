@@ -19,7 +19,7 @@ read_when:
 
 <p align="center">
   <a href="https://github.com/steipete/clawdis">GitHub</a> ·
-  <a href="https://www.npmjs.com/package/clawdis">npm</a> ·
+  <a href="https://github.com/steipete/clawdis/releases">Releases</a> ·
   <a href="./clawd.md">Clawd setup</a>
 </p>
 
@@ -29,25 +29,41 @@ It’s built for [Clawd](https://clawd.me), a space lobster who needed a TARDIS.
 ## How it works
 
 ```
-┌─────────────┐      ┌──────────┐      ┌─────────────┐
-│  WhatsApp   │ ───▶ │ CLAWDIS  │ ───▶ │  AI Agent   │
-│  Telegram   │ ───▶ │  🦞⏱️💙   │ ◀─── │    (Pi)     │
-│  (You)      │ ◀─── │          │      │             │
-└─────────────┘      └──────────┘      └─────────────┘
+WhatsApp / Telegram
+        │
+        ▼
+  ┌──────────────────────────┐
+  │          Gateway          │  ws://127.0.0.1:18789 (loopback-only)
+  │     (single source)       │  tcp://0.0.0.0:18790 (optional Bridge)
+  └───────────┬───────────────┘
+              │
+              ├─ Pi agent (RPC)
+              ├─ CLI (clawdis …)
+              ├─ WebChat (loopback UI)
+              ├─ macOS app (Clawdis.app)
+              └─ iOS node (Iris) via Bridge + pairing
 ```
 
 Most operations flow through the **Gateway** (`clawdis gateway`), a single long-running process that owns provider connections and the WebSocket control plane.
+
+## Network model
+
+- **One Gateway per host**: it is the only process allowed to own the WhatsApp Web session.
+- **Loopback-first**: Gateway WS is `ws://127.0.0.1:18789` (not exposed on the LAN).
+- **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
+- **Remote use**: SSH tunnel or tailnet/VPN; see `docs/remote.md` and `docs/discovery.md`.
 
 ## Features (high level)
 
 - 📱 **WhatsApp Integration** — Uses Baileys for WhatsApp Web protocol
 - ✈️ **Telegram Bot** — DMs + groups via grammY
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
-- 💬 **Sessions** — Per-sender (or shared `main`) conversation context
+- 💬 **Sessions** — Direct chats collapse into shared `main` (default); groups are isolated
 - 👥 **Group Chat Support** — Mention-based triggering in group chats
 - 📎 **Media Support** — Send and receive images, audio, documents
 - 🎤 **Voice notes** — Optional transcription hook
-- 🖥️ **WebChat + macOS app** — A local UI + menu bar companion for ops and voice wake
+- 🖥️ **WebChat + macOS app** — Local UI + menu bar companion for ops and voice wake
+- 📱 **iOS node (Iris)** — Pairs as a node and exposes a Canvas surface
 
 Note: legacy Claude/Codex/Gemini/Opencode paths have been removed; Pi is the only coding-agent path.
 
@@ -56,8 +72,10 @@ Note: legacy Claude/Codex/Gemini/Opencode paths have been removed; Pi is the onl
 Runtime requirement: **Node ≥ 22**.
 
 ```bash
-# Install
-npm install -g clawdis
+# From source (recommended while the npm package is still settling)
+pnpm install
+pnpm build
+pnpm link --global
 
 # Pair WhatsApp Web (shows QR)
 clawdis login
@@ -95,18 +113,23 @@ Example:
 
 ## Docs
 
-- [Configuration](./configuration.md)
-- [Gateway runbook](./gateway.md)
-- [WebChat](./webchat.md)
-- [Agent integration](./agents.md)
-- [Telegram](./telegram.md)
-- [Group messages](./group-messages.md)
-- [Media: images](./images.md)
-- [Media: audio](./audio.md)
-- [Sessions](./session.md)
-- [Cron + wakeups](./cron.md)
-- [Security](./security.md)
-- [Troubleshooting](./troubleshooting.md)
+- Start here:
+  - [Configuration](./configuration.md)
+  - [Clawd personal assistant setup](./clawd.md)
+  - [Gateway runbook](./gateway.md)
+  - [Discovery + transports](./discovery.md)
+  - [Remote access](./remote.md)
+- Providers and UX:
+  - [WebChat](./webchat.md)
+  - [Telegram](./telegram.md)
+  - [Group messages](./group-messages.md)
+  - [Media: images](./images.md)
+  - [Media: audio](./audio.md)
+- Ops and safety:
+  - [Sessions](./session.md)
+  - [Cron + wakeups](./cron.md)
+  - [Security](./security.md)
+  - [Troubleshooting](./troubleshooting.md)
 
 ## The name
 
