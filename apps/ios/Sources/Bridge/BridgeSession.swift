@@ -3,6 +3,11 @@ import Foundation
 import Network
 
 actor BridgeSession {
+    private struct TimeoutError: LocalizedError {
+        var message: String
+        var errorDescription: String? { self.message }
+    }
+
     enum State: Sendable, Equatable {
         case idle
         case connecting
@@ -65,15 +70,25 @@ actor BridgeSession {
         await self.disconnect()
         self.state = .connecting
 
-        let connection = NWConnection(to: endpoint, using: .tcp)
+        let params = NWParameters.tcp
+        params.includePeerToPeer = true
+        let connection = NWConnection(to: endpoint, using: params)
         let queue = DispatchQueue(label: "com.steipete.clawdis.ios.bridge-session")
         self.connection = connection
         self.queue = queue
+
+        let stateStream = Self.makeStateStream(for: connection)
         connection.start(queue: queue)
 
-        try await self.send(hello)
+        try await Self.waitForReady(stateStream, timeoutSeconds: 6)
 
-        guard let line = try await self.receiveLine(),
+        try await Self.withTimeout(seconds: 6) {
+            try await self.send(hello)
+        }
+
+        guard let line = try await Self.withTimeout(seconds: 6, operation: {
+                  try await self.receiveLine()
+              }),
               let data = line.data(using: .utf8),
               let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
         else {
@@ -292,6 +307,72 @@ actor BridgeSession {
                 }
                 cont.resume(returning: data ?? Data())
             }
+        }
+    }
+
+    private static func withTimeout<T>(
+        seconds: Double,
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+    {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw TimeoutError(message: "UNAVAILABLE: connection timeout")
+            }
+
+            guard let first = try await group.next() else {
+                throw TimeoutError(message: "UNAVAILABLE: connection timeout")
+            }
+
+            group.cancelAll()
+            return first
+        }
+    }
+
+    private static func makeStateStream(for connection: NWConnection) -> AsyncStream<NWConnection.State> {
+        AsyncStream { continuation in
+            continuation.onTermination = { @Sendable _ in
+                connection.stateUpdateHandler = nil
+            }
+
+            connection.stateUpdateHandler = { state in
+                continuation.yield(state)
+                switch state {
+                case .ready, .cancelled, .failed, .waiting:
+                    continuation.finish()
+                case .setup, .preparing:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+        }
+    }
+
+    private static func waitForReady(
+        _ stateStream: AsyncStream<NWConnection.State>,
+        timeoutSeconds: Double) async throws
+    {
+        try await Self.withTimeout(seconds: timeoutSeconds) {
+            for await state in stateStream {
+                switch state {
+                case .ready:
+                    return
+                case let .failed(error):
+                    throw error
+                case let .waiting(error):
+                    throw error
+                case .cancelled:
+                    throw TimeoutError(message: "UNAVAILABLE: connection cancelled")
+                case .setup, .preparing:
+                    break
+                @unknown default:
+                    break
+                }
+            }
+
+            throw TimeoutError(message: "UNAVAILABLE: connection ended")
         }
     }
 }
