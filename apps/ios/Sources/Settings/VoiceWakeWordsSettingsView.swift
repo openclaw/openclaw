@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct VoiceWakeWordsSettingsView: View {
-    @EnvironmentObject private var appModel: NodeAppModel
+    @Environment(NodeAppModel.self) private var appModel
     @State private var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
     @State private var syncTask: Task<Void, Never>?
 

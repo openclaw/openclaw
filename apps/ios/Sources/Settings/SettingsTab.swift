@@ -59,8 +59,6 @@ struct SettingsTab: View {
 
                     NavigationLink {
                         VoiceWakeWordsSettingsView()
-                            .environmentObject(self.appModel)
-                            .environmentObject(self.voiceWake)
                     } label: {
                         LabeledContent(
                             "Wake Words",
