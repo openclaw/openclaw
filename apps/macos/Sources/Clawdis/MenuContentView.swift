@@ -1,17 +1,18 @@
 import AppKit
 import AVFoundation
 import Foundation
+import Observation
 import SwiftUI
 
 /// Menu contents for the Clawdis menu bar extra.
 struct MenuContent: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     let updater: UpdaterProviding?
-    @ObservedObject private var gatewayManager = GatewayProcessManager.shared
-    @ObservedObject private var healthStore = HealthStore.shared
-    @ObservedObject private var heartbeatStore = HeartbeatStore.shared
-    @ObservedObject private var controlChannel = ControlChannel.shared
-    @ObservedObject private var activityStore = WorkActivityStore.shared
+    private let gatewayManager = GatewayProcessManager.shared
+    private let healthStore = HealthStore.shared
+    private let heartbeatStore = HeartbeatStore.shared
+    private let controlChannel = ControlChannel.shared
+    private let activityStore = WorkActivityStore.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false

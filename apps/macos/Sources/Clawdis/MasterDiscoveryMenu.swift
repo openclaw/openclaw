@@ -3,7 +3,7 @@ import SwiftUI
 // “master” is part of the discovery protocol naming; keep UI components consistent.
 // swiftlint:disable:next inclusive_language
 struct MasterDiscoveryInlineList: View {
-    @ObservedObject var discovery: MasterDiscoveryModel
+    var discovery: MasterDiscoveryModel
     var currentTarget: String?
     var onSelect: (MasterDiscoveryModel.DiscoveredMaster) -> Void
     @State private var hoveredMasterID: MasterDiscoveryModel.DiscoveredMaster.ID?
@@ -109,7 +109,7 @@ struct MasterDiscoveryInlineList: View {
 
 // swiftlint:disable:next inclusive_language
 struct MasterDiscoveryMenu: View {
-    @ObservedObject var discovery: MasterDiscoveryModel
+    var discovery: MasterDiscoveryModel
     var onSelect: (MasterDiscoveryModel.DiscoveredMaster) -> Void
 
     var body: some View {

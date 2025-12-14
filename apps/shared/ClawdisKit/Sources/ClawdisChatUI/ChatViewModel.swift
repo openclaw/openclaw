@@ -1,5 +1,6 @@
 import ClawdisKit
 import Foundation
+import Observation
 import OSLog
 import UniformTypeIdentifiers
 
@@ -12,21 +13,23 @@ import UIKit
 private let chatUILogger = Logger(subsystem: "com.steipete.clawdis", category: "ClawdisChatUI")
 
 @MainActor
-public final class ClawdisChatViewModel: ObservableObject {
-    @Published public private(set) var messages: [ClawdisChatMessage] = []
-    @Published public var input: String = ""
-    @Published public var thinkingLevel: String = "off"
-    @Published public private(set) var isLoading = false
-    @Published public private(set) var isSending = false
-    @Published public var errorText: String?
-    @Published public var attachments: [ClawdisPendingAttachment] = []
-    @Published public private(set) var healthOK: Bool = true
-    @Published public private(set) var pendingRunCount: Int = 0
+@Observable
+public final class ClawdisChatViewModel {
+    public private(set) var messages: [ClawdisChatMessage] = []
+    public var input: String = ""
+    public var thinkingLevel: String = "off"
+    public private(set) var isLoading = false
+    public private(set) var isSending = false
+    public var errorText: String?
+    public var attachments: [ClawdisPendingAttachment] = []
+    public private(set) var healthOK: Bool = true
+    public private(set) var pendingRunCount: Int = 0
 
     public let sessionKey: String
     private let transport: any ClawdisChatTransport
 
-    private var eventTask: Task<Void, Never>?
+    @ObservationIgnored
+    private nonisolated(unsafe) var eventTask: Task<Void, Never>?
     private var pendingRuns = Set<String>() {
         didSet { self.pendingRunCount = self.pendingRuns.count }
     }

@@ -1,10 +1,12 @@
 import AppKit
 import Foundation
+import Observation
 import ServiceManagement
 import SwiftUI
 
 @MainActor
-final class AppState: ObservableObject {
+@Observable
+final class AppState {
     private let isPreview: Bool
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
@@ -19,26 +21,26 @@ final class AppState: ObservableObject {
         case remote
     }
 
-    @Published var isPaused: Bool {
+    var isPaused: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.isPaused, forKey: pauseDefaultsKey) } }
     }
 
-    @Published var launchAtLogin: Bool {
+    var launchAtLogin: Bool {
         didSet { self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } } }
     }
 
-    @Published var onboardingSeen: Bool {
+    var onboardingSeen: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.onboardingSeen, forKey: "clawdis.onboardingSeen") }
         }
     }
 
-    @Published var debugPaneEnabled: Bool {
+    var debugPaneEnabled: Bool {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "clawdis.debugPaneEnabled") }
         }
     }
 
-    @Published var swabbleEnabled: Bool {
+    var swabbleEnabled: Bool {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.swabbleEnabled, forKey: swabbleEnabledKey)
@@ -47,7 +49,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var swabbleTriggerWords: [String] {
+    var swabbleTriggerWords: [String] {
         didSet {
             // Preserve the raw editing state; sanitization happens when we actually use the triggers.
             self.ifNotPreview {
@@ -60,21 +62,21 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var voiceWakeTriggerChime: VoiceWakeChime {
+    var voiceWakeTriggerChime: VoiceWakeChime {
         didSet { self.ifNotPreview { self.storeChime(self.voiceWakeTriggerChime, key: voiceWakeTriggerChimeKey) } }
     }
 
-    @Published var voiceWakeSendChime: VoiceWakeChime {
+    var voiceWakeSendChime: VoiceWakeChime {
         didSet { self.ifNotPreview { self.storeChime(self.voiceWakeSendChime, key: voiceWakeSendChimeKey) } }
     }
 
-    @Published var iconAnimationsEnabled: Bool {
+    var iconAnimationsEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(
             self.iconAnimationsEnabled,
             forKey: iconAnimationsEnabledKey) } }
     }
 
-    @Published var showDockIcon: Bool {
+    var showDockIcon: Bool {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.showDockIcon, forKey: showDockIconKey)
@@ -83,7 +85,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var voiceWakeMicID: String {
+    var voiceWakeMicID: String {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.voiceWakeMicID, forKey: voiceWakeMicKey)
@@ -94,7 +96,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var voiceWakeLocaleID: String {
+    var voiceWakeLocaleID: String {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.voiceWakeLocaleID, forKey: voiceWakeLocaleKey)
@@ -105,27 +107,27 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var voiceWakeAdditionalLocaleIDs: [String] {
+    var voiceWakeAdditionalLocaleIDs: [String] {
         didSet { self.ifNotPreview { UserDefaults.standard.set(
             self.voiceWakeAdditionalLocaleIDs,
             forKey: voiceWakeAdditionalLocalesKey) } }
     }
 
-    @Published var voicePushToTalkEnabled: Bool {
+    var voicePushToTalkEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(
             self.voicePushToTalkEnabled,
             forKey: voicePushToTalkEnabledKey) } }
     }
 
-    @Published var iconOverride: IconOverrideSelection {
+    var iconOverride: IconOverrideSelection {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.iconOverride.rawValue, forKey: iconOverrideKey) } }
     }
 
-    @Published var isWorking: Bool = false
-    @Published var earBoostActive: Bool = false
-    @Published var blinkTick: Int = 0
-    @Published var sendCelebrationTick: Int = 0
-    @Published var heartbeatsEnabled: Bool {
+    var isWorking: Bool = false
+    var earBoostActive: Bool = false
+    var blinkTick: Int = 0
+    var sendCelebrationTick: Int = 0
+    var heartbeatsEnabled: Bool {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
@@ -134,31 +136,31 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var connectionMode: ConnectionMode {
+    var connectionMode: ConnectionMode {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
         }
     }
 
-    @Published var webChatEnabled: Bool {
+    var webChatEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatEnabled, forKey: webChatEnabledKey) } }
     }
 
-    @Published var webChatSwiftUIEnabled: Bool {
+    var webChatSwiftUIEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(
             self.webChatSwiftUIEnabled,
             forKey: webChatSwiftUIEnabledKey) } }
     }
 
-    @Published var webChatPort: Int {
+    var webChatPort: Int {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatPort, forKey: webChatPortKey) } }
     }
 
-    @Published var canvasEnabled: Bool {
+    var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
-    @Published var peekabooBridgeEnabled: Bool {
+    var peekabooBridgeEnabled: Bool {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.peekabooBridgeEnabled, forKey: peekabooBridgeEnabledKey)
@@ -167,7 +169,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var attachExistingGatewayOnly: Bool {
+    var attachExistingGatewayOnly: Bool {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.attachExistingGatewayOnly, forKey: attachExistingGatewayOnlyKey)
@@ -175,15 +177,15 @@ final class AppState: ObservableObject {
         }
     }
 
-    @Published var remoteTarget: String {
+    var remoteTarget: String {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) } }
     }
 
-    @Published var remoteIdentity: String {
+    var remoteIdentity: String {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteIdentity, forKey: remoteIdentityKey) } }
     }
 
-    @Published var remoteProjectRoot: String {
+    var remoteProjectRoot: String {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteProjectRoot, forKey: remoteProjectRootKey) } }
     }
 

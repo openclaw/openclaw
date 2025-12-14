@@ -1,8 +1,9 @@
+import Observation
 import SwiftUI
 
 struct SettingsRootView: View {
-    @ObservedObject var state: AppState
-    @ObservedObject private var permissionMonitor = PermissionMonitor.shared
+    @Bindable var state: AppState
+    private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
     let updater: UpdaterProviding?

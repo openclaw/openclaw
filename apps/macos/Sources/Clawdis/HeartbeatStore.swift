@@ -1,11 +1,13 @@
 import Foundation
+import Observation
 import SwiftUI
 
 @MainActor
-final class HeartbeatStore: ObservableObject {
+@Observable
+final class HeartbeatStore {
     static let shared = HeartbeatStore()
 
-    @Published private(set) var lastEvent: ControlHeartbeatEvent?
+    private(set) var lastEvent: ControlHeartbeatEvent?
 
     private var observer: NSObjectProtocol?
 

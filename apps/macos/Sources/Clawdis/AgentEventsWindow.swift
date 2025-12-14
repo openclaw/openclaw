@@ -2,7 +2,7 @@ import SwiftUI
 
 @MainActor
 struct AgentEventsWindow: View {
-    @ObservedObject private var store = AgentEventStore.shared
+    private let store = AgentEventStore.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

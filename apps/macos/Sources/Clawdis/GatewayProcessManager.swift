@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Observation
 import OSLog
 import Subprocess
 #if canImport(Darwin)
@@ -12,7 +13,8 @@ import SystemPackage
 #endif
 
 @MainActor
-final class GatewayProcessManager: ObservableObject {
+@Observable
+final class GatewayProcessManager {
     static let shared = GatewayProcessManager()
 
     enum Status: Equatable {
@@ -39,11 +41,11 @@ final class GatewayProcessManager: ObservableObject {
         }
     }
 
-    @Published private(set) var status: Status = .stopped
-    @Published private(set) var log: String = ""
-    @Published private(set) var restartCount: Int = 0
-    @Published private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
-    @Published private(set) var existingGatewayDetails: String?
+    private(set) var status: Status = .stopped
+    private(set) var log: String = ""
+    private(set) var restartCount: Int = 0
+    private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
+    private(set) var existingGatewayDetails: String?
 
     private var execution: Execution?
     private var lastPid: Int32?

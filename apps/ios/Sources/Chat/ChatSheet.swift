@@ -3,12 +3,12 @@ import SwiftUI
 
 struct ChatSheet: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var viewModel: ClawdisChatViewModel
+    @State private var viewModel: ClawdisChatViewModel
 
     init(bridge: BridgeSession, sessionKey: String = "main") {
         let transport = IOSBridgeChatTransport(bridge: bridge)
-        self._viewModel = StateObject(
-            wrappedValue: ClawdisChatViewModel(
+        self._viewModel = State(
+            initialValue: ClawdisChatViewModel(
                 sessionKey: sessionKey,
                 transport: transport))
     }

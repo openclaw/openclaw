@@ -3,7 +3,7 @@ import SwiftUI
 import WebKit
 
 struct ScreenWebView: UIViewRepresentable {
-    @ObservedObject var controller: ScreenController
+    var controller: ScreenController
 
     func makeUIView(context: Context) -> WKWebView {
         self.controller.webView

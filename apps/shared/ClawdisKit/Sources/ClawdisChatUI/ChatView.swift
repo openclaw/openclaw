@@ -2,11 +2,11 @@ import SwiftUI
 
 @MainActor
 public struct ClawdisChatView: View {
-    @StateObject private var viewModel: ClawdisChatViewModel
+    @State private var viewModel: ClawdisChatViewModel
     @State private var scrollerBottomID = UUID()
 
     public init(viewModel: ClawdisChatViewModel) {
-        self._viewModel = StateObject(wrappedValue: viewModel)
+        self._viewModel = State(initialValue: viewModel)
     }
 
     public var body: some View {

@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import Observation
 import OSLog
 import SwiftUI
 
@@ -53,15 +54,16 @@ enum HealthState: Equatable {
 }
 
 @MainActor
-final class HealthStore: ObservableObject {
+@Observable
+final class HealthStore {
     static let shared = HealthStore()
 
     private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "health")
 
-    @Published private(set) var snapshot: HealthSnapshot?
-    @Published private(set) var lastSuccess: Date?
-    @Published private(set) var lastError: String?
-    @Published private(set) var isRefreshing = false
+    private(set) var snapshot: HealthSnapshot?
+    private(set) var lastSuccess: Date?
+    private(set) var lastError: String?
+    private(set) var isRefreshing = false
 
     private var loopTask: Task<Void, Never>?
     private let refreshInterval: TimeInterval = 60

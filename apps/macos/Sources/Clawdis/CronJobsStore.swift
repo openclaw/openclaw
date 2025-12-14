@@ -1,23 +1,25 @@
 import ClawdisProtocol
 import Foundation
+import Observation
 import OSLog
 
 @MainActor
-final class CronJobsStore: ObservableObject {
+@Observable
+final class CronJobsStore {
     static let shared = CronJobsStore()
 
-    @Published var jobs: [CronJob] = []
-    @Published var selectedJobId: String?
-    @Published var runEntries: [CronRunLogEntry] = []
+    var jobs: [CronJob] = []
+    var selectedJobId: String?
+    var runEntries: [CronRunLogEntry] = []
 
-    @Published var schedulerEnabled: Bool?
-    @Published var schedulerStorePath: String?
-    @Published var schedulerNextWakeAtMs: Int?
+    var schedulerEnabled: Bool?
+    var schedulerStorePath: String?
+    var schedulerNextWakeAtMs: Int?
 
-    @Published var isLoadingJobs = false
-    @Published var isLoadingRuns = false
-    @Published var lastError: String?
-    @Published var statusMessage: String?
+    var isLoadingJobs = false
+    var isLoadingRuns = false
+    var lastError: String?
+    var statusMessage: String?
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "cron.ui")
     private var refreshTask: Task<Void, Never>?

@@ -1,11 +1,12 @@
 import AppKit
 import AVFoundation
+import Observation
 import Speech
 import SwiftUI
 import UniformTypeIdentifiers
 
 struct VoiceWakeSettings: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @State private var testState: VoiceWakeTestState = .idle
     @State private var tester = VoiceWakeTester()
     @State private var isTesting = false

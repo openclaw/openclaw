@@ -1,9 +1,11 @@
 import AppKit
 import Foundation
+import Observation
 import OSLog
 
 @MainActor
-final class VoiceSessionCoordinator: ObservableObject {
+@Observable
+final class VoiceSessionCoordinator {
     static let shared = VoiceSessionCoordinator()
 
     enum Source: String { case wakeWord, pushToTalk }

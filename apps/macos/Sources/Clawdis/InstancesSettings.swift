@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct InstancesSettings: View {
-    @ObservedObject var store: InstancesStore
+    var store: InstancesStore
 
     init(store: InstancesStore = .shared) {
         self.store = store

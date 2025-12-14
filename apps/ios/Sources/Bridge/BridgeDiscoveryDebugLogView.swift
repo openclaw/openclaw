@@ -2,7 +2,7 @@ import SwiftUI
 import UIKit
 
 struct BridgeDiscoveryDebugLogView: View {
-    @EnvironmentObject private var bridgeController: BridgeConnectionController
+    @Environment(BridgeConnectionController.self) private var bridgeController
     @AppStorage("bridge.discovery.debugLogs") private var debugLogsEnabled: Bool = false
 
     var body: some View {

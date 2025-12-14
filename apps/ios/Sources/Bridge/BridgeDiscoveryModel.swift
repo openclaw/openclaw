@@ -1,9 +1,11 @@
 import ClawdisKit
 import Foundation
 import Network
+import Observation
 
 @MainActor
-final class BridgeDiscoveryModel: ObservableObject {
+@Observable
+final class BridgeDiscoveryModel {
     struct DebugLogEntry: Identifiable, Equatable {
         var id = UUID()
         var ts: Date
@@ -18,9 +20,9 @@ final class BridgeDiscoveryModel: ObservableObject {
         var debugID: String
     }
 
-    @Published var bridges: [DiscoveredBridge] = []
-    @Published var statusText: String = "Idle"
-    @Published private(set) var debugLog: [DebugLogEntry] = []
+    var bridges: [DiscoveredBridge] = []
+    var statusText: String = "Idle"
+    private(set) var debugLog: [DebugLogEntry] = []
 
     private var browser: NWBrowser?
     private var debugLoggingEnabled = false

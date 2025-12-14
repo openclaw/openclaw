@@ -2,7 +2,7 @@ import ClawdisKit
 import SwiftUI
 
 struct ScreenTab: View {
-    @EnvironmentObject private var appModel: NodeAppModel
+    @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
         ZStack(alignment: .top) {

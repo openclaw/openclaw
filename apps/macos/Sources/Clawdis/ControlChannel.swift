@@ -1,5 +1,6 @@
 import ClawdisProtocol
 import Foundation
+import Observation
 import OSLog
 import SwiftUI
 
@@ -36,7 +37,8 @@ enum ControlChannelError: Error, LocalizedError {
 }
 
 @MainActor
-final class ControlChannel: ObservableObject {
+@Observable
+final class ControlChannel {
     static let shared = ControlChannel()
 
     enum Mode {
@@ -51,8 +53,8 @@ final class ControlChannel: ObservableObject {
         case degraded(String)
     }
 
-    @Published private(set) var state: ConnectionState = .disconnected
-    @Published private(set) var lastPingMs: Double?
+    private(set) var state: ConnectionState = .disconnected
+    private(set) var lastPingMs: Double?
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
 

@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct VoiceTab: View {
-    @EnvironmentObject private var appModel: NodeAppModel
-    @EnvironmentObject private var voiceWake: VoiceWakeManager
+    @Environment(NodeAppModel.self) private var appModel
+    @Environment(VoiceWakeManager.self) private var voiceWake
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
 
     var body: some View {

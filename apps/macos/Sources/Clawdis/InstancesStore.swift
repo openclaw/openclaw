@@ -1,6 +1,7 @@
 import ClawdisProtocol
 import Cocoa
 import Foundation
+import Observation
 import OSLog
 
 struct InstanceInfo: Identifiable, Codable {
@@ -27,14 +28,15 @@ struct InstanceInfo: Identifiable, Codable {
 }
 
 @MainActor
-final class InstancesStore: ObservableObject {
+@Observable
+final class InstancesStore {
     static let shared = InstancesStore()
     let isPreview: Bool
 
-    @Published var instances: [InstanceInfo] = []
-    @Published var lastError: String?
-    @Published var statusMessage: String?
-    @Published var isLoading = false
+    var instances: [InstanceInfo] = []
+    var lastError: String?
+    var statusMessage: String?
+    var isLoading = false
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "instances")
     private var task: Task<Void, Never>?

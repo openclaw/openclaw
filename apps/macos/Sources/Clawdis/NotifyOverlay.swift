@@ -1,13 +1,15 @@
 import AppKit
+import Observation
 import QuartzCore
 import SwiftUI
 
 /// Lightweight, borderless panel for in-app "toast" notifications (bypasses macOS Notification Center).
 @MainActor
-final class NotifyOverlayController: ObservableObject {
+@Observable
+final class NotifyOverlayController {
     static let shared = NotifyOverlayController()
 
-    @Published private(set) var model = Model()
+    private(set) var model = Model()
     var isVisible: Bool { self.model.isVisible }
 
     struct Model {
@@ -159,7 +161,7 @@ final class NotifyOverlayController: ObservableObject {
 }
 
 private struct NotifyOverlayView: View {
-    @ObservedObject var controller: NotifyOverlayController
+    var controller: NotifyOverlayController
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {

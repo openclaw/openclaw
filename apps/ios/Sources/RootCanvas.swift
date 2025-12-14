@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct RootCanvas: View {
-    @EnvironmentObject private var appModel: NodeAppModel
-    @EnvironmentObject private var voiceWake: VoiceWakeManager
+    @Environment(NodeAppModel.self) private var appModel
+    @Environment(VoiceWakeManager.self) private var voiceWake
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @State private var presentedSheet: PresentedSheet?
     @State private var voiceWakeToastText: String?

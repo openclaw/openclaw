@@ -1,8 +1,10 @@
 import Foundation
+import Observation
 import SwiftUI
 
 @MainActor
-final class WorkActivityStore: ObservableObject {
+@Observable
+final class WorkActivityStore {
     static let shared = WorkActivityStore()
 
     struct Activity: Equatable {
@@ -14,8 +16,8 @@ final class WorkActivityStore: ObservableObject {
         var lastUpdate: Date
     }
 
-    @Published private(set) var current: Activity?
-    @Published private(set) var iconState: IconState = .idle
+    private(set) var current: Activity?
+    private(set) var iconState: IconState = .idle
 
     private var active: [String: Activity] = [:]
     private var currentSessionKey: String?

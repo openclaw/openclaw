@@ -1,18 +1,18 @@
 import ClawdisKit
-import Combine
 import Foundation
 import Network
+import Observation
 import SwiftUI
 
 @MainActor
-final class BridgeConnectionController: ObservableObject {
-    @Published private(set) var bridges: [BridgeDiscoveryModel.DiscoveredBridge] = []
-    @Published private(set) var discoveryStatusText: String = "Idle"
-    @Published private(set) var discoveryDebugLog: [BridgeDiscoveryModel.DebugLogEntry] = []
+@Observable
+final class BridgeConnectionController {
+    private(set) var bridges: [BridgeDiscoveryModel.DiscoveredBridge] = []
+    private(set) var discoveryStatusText: String = "Idle"
+    private(set) var discoveryDebugLog: [BridgeDiscoveryModel.DebugLogEntry] = []
 
     private let discovery = BridgeDiscoveryModel()
     private weak var appModel: NodeAppModel?
-    private var cancellables = Set<AnyCancellable>()
     private var didAutoConnect = false
     private var seenStableIDs = Set<String>()
 
@@ -23,20 +23,8 @@ final class BridgeConnectionController: ObservableObject {
         self.discovery.setDebugLoggingEnabled(
             UserDefaults.standard.bool(forKey: "bridge.discovery.debugLogs"))
 
-        self.discovery.$bridges
-            .sink { [weak self] newValue in
-                guard let self else { return }
-                self.bridges = newValue
-                self.updateLastDiscoveredBridge(from: newValue)
-                self.maybeAutoConnect()
-            }
-            .store(in: &self.cancellables)
-
-        self.discovery.$statusText
-            .assign(to: &self.$discoveryStatusText)
-
-        self.discovery.$debugLog
-            .assign(to: &self.$discoveryDebugLog)
+        self.updateFromDiscovery()
+        self.observeDiscovery()
 
         if startDiscovery {
             self.discovery.start()
@@ -55,6 +43,29 @@ final class BridgeConnectionController: ObservableObject {
             self.discovery.start()
         @unknown default:
             self.discovery.start()
+        }
+    }
+
+    private func updateFromDiscovery() {
+        let newBridges = self.discovery.bridges
+        self.bridges = newBridges
+        self.discoveryStatusText = self.discovery.statusText
+        self.discoveryDebugLog = self.discovery.debugLog
+        self.updateLastDiscoveredBridge(from: newBridges)
+        self.maybeAutoConnect()
+    }
+
+    private func observeDiscovery() {
+        withObservationTracking {
+            _ = self.discovery.bridges
+            _ = self.discovery.statusText
+            _ = self.discovery.debugLog
+        } onChange: { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.updateFromDiscovery()
+                self.observeDiscovery()
+            }
         }
     }
 

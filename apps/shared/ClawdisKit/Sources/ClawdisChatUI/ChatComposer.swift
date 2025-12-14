@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import SwiftUI
 
 #if !os(macOS)
@@ -8,7 +9,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct ClawdisChatComposer: View {
-    @ObservedObject var viewModel: ClawdisChatViewModel
+    @Bindable var viewModel: ClawdisChatViewModel
 
     #if !os(macOS)
     @State private var pickerItems: [PhotosPickerItem] = []

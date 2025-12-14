@@ -1,7 +1,8 @@
+import Observation
 import SwiftUI
 
 struct CronSettings: View {
-    @ObservedObject var store: CronJobsStore
+    @Bindable var store: CronJobsStore
     @State private var showEditor = false
     @State private var editingJob: CronJob?
     @State private var editorError: String?

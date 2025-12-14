@@ -12,8 +12,8 @@ struct DebugSettings: View {
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
     @State private var modelsError: String?
-    @ObservedObject private var gatewayManager = GatewayProcessManager.shared
-    @ObservedObject private var healthStore = HealthStore.shared
+    private let gatewayManager = GatewayProcessManager.shared
+    private let healthStore = HealthStore.shared
     @State private var gatewayRootInput: String = GatewayProcessManager.shared.projectRootPath()
     @State private var sessionStorePath: String = SessionLoader.defaultStorePath
     @State private var sessionStoreSaveError: String?

@@ -1,13 +1,14 @@
 import AppKit
+import Observation
 import SwiftUI
 
 struct GeneralSettings: View {
-    @ObservedObject var state: AppState
+    @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = true
-    @ObservedObject private var healthStore = HealthStore.shared
-    @ObservedObject private var gatewayManager = GatewayProcessManager.shared
+    private let healthStore = HealthStore.shared
+    private let gatewayManager = GatewayProcessManager.shared
     // swiftlint:disable:next inclusive_language
-    @StateObject private var masterDiscovery = MasterDiscoveryModel()
+    @State private var masterDiscovery = MasterDiscoveryModel()
     @State private var isInstallingCLI = false
     @State private var cliStatus: String?
     @State private var cliInstalled = false

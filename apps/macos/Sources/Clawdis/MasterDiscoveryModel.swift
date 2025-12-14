@@ -1,10 +1,12 @@
 import Foundation
 import Network
+import Observation
 
 // We use “master” as the on-the-wire service name; keep the model aligned with the protocol/docs.
 @MainActor
 // swiftlint:disable:next inclusive_language
-final class MasterDiscoveryModel: ObservableObject {
+@Observable
+final class MasterDiscoveryModel {
     // swiftlint:disable:next inclusive_language
     struct DiscoveredMaster: Identifiable, Equatable {
         var id: String { self.debugID }
@@ -16,8 +18,8 @@ final class MasterDiscoveryModel: ObservableObject {
     }
 
     // swiftlint:disable:next inclusive_language
-    @Published var masters: [DiscoveredMaster] = []
-    @Published var statusText: String = "Idle"
+    var masters: [DiscoveredMaster] = []
+    var statusText: String = "Idle"
 
     private var browser: NWBrowser?
 

@@ -1,8 +1,8 @@
 import SwiftUI
 
 struct RootTabs: View {
-    @EnvironmentObject private var appModel: NodeAppModel
-    @EnvironmentObject private var voiceWake: VoiceWakeManager
+    @Environment(NodeAppModel.self) private var appModel
+    @Environment(VoiceWakeManager.self) private var voiceWake
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @State private var selectedTab: Int = 0
     @State private var voiceWakeToastText: String?

@@ -1,19 +1,21 @@
 import ClawdisKit
 import Network
+import Observation
 import SwiftUI
 import UIKit
 
 @MainActor
-private final class ConnectStatusStore: ObservableObject {
-    @Published var text: String?
+@Observable
+private final class ConnectStatusStore {
+    var text: String?
 }
 
 extension ConnectStatusStore: @unchecked Sendable {}
 
 struct SettingsTab: View {
-    @EnvironmentObject private var appModel: NodeAppModel
-    @EnvironmentObject private var voiceWake: VoiceWakeManager
-    @EnvironmentObject private var bridgeController: BridgeConnectionController
+    @Environment(NodeAppModel.self) private var appModel: NodeAppModel
+    @Environment(VoiceWakeManager.self) private var voiceWake: VoiceWakeManager
+    @Environment(BridgeConnectionController.self) private var bridgeController: BridgeConnectionController
     @Environment(\.dismiss) private var dismiss
     @AppStorage("node.displayName") private var displayName: String = "iOS Node"
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
@@ -25,7 +27,7 @@ struct SettingsTab: View {
     @AppStorage("bridge.manual.host") private var manualBridgeHost: String = ""
     @AppStorage("bridge.manual.port") private var manualBridgePort: Int = 18790
     @AppStorage("bridge.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
-    @StateObject private var connectStatus = ConnectStatusStore()
+    @State private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
 
@@ -264,6 +266,7 @@ struct SettingsTab: View {
         defer { self.connectingBridgeID = nil }
 
         do {
+            let statusStore = self.connectStatus
             let existing = KeychainStore.loadString(
                 service: "com.steipete.clawdis.bridge",
                 account: self.keychainAccount())
@@ -281,9 +284,8 @@ struct SettingsTab: View {
                 endpoint: bridge.endpoint,
                 hello: hello,
                 onStatus: { status in
-                    let store = self.connectStatus
                     Task { @MainActor in
-                        store.text = status
+                        statusStore.text = status
                     }
                 })
 
@@ -330,6 +332,7 @@ struct SettingsTab: View {
         let endpoint: NWEndpoint = .hostPort(host: NWEndpoint.Host(host), port: port)
 
         do {
+            let statusStore = self.connectStatus
             let existing = KeychainStore.loadString(
                 service: "com.steipete.clawdis.bridge",
                 account: self.keychainAccount())
@@ -347,9 +350,8 @@ struct SettingsTab: View {
                 endpoint: endpoint,
                 hello: hello,
                 onStatus: { status in
-                    let store = self.connectStatus
                     Task { @MainActor in
-                        store.text = status
+                        statusStore.text = status
                     }
                 })
 

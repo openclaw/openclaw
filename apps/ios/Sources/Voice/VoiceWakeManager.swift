@@ -1,5 +1,6 @@
 import AVFAudio
 import Foundation
+import Observation
 import Speech
 
 private func makeAudioTapEnqueueCallback(queue: AudioBufferQueue) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
@@ -76,12 +77,13 @@ extension AVAudioPCMBuffer {
 }
 
 @MainActor
-final class VoiceWakeManager: NSObject, ObservableObject {
-    @Published var isEnabled: Bool = false
-    @Published var isListening: Bool = false
-    @Published var statusText: String = "Off"
-    @Published var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
-    @Published var lastTriggeredCommand: String?
+@Observable
+final class VoiceWakeManager: NSObject {
+    var isEnabled: Bool = false
+    var isListening: Bool = false
+    var statusText: String = "Off"
+    var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
+    var lastTriggeredCommand: String?
 
     private let audioEngine = AVAudioEngine()
     private var speechRecognizer: SFSpeechRecognizer?

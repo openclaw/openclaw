@@ -1,5 +1,6 @@
 import AppKit
 import ClawdisIPC
+import Observation
 import SwiftUI
 
 enum UIStrings {
@@ -68,9 +69,9 @@ struct OnboardingView: View {
     @State private var gatewayInstalling = false
     @State private var gatewayInstallMessage: String?
     // swiftlint:disable:next inclusive_language
-    @StateObject private var masterDiscovery: MasterDiscoveryModel
-    @ObservedObject private var state: AppState
-    @ObservedObject private var permissionMonitor: PermissionMonitor
+    @State private var masterDiscovery: MasterDiscoveryModel
+    @Bindable private var state: AppState
+    private var permissionMonitor: PermissionMonitor
 
     private let pageWidth: CGFloat = 680
     private let contentHeight: CGFloat = 520
@@ -99,9 +100,9 @@ struct OnboardingView: View {
         permissionMonitor: PermissionMonitor = .shared,
         discoveryModel: MasterDiscoveryModel = MasterDiscoveryModel())
     {
-        self._state = ObservedObject(wrappedValue: state)
-        self._permissionMonitor = ObservedObject(wrappedValue: permissionMonitor)
-        self._masterDiscovery = StateObject(wrappedValue: discoveryModel)
+        self.state = state
+        self.permissionMonitor = permissionMonitor
+        self._masterDiscovery = State(initialValue: discoveryModel)
     }
 
     var body: some View {

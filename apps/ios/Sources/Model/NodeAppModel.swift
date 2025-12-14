@@ -1,16 +1,18 @@
 import ClawdisKit
 import Network
+import Observation
 import SwiftUI
 
 @MainActor
-final class NodeAppModel: ObservableObject {
-    @Published var isBackgrounded: Bool = false
+@Observable
+final class NodeAppModel {
+    var isBackgrounded: Bool = false
     let screen = ScreenController()
     let camera = CameraController()
-    @Published var bridgeStatusText: String = "Not connected"
-    @Published var bridgeServerName: String?
-    @Published var bridgeRemoteAddress: String?
-    @Published var connectedBridgeID: String?
+    var bridgeStatusText: String = "Not connected"
+    var bridgeServerName: String?
+    var bridgeRemoteAddress: String?
+    var connectedBridgeID: String?
 
     private let bridge = BridgeSession()
     private var bridgeTask: Task<Void, Never>?

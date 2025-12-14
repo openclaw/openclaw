@@ -4,6 +4,7 @@ import AVFoundation
 import ClawdisIPC
 import CoreGraphics
 import Foundation
+import Observation
 import OSLog
 import Speech
 import UserNotifications
@@ -236,10 +237,11 @@ enum AppleScriptPermission {
 }
 
 @MainActor
-final class PermissionMonitor: ObservableObject {
+@Observable
+final class PermissionMonitor {
     static let shared = PermissionMonitor()
 
-    @Published private(set) var status: [Capability: Bool] = [:]
+    private(set) var status: [Capability: Bool] = [:]
 
     private var monitorTimer: Timer?
     private var isChecking = false

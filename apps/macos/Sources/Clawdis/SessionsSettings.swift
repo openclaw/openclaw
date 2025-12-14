@@ -4,7 +4,7 @@ import SwiftUI
 @MainActor
 struct SessionsSettings: View {
     private let isPreview: Bool
-    @ObservedObject private var state = AppStateStore.shared
+    private let state = AppStateStore.shared
     @State private var rows: [SessionRow]
     @State private var storePath: String = SessionLoader.defaultStorePath
     @State private var lastLoaded: Date?

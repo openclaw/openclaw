@@ -1,14 +1,16 @@
 import ClawdisKit
+import Observation
 import SwiftUI
 import WebKit
 
 @MainActor
-final class ScreenController: ObservableObject {
+@Observable
+final class ScreenController {
     let webView: WKWebView
 
-    @Published var mode: ClawdisScreenMode = .canvas
-    @Published var urlString: String = ""
-    @Published var errorText: String?
+    var mode: ClawdisScreenMode = .canvas
+    var urlString: String = ""
+    var errorText: String?
 
     init() {
         let config = WKWebViewConfiguration()

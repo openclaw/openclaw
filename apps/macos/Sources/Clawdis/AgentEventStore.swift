@@ -1,10 +1,12 @@
 import Foundation
+import Observation
 
 @MainActor
-final class AgentEventStore: ObservableObject {
+@Observable
+final class AgentEventStore {
     static let shared = AgentEventStore()
 
-    @Published private(set) var events: [ControlAgentEvent] = []
+    private(set) var events: [ControlAgentEvent] = []
     private let maxEvents = 400
 
     func append(_ event: ControlAgentEvent) {

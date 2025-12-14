@@ -2,23 +2,23 @@ import SwiftUI
 
 @main
 struct ClawdisApp: App {
-    @StateObject private var appModel: NodeAppModel
-    @StateObject private var bridgeController: BridgeConnectionController
+    @State private var appModel: NodeAppModel
+    @State private var bridgeController: BridgeConnectionController
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
         BridgeSettingsStore.bootstrapPersistence()
         let appModel = NodeAppModel()
-        _appModel = StateObject(wrappedValue: appModel)
-        _bridgeController = StateObject(wrappedValue: BridgeConnectionController(appModel: appModel))
+        _appModel = State(initialValue: appModel)
+        _bridgeController = State(initialValue: BridgeConnectionController(appModel: appModel))
     }
 
     var body: some Scene {
         WindowGroup {
             RootCanvas()
-                .environmentObject(self.appModel)
-                .environmentObject(self.appModel.voiceWake)
-                .environmentObject(self.bridgeController)
+                .environment(self.appModel)
+                .environment(self.appModel.voiceWake)
+                .environment(self.bridgeController)
                 .onOpenURL { url in
                     Task { await self.appModel.handleDeepLink(url: url) }
                 }

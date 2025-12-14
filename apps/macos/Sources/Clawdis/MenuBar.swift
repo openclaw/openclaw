@@ -9,9 +9,9 @@ import SwiftUI
 @main
 struct ClawdisApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var state: AppState
-    @StateObject private var gatewayManager = GatewayProcessManager.shared
-    @StateObject private var activityStore = WorkActivityStore.shared
+    @State private var state: AppState
+    private let gatewayManager = GatewayProcessManager.shared
+    private let activityStore = WorkActivityStore.shared
     @State private var statusItem: NSStatusItem?
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
@@ -23,7 +23,7 @@ struct ClawdisApp: App {
     }
 
     init() {
-        _state = StateObject(wrappedValue: AppStateStore.shared)
+        _state = State(initialValue: AppStateStore.shared)
     }
 
     var body: some Scene {

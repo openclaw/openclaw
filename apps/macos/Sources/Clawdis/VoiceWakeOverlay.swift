@@ -1,11 +1,13 @@
 import AppKit
+import Observation
 import OSLog
 import QuartzCore
 import SwiftUI
 
 /// Lightweight, borderless panel that shows the current voice wake transcript near the menu bar.
 @MainActor
-final class VoiceWakeOverlayController: ObservableObject {
+@Observable
+final class VoiceWakeOverlayController {
     static let shared = VoiceWakeOverlayController()
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.overlay")
@@ -17,7 +19,7 @@ final class VoiceWakeOverlayController: ObservableObject {
 
     enum Source: String { case wakeWord, pushToTalk }
 
-    @Published private(set) var model = Model()
+    private(set) var model = Model()
     var isVisible: Bool { self.model.isVisible }
 
     struct Model {
@@ -465,7 +467,7 @@ final class VoiceWakeOverlayController: ObservableObject {
 }
 
 struct VoiceWakeOverlayView: View {
-    @ObservedObject var controller: VoiceWakeOverlayController
+    var controller: VoiceWakeOverlayController
     @FocusState private var textFocused: Bool
     @State private var isHovering: Bool = false
     @State private var closeHovering: Bool = false
