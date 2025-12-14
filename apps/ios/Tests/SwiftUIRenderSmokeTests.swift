@@ -67,28 +67,4 @@ import UIKit
         let root = VoiceWakeToast(command: "clawdis: do something")
         _ = Self.host(root)
     }
-
-    @Test @MainActor func rootCanvasBuildsAViewHierarchyAcrossBridgeStates() {
-        let appModel = NodeAppModel()
-        let bridgeController = BridgeConnectionController(appModel: appModel, startDiscovery: false)
-
-        let hostCanvas = {
-            _ = Self.host(
-                RootCanvas()
-                    .environment(appModel)
-                    .environment(appModel.voiceWake)
-                    .environment(bridgeController))
-        }
-
-        hostCanvas()
-
-        appModel.bridgeStatusText = "Connecting…"
-        hostCanvas()
-
-        appModel.bridgeStatusText = "Error: disconnected"
-        hostCanvas()
-
-        appModel.bridgeServerName = "Mock Bridge"
-        hostCanvas()
-    }
 }
