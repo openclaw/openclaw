@@ -27,3 +27,6 @@ apps/ios/fastlane/logs/
 # fastlane build artifacts (local)
 apps/ios/*.ipa
 apps/ios/*.dSYM.zip
+
+# provisioning profiles (local)
+apps/ios/*.mobileprovision
