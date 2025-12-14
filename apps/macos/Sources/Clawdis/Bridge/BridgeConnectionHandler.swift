@@ -34,7 +34,15 @@ actor BridgeConnectionHandler {
         case error(code: String, message: String)
     }
 
-    // swiftlint:disable:next cyclomatic_complexity
+    private struct FrameContext: Sendable {
+        var serverName: String
+        var resolveAuth: @Sendable (BridgeHello) async -> AuthResult
+        var handlePair: @Sendable (BridgePairRequest) async -> PairResult
+        var onAuthenticated: (@Sendable (String) async -> Void)?
+        var onEvent: (@Sendable (String, BridgeEventFrame) async -> Void)?
+        var onRequest: (@Sendable (String, BridgeRPCRequest) async -> BridgeRPCResponse)?
+    }
+
     func run(
         resolveAuth: @escaping @Sendable (BridgeHello) async -> AuthResult,
         handlePair: @escaping @Sendable (BridgePairRequest) async -> PairResult,
@@ -43,6 +51,35 @@ actor BridgeConnectionHandler {
         onEvent: (@Sendable (String, BridgeEventFrame) async -> Void)? = nil,
         onRequest: (@Sendable (String, BridgeRPCRequest) async -> BridgeRPCResponse)? = nil) async
     {
+        self.configureStateLogging()
+        self.connection.start(queue: self.queue)
+
+        let context = FrameContext(
+            serverName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName,
+            resolveAuth: resolveAuth,
+            handlePair: handlePair,
+            onAuthenticated: onAuthenticated,
+            onEvent: onEvent,
+            onRequest: onRequest)
+
+        while true {
+            do {
+                guard let line = try await self.receiveLine() else { break }
+                guard let data = line.data(using: .utf8) else { continue }
+                let base = try self.decoder.decode(BridgeBaseFrame.self, from: data)
+                try await self.handleFrame(
+                    baseType: base.type,
+                    data: data,
+                    context: context)
+            } catch {
+                await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
+            }
+        }
+
+        await self.close(with: onDisconnected)
+    }
+
+    private func configureStateLogging() {
         self.connection.stateUpdateHandler = { [logger] state in
             switch state {
             case .ready:
@@ -53,95 +90,140 @@ actor BridgeConnectionHandler {
                 break
             }
         }
-        self.connection.start(queue: self.queue)
+    }
 
-        while true {
-            do {
-                guard let line = try await self.receiveLine() else { break }
-                guard let data = line.data(using: .utf8) else { continue }
-                let base = try self.decoder.decode(BridgeBaseFrame.self, from: data)
+    private func handleFrame(
+        baseType: String,
+        data: Data,
+        context: FrameContext) async throws
+    {
+        switch baseType {
+        case "hello":
+            await self.handleHelloFrame(
+                data: data,
+                context: context)
+        case "pair-request":
+            await self.handlePairRequestFrame(
+                data: data,
+                context: context)
+        case "event":
+            await self.handleEventFrame(data: data, onEvent: context.onEvent)
+        case "req":
+            try await self.handleRPCRequestFrame(data: data, onRequest: context.onRequest)
+        case "ping":
+            try await self.handlePingFrame(data: data)
+        case "invoke-res":
+            await self.handleInvokeResponseFrame(data: data)
+        default:
+            await self.sendError(code: "INVALID_REQUEST", message: "unknown type")
+        }
+    }
 
-                switch base.type {
-                case "hello":
-                    let hello = try self.decoder.decode(BridgeHello.self, from: data)
-                    self.nodeId = hello.nodeId
-                    let result = await resolveAuth(hello)
-                    await self.handleAuthResult(
-                        result,
-                        serverName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName)
-                    if case .ok = result, let nodeId = self.nodeId {
-                        await onAuthenticated?(nodeId)
-                    }
-                case "pair-request":
-                    let req = try self.decoder.decode(BridgePairRequest.self, from: data)
-                    self.nodeId = req.nodeId
-                    let enriched = BridgePairRequest(
-                        type: req.type,
-                        nodeId: req.nodeId,
-                        displayName: req.displayName,
-                        platform: req.platform,
-                        version: req.version,
-                        remoteAddress: self.remoteAddressString())
-                    let result = await handlePair(enriched)
-                    await self.handlePairResult(
-                        result,
-                        serverName: Host.current().localizedName ?? ProcessInfo.processInfo.hostName)
-                    if case .ok = result, let nodeId = self.nodeId {
-                        await onAuthenticated?(nodeId)
-                    }
-                case "event":
-                    guard self.isAuthenticated, let nodeId = self.nodeId else {
-                        await self.sendError(code: "UNAUTHORIZED", message: "not authenticated")
-                        continue
-                    }
-                    let evt = try self.decoder.decode(BridgeEventFrame.self, from: data)
-                    await onEvent?(nodeId, evt)
-                case "req":
-                    let req = try self.decoder.decode(BridgeRPCRequest.self, from: data)
-                    guard self.isAuthenticated, let nodeId = self.nodeId else {
-                        try await self.send(
-                            BridgeRPCResponse(
-                                id: req.id,
-                                ok: false,
-                                error: BridgeRPCError(code: "UNAUTHORIZED", message: "not authenticated")))
-                        continue
-                    }
-
-                    if let onRequest {
-                        let res = await onRequest(nodeId, req)
-                        try await self.send(res)
-                    } else {
-                        try await self.send(
-                            BridgeRPCResponse(
-                                id: req.id,
-                                ok: false,
-                                error: BridgeRPCError(code: "UNAVAILABLE", message: "RPC not supported")))
-                    }
-                case "ping":
-                    if !self.isAuthenticated {
-                        await self.sendError(code: "UNAUTHORIZED", message: "not authenticated")
-                        continue
-                    }
-                    let ping = try self.decoder.decode(BridgePing.self, from: data)
-                    try await self.send(BridgePong(type: "pong", id: ping.id))
-                case "invoke-res":
-                    guard self.isAuthenticated else {
-                        await self.sendError(code: "UNAUTHORIZED", message: "not authenticated")
-                        continue
-                    }
-                    let res = try self.decoder.decode(BridgeInvokeResponse.self, from: data)
-                    if let cont = self.pendingInvokes.removeValue(forKey: res.id) {
-                        cont.resume(returning: res)
-                    }
-                default:
-                    await self.sendError(code: "INVALID_REQUEST", message: "unknown type")
-                }
-            } catch {
-                await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
+    private func handleHelloFrame(
+        data: Data,
+        context: FrameContext) async
+    {
+        do {
+            let hello = try self.decoder.decode(BridgeHello.self, from: data)
+            self.nodeId = hello.nodeId
+            let result = await context.resolveAuth(hello)
+            await self.handleAuthResult(result, serverName: context.serverName)
+            if case .ok = result, let nodeId = self.nodeId {
+                await context.onAuthenticated?(nodeId)
             }
+        } catch {
+            await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
+        }
+    }
+
+    private func handlePairRequestFrame(
+        data: Data,
+        context: FrameContext) async
+    {
+        do {
+            let req = try self.decoder.decode(BridgePairRequest.self, from: data)
+            self.nodeId = req.nodeId
+            let enriched = BridgePairRequest(
+                type: req.type,
+                nodeId: req.nodeId,
+                displayName: req.displayName,
+                platform: req.platform,
+                version: req.version,
+                remoteAddress: self.remoteAddressString())
+            let result = await context.handlePair(enriched)
+            await self.handlePairResult(result, serverName: context.serverName)
+            if case .ok = result, let nodeId = self.nodeId {
+                await context.onAuthenticated?(nodeId)
+            }
+        } catch {
+            await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
+        }
+    }
+
+    private func handleEventFrame(
+        data: Data,
+        onEvent: (@Sendable (String, BridgeEventFrame) async -> Void)?) async
+    {
+        guard self.isAuthenticated, let nodeId = self.nodeId else {
+            await self.sendError(code: "UNAUTHORIZED", message: "not authenticated")
+            return
+        }
+        do {
+            let evt = try self.decoder.decode(BridgeEventFrame.self, from: data)
+            await onEvent?(nodeId, evt)
+        } catch {
+            await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
+        }
+    }
+
+    private func handleRPCRequestFrame(
+        data: Data,
+        onRequest: (@Sendable (String, BridgeRPCRequest) async -> BridgeRPCResponse)?) async throws
+    {
+        let req = try self.decoder.decode(BridgeRPCRequest.self, from: data)
+        guard self.isAuthenticated, let nodeId = self.nodeId else {
+            try await self.send(
+                BridgeRPCResponse(
+                    id: req.id,
+                    ok: false,
+                    error: BridgeRPCError(code: "UNAUTHORIZED", message: "not authenticated")))
+            return
         }
 
-        await self.close(with: onDisconnected)
+        if let onRequest {
+            let res = await onRequest(nodeId, req)
+            try await self.send(res)
+        } else {
+            try await self.send(
+                BridgeRPCResponse(
+                    id: req.id,
+                    ok: false,
+                    error: BridgeRPCError(code: "UNAVAILABLE", message: "RPC not supported")))
+        }
+    }
+
+    private func handlePingFrame(data: Data) async throws {
+        guard self.isAuthenticated else {
+            await self.sendError(code: "UNAUTHORIZED", message: "not authenticated")
+            return
+        }
+        let ping = try self.decoder.decode(BridgePing.self, from: data)
+        try await self.send(BridgePong(type: "pong", id: ping.id))
+    }
+
+    private func handleInvokeResponseFrame(data: Data) async {
+        guard self.isAuthenticated else {
+            await self.sendError(code: "UNAUTHORIZED", message: "not authenticated")
+            return
+        }
+        do {
+            let res = try self.decoder.decode(BridgeInvokeResponse.self, from: data)
+            if let cont = self.pendingInvokes.removeValue(forKey: res.id) {
+                cont.resume(returning: res)
+            }
+        } catch {
+            await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
+        }
     }
 
     private func remoteAddressString() -> String? {
