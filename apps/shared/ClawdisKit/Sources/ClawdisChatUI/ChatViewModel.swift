@@ -22,7 +22,7 @@ public final class ClawdisChatViewModel {
     public private(set) var isSending = false
     public var errorText: String?
     public var attachments: [ClawdisPendingAttachment] = []
-    public private(set) var healthOK: Bool = true
+    public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
 
     public let sessionKey: String
@@ -89,6 +89,8 @@ public final class ClawdisChatViewModel {
 
     private func bootstrap() async {
         self.isLoading = true
+        self.errorText = nil
+        self.healthOK = false
         defer { self.isLoading = false }
         do {
             do {
@@ -103,6 +105,7 @@ public final class ClawdisChatViewModel {
                 self.thinkingLevel = level
             }
             await self.pollHealthIfNeeded(force: true)
+            self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription
             chatUILogger.error("bootstrap failed \(error.localizedDescription, privacy: .public)")
