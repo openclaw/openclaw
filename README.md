@@ -10,18 +10,27 @@
 
 <p align="center">
   <a href="https://github.com/steipete/clawdis/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/steipete/clawdis/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
-  <a href="https://www.npmjs.com/package/clawdis"><img src="https://img.shields.io/npm/v/clawdis.svg?style=for-the-badge" alt="npm version"></a>
+  <a href="https://github.com/steipete/clawdis/releases"><img src="https://img.shields.io/github/v/release/steipete/clawdis?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**CLAWDIS** is a WhatsApp- and Telegram-to-AI gateway. Send a message, get an AI response. It's like having a genius lobster in your pocket 24/7.
+**CLAWDIS** is a TypeScript/Node gateway that bridges WhatsApp (Web/Baileys) and Telegram (Bot API/grammY) to a local coding agent (**Pi**).
+It’s like having a genius lobster in your pocket 24/7 — but with a real control plane, companion apps, and a network model that won’t corrupt sessions.
 
 ```
-┌─────────────┐      ┌──────────┐      ┌─────────────┐
-│  WhatsApp   │ ───▶ │ CLAWDIS  │ ───▶ │  AI Agent   │
-│  Telegram   │ ───▶ │  🦞⏱️💙   │ ◀─── │    (Pi)     │
-│  (You)      │ ◀─── │          │      │             │
-└─────────────┘      └──────────┘      └─────────────┘
+WhatsApp / Telegram
+        │
+        ▼
+  ┌──────────────────────────┐
+  │          Gateway          │  ws://127.0.0.1:18789 (loopback-only)
+  │     (single source)       │  tcp://0.0.0.0:18790 (optional Bridge)
+  └───────────┬───────────────┘
+              │
+              ├─ Pi agent (RPC)
+              ├─ CLI (clawdis …)
+              ├─ WebChat (loopback UI)
+              ├─ macOS app (Clawdis.app)
+              └─ iOS node (Iris) via Bridge + pairing
 ```
 
 ## Why "CLAWDIS"?
@@ -34,52 +43,66 @@ Because every space lobster needs a time-and-space machine. The Doctor has a TAR
 
 - 📱 **WhatsApp Integration** — Personal WhatsApp Web (Baileys)
 - ✈️ **Telegram (Bot API)** — DMs and groups via grammY
-- 🤖 **AI Agent Gateway** — Pi only (Pi CLI in RPC mode)
-- 💬 **Session Management** — Per-sender conversation context
+- 🛰️ **Gateway control plane** — One long-lived gateway owns provider state; clients connect over WebSocket
+- 🤖 **Agent runtime** — Pi only (Pi CLI in RPC mode), with tool streaming
+- 💬 **Sessions** — Direct chats collapse into `main` by default; groups are isolated
 - 🔔 **Heartbeats** — Periodic check-ins for proactive AI
 - 🧭 **Clawd Browser** — Dedicated Chrome/Chromium profile with tabs + screenshot control (no interference with your daily browser)
 - 👥 **Group Chat Support** — Mention-based triggering
 - 📎 **Media Support** — Images, audio, documents, voice notes
-- 🎤 **Voice Transcription** — Whisper integration
+- 🎤 **Voice & transcription hooks** — Voice Wake (macOS/iOS) + optional transcription pipeline
 - 🔧 **Tool Streaming** — Real-time display (💻📄✍️📝)
-- 🖥️ **macOS Companion (Clawdis.app)** — Menu bar controls, on-device Voice Wake, model/config editor
+- 🖥️ **macOS Companion (Clawdis.app)** — Menu bar controls, Voice Wake, WebChat, onboarding, remote gateway control
+- 📱 **iOS Node (Iris)** — Pairs as a node, exposes a Canvas surface, forwards voice wake transcripts
 
 Only the Pi CLI is supported now; legacy Claude/Codex/Gemini paths have been removed.
 
+## Network model (the “new reality”)
+
+- **One Gateway per host**. The Gateway is the only process allowed to own the WhatsApp Web session.
+- **Loopback-first**: the Gateway WebSocket listens on `ws://127.0.0.1:18789` and is not exposed on the LAN.
+- **Bridge for nodes**: when enabled, the Gateway also exposes a LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
+- **Remote control**: use a VPN/tailnet or an SSH tunnel (`ssh -N -L 18789:127.0.0.1:18789 user@host`). The macOS app can drive this flow.
+
+## Codebase
+
+- **TypeScript (ESM)**: CLI + Gateway live in `src/` and run on Node ≥ 22.
+- **macOS app (Swift)**: menu bar companion lives in `apps/macos/`.
+- **iOS app (Swift)**: Iris node prototype lives in `apps/ios/`.
+
 ## Quick Start
-Mac signing tip: set `SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` in your shell profile so `scripts/restart-mac.sh` signs with your cert (defaults to ad-hoc). Debug bundle ID remains `com.steipete.clawdis.debug`.
 
 Runtime requirement: **Node ≥22.0.0** (not bundled). The macOS app and CLI both use the host runtime; install via Homebrew or official installers before running `clawdis`.
 
 ```bash
-# Install
-npm install -g clawdis
+# From source (recommended while the npm package is still settling)
+pnpm install
+pnpm build
 
-# Link your WhatsApp
-clawdis login
-
-# Send a message
-clawdis send --to +1234567890 --message "Hello from the CLAWDIS!"
-
-# Talk directly to the agent (no WhatsApp send)
-clawdis agent --to +1234567890 --message "Ship checklist" --thinking high
+# Link your WhatsApp (stores creds under ~/.clawdis/credentials)
+pnpm clawdis login
 
 # Start the gateway (WebSocket control plane)
-clawdis gateway --port 18789 --verbose
+pnpm clawdis gateway --port 18789 --verbose
+
+# Send a WhatsApp message (WhatsApp sends go through the Gateway)
+pnpm clawdis send --to +1234567890 --message "Hello from the CLAWDIS!"
+
+# Talk to the agent (optionally deliver back to WhatsApp/Telegram)
+pnpm clawdis agent --message "Ship checklist" --thinking high
 
 # If the port is busy, force-kill listeners then start
-clawdis gateway --force
+pnpm clawdis gateway --force
 ```
 
 ## Companion Apps
 
 ### macOS Companion (Clawdis.app)
 
-- **On-device Voice Wake:** listens for wake words (e.g. “Claude”) using Apple’s on-device speech recognizer (macOS 26+). macOS still shows the standard Speech/Mic permissions prompt, but audio stays on device.
-- **Push-to-talk (Right Option hold):** hold right Option to speak; the voice overlay shows live partials and sends when you release.
-- **Config tab:** pick the model from your local Pi model catalog (`pi-mono/packages/ai/src/models.generated.ts`), or enter a custom model ID; edit session store path and context tokens.
-- **Voice settings:** language + additional languages, mic picker, live level meter, trigger-word table, and a built-in test harness.
-- **Menu bar toggle:** enable/disable Voice Wake from the menu bar; respects Dock-icon preference.
+- A menu bar app that can start/stop the Gateway, show health/presence, and provide a local ops UI.
+- **Voice Wake** (on-device speech recognition) and Push-to-talk overlay.
+- **WebChat** embed + debug tooling (logs, status, heartbeats, sessions).
+- Hosts **PeekabooBridge** for UI automation brokering (for clawd workflows).
 
 ### Voice Wake reply routing
 
@@ -97,9 +120,9 @@ Build/run the mac app with `./scripts/restart-mac.sh` (packages, installs, and l
 
 Iris is an internal/prototype iOS app that connects as a **remote node**:
 
-- **Voice trigger:** forwards transcripts into the Gateway `agent` method.
+- **Voice trigger:** forwards transcripts into the Gateway (agent runs + wakeups).
 - **Canvas screen:** a WKWebView + `<canvas>` surface the agent can control (via `screen.eval` / `screen.snapshot` over `node.invoke`).
-- **Discovery + pairing:** finds the gateway bridge via Bonjour (`_clawdis-bridge._tcp`) and uses Gateway-owned pairing (`clawdis nodes pending|approve`).
+- **Discovery + pairing:** finds the bridge via Bonjour (`_clawdis-bridge._tcp`) and uses Gateway-owned pairing (`clawdis nodes pending|approve`).
 
 Runbook: `docs/ios/connect.md`
 
@@ -110,16 +133,7 @@ Create `~/.clawdis/clawdis.json`:
 ```json5
 {
   inbound: {
-    allowFrom: ["+1234567890"],
-    reply: {
-      mode: "command",
-      command: ["pi", "--mode", "rpc", "{{BodyStripped}}"],
-      session: {
-        scope: "per-sender",
-        idleMinutes: 1440
-      },
-      heartbeatMinutes: 10
-    }
+    allowFrom: ["+1234567890"]
   }
 }
 ```
@@ -139,12 +153,16 @@ Optional: enable/configure clawd’s dedicated browser control (defaults are alr
 ## Documentation
 
 - [Configuration Guide](./docs/configuration.md)
+- [Gateway runbook](./docs/gateway.md)
+- [Discovery + transports](./docs/discovery.md)
 - [Agent Integration](./docs/agents.md)
 - [Group Chats](./docs/group-messages.md)
 - [Security](./docs/security.md)
 - [Troubleshooting](./docs/troubleshooting.md)
 - [The Lore](./docs/lore.md) 🦞
 - [Telegram (Bot API)](./docs/telegram.md)
+- [iOS node runbook (Iris)](./docs/ios/connect.md)
+- [macOS app spec](./docs/clawdis-mac.md)
 
 ## Clawd
 
@@ -157,21 +175,23 @@ CLAWDIS was built for **Clawd**, a space lobster AI assistant. See the full setu
 
 ## Provider
 
+If you’re running from source, use `pnpm clawdis …` instead of `clawdis …`.
+
 ### WhatsApp Web
 ```bash
-clawdis login      # Scan QR code
-clawdis gateway    # Start listening (WS on 127.0.0.1:18789)
+clawdis login      # scan QR, store creds
+clawdis gateway    # run Gateway (WS on 127.0.0.1:18789)
 ```
 
 ### Telegram (Bot API)
-Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebChat, with groups kept isolated. Text and media send work via `clawdis send --provider telegram`. The unified `clawdis gateway` starts WhatsApp and, when `TELEGRAM_BOT_TOKEN` or `telegram.botToken` is set, Telegram too (use `--provider` to force web|telegram|all). Webhook mode: `--webhook --port … --webhook-secret … --webhook-url …` (or register via BotFather). See `docs/telegram.md` for setup and limits.
+Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebChat, with groups kept isolated. Text/media sends work via `clawdis send --provider telegram` (reads `TELEGRAM_BOT_TOKEN` or `telegram.botToken`). Webhook mode is supported; see `docs/telegram.md` for setup and limits.
 
 ## Commands
 
 | Command | Description |
 |---------|-------------|
 | `clawdis login` | Link WhatsApp Web via QR |
-| `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode). Always uses the Gateway WS; requires a running gateway. |
+| `clawdis send` | Send a message (WhatsApp default; `--provider telegram` for bot mode). WhatsApp sends go via the Gateway WS; Telegram sends are direct. |
 | `clawdis agent` | Talk directly to the agent (no WhatsApp send) |
 | `clawdis browser ...` | Manage clawd’s dedicated browser (status/tabs/open/screenshot). |
 | `clawdis gateway` | Start the Gateway server (WS control plane). Params: `--port`, `--token`, `--force`, `--verbose`. |
@@ -202,7 +222,7 @@ In chat, send `/status` to see if the agent is reachable, how much context the s
 ### Sessions, surfaces, and WebChat
 
 - Direct chats now share a canonical session key `main` by default (configurable via `inbound.reply.session.mainKey`). Groups stay isolated as `group:<jid>`.
-- WebChat always attaches to the `main` session and hydrates the full session history from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view mirrors WhatsApp/Telegram turns.
+- WebChat attaches to `main` and hydrates history from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view mirrors WhatsApp/Telegram turns.
 - Inbound contexts carry a `Surface` hint (e.g., `whatsapp`, `webchat`, `telegram`) for logging; replies still go back to the originating surface deterministically.
 - Every inbound message is wrapped for the agent as `[Surface FROM HOST/IP TIMESTAMP] body`:
   - WhatsApp: `[WhatsApp +15551234567 2025-12-09 12:34] …`
