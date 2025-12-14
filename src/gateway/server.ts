@@ -61,6 +61,11 @@ import {
   updateSystemPresence,
   upsertPresence,
 } from "../infra/system-presence.js";
+import {
+  defaultVoiceWakeTriggers,
+  loadVoiceWakeConfig,
+  setVoiceWakeTriggers,
+} from "../infra/voicewake.js";
 import { logError, logInfo, logWarn } from "../logger.js";
 import {
   getChildLogger,
@@ -168,6 +173,8 @@ type SessionsPatchResult = {
 const METHODS = [
   "health",
   "status",
+  "voicewake.get",
+  "voicewake.set",
   "sessions.list",
   "sessions.patch",
   "last-heartbeat",
@@ -207,6 +214,7 @@ const EVENTS = [
   "cron",
   "node.pair.requested",
   "node.pair.resolved",
+  "voicewake.changed",
 ];
 
 export type GatewayServer = {
@@ -282,6 +290,16 @@ function formatForLog(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function normalizeVoiceWakeTriggers(input: unknown): string[] {
+  const raw = Array.isArray(input) ? input : [];
+  const cleaned = raw
+    .map((v) => (typeof v === "string" ? v.trim() : ""))
+    .filter((v) => v.length > 0)
+    .slice(0, 32)
+    .map((v) => v.slice(0, 64));
+  return cleaned.length > 0 ? cleaned : defaultVoiceWakeTriggers();
 }
 
 function readSessionMessages(
@@ -752,6 +770,20 @@ export async function startGatewayServer(
     }
   };
 
+  const bridgeSendToAllConnected = (event: string, payload: unknown) => {
+    if (!bridge) return;
+    const payloadJSON = payload ? JSON.stringify(payload) : null;
+    for (const node of bridge.listConnected()) {
+      bridge.sendEvent({ nodeId: node.nodeId, event, payloadJSON });
+    }
+  };
+
+  const broadcastVoiceWakeChanged = (triggers: string[]) => {
+    const payload = { triggers };
+    broadcast("voicewake.changed", payload, { dropIfSlow: true });
+    bridgeSendToAllConnected("voicewake.changed", payload);
+  };
+
   const handleBridgeRequest = async (
     nodeId: string,
     req: { id: string; method: string; paramsJSON?: string | null },
@@ -773,6 +805,23 @@ export async function startGatewayServer(
 
     try {
       switch (method) {
+        case "voicewake.get": {
+          const cfg = await loadVoiceWakeConfig();
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ triggers: cfg.triggers }),
+          };
+        }
+        case "voicewake.set": {
+          const params = parseParams();
+          const triggers = normalizeVoiceWakeTriggers(params.triggers);
+          const cfg = await setVoiceWakeTriggers(triggers);
+          broadcastVoiceWakeChanged(cfg.triggers);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ triggers: cfg.triggers }),
+          };
+        }
         case "health": {
           const now = Date.now();
           const cached = healthCache;
@@ -1170,7 +1219,7 @@ export async function startGatewayServer(
         port: bridgePort,
         serverName: machineDisplayName,
         onRequest: (nodeId, req) => handleBridgeRequest(nodeId, req),
-        onAuthenticated: (node) => {
+        onAuthenticated: async (node) => {
           const host = node.displayName?.trim() || node.nodeId;
           const ip = node.remoteIp?.trim();
           const version = node.version?.trim() || "unknown";
@@ -1199,6 +1248,17 @@ export async function startGatewayServer(
               },
             },
           );
+
+          try {
+            const cfg = await loadVoiceWakeConfig();
+            started.sendEvent({
+              nodeId: node.nodeId,
+              event: "voicewake.changed",
+              payloadJSON: JSON.stringify({ triggers: cfg.triggers }),
+            });
+          } catch {
+            // Best-effort only.
+          }
         },
         onDisconnected: (node) => {
           bridgeUnsubscribeAll(node.nodeId);
@@ -1674,6 +1734,46 @@ export async function startGatewayServer(
                 "connect is only valid as the first request",
               ),
             );
+            break;
+          }
+          case "voicewake.get": {
+            try {
+              const cfg = await loadVoiceWakeConfig();
+              respond(true, { triggers: cfg.triggers });
+            } catch (err) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+              );
+            }
+            break;
+          }
+          case "voicewake.set": {
+            const params = (req.params ?? {}) as Record<string, unknown>;
+            if (!Array.isArray(params.triggers)) {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  "voicewake.set requires triggers: string[]",
+                ),
+              );
+              break;
+            }
+            try {
+              const triggers = normalizeVoiceWakeTriggers(params.triggers);
+              const cfg = await setVoiceWakeTriggers(triggers);
+              broadcastVoiceWakeChanged(cfg.triggers);
+              respond(true, { triggers: cfg.triggers });
+            } catch (err) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+              );
+            }
             break;
           }
           case "health": {

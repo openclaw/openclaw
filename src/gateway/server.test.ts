@@ -47,6 +47,9 @@ const bridgeInvoke = vi.hoisted(() =>
     error: null,
   })),
 );
+const bridgeListConnected = vi.hoisted(() =>
+  vi.fn(() => [] as BridgeClientInfo[]),
+);
 const bridgeSendEvent = vi.hoisted(() => vi.fn());
 vi.mock("../infra/bridge/server.js", () => ({
   startNodeBridgeServer: vi.fn(async (opts: BridgeStartOpts) => {
@@ -54,7 +57,7 @@ vi.mock("../infra/bridge/server.js", () => ({
     return {
       port: 18790,
       close: async () => {},
-      listConnected: () => [],
+      listConnected: bridgeListConnected,
       invoke: bridgeInvoke,
       sendEvent: bridgeSendEvent,
     };
@@ -246,6 +249,110 @@ async function rpcReq<T = unknown>(
 }
 
 describe("gateway server", () => {
+  test("voicewake.get returns defaults and voicewake.set broadcasts", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
+    expect(initial.ok).toBe(true);
+    expect(initial.payload?.triggers).toEqual(["clawd", "claude"]);
+
+    const changedP = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: unknown;
+    }>(ws, (o) => o.type === "event" && o.event === "voicewake.changed");
+
+    const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+      triggers: ["  hi  ", "", "there"],
+    });
+    expect(setRes.ok).toBe(true);
+    expect(setRes.payload?.triggers).toEqual(["hi", "there"]);
+
+    const changed = await changedP;
+    expect(changed.event).toBe("voicewake.changed");
+    expect(
+      (changed.payload as { triggers?: unknown } | undefined)?.triggers,
+    ).toEqual(["hi", "there"]);
+
+    const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
+    expect(after.ok).toBe(true);
+    expect(after.payload?.triggers).toEqual(["hi", "there"]);
+
+    const onDisk = JSON.parse(
+      await fs.readFile(
+        path.join(homeDir, ".clawdis", "settings", "voicewake.json"),
+        "utf8",
+      ),
+    ) as { triggers?: unknown; updatedAtMs?: unknown };
+    expect(onDisk.triggers).toEqual(["hi", "there"]);
+    expect(typeof onDisk.updatedAtMs).toBe("number");
+
+    ws.close();
+    await server.close();
+
+    if (prevHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = prevHome;
+    }
+  });
+
+  test("pushes voicewake.changed to nodes on connect and on updates", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    bridgeSendEvent.mockClear();
+    bridgeListConnected.mockReturnValue([{ nodeId: "n1" }]);
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const startCall = bridgeStartCalls.at(-1);
+    expect(startCall).toBeTruthy();
+
+    await startCall?.onAuthenticated?.({ nodeId: "n1" });
+
+    const first = bridgeSendEvent.mock.calls.find(
+      (c) => c[0]?.event === "voicewake.changed" && c[0]?.nodeId === "n1",
+    )?.[0] as { payloadJSON?: string | null } | undefined;
+    expect(first?.payloadJSON).toBeTruthy();
+    const firstPayload = JSON.parse(String(first?.payloadJSON)) as {
+      triggers?: unknown;
+    };
+    expect(firstPayload.triggers).toEqual(["clawd", "claude"]);
+
+    bridgeSendEvent.mockClear();
+
+    const setRes = await rpcReq<{ triggers: string[] }>(ws, "voicewake.set", {
+      triggers: ["clawd", "computer"],
+    });
+    expect(setRes.ok).toBe(true);
+
+    const broadcast = bridgeSendEvent.mock.calls.find(
+      (c) => c[0]?.event === "voicewake.changed" && c[0]?.nodeId === "n1",
+    )?.[0] as { payloadJSON?: string | null } | undefined;
+    expect(broadcast?.payloadJSON).toBeTruthy();
+    const broadcastPayload = JSON.parse(String(broadcast?.payloadJSON)) as {
+      triggers?: unknown;
+    };
+    expect(broadcastPayload.triggers).toEqual(["clawd", "computer"]);
+
+    ws.close();
+    await server.close();
+
+    if (prevHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = prevHome;
+    }
+  });
+
   test("supports gateway-owned node pairing methods and events", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
     const prevHome = process.env.HOME;
