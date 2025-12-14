@@ -1,7 +1,9 @@
 import SwiftUI
 
 struct VoiceWakeWordsSettingsView: View {
-    @State private var triggerWords: [String] = []
+    @EnvironmentObject private var appModel: NodeAppModel
+    @State private var triggerWords: [String] = VoiceWakePreferences.loadTriggerWords()
+    @State private var syncTask: Task<Void, Never>?
 
     var body: some View {
         Form {
@@ -34,13 +36,21 @@ struct VoiceWakeWordsSettingsView: View {
         }
         .navigationTitle("Wake Words")
         .toolbar { EditButton() }
-        .task {
+        .onAppear {
             if self.triggerWords.isEmpty {
-                self.triggerWords = VoiceWakePreferences.loadTriggerWords()
+                self.triggerWords = VoiceWakePreferences.defaultTriggerWords
             }
         }
         .onChange(of: self.triggerWords) { _, newValue in
+            // Keep local voice wake responsive even if bridge isn't connected yet.
             VoiceWakePreferences.saveTriggerWords(newValue)
+
+            let snapshot = VoiceWakePreferences.sanitizeTriggerWords(newValue)
+            self.syncTask?.cancel()
+            self.syncTask = Task { [snapshot, weak appModel = self.appModel] in
+                try? await Task.sleep(nanoseconds: 650_000_000)
+                await appModel?.setGlobalWakeWords(snapshot)
+            }
         }
     }
 
