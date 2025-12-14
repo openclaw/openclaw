@@ -20,9 +20,6 @@ enum AgentIdentityEmoji {
         let table: [(needle: String, emoji: String)] = [
             ("lobster", "🦞"),
             ("sloth", "🦥"),
-            ("space", "🪐"),
-            ("rocket", "🚀"),
-            ("astronaut", "🧑‍🚀"),
             ("octopus", "🐙"),
             ("crab", "🦀"),
             ("shark", "🦈"),
@@ -30,9 +27,14 @@ enum AgentIdentityEmoji {
             ("dog", "🐕"),
             ("owl", "🦉"),
             ("fox", "🦊"),
-            ("robot", "🤖"),
-            ("wizard", "🧙"),
-            ("ninja", "🥷"),
+            ("otter", "🦦"),
+            ("raccoon", "🦝"),
+            ("badger", "🦡"),
+            ("hedgehog", "🦔"),
+            ("koala", "🐨"),
+            ("penguin", "🐧"),
+            ("frog", "🐸"),
+            ("bear", "🐻"),
         ]
 
         for entry in table where normalized.contains(entry.needle) {
@@ -41,4 +43,3 @@ enum AgentIdentityEmoji {
         return "🦞"
     }
 }
-
