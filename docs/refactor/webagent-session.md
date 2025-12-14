@@ -10,7 +10,7 @@ Context: web chat currently lives in a WKWebView that loads the pi-web bundle. S
 
 ## Target state
 - Gateway WS adds methods:
-  - `chat.history { sessionKey }` → `{ sessionKey, messages[], thinkingLevel }` (reads the existing JSONL + sessions.json).
+  - `chat.history { sessionKey }` → `{ sessionKey, messages[], thinkingLevel }` (reads the existing JSONL + session store).
   - `chat.send { sessionKey, message, attachments?, thinking?, deliver?, timeoutMs<=30000, idempotencyKey }` → `res { runId, status:"accepted" }` or `res ok:false` on validation/timeout.
 - Gateway WS emits `chat` events `{ runId, sessionKey, seq, state:"delta"|"final"|"error", message?, errorMessage?, usage?, stopReason? }`. Streaming is optional; minimum is a single `state:"final"` per send.
 - Client consumes only WS: bootstrap via `chat.history`, send via `chat.send`, live updates via `chat` events. No file watchers.
