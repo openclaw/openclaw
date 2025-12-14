@@ -124,8 +124,8 @@ jobs:
       - name: Swift build (release)
         run: swift build --package-path apps/macos --configuration release
 
-      - name: Swift tests
-        run: swift test --package-path apps/macos --parallel
+      - name: Swift tests (coverage)
+        run: swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path
 
       - name: Generate iOS project
         run: |
@@ -135,13 +135,25 @@ jobs:
       - name: iOS tests
         run: |
           set -euo pipefail
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
           DEST_ID="$(
-            xcrun simctl list devices available |
-              grep -m 1 -E 'iPhone.*\\([0-9A-Fa-f-]{36}\\)' |
-              sed -E 's/.*\\(([0-9A-Fa-f-]{36})\\).*/\\1/'
+            (
+              xcrun simctl list devices available |
+                grep -m 1 -E 'iPhone 16 .*\\([0-9A-Fa-f-]{36}\\)' ||
+                xcrun simctl list devices available |
+                  grep -m 1 -E 'iPhone.*\\([0-9A-Fa-f-]{36}\\)'
+            ) | sed -E 's/.*\\(([0-9A-Fa-f-]{36})\\).*/\\1/'
           )"
           echo "Using iOS Simulator id: $DEST_ID"
           xcodebuild test \
             -project apps/ios/Clawdis.xcodeproj \
             -scheme Clawdis \
-            -destination "platform=iOS Simulator,id=$DEST_ID"
+            -destination "platform=iOS Simulator,id=$DEST_ID" \
+            -resultBundlePath "$RESULT_BUNDLE_PATH" \
+            -enableCodeCoverage YES
+
+      - name: iOS coverage summary
+        run: |
+          set -euo pipefail
+          RESULT_BUNDLE_PATH="$RUNNER_TEMP/Clawdis-iOS.xcresult"
+          xcrun xccov view --report --only-targets "$RESULT_BUNDLE_PATH"
