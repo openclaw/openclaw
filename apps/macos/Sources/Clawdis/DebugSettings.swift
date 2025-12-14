@@ -8,7 +8,6 @@ struct DebugSettings: View {
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @AppStorage(iconOverrideKey) private var iconOverrideRaw: String = IconOverrideSelection.system.rawValue
-    @AppStorage(canvasEnabledKey) private var canvasEnabled: Bool = true
     @AppStorage(deepLinkAgentEnabledKey) private var deepLinkAgentEnabled: Bool = false
     @State private var modelsCount: Int?
     @State private var modelsLoading = false
@@ -484,11 +483,9 @@ struct DebugSettings: View {
     private var canvasSection: some View {
         GroupBox("Canvas") {
             VStack(alignment: .leading, spacing: 10) {
-                Toggle("Allow Canvas (agent)", isOn: self.$canvasEnabled)
-                    .toggleStyle(.checkbox)
-                    .help(
-                        "When off, agent Canvas requests return “Canvas disabled by user”. " +
-                            "Manual debug actions still work.")
+                Text("Enable/disable Canvas in General settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
                 HStack(spacing: 8) {
                     TextField("Session", text: self.$canvasSessionKey)
