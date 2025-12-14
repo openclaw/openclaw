@@ -475,7 +475,8 @@ struct OnboardingView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Workspace")
                         .font(.headline)
-                    Text(self.workspacePath.isEmpty ? AgentWorkspace.displayPath(for: ClawdisConfigFile.defaultWorkspaceURL()) : self.workspacePath)
+                    Text(self.workspacePath.isEmpty ? AgentWorkspace
+                        .displayPath(for: ClawdisConfigFile.defaultWorkspaceURL()) : self.workspacePath)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -491,7 +492,8 @@ struct OnboardingView: View {
                         }
                     }
                     .buttonStyle(.borderedProminent)
-                    .disabled(self.identityApplying || self.identityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(self.identityApplying || self.identityName.trimmingCharacters(in: .whitespacesAndNewlines)
+                        .isEmpty)
 
                     Button("Open workspace") {
                         let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)

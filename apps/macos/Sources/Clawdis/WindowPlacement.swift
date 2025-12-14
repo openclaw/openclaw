@@ -48,7 +48,7 @@ enum WindowPlacement {
         fallback: ((NSScreen?) -> NSRect)? = nil)
     {
         let frame = window.frame
-        let targetScreens = NSScreen.screens.isEmpty ? [NSScreen.main].compactMap { $0 } : NSScreen.screens
+        let targetScreens = NSScreen.screens.isEmpty ? [NSScreen.main].compactMap(\.self) : NSScreen.screens
         let isVisibleSomewhere = targetScreens.contains { screen in
             frame.intersects(screen.visibleFrame.insetBy(dx: 12, dy: 12))
         }
@@ -56,7 +56,7 @@ enum WindowPlacement {
         if isVisibleSomewhere { return }
 
         let screen = NSScreen.main ?? targetScreens.first
-        let next = fallback?(screen) ?? centeredFrame(size: defaultSize, on: screen)
+        let next = fallback?(screen) ?? self.centeredFrame(size: defaultSize, on: screen)
         window.setFrame(next, display: false)
     }
 }
