@@ -9,6 +9,16 @@ packages:
   ClawdisKit:
     path: ../shared/ClawdisKit
 
+schemes:
+  Clawdis:
+    shared: true
+    build:
+      targets:
+        Clawdis: all
+    test:
+      targets:
+        - ClawdisTests
+
 targets:
   Clawdis:
     type: application
