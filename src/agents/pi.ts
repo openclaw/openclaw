@@ -1,5 +1,6 @@
 import path from "node:path";
 
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type {
   AgentMeta,
   AgentParseResult,
@@ -165,33 +166,51 @@ function parsePiJson(raw: string): AgentParseResult {
   };
 }
 
+function isPiInvocation(argv: string[]): boolean {
+  if (argv.length === 0) return false;
+  const base = path.basename(argv[0]).replace(/\.(m?js)$/i, "");
+  if (base === "pi" || base === "tau") return true;
+
+  // Also handle node entrypoints like `node /.../pi-mono/packages/coding-agent/dist/cli.js`
+  if (base === "node" && argv.length > 1) {
+    const second = argv[1]?.toString().toLowerCase();
+    return (
+      second.includes("pi-mono") &&
+      second.includes("packages") &&
+      second.includes("coding-agent") &&
+      (second.endsWith("cli.js") || second.includes("/dist/cli"))
+    );
+  }
+
+  return false;
+}
+
 export const piSpec: AgentSpec = {
   kind: "pi",
-  isInvocation: (argv) => {
-    if (argv.length === 0) return false;
-    const base = path.basename(argv[0]).replace(/\.(m?js)$/i, "");
-    if (base === "pi" || base === "tau") return true;
-
-    // Also handle node entrypoints like `node /.../pi-mono/packages/coding-agent/dist/cli.js`
-    if (base === "node" && argv.length > 1) {
-      const second = argv[1]?.toString().toLowerCase();
-      return (
-        second.includes("pi-mono") &&
-        second.includes("packages") &&
-        second.includes("coding-agent") &&
-        (second.endsWith("cli.js") || second.includes("/dist/cli"))
-      );
-    }
-
-    return false;
-  },
+  isInvocation: isPiInvocation,
   buildArgs: (ctx) => {
     const argv = [...ctx.argv];
+    if (!isPiInvocation(argv)) return argv;
     let bodyPos = ctx.bodyIndex;
     const modeIdx = argv.indexOf("--mode");
     const modeVal =
       modeIdx >= 0 ? argv[modeIdx + 1]?.toString().toLowerCase() : undefined;
     const isRpcMode = modeVal === "rpc";
+
+    const desiredProvider = (ctx.provider ?? DEFAULT_PROVIDER).trim();
+    const desiredModel = (ctx.model ?? DEFAULT_MODEL).trim();
+    const hasFlag = (flag: string) =>
+      argv.includes(flag) || argv.some((a) => a.startsWith(`${flag}=`));
+
+    if (desiredProvider && !hasFlag("--provider")) {
+      argv.splice(bodyPos, 0, "--provider", desiredProvider);
+      bodyPos += 2;
+    }
+    if (desiredModel && !hasFlag("--model")) {
+      argv.splice(bodyPos, 0, "--model", desiredModel);
+      bodyPos += 2;
+    }
+
     // Non-interactive print + JSON
     if (!isRpcMode && !argv.includes("-p") && !argv.includes("--print")) {
       argv.splice(bodyPos, 0, "-p");

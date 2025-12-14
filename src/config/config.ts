@@ -85,6 +85,11 @@ export type GroupChatConfig = {
 };
 
 export type ClawdisConfig = {
+  identity?: {
+    name?: string;
+    theme?: string;
+    emoji?: string;
+  };
   logging?: LoggingConfig;
   browser?: BrowserConfig;
   inbound?: {
@@ -120,6 +125,7 @@ export type ClawdisConfig = {
         kind: AgentKind;
         format?: "text" | "json";
         identityPrefix?: string;
+        provider?: string;
         model?: string;
         contextTokens?: number;
       };
@@ -185,6 +191,7 @@ const ReplySchema = z
         kind: z.literal("pi"),
         format: z.union([z.literal("text"), z.literal("json")]).optional(),
         identityPrefix: z.string().optional(),
+        provider: z.string().optional(),
         model: z.string().optional(),
         contextTokens: z.number().int().positive().optional(),
       })
@@ -202,6 +209,13 @@ const ReplySchema = z
   );
 
 const ClawdisSchema = z.object({
+  identity: z
+    .object({
+      name: z.string().optional(),
+      theme: z.string().optional(),
+      emoji: z.string().optional(),
+    })
+    .optional(),
   logging: z
     .object({
       level: z
@@ -291,6 +305,61 @@ const ClawdisSchema = z.object({
     .optional(),
 });
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
+  const identity = cfg.identity;
+  if (!identity) return cfg;
+
+  const emoji = identity.emoji?.trim();
+  const name = identity.name?.trim();
+  const theme = identity.theme?.trim();
+
+  const inbound = cfg.inbound ?? {};
+  const groupChat = inbound.groupChat ?? {};
+  const reply = inbound.reply ?? undefined;
+  const session = reply?.session ?? undefined;
+
+  let mutated = false;
+  const next: ClawdisConfig = { ...cfg };
+
+  if (emoji && !inbound.responsePrefix) {
+    next.inbound = { ...inbound, responsePrefix: emoji };
+    mutated = true;
+  }
+
+  if (name && !groupChat.mentionPatterns) {
+    const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
+    const re = parts.length ? parts.join("\\s+") : escapeRegExp(name);
+    const pattern = `\\b@?${re}\\b`;
+    next.inbound = {
+      ...(next.inbound ?? inbound),
+      groupChat: { ...groupChat, mentionPatterns: [pattern] },
+    };
+    mutated = true;
+  }
+
+  if (name && reply && !session?.sessionIntro) {
+    const introParts = [
+      `You are ${name}.`,
+      theme ? `Theme: ${theme}.` : undefined,
+      emoji ? `Your emoji is ${emoji}.` : undefined,
+    ].filter(Boolean);
+    next.inbound = {
+      ...(next.inbound ?? inbound),
+      reply: {
+        ...reply,
+        session: { ...(session ?? {}), sessionIntro: introParts.join(" ") },
+      },
+    };
+    mutated = true;
+  }
+
+  return mutated ? next : cfg;
+}
+
 export function loadConfig(): ClawdisConfig {
   // Read config file (JSON5) if present.
   const configPath = CONFIG_PATH_CLAWDIS;
@@ -307,7 +376,7 @@ export function loadConfig(): ClawdisConfig {
       }
       return {};
     }
-    return validated.data as ClawdisConfig;
+    return applyIdentityDefaults(validated.data as ClawdisConfig);
   } catch (err) {
     console.error(`Failed to read config at ${configPath}`, err);
     return {};

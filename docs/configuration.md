@@ -12,6 +12,7 @@ If the file is missing, CLAWDIS uses safe-ish defaults (bundled Pi in RPC mode +
 - restrict who can trigger the bot (`inbound.allowFrom`)
 - tune group mention behavior (`inbound.groupChat`)
 - customize the agent command (`inbound.reply.command`)
+ - set the agent’s identity (`identity`)
 
 ## Minimal config (recommended starting point)
 
@@ -24,6 +25,21 @@ If the file is missing, CLAWDIS uses safe-ish defaults (bundled Pi in RPC mode +
 ```
 
 ## Common options
+
+### `identity`
+
+Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
+
+If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
+- `inbound.responsePrefix` from `identity.emoji`
+- `inbound.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
+- `inbound.reply.session.sessionIntro` when `inbound.reply` is present (and for default Pi runs)
+
+```json5
+{
+  identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" }
+}
+```
 
 ### `logging`
 
@@ -69,8 +85,10 @@ Controls how CLAWDIS produces replies. Two modes:
 - `mode: "command"` — run a local command and use its stdout as the reply (typical)
 
 If you **omit** `inbound.reply`, CLAWDIS defaults to the bundled Pi binary in **RPC** mode:
-- command: `pi --mode rpc {{BodyStripped}}`
+- command (base): `pi --mode rpc {{BodyStripped}}`
 - per-sender sessions + `/new` resets
+
+Safety default: when invoking Pi, CLAWDIS always passes `--provider` and `--model` (unless you already specified them).
 
 Example command-mode config:
 
@@ -100,6 +118,7 @@ Example command-mode config:
         kind: "pi",
         format: "json",
         // Only used for status/usage labeling (Pi may report its own model)
+        provider: "anthropic",
         model: "claude-opus-4-5",
         contextTokens: 200000
       }

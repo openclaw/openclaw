@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 
 import { lookupContextTokens } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+} from "../agents/defaults.js";
 import { resolveBundledPiBinary } from "../agents/pi-path.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
@@ -152,6 +156,7 @@ function makeDefaultPiReply(): ResolvedReplyConfig {
     command: [piBin, "--mode", "rpc", "{{BodyStripped}}"],
     agent: {
       kind: "pi" as const,
+      provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
       contextTokens: defaultContext,
       format: "json" as const,
@@ -177,6 +182,18 @@ export async function getReplyFromConfig(
   const reply: ResolvedReplyConfig = configuredReply
     ? { ...configuredReply, cwd: configuredReply.cwd ?? workspaceDir }
     : { ...makeDefaultPiReply(), cwd: workspaceDir };
+  const identity = cfg.identity;
+  if (identity?.name?.trim() && reply.session && !reply.session.sessionIntro) {
+    const name = identity.name.trim();
+    const theme = identity.theme?.trim();
+    const emoji = identity.emoji?.trim();
+    const introParts = [
+      `You are ${name}.`,
+      theme ? `Theme: ${theme}.` : undefined,
+      emoji ? `Your emoji is ${emoji}.` : undefined,
+    ].filter(Boolean);
+    reply.session = { ...reply.session, sessionIntro: introParts.join(" ") };
+  }
 
   // Bootstrap the workspace (and a starter AGENTS.md) only when we actually run from it.
   if (reply.mode === "command" && typeof reply.cwd === "string") {

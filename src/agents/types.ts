@@ -34,6 +34,8 @@ export type BuildArgsContext = {
   bodyIndex: number; // index of prompt/body argument in argv
   isNewSession: boolean;
   sessionId?: string;
+  provider?: string;
+  model?: string;
   sendSystemOnce: boolean;
   systemSent: boolean;
   identityPrefix?: string;

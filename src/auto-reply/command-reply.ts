@@ -482,6 +482,8 @@ export async function runCommandReply(
     bodyIndex,
     isNewSession,
     sessionId: templatingCtx.SessionId,
+    provider: agentCfg.provider,
+    model: agentCfg.model,
     sendSystemOnce,
     systemSent,
     identityPrefix: agentCfg.identityPrefix,
