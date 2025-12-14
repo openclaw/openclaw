@@ -105,9 +105,9 @@ jobs:
           sudo xcode-select -s /Applications/Xcode_26.1.app
           xcodebuild -version
 
-      - name: Install SwiftLint / SwiftFormat
+      - name: Install XcodeGen / SwiftLint / SwiftFormat
         run: |
-          brew install swiftlint swiftformat
+          brew install xcodegen swiftlint swiftformat
 
       - name: Show toolchain
         run: |
@@ -126,3 +126,22 @@ jobs:
 
       - name: Swift tests
         run: swift test --package-path apps/macos --parallel
+
+      - name: Generate iOS project
+        run: |
+          cd apps/ios
+          xcodegen generate
+
+      - name: iOS tests
+        run: |
+          set -euo pipefail
+          DEST_ID="$(
+            xcrun simctl list devices available |
+              grep -m 1 -E 'iPhone.*\\([0-9A-Fa-f-]{36}\\)' |
+              sed -E 's/.*\\(([0-9A-Fa-f-]{36})\\).*/\\1/'
+          )"
+          echo "Using iOS Simulator id: $DEST_ID"
+          xcodebuild test \
+            -project apps/ios/Clawdis.xcodeproj \
+            -scheme Clawdis \
+            -destination "platform=iOS Simulator,id=$DEST_ID"
