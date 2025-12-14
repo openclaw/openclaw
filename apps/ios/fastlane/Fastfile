@@ -7,11 +7,24 @@ platform :ios do
       return app_store_connect_api_key(path: key_path)
     end
 
+    p8_path = ENV["ASC_KEY_PATH"]
+    if p8_path && !p8_path.strip.empty?
+      key_id = ENV["ASC_KEY_ID"]
+      issuer_id = ENV["ASC_ISSUER_ID"]
+      UI.user_error!("Missing ASC_KEY_ID or ASC_ISSUER_ID for ASC_KEY_PATH auth.") if [key_id, issuer_id].any? { |v| v.nil? || v.strip.empty? }
+
+      return app_store_connect_api_key(
+        key_id: key_id,
+        issuer_id: issuer_id,
+        key_filepath: p8_path
+      )
+    end
+
     key_id = ENV["ASC_KEY_ID"]
     issuer_id = ENV["ASC_ISSUER_ID"]
     key_content = ENV["ASC_KEY_CONTENT"]
 
-    UI.user_error!("Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH or ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_CONTENT.") if [key_id, issuer_id, key_content].any? { |v| v.nil? || v.strip.empty? }
+    UI.user_error!("Missing App Store Connect API key. Set APP_STORE_CONNECT_API_KEY_PATH (json) or ASC_KEY_PATH (p8) or ASC_KEY_ID/ASC_ISSUER_ID/ASC_KEY_CONTENT.") if [key_id, issuer_id, key_content].any? { |v| v.nil? || v.strip.empty? }
 
     is_base64 = key_content.include?("BEGIN PRIVATE KEY") ? false : true
 
