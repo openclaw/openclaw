@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootTabs: View {
     @EnvironmentObject private var appModel: NodeAppModel
+    @State private var isConnectingPulse: Bool = false
 
     var body: some View {
         TabView {
@@ -27,11 +28,17 @@ struct RootTabs: View {
                                     radius: self.settingsIndicatorGlowRadius,
                                     x: 0,
                                     y: 0)
+                                .scaleEffect(self.settingsIndicatorScale)
+                                .opacity(self.settingsIndicatorOpacity)
                                 .offset(x: 7, y: -2)
                         }
                         Text("Settings")
                     }
                 }
+        }
+        .onAppear { self.updateConnectingPulse(for: self.bridgeIndicatorState) }
+        .onChange(of: self.bridgeIndicatorState) { _, newValue in
+            self.updateConnectingPulse(for: newValue)
         }
     }
 
@@ -74,9 +81,31 @@ struct RootTabs: View {
         case .connected:
             6
         case .connecting:
-            4
+            self.isConnectingPulse ? 6 : 3
         case .disconnected:
             0
+        }
+    }
+
+    private var settingsIndicatorScale: CGFloat {
+        guard self.bridgeIndicatorState == .connecting else { return 1 }
+        return self.isConnectingPulse ? 1.12 : 0.96
+    }
+
+    private var settingsIndicatorOpacity: Double {
+        guard self.bridgeIndicatorState == .connecting else { return 1 }
+        return self.isConnectingPulse ? 1.0 : 0.75
+    }
+
+    private func updateConnectingPulse(for state: BridgeIndicatorState) {
+        guard state == .connecting else {
+            withAnimation(.easeOut(duration: 0.2)) { self.isConnectingPulse = false }
+            return
+        }
+
+        guard !self.isConnectingPulse else { return }
+        withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+            self.isConnectingPulse = true
         }
     }
 }
