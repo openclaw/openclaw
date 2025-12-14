@@ -187,7 +187,7 @@ actor CameraCaptureService {
 
     private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
         let v = ms ?? 3000
-        return min(15_000, max(250, v))
+        return min(15000, max(250, v))
     }
 
     private nonisolated static func reencodeJPEG(

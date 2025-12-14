@@ -344,7 +344,11 @@ struct ClawdisCLI {
                 }
             }
             return ParsedCLIRequest(
-                request: .cameraClip(facing: facing, durationMs: durationMs, includeAudio: includeAudio, outPath: outPath),
+                request: .cameraClip(
+                    facing: facing,
+                    durationMs: durationMs,
+                    includeAudio: includeAudio,
+                    outPath: outPath),
                 kind: .mediaPath)
 
         default:
