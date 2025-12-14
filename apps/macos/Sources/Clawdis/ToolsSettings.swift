@@ -78,14 +78,14 @@ struct ToolsSettings: View {
     private let tools: [ToolEntry] = [
         ToolEntry(
             id: "mcporter",
-            name: "🧩 mcporter",
+            name: "🧳 mcporter",
             url: URL(string: "https://github.com/steipete/mcporter")!,
             description: "MCP runtime/CLI to discover servers, run tools, and sync configs across AI clients.",
             method: .node(package: "mcporter", binary: "mcporter"),
             kind: .tool),
         ToolEntry(
             id: "peekaboo",
-            name: "👀 Peekaboo",
+            name: "🫣 Peekaboo",
             url: URL(string: "https://github.com/steipete/Peekaboo")!,
             description: "Lightning-fast macOS screenshots with AI vision helpers for step-by-step automation.",
             method: .brew(formula: "steipete/tap/peekaboo", binary: "peekaboo"),
@@ -141,7 +141,7 @@ struct ToolsSettings: View {
             kind: .tool),
         ToolEntry(
             id: "sonoscli",
-            name: "🔊 Sonos CLI",
+            name: "🔊 sonoscli",
             url: URL(string: "https://github.com/steipete/sonoscli")!,
             description: "Control Sonos speakers (discover, status, play/pause, volume, grouping) from scripts.",
             method: .go(module: "github.com/steipete/sonoscli/cmd/sonos@latest", binary: "sonos"),
@@ -169,7 +169,7 @@ struct ToolsSettings: View {
             kind: .tool),
         ToolEntry(
             id: "gog",
-            name: "🧰 gog",
+            name: "📮 gog",
             url: URL(string: "https://github.com/steipete/gogcli")!,
             description: "Google Suite CLI: Gmail, Calendar, Drive, Contacts.",
             method: .brew(formula: "steipete/tap/gogcli", binary: "gog"),
