@@ -414,6 +414,7 @@ export async function agentCommand(
 
   const whatsappTarget = opts.to ? normalizeE164(opts.to) : allowFrom[0];
   const telegramTarget = opts.to?.trim() || undefined;
+  const discordTarget = opts.to?.trim() || undefined;
 
   const logDeliveryError = (err: unknown) => {
     const deliveryTarget =
@@ -421,7 +422,9 @@ export async function agentCommand(
         ? telegramTarget
         : deliveryProvider === "whatsapp"
           ? whatsappTarget
-          : undefined;
+          : deliveryProvider === "discord"
+            ? discordTarget
+            : undefined;
     const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
     if (!runtime.error) runtime.log(message);
@@ -440,6 +443,13 @@ export async function agentCommand(
       if (!bestEffortDeliver) throw err;
       logDeliveryError(err);
     }
+    if (deliveryProvider === "discord" && !discordTarget) {
+      const err = new Error(
+        "Delivering to Discord requires --to <channelId|user:ID|channel:ID>",
+      );
+      if (!bestEffortDeliver) throw err;
+      logDeliveryError(err);
+    }
     if (deliveryProvider === "webchat") {
       const err = new Error(
         "Delivering to WebChat is not supported via `clawdis agent`; use WhatsApp/Telegram or run with --deliver=false.",
@@ -450,6 +460,7 @@ export async function agentCommand(
     if (
       deliveryProvider !== "whatsapp" &&
       deliveryProvider !== "telegram" &&
+      deliveryProvider !== "discord" &&
       deliveryProvider !== "webchat"
     ) {
       const err = new Error(`Unknown provider: ${deliveryProvider}`);
@@ -531,6 +542,29 @@ export async function agentCommand(
             first = false;
             await deps.sendMessageTelegram(telegramTarget, caption, {
               verbose: false,
+              mediaUrl: url,
+            });
+          }
+        }
+      } catch (err) {
+        if (!bestEffortDeliver) throw err;
+        logDeliveryError(err);
+      }
+    }
+
+    if (deliveryProvider === "discord" && discordTarget) {
+      try {
+        if (media.length === 0) {
+          await deps.sendMessageDiscord(discordTarget, text, {
+            token: process.env.DISCORD_BOT_TOKEN,
+          });
+        } else {
+          let first = true;
+          for (const url of media) {
+            const caption = first ? text : "";
+            first = false;
+            await deps.sendMessageDiscord(discordTarget, caption, {
+              token: process.env.DISCORD_BOT_TOKEN,
               mediaUrl: url,
             });
           }

@@ -83,7 +83,7 @@ Or use the `process` tool to background long commands.
 ```bash
 # Check local status (creds, sessions, queued events)
 clawdis status
-# Probe the running gateway + providers (WA connect + Telegram API)
+# Probe the running gateway + providers (WA connect + Telegram + Discord APIs)
 clawdis status --deep
 
 # View recent connection events

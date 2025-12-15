@@ -264,7 +264,7 @@ Add a `cron` command group (all commands should also support `--json` where sens
     - `--wake now|next-heartbeat`
   - payload flags (choose one):
     - `--system-event "<text>"`
-    - `--message "<agent message>" [--deliver] [--channel last|whatsapp|telegram] [--to <dest>]`
+    - `--message "<agent message>" [--deliver] [--channel last|whatsapp|telegram|discord] [--to <dest>]`
 
 - `clawdis cron edit <id> ...` (patch-by-flags, non-interactive)
 - `clawdis cron rm <id>`

@@ -386,3 +386,87 @@ describe("trigger handling", () => {
     });
   });
 });
+
+describe("group intro prompts", () => {
+  it("labels Discord groups using the surface metadata", async () => {
+    const commandSpy = vi
+      .spyOn(commandReply, "runCommandReply")
+      .mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+
+    await getReplyFromConfig(
+      {
+        Body: "status update",
+        From: "group:dev",
+        To: "+1888",
+        ChatType: "group",
+        GroupSubject: "Release Squad",
+        GroupMembers: "Alice, Bob",
+        Surface: "discord",
+      },
+      {},
+      baseCfg,
+    );
+
+    expect(commandSpy).toHaveBeenCalledOnce();
+    const body =
+      commandSpy.mock.calls.at(-1)?.[0]?.templatingCtx.Body ?? "";
+    const intro = body.split("\n\n")[0];
+    expect(intro).toBe(
+      'You are replying inside the Discord group "Release Squad". Group members: Alice, Bob. Address the specific sender noted in the message context.',
+    );
+  });
+
+  it("keeps WhatsApp labeling for WhatsApp group chats", async () => {
+    const commandSpy = vi
+      .spyOn(commandReply, "runCommandReply")
+      .mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+
+    await getReplyFromConfig(
+      {
+        Body: "ping",
+        From: "[redacted-email]",
+        To: "+1999",
+        ChatType: "group",
+        GroupSubject: "Ops",
+        Surface: "whatsapp",
+      },
+      {},
+      baseCfg,
+    );
+
+    expect(commandSpy).toHaveBeenCalledOnce();
+    const body =
+      commandSpy.mock.calls.at(-1)?.[0]?.templatingCtx.Body ?? "";
+    const intro = body.split("\n\n")[0];
+    expect(intro).toBe(
+      'You are replying inside the WhatsApp group "Ops". Address the specific sender noted in the message context.',
+    );
+  });
+
+  it("labels Telegram groups using their own surface", async () => {
+    const commandSpy = vi
+      .spyOn(commandReply, "runCommandReply")
+      .mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+
+    await getReplyFromConfig(
+      {
+        Body: "ping",
+        From: "group:tg",
+        To: "+1777",
+        ChatType: "group",
+        GroupSubject: "Dev Chat",
+        Surface: "telegram",
+      },
+      {},
+      baseCfg,
+    );
+
+    expect(commandSpy).toHaveBeenCalledOnce();
+    const body =
+      commandSpy.mock.calls.at(-1)?.[0]?.templatingCtx.Body ?? "";
+    const intro = body.split("\n\n")[0];
+    expect(intro).toBe(
+      'You are replying inside the Telegram group "Dev Chat". Address the specific sender noted in the message context.',
+    );
+  });
+});

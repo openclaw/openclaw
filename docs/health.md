@@ -9,7 +9,7 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 
 ## Quick checks
 - `clawdis status` — local summary: whether creds exist, auth age, session store path + recent sessions.
-- `clawdis status --deep` — also probes the running Gateway (WA connect + Telegram API).
+- `clawdis status --deep` — also probes the running Gateway (WhatsApp connect + Telegram + Discord APIs).
 - `clawdis health --json` — asks the running Gateway for a full health snapshot (WS-only; no direct Baileys socket).
 - Send `/status` in WhatsApp/WebChat to get a status reply without invoking the agent.
 - Logs: tail `/tmp/clawdis/clawdis-*.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.

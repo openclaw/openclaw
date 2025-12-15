@@ -235,6 +235,15 @@ export async function statusCommand(
         : `Telegram: failed (${health.telegram.probe?.status ?? "unknown"})${health.telegram.probe?.error ? ` - ${health.telegram.probe.error}` : ""}`
       : info("Telegram: not configured");
     runtime.log(tgLine);
+
+    const discordLine = health.discord.configured
+      ? health.discord.probe?.ok
+        ? info(
+            `Discord: ok${health.discord.probe.bot?.username ? ` (@${health.discord.probe.bot.username})` : ""} (${health.discord.probe.elapsedMs}ms)`,
+          )
+        : `Discord: failed (${health.discord.probe?.status ?? "unknown"})${health.discord.probe?.error ? ` - ${health.discord.probe.error}` : ""}`
+      : info("Discord: not configured");
+    runtime.log(discordLine);
   } else {
     runtime.log(info("Provider probes: skipped (use --deep)"));
   }

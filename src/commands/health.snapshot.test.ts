@@ -40,6 +40,7 @@ describe("getHealthSnapshot", () => {
       foo: { updatedAt: 2000 },
     };
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
     const snap = (await getHealthSnapshot(10)) satisfies HealthSummary;
     expect(snap.ok).toBe(true);
     expect(snap.telegram.configured).toBe(false);
@@ -51,6 +52,7 @@ describe("getHealthSnapshot", () => {
   it("probes telegram getMe + webhook info when configured", async () => {
     testConfig = { telegram: { botToken: "t-1" } };
     testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
 
     const calls: string[] = [];
     vi.stubGlobal(
@@ -100,6 +102,7 @@ describe("getHealthSnapshot", () => {
   it("returns a structured telegram probe error when getMe fails", async () => {
     testConfig = { telegram: { botToken: "bad-token" } };
     testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
 
     vi.stubGlobal(
       "fetch",
@@ -125,6 +128,7 @@ describe("getHealthSnapshot", () => {
   it("captures unexpected probe exceptions as errors", async () => {
     testConfig = { telegram: { botToken: "t-err" } };
     testStore = {};
+    vi.stubEnv("DISCORD_BOT_TOKEN", "");
 
     vi.stubGlobal(
       "fetch",

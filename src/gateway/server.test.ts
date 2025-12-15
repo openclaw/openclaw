@@ -1793,6 +1793,61 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("agent routes main last-channel discord", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-discord",
+            updatedAt: Date.now(),
+            lastChannel: "discord",
+            lastTo: "channel:discord-123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "agent-last-discord",
+        method: "agent",
+        params: {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-discord",
+        },
+      }),
+    );
+    await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "agent-last-discord",
+    );
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).toHaveBeenCalled();
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.provider).toBe("discord");
+    expect(call.to).toBe("channel:discord-123");
+    expect(call.deliver).toBe(true);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-discord");
+
+    ws.close();
+    await server.close();
+  });
+
   test("agent ignores webchat last-channel for routing", async () => {
     testAllowFrom = ["+1555"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));

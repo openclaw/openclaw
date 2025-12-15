@@ -1,5 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { probeDiscord, type DiscordProbe } from "../discord/probe.js";
 import { callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -33,6 +34,10 @@ export type HealthSummary = {
   telegram: {
     configured: boolean;
     probe?: TelegramProbe;
+  };
+  discord: {
+    configured: boolean;
+    probe?: DiscordProbe;
   };
   heartbeatSeconds: number;
   sessions: {
@@ -77,12 +82,19 @@ export async function getHealthSnapshot(
     ? await probeTelegram(telegramToken.trim(), cappedTimeout, telegramProxy)
     : undefined;
 
+  const discordToken = process.env.DISCORD_BOT_TOKEN ?? cfg.discord?.token ?? "";
+  const discordConfigured = discordToken.trim().length > 0;
+  const discordProbe = discordConfigured
+    ? await probeDiscord(discordToken.trim(), cappedTimeout)
+    : undefined;
+
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     web: { linked, authAgeMs },
     telegram: { configured: telegramConfigured, probe: telegramProbe },
+    discord: { configured: discordConfigured, probe: discordProbe },
     heartbeatSeconds,
     sessions: {
       path: storePath,
@@ -138,6 +150,15 @@ export async function healthCommand(
         : `Telegram: failed (${summary.telegram.probe?.status ?? "unknown"})${summary.telegram.probe?.error ? ` - ${summary.telegram.probe.error}` : ""}`
       : "Telegram: not configured";
     runtime.log(tgLabel);
+
+    const discordLabel = summary.discord.configured
+      ? summary.discord.probe?.ok
+        ? info(
+            `Discord: ok${summary.discord.probe.bot?.username ? ` (@${summary.discord.probe.bot.username})` : ""} (${summary.discord.probe.elapsedMs}ms)`,
+          )
+        : `Discord: failed (${summary.discord.probe?.status ?? "unknown"})${summary.discord.probe?.error ? ` - ${summary.discord.probe.error}` : ""}`
+      : "Discord: not configured";
+    runtime.log(discordLabel);
 
     runtime.log(info(`Heartbeat interval: ${summary.heartbeatSeconds}s`));
     runtime.log(

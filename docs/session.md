@@ -21,7 +21,7 @@ All session state is **owned by the gateway** (the “master” Clawdis). UI cli
 - Clawdis does **not** read legacy Pi/Tau session folders.
 
 ## Mapping transports → session keys
-- Direct chats (WhatsApp, Telegram, desktop Web Chat) all collapse to the **primary key** so they share context.
+- Direct chats (WhatsApp, Telegram, Discord, desktop Web Chat) all collapse to the **primary key** so they share context.
 - Multiple phone numbers can map to that same key; they act as transports into the same conversation.
 - Group chats still isolate state with `group:<jid>` keys; do not reuse the primary key for groups.
 

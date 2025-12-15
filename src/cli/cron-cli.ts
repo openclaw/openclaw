@@ -155,10 +155,13 @@ export function registerCronCli(program: Command) {
       .option("--deliver", "Deliver agent output", false)
       .option(
         "--channel <channel>",
-        "Delivery channel (last|whatsapp|telegram)",
+        "Delivery channel (last|whatsapp|telegram|discord)",
         "last",
       )
-      .option("--to <dest>", "Delivery destination (E.164 or Telegram chatId)")
+      .option(
+        "--to <dest>",
+        "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
+      )
       .option(
         "--best-effort-deliver",
         "Do not fail the job if delivery fails",
@@ -411,9 +414,12 @@ export function registerCronCli(program: Command) {
       .option("--deliver", "Deliver agent output", false)
       .option(
         "--channel <channel>",
-        "Delivery channel (last|whatsapp|telegram)",
+        "Delivery channel (last|whatsapp|telegram|discord)",
       )
-      .option("--to <dest>", "Delivery destination")
+      .option(
+        "--to <dest>",
+        "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
+      )
       .option(
         "--best-effort-deliver",
         "Do not fail job if delivery fails",

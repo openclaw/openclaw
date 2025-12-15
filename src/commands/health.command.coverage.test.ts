@@ -46,6 +46,9 @@ describe("healthCommand (coverage)", () => {
           webhook: { url: "https://example.com/h" },
         },
       },
+      discord: {
+        configured: false,
+      },
       heartbeatSeconds: 60,
       sessions: {
         path: "/tmp/sessions.json",

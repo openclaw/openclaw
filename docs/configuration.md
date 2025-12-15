@@ -85,6 +85,23 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
+### `discord` (bot transport)
+
+Configure the Discord bot by setting the bot token and optional gating:
+
+```json5
+{
+  discord: {
+    token: "your-bot-token",
+    allowFrom: ["discord:1234567890", "*"], // optional DM allowlist (user ids)
+    requireMention: true,                   // require @bot mentions in guilds
+    mediaMaxMb: 8                           // clamp inbound media size
+  }
+}
+```
+
+Clawdis reads `DISCORD_BOT_TOKEN` or `discord.token` to start the provider. Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
+
 ### `agent.workspace`
 
 Sets the **single global workspace directory** used by the agent for file operations.
@@ -152,7 +169,7 @@ deprecation fallback.
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set
   `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
-- `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `none`). Default: `last`.
+- `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `none`). Default: `last`.
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
 
@@ -510,7 +527,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 | `{{GroupMembers}}` | Group members preview (best effort) |
 | `{{SenderName}}` | Sender display name (best effort) |
 | `{{SenderE164}}` | Sender phone number (best effort) |
-| `{{Surface}}` | Surface hint (whatsapp|telegram|webchat|…) |
+| `{{Surface}}` | Surface hint (whatsapp|telegram|discord|webchat|…) |
 
 ## Cron (Gateway scheduler)
 

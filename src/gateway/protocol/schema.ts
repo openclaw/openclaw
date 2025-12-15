@@ -450,6 +450,7 @@ export const CronPayloadSchema = Type.Union([
           Type.Literal("last"),
           Type.Literal("whatsapp"),
           Type.Literal("telegram"),
+          Type.Literal("discord"),
         ]),
       ),
       to: Type.Optional(Type.String()),

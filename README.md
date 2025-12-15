@@ -15,7 +15,7 @@
 </p>
 
 **Clawdis** is a *personal AI assistant* you run on your own devices.
-It answers you on the surfaces you already use (WhatsApp, Telegram, WebChat), can speak and listen on macOS/iOS, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, WebChat), can speak and listen on macOS/iOS, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a private, single-user assistant that feels local, fast, and always-on, this is it.
 
@@ -38,7 +38,7 @@ Your surfaces
 ## What Clawdis does
 
 - **Personal assistant** — one user, one identity, one memory surface.
-- **Multi-surface inbox** — WhatsApp, Telegram, WebChat, macOS, iOS.
+- **Multi-surface inbox** — WhatsApp, Telegram, Discord, WebChat, macOS, iOS.
 - **Voice wake + push-to-talk** — local speech recognition on macOS/iOS.
 - **Canvas** — a live visual workspace you can drive from the agent.
 - **Automation-ready** — browser control, media handling, and tool streaming.
@@ -73,7 +73,7 @@ pnpm gateway:watch
 # Send a message
 pnpm clawdis send --to +1234567890 --message "Hello from Clawdis"
 
-# Talk to the assistant (optionally deliver back to WhatsApp/Telegram)
+# Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Discord)
 pnpm clawdis agent --message "Ship checklist" --thinking high
 ```
 
@@ -170,6 +170,19 @@ Minimal `~/.clawdis/clawdis.json`:
 }
 ```
 
+### Discord
+
+- Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
+- Optional: set `discord.requireMention`, `discord.allowFrom`, or `discord.mediaMaxMb` as needed.
+
+```json5
+{
+  discord: {
+    token: "1234abcd"
+  }
+}
+```
+
 Browser control (optional):
 
 ```json5
@@ -191,6 +204,7 @@ Browser control (optional):
 - [`docs/web.md`](docs/web.md)
 - [`docs/discovery.md`](docs/discovery.md)
 - [`docs/agent.md`](docs/agent.md)
+- [`docs/discord.md`](docs/discord.md)
 - Webhooks + external triggers: [`docs/webhook.md`](docs/webhook.md)
 - Gmail hooks (email → wake): [`docs/gmail-pubsub.md`](docs/gmail-pubsub.md)
 

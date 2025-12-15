@@ -53,6 +53,35 @@ export async function sendCommand(
     return;
   }
 
+  if (provider === "discord") {
+    const result = await deps.sendMessageDiscord(opts.to, opts.message, {
+      token: process.env.DISCORD_BOT_TOKEN,
+      mediaUrl: opts.media,
+    });
+    runtime.log(
+      success(
+        `✅ Sent via discord. Message ID: ${result.messageId} (channel ${result.channelId})`,
+      ),
+    );
+    if (opts.json) {
+      runtime.log(
+        JSON.stringify(
+          {
+            provider: "discord",
+            via: "direct",
+            to: opts.to,
+            channelId: result.channelId,
+            messageId: result.messageId,
+            mediaUrl: opts.media ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    return;
+  }
+
   // Always send via gateway over WS to avoid multi-session corruption.
   const sendViaGateway = async () =>
     callGateway<{

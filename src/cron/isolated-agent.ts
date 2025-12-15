@@ -53,7 +53,7 @@ function pickSummaryFromPayloads(
 function resolveDeliveryTarget(
   cfg: ClawdisConfig,
   jobPayload: {
-    channel?: "last" | "whatsapp" | "telegram";
+    channel?: "last" | "whatsapp" | "telegram" | "discord";
     to?: string;
   },
 ) {
@@ -76,7 +76,11 @@ function resolveDeliveryTarget(
   const lastTo = typeof main?.lastTo === "string" ? main.lastTo.trim() : "";
 
   const channel = (() => {
-    if (requestedChannel === "whatsapp" || requestedChannel === "telegram") {
+    if (
+      requestedChannel === "whatsapp" ||
+      requestedChannel === "telegram" ||
+      requestedChannel === "discord"
+    ) {
       return requestedChannel;
     }
     return lastChannel ?? "whatsapp";
@@ -356,6 +360,50 @@ export async function runCronIsolatedAgentTurn(params: {
               first = false;
               await params.deps.sendMessageTelegram(chatId, caption, {
                 verbose: false,
+                mediaUrl: url,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        if (!bestEffortDeliver)
+          return { status: "error", summary, error: String(err) };
+        return { status: "ok", summary };
+      }
+    } else if (resolvedDelivery.channel === "discord") {
+      if (!resolvedDelivery.to) {
+        if (!bestEffortDeliver)
+          return {
+            status: "error",
+            summary,
+            error:
+              "Cron delivery to Discord requires --channel discord and --to <channelId|user:ID>",
+          };
+        return {
+          status: "skipped",
+          summary: "Delivery skipped (no Discord destination).",
+        };
+      }
+      const discordTarget = resolvedDelivery.to;
+      try {
+        for (const payload of payloads) {
+          const mediaList =
+            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+          if (mediaList.length === 0) {
+            await params.deps.sendMessageDiscord(
+              discordTarget,
+              payload.text ?? "",
+              {
+                token: process.env.DISCORD_BOT_TOKEN,
+              },
+            );
+          } else {
+            let first = true;
+            for (const url of mediaList) {
+              const caption = first ? (payload.text ?? "") : "";
+              first = false;
+              await params.deps.sendMessageDiscord(discordTarget, caption, {
+                token: process.env.DISCORD_BOT_TOKEN,
                 mediaUrl: url,
               });
             }

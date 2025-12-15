@@ -13,14 +13,14 @@ export function isVerbose() {
 }
 
 export function logVerbose(message: string) {
-  if (globalVerbose) {
-    console.log(chalk.gray(message));
-    try {
-      getLogger().debug({ message }, "verbose");
-    } catch {
-      // ignore logger failures to avoid breaking verbose printing
-    }
+  // if (globalVerbose) {
+  console.log(chalk.gray(message));
+  try {
+    getLogger().debug({ message }, "verbose");
+  } catch {
+    // ignore logger failures to avoid breaking verbose printing
   }
+  // }
 }
 
 export function setYes(v: boolean) {

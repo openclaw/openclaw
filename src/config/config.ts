@@ -84,7 +84,7 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?: "last" | "whatsapp" | "telegram";
+  channel?: "last" | "whatsapp" | "telegram" | "discord";
   to?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -134,6 +134,13 @@ export type TelegramConfig = {
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;
+};
+
+export type DiscordConfig = {
+  token?: string;
+  allowFrom?: Array<string | number>;
+  requireMention?: boolean;
+  mediaMaxMb?: number;
 };
 
 export type GroupChatConfig = {
@@ -329,8 +336,8 @@ export type ClawdisConfig = {
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
-      /** Delivery target (last|whatsapp|telegram|none). */
-      target?: "last" | "whatsapp" | "telegram" | "none";
+      /** Delivery target (last|whatsapp|telegram|discord|none). */
+      target?: "last" | "whatsapp" | "telegram" | "discord" | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
       /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
@@ -353,6 +360,7 @@ export type ClawdisConfig = {
   session?: SessionConfig;
   web?: WebConfig;
   telegram?: TelegramConfig;
+  discord?: DiscordConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
   bridge?: BridgeConfig;
@@ -512,7 +520,12 @@ const HookMappingSchema = z
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
     channel: z
-      .union([z.literal("last"), z.literal("whatsapp"), z.literal("telegram")])
+      .union([
+        z.literal("last"),
+        z.literal("whatsapp"),
+        z.literal("telegram"),
+        z.literal("discord"),
+      ])
       .optional(),
     to: z.string().optional(),
     thinking: z.string().optional(),
@@ -679,6 +692,14 @@ const ClawdisSchema = z.object({
       webhookUrl: z.string().optional(),
       webhookSecret: z.string().optional(),
       webhookPath: z.string().optional(),
+    })
+    .optional(),
+  discord: z
+    .object({
+      token: z.string().optional(),
+      allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      requireMention: z.boolean().optional(),
+      mediaMaxMb: z.number().positive().optional(),
     })
     .optional(),
   bridge: z

@@ -13,7 +13,7 @@ struct CronJobEditor: View {
             + "Use an isolated session for agent turns so your main chat stays clean."
     static let sessionTargetNote =
         "Main jobs post a system event into the current main session. "
-            + "Isolated jobs run clawd in a dedicated session and can deliver results (WhatsApp/Telegram/etc)."
+            + "Isolated jobs run clawd in a dedicated session and can deliver results (WhatsApp/Telegram/Discord/etc)."
     static let scheduleKindNote =
         "“At” runs once, “Every” repeats with a duration, “Cron” uses a 5-field Unix expression."
     static let isolatedPayloadNote =
@@ -322,6 +322,7 @@ struct CronJobEditor: View {
                             Text("last").tag(GatewayAgentChannel.last)
                             Text("whatsapp").tag(GatewayAgentChannel.whatsapp)
                             Text("telegram").tag(GatewayAgentChannel.telegram)
+                            Text("discord").tag(GatewayAgentChannel.discord)
                         }
                         .labelsHidden()
                         .pickerStyle(.segmented)
@@ -329,7 +330,7 @@ struct CronJobEditor: View {
                     }
                     GridRow {
                         self.gridLabel("To")
-                        TextField("Optional override (phone number / chat id)", text: self.$to)
+                        TextField("Optional override (phone number / chat id / Discord channel)", text: self.$to)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: .infinity)
                     }

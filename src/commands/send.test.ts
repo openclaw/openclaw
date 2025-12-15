@@ -11,13 +11,16 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 const originalTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+const originalDiscordToken = process.env.DISCORD_BOT_TOKEN;
 
 beforeEach(() => {
   process.env.TELEGRAM_BOT_TOKEN = "token-abc";
+  process.env.DISCORD_BOT_TOKEN = "token-discord";
 });
 
 afterAll(() => {
   process.env.TELEGRAM_BOT_TOKEN = originalTelegramToken;
+  process.env.DISCORD_BOT_TOKEN = originalDiscordToken;
 });
 
 const runtime: RuntimeEnv = {
@@ -31,6 +34,7 @@ const runtime: RuntimeEnv = {
 const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
   sendMessageTelegram: vi.fn(),
+  sendMessageDiscord: vi.fn(),
   ...overrides,
 });
 
@@ -79,6 +83,25 @@ describe("sendCommand", () => {
       "123",
       "hi",
       expect.objectContaining({ token: "token-abc" }),
+    );
+    expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("routes to discord provider", async () => {
+    const deps = makeDeps({
+      sendMessageDiscord: vi
+        .fn()
+        .mockResolvedValue({ messageId: "d1", channelId: "chan" }),
+    });
+    await sendCommand(
+      { to: "channel:chan", message: "hi", provider: "discord" },
+      deps,
+      runtime,
+    );
+    expect(deps.sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:chan",
+      "hi",
+      expect.objectContaining({ token: "token-discord" }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });

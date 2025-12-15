@@ -7,14 +7,14 @@ read_when:
 <!-- {% raw %} -->
 # Building a personal assistant with CLAWDIS (Clawd-style)
 
-CLAWDIS is a WhatsApp + Telegram gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
+CLAWDIS is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
 
 ## ⚠️ Safety first
 
 You’re putting an agent in a position to:
 - run commands on your machine (depending on your Pi tool setup)
 - read/write files in your workspace
-- send messages back out via WhatsApp/Telegram
+- send messages back out via WhatsApp/Telegram/Discord
 
 Start conservative:
 - Always set `routing.allowFrom` (never run open-to-the-world on your personal Mac).

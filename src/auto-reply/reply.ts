@@ -790,9 +790,18 @@ export async function getReplyFromConfig(
           defaultGroupActivation();
         const subject = sessionCtx.GroupSubject?.trim();
         const members = sessionCtx.GroupMembers?.trim();
+        const surface = sessionCtx.Surface?.trim().toLowerCase();
+        const surfaceLabel = (() => {
+          if (!surface) return "chat";
+          if (surface === "whatsapp") return "WhatsApp";
+          if (surface === "telegram") return "Telegram";
+          if (surface === "discord") return "Discord";
+          if (surface === "webchat") return "WebChat";
+          return `${surface.at(0)?.toUpperCase() ?? ""}${surface.slice(1)}`;
+        })();
         const subjectLine = subject
-          ? `You are replying inside the WhatsApp group "${subject}".`
-          : "You are replying inside a WhatsApp group chat.";
+          ? `You are replying inside the ${surfaceLabel} group "${subject}".`
+          : `You are replying inside a ${surfaceLabel} group chat.`;
         const membersLine = members ? `Group members: ${members}.` : undefined;
         const activationLine =
           activation === "always"

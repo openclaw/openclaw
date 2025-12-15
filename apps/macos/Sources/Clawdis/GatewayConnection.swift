@@ -9,6 +9,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case last
     case whatsapp
     case telegram
+    case discord
     case webchat
 
     init(raw: String?) {

@@ -18,7 +18,7 @@ The macOS menu bar app shows the WebChat UI as a native SwiftUI view and reuses 
 ## How it’s wired
 - Implementation: `apps/macos/Sources/Clawdis/WebChatSwiftUI.swift` hosts `ClawdisChatUI` and speaks to the Gateway over `GatewayConnection`.
 - Data plane: Gateway WebSocket methods `chat.history`, `chat.send`, `chat.abort`; events `chat`, `agent`, `presence`, `tick`, `health`.
-- Session: usually primary (`main`). The onboarding flow uses a dedicated `onboarding` session to keep first-run setup separate.
+- Session: usually primary (`main`); multiple transports (WhatsApp/Telegram/Discord/Desktop) share the same key. The onboarding flow uses a dedicated `onboarding` session to keep first-run setup separate.
 
 ## Security / surface area
 - Remote mode forwards only the Gateway WebSocket control port over SSH.

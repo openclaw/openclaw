@@ -13,7 +13,7 @@ read_when:
 </p>
 
 <p align="center">
-  <strong>WhatsApp + Telegram gateway for AI agents (Pi).</strong><br>
+  <strong>WhatsApp + Telegram + Discord gateway for AI agents (Pi).</strong><br>
   Send a message, get an agent response — from your pocket.
 </p>
 
@@ -23,13 +23,13 @@ read_when:
   <a href="./clawd">Clawd setup</a>
 </p>
 
-CLAWDIS bridges WhatsApp (via WhatsApp Web / Baileys) and Telegram (Bot API / grammY) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
+CLAWDIS bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), and Discord (Bot API / discord.js) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
 It’s built for [Clawd](https://clawd.me), a space lobster who needed a TARDIS.
 
 ## How it works
 
 ```
-WhatsApp / Telegram
+WhatsApp / Telegram / Discord
         │
         ▼
   ┌──────────────────────────┐
@@ -60,6 +60,7 @@ Most operations flow through the **Gateway** (`clawdis gateway`), a single long-
 
 - 📱 **WhatsApp Integration** — Uses Baileys for WhatsApp Web protocol
 - ✈️ **Telegram Bot** — DMs + groups via grammY
+- 🎮 **Discord Bot** — DMs + guild channels via discord.js
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
 - 💬 **Sessions** — Direct chats collapse into shared `main` (default); groups are isolated
 - 👥 **Group Chat Support** — Mention-based by default; owner can toggle `/activation always|mention`
@@ -127,6 +128,7 @@ Example:
   - [WebChat](./webchat.md)
   - [Control UI (browser)](./control-ui.md)
   - [Telegram](./telegram.md)
+  - [Discord](./discord.md)
   - [Group messages](./group-messages.md)
   - [Media: images](./images.md)
   - [Media: audio](./audio.md)

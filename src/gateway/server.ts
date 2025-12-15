@@ -67,6 +67,8 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
+import { monitorDiscordProvider, sendMessageDiscord } from "../discord/index.js";
+import { probeDiscord, type DiscordProbe } from "../discord/probe.js";
 import { isVerbose } from "../globals.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
@@ -273,9 +275,11 @@ const logHooks = log.child("hooks");
 const logWsControl = log.child("ws");
 const logWhatsApp = logProviders.child("whatsapp");
 const logTelegram = logProviders.child("telegram");
+const logDiscord = logProviders.child("discord");
 const canvasRuntime = runtimeForLogger(logCanvas);
 const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
 const telegramRuntimeEnv = runtimeForLogger(logTelegram);
+const discordRuntimeEnv = runtimeForLogger(logDiscord);
 
 function resolveBonjourCliPath(): string | undefined {
   const envPath = process.env.CLAWDIS_CLI_PATH?.trim();
@@ -1378,13 +1382,17 @@ export async function startGatewayServer(
     const channel =
       channelRaw === "whatsapp" ||
       channelRaw === "telegram" ||
+      channelRaw === "discord" ||
       channelRaw === "last"
         ? channelRaw
         : channelRaw === undefined
           ? "last"
           : null;
     if (channel === null) {
-      return { ok: false, error: "channel must be last|whatsapp|telegram" };
+      return {
+        ok: false,
+        error: "channel must be last|whatsapp|telegram|discord",
+      };
     }
     const toRaw = payload.to;
     const to =
@@ -1703,8 +1711,10 @@ export async function startGatewayServer(
   });
   let whatsappAbort: AbortController | null = null;
   let telegramAbort: AbortController | null = null;
+  let discordAbort: AbortController | null = null;
   let whatsappTask: Promise<unknown> | null = null;
   let telegramTask: Promise<unknown> | null = null;
+  let discordTask: Promise<unknown> | null = null;
   let whatsappRuntime: WebProviderStatus = {
     running: false,
     connected: false,
@@ -1727,6 +1737,17 @@ export async function startGatewayServer(
     lastStopAt: null,
     lastError: null,
     mode: null,
+  };
+  let discordRuntime: {
+    running: boolean;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+  } = {
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
   };
   const clients = new Set<Client>();
   let seq = 0;
@@ -1954,9 +1975,88 @@ export async function startGatewayServer(
     };
   };
 
+  const startDiscordProvider = async () => {
+    if (discordTask) return;
+    const cfg = loadConfig();
+    const discordToken =
+      process.env.DISCORD_BOT_TOKEN ?? cfg.discord?.token ?? "";
+    if (!discordToken.trim()) {
+      discordRuntime = {
+        ...discordRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      logDiscord.info(
+        "skipping provider start (no DISCORD_BOT_TOKEN/config)",
+      );
+      return;
+    }
+    let discordBotLabel = "";
+    try {
+      const probe = await probeDiscord(discordToken.trim(), 2500);
+      const username = probe.ok ? probe.bot?.username?.trim() : null;
+      if (username) discordBotLabel = ` (@${username})`;
+    } catch (err) {
+      if (isVerbose()) {
+        logDiscord.debug(`bot probe failed: ${String(err)}`);
+      }
+    }
+    logDiscord.info(`starting provider${discordBotLabel}`);
+    discordAbort = new AbortController();
+    discordRuntime = {
+      ...discordRuntime,
+      running: true,
+      lastStartAt: Date.now(),
+      lastError: null,
+    };
+    const task = monitorDiscordProvider({
+      token: discordToken.trim(),
+      runtime: discordRuntimeEnv,
+      abortSignal: discordAbort.signal,
+      allowFrom: cfg.discord?.allowFrom,
+      requireMention: cfg.discord?.requireMention,
+      mediaMaxMb: cfg.discord?.mediaMaxMb,
+    })
+      .catch((err) => {
+        discordRuntime = {
+          ...discordRuntime,
+          lastError: formatError(err),
+        };
+        logDiscord.error(`provider exited: ${formatError(err)}`);
+      })
+      .finally(() => {
+        discordAbort = null;
+        discordTask = null;
+        discordRuntime = {
+          ...discordRuntime,
+          running: false,
+          lastStopAt: Date.now(),
+        };
+      });
+    discordTask = task;
+  };
+
+  const stopDiscordProvider = async () => {
+    if (!discordAbort && !discordTask) return;
+    discordAbort?.abort();
+    try {
+      await discordTask;
+    } catch {
+      // ignore
+    }
+    discordAbort = null;
+    discordTask = null;
+    discordRuntime = {
+      ...discordRuntime,
+      running: false,
+      lastStopAt: Date.now(),
+    };
+  };
+
   const startProviders = async () => {
     await startWhatsAppProvider();
     await startTelegramProvider();
+    await startDiscordProvider();
   };
 
   const broadcast = (
@@ -3784,6 +3884,21 @@ export async function startGatewayServer(
                 lastProbeAt = Date.now();
               }
 
+              const discordEnvToken = process.env.DISCORD_BOT_TOKEN?.trim();
+              const discordConfigToken = cfg.discord?.token?.trim();
+              const discordToken = discordEnvToken || discordConfigToken || "";
+              const discordTokenSource = discordEnvToken
+                ? "env"
+                : discordConfigToken
+                  ? "config"
+                  : "none";
+              let discordProbe: DiscordProbe | undefined;
+              let discordLastProbeAt: number | null = null;
+              if (probe && discordToken) {
+                discordProbe = await probeDiscord(discordToken, timeoutMs);
+                discordLastProbeAt = Date.now();
+              }
+
               const linked = await webAuthExists();
               const authAgeMs = getWebAuthAgeMs();
               const self = readWebSelfId();
@@ -3816,6 +3931,16 @@ export async function startGatewayServer(
                     lastError: telegramRuntime.lastError ?? null,
                     probe: telegramProbe,
                     lastProbeAt,
+                  },
+                  discord: {
+                    configured: Boolean(discordToken),
+                    tokenSource: discordTokenSource,
+                    running: discordRuntime.running,
+                    lastStartAt: discordRuntime.lastStartAt ?? null,
+                    lastStopAt: discordRuntime.lastStopAt ?? null,
+                    lastError: discordRuntime.lastError ?? null,
+                    probe: discordProbe,
+                    lastProbeAt: discordLastProbeAt,
                   },
                 },
                 undefined,
@@ -5588,6 +5713,23 @@ export async function startGatewayServer(
                     payload,
                   });
                   respond(true, payload, undefined, { provider });
+                } else if (provider === "discord") {
+                  const result = await sendMessageDiscord(to, message, {
+                    mediaUrl: params.mediaUrl,
+                    token: process.env.DISCORD_BOT_TOKEN,
+                  });
+                  const payload = {
+                    runId: idem,
+                    messageId: result.messageId,
+                    channelId: result.channelId,
+                    provider,
+                  };
+                  dedupe.set(`send:${idem}`, {
+                    ts: Date.now(),
+                    ok: true,
+                    payload,
+                  });
+                  respond(true, payload, undefined, { provider });
                 } else {
                   const result = await sendMessageWhatsApp(to, message, {
                     mediaUrl: params.mediaUrl,
@@ -5723,6 +5865,7 @@ export async function startGatewayServer(
                 if (
                   requestedChannel === "whatsapp" ||
                   requestedChannel === "telegram" ||
+                  requestedChannel === "discord" ||
                   requestedChannel === "webchat"
                 ) {
                   return requestedChannel;
@@ -5740,7 +5883,8 @@ export async function startGatewayServer(
                 if (explicit) return explicit;
                 if (
                   resolvedChannel === "whatsapp" ||
-                  resolvedChannel === "telegram"
+                  resolvedChannel === "telegram" ||
+                  resolvedChannel === "discord"
                 ) {
                   return lastTo || undefined;
                 }
@@ -5975,6 +6119,7 @@ export async function startGatewayServer(
       }
       await stopWhatsAppProvider();
       await stopTelegramProvider();
+      await stopDiscordProvider();
       cron.stop();
       heartbeatRunner.stop();
       broadcast("shutdown", {

@@ -81,6 +81,7 @@
     "commander": "^14.0.2",
     "croner": "^9.1.0",
     "detect-libc": "^2.1.2",
+    "discord.js": "^14.25.1",
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "file-type": "^21.1.1",

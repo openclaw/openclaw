@@ -87,6 +87,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const deps: CliDeps = {
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "first" }, { text: " " }, { text: " last " }],
@@ -116,6 +117,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const deps: CliDeps = {
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
       };
       const long = "a".repeat(2001);
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
@@ -146,6 +148,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const deps: CliDeps = {
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello" }],
@@ -183,6 +186,7 @@ describe("runCronIsolatedAgentTurn", () => {
       const deps: CliDeps = {
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello" }],
@@ -210,6 +214,49 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(res.status).toBe("skipped");
       expect(String(res.summary ?? "")).toMatch(/delivery skipped/i);
       expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+    });
+  });
+
+  it("delivers via discord when configured", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn().mockResolvedValue({
+          messageId: "d1",
+          channelId: "chan",
+        }),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello from cron" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath),
+        deps,
+        job: makeJob({
+          kind: "agentTurn",
+          message: "do it",
+          deliver: true,
+          channel: "discord",
+          to: "channel:1122",
+        }),
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      expect(deps.sendMessageDiscord).toHaveBeenCalledWith(
+        "channel:1122",
+        "hello from cron",
+        expect.objectContaining({ token: process.env.DISCORD_BOT_TOKEN }),
+      );
     });
   });
 });

@@ -8,14 +8,14 @@ read_when:
 Last updated: 2025-12-09
 
 ## Overview
-- A single long-lived **Gateway** process owns all messaging surfaces (WhatsApp via Baileys, Telegram when enabled) and the control/event plane.
+- A single long-lived **Gateway** process owns all messaging surfaces (WhatsApp via Baileys, Telegram via grammY, Discord via discord.js) and the control/event plane.
 - All clients (macOS app, CLI, web UI, automations) connect to the Gateway over one transport: **WebSocket on 127.0.0.1:18789** (tunnel or VPN for remote).
 - One Gateway per host; it is the only place that is allowed to open a WhatsApp session. All sends/agent runs go through it.
 - By default: the Gateway exposes a Canvas host on `canvasHost.port` (default `18793`), serving `~/clawd/canvas` at `/__clawdis__/canvas/` with live-reload; disable via `canvasHost.enabled=false` or `CLAWDIS_SKIP_CANVAS_HOST=1`.
 
 ## Components and flows
 - **Gateway (daemon)**  
-  - Maintains Baileys/Telegram connections.  
+  - Maintains Baileys/Telegram/Discord connections.  
   - Exposes a typed WS API (req/resp + server push events).  
   - Validates every inbound frame against JSON Schema; rejects anything before a mandatory `connect`.
 - **Clients (mac app / CLI / web admin)**  
