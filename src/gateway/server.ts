@@ -1823,7 +1823,9 @@ export async function startGatewayServer(
               sessionId && storePath
                 ? readSessionMessages(sessionId, storePath)
                 : [];
-            const max = typeof limit === "number" ? limit : 200;
+            const hardMax = 1000;
+            const requested = typeof limit === "number" ? limit : hardMax;
+            const max = Math.min(hardMax, requested);
             const messages =
               rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
             const thinkingLevel =
