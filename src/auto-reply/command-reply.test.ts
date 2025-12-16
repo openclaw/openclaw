@@ -388,7 +388,13 @@ describe("runCommandReply (pi)", () => {
             content: [{ type: "text", text: "from agent_end" }],
             model: "pi-1",
             provider: "inflection",
-            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, total: 2 },
+            usage: {
+              input: 1,
+              output: 1,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 2,
+            },
             stopReason: "stop",
           },
         ],
@@ -443,7 +449,7 @@ describe("runCommandReply (pi)", () => {
 
     expect(payloads?.[0]?.text).toMatch(/produced no output/i);
     expect(payloads?.[0]?.text).not.toContain("message_end");
-    expect(payloads?.[0]?.text).not.toContain("\"type\"");
+    expect(payloads?.[0]?.text).not.toContain('"type"');
   });
 
   it("does not stream tool results when verbose is off", async () => {

@@ -154,7 +154,6 @@ function extractNonJsonText(raw: string): string | undefined {
     try {
       JSON.parse(trimmed);
       // JSON protocol frame → never surface directly.
-      continue;
     } catch {
       kept.push(line);
     }
