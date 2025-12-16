@@ -6,6 +6,15 @@ import Darwin
 import Foundation
 
 @Suite struct WebChatTunnelTests {
+    @Test func drainStderrDoesNotCrashWhenHandleClosed() {
+        let pipe = Pipe()
+        let handle = pipe.fileHandleForReading
+        try? handle.close()
+
+        let drained = WebChatTunnel._testDrainStderr(handle)
+        #expect(drained.isEmpty)
+    }
+
     @Test func portIsFreeDetectsIPv4Listener() {
         var fd = socket(AF_INET, SOCK_STREAM, 0)
         #expect(fd >= 0)
@@ -57,7 +66,7 @@ import Foundation
                 free = true
                 break
             }
-            usleep(10_000) // 10ms
+            usleep(10000) // 10ms
         }
         #expect(free == true)
     }

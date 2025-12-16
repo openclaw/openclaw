@@ -22,11 +22,12 @@ import Testing
             return nil
         }
 
-        let data = stderr.fileHandleForReading.readDataToEndOfFile()
+        let data = stderr.fileHandleForReading.readToEndSafely()
         guard let text = String(data: data, encoding: .utf8) else { return nil }
         for line in text.split(separator: "\n") {
             if line.hasPrefix("TeamIdentifier=") {
-                let raw = String(line.dropFirst("TeamIdentifier=".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                let raw = String(line.dropFirst("TeamIdentifier=".count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
                 return raw == "not set" ? nil : raw
             }
         }
