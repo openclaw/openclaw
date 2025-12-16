@@ -1786,8 +1786,8 @@ describe("gateway server", () => {
     );
     expect(defaultRes.ok).toBe(true);
     const defaultMsgs = defaultRes.payload?.messages ?? [];
-    expect(defaultMsgs.length).toBe(300);
-    expect(firstContentText(defaultMsgs[0])).toBe("m0");
+    expect(defaultMsgs.length).toBe(200);
+    expect(firstContentText(defaultMsgs[0])).toBe("m100");
 
     const limitedRes = await rpcReq<{ messages?: unknown[] }>(
       ws,
@@ -1829,21 +1829,21 @@ describe("gateway server", () => {
     );
     expect(cappedRes.ok).toBe(true);
     const cappedMsgs = cappedRes.payload?.messages ?? [];
-    expect(cappedMsgs.length).toBe(1000);
-    expect(firstContentText(cappedMsgs[0])).toBe("b500");
+    expect(cappedMsgs.length).toBe(200);
+    expect(firstContentText(cappedMsgs[0])).toBe("b1300");
 
-    const overLimitRes = await rpcReq<{ messages?: unknown[] }>(
+    const maxRes = await rpcReq<{ messages?: unknown[] }>(
       ws,
       "chat.history",
       {
         sessionKey: "main",
-        limit: 5000,
+        limit: 1000,
       },
     );
-    expect(overLimitRes.ok).toBe(true);
-    const overLimitMsgs = overLimitRes.payload?.messages ?? [];
-    expect(overLimitMsgs.length).toBe(1000);
-    expect(firstContentText(overLimitMsgs[0])).toBe("b500");
+    expect(maxRes.ok).toBe(true);
+    const maxMsgs = maxRes.payload?.messages ?? [];
+    expect(maxMsgs.length).toBe(1000);
+    expect(firstContentText(maxMsgs[0])).toBe("b500");
 
     ws.close();
     await server.close();
