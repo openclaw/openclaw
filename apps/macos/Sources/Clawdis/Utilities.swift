@@ -191,7 +191,7 @@ enum CLIInstaller {
         do {
             try proc.run()
             proc.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let data = pipe.fileHandleForReading.readToEndSafely()
             let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if proc.terminationStatus == 0 {
                 return output.isEmpty ? "CLI helper linked into \(targetList)" : output

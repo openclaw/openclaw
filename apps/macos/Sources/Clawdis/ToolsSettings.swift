@@ -463,7 +463,7 @@ private enum ToolInstaller {
             process.standardOutput = pipe
             process.standardError = pipe
             process.terminationHandler = { proc in
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                let data = pipe.fileHandleForReading.readToEndSafely()
                 let output = String(data: data, encoding: .utf8) ?? ""
                 continuation.resume(returning: (proc.terminationStatus, output))
             }

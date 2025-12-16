@@ -202,7 +202,7 @@ enum GatewayEnvironment {
         do {
             try process.run()
             process.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let data = pipe.fileHandleForReading.readToEndSafely()
             let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
             return Semver.parse(raw)
         } catch {

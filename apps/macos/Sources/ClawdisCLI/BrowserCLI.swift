@@ -263,7 +263,7 @@ enum BrowserCLI {
             return try String(contentsOfFile: jsFile, encoding: .utf8)
         }
         if options.jsStdin {
-            let data = FileHandle.standardInput.readDataToEndOfFile()
+            let data = FileHandle.standardInput.readToEndSafely()
             return String(data: data, encoding: .utf8) ?? ""
         }
         if let js = options.js, !js.isEmpty {

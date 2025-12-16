@@ -74,9 +74,9 @@ final class WebChatTunnel {
 
         // Consume stderr so ssh cannot block if it logs.
         stderrHandle.readabilityHandler = { handle in
-            let data = handle.availableData
+            let data = handle.readSafely(upToCount: 64 * 1024)
             guard !data.isEmpty else {
-                // EOF: stop monitoring to avoid spinning on a closed pipe.
+                // EOF (or read failure): stop monitoring to avoid spinning on a closed pipe.
                 Self.cleanupStderr(handle)
                 return
             }
@@ -223,15 +223,25 @@ final class WebChatTunnel {
 
     private static func drainStderr(_ handle: FileHandle) -> String {
         handle.readabilityHandler = nil
-        let data = handle.readDataToEndOfFile()
-        try? handle.close()
-        return String(data: data, encoding: .utf8)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        defer { try? handle.close() }
+
+        do {
+            let data = try handle.readToEnd() ?? Data()
+            return String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        } catch {
+            self.logger.debug("Failed to drain ssh stderr: \(error, privacy: .public)")
+            return ""
+        }
     }
 
     #if SWIFT_PACKAGE
     static func _testPortIsFree(_ port: UInt16) -> Bool {
         self.portIsFree(port)
+    }
+
+    static func _testDrainStderr(_ handle: FileHandle) -> String {
+        self.drainStderr(handle)
     }
     #endif
 }

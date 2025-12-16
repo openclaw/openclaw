@@ -24,8 +24,8 @@ enum ShellExecutor {
 
         let waitTask = Task { () -> Response in
             process.waitUntilExit()
-            let out = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
-            let err = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+            let out = stdoutPipe.fileHandleForReading.readToEndSafely()
+            let err = stderrPipe.fileHandleForReading.readToEndSafely()
             let status = process.terminationStatus
             let combined = out.isEmpty ? err : out
             return Response(ok: status == 0, message: status == 0 ? nil : "exit \(status)", payload: combined)
