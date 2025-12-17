@@ -107,7 +107,7 @@ final class BridgeDiscoveryModel {
 
     private func recomputeBridges() {
         let next = self.bridgesByDomain.values
-            .flatMap { $0 }
+            .flatMap(\.self)
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
         let nextIDs = Set(next.map(\.stableID))
@@ -147,12 +147,12 @@ final class BridgeDiscoveryModel {
             }
         }
 
-        if states.contains(where: { if case .ready = $0 { return true } else { return false } }) {
+        if states.contains(where: { if case .ready = $0 { true } else { false } }) {
             self.statusText = "Searching…"
             return
         }
 
-        if states.contains(where: { if case .setup = $0 { return true } else { return false } }) {
+        if states.contains(where: { if case .setup = $0 { true } else { false } }) {
             self.statusText = "Setup"
             return
         }
