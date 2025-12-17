@@ -133,9 +133,10 @@ struct ClawdisChatComposer: View {
             .overlay(alignment: .topLeading) {
                 self.editorOverlay
             }
-            .overlay(alignment: .bottomTrailing) {
-                VStack(alignment: .trailing, spacing: 6) {
+            .overlay(alignment: .bottom) {
+                HStack(alignment: .bottom, spacing: 8) {
                     self.connectionPill
+                    Spacer(minLength: 0)
                     self.sendButton
                 }
                 .padding(8)
@@ -177,12 +178,14 @@ struct ClawdisChatComposer: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .padding(.trailing, 44)
+            .padding(.bottom, 28)
             #else
             TextEditor(text: self.$viewModel.input)
                 .font(.system(size: 15))
                 .scrollContentBackground(.hidden)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 8)
+                .padding(.bottom, 28)
                 .focused(self.$isFocused)
             #endif
         }
