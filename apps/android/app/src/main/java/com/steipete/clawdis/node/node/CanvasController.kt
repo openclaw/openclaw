@@ -147,49 +147,8 @@ private val canvasHtml =
         }
         html,body { height:100%; margin:0; }
         body {
-          background: radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.18), rgba(0,0,0,0) 55%),
-                      radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.14), rgba(0,0,0,0) 60%),
-                      radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.10), rgba(0,0,0,0) 60%),
-                      #000;
+          background: transparent;
           overflow: hidden;
-        }
-        body::before {
-          content:"";
-          position: fixed;
-          inset: -20%;
-          background:
-            repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) 1px,
-                                     transparent 1px, transparent 48px),
-            repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) 1px,
-                                     transparent 1px, transparent 48px);
-          transform: rotate(-7deg);
-          opacity: 0.55;
-          pointer-events: none;
-          animation: clawdis-grid-drift 22s linear infinite;
-        }
-        body::after {
-          content:"";
-          position: fixed;
-          inset: -35%;
-          background:
-            radial-gradient(900px 700px at 30% 30%, rgba(42,113,255,0.16), rgba(0,0,0,0) 60%),
-            radial-gradient(800px 650px at 70% 35%, rgba(255,0,138,0.12), rgba(0,0,0,0) 62%),
-            radial-gradient(900px 800px at 55% 75%, rgba(0,209,255,0.10), rgba(0,0,0,0) 62%);
-          filter: blur(28px);
-          opacity: 0.55;
-          mix-blend-mode: screen;
-          pointer-events: none;
-          animation: clawdis-glow-drift 18s ease-in-out infinite alternate;
-        }
-        @keyframes clawdis-grid-drift {
-          0%   { transform: translate3d(-18px, 12px, 0) rotate(-7deg); opacity: 0.50; }
-          50%  { transform: translate3d( 14px,-10px, 0) rotate(-6.2deg); opacity: 0.62; }
-          100% { transform: translate3d(-10px,  8px, 0) rotate(-7.4deg); opacity: 0.52; }
-        }
-        @keyframes clawdis-glow-drift {
-          0%   { transform: translate3d(-26px, 18px, 0) scale(1.02); opacity: 0.42; }
-          50%  { transform: translate3d( 20px,-14px, 0) scale(1.05); opacity: 0.55; }
-          100% { transform: translate3d(-12px, 10px, 0) scale(1.03); opacity: 0.46; }
         }
         canvas {
           display:block;
@@ -208,7 +167,7 @@ private val canvasHtml =
           text-align: center;
           padding: 16px 18px;
           border-radius: 14px;
-          background: rgba(18, 18, 22, 0.42);
+          background: rgba(18, 18, 22, 0.70);
           border: 1px solid rgba(255,255,255,0.08);
           box-shadow: 0 18px 60px rgba(0,0,0,0.55);
           backdrop-filter: blur(14px);

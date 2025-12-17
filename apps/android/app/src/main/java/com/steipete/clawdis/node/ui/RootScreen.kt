@@ -3,6 +3,8 @@ package com.steipete.clawdis.node.ui
 import android.annotation.SuppressLint
 import android.Manifest
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.view.View
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.foundation.layout.Arrangement
@@ -148,7 +150,9 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = false
         webViewClient = WebViewClient()
-        setBackgroundColor(0x00000000)
+        setBackgroundColor(Color.TRANSPARENT)
+        setBackgroundResource(0)
+        setLayerType(View.LAYER_TYPE_HARDWARE, null)
         viewModel.canvas.attach(this)
       }
     },
