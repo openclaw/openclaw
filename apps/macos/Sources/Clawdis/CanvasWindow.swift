@@ -140,12 +140,16 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             }
         }
 
-        // Convenience: absolute paths resolve as local files when they exist.
-        if trimmed.hasPrefix("/"), FileManager.default.fileExists(atPath: trimmed) {
+        // Convenience: absolute file paths resolve as local files when they exist.
+        // (Avoid treating Canvas routes like "/" as filesystem paths.)
+        if trimmed.hasPrefix("/") {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
             let url = URL(fileURLWithPath: trimmed)
             canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
             self.loadFile(url)
             return
+            }
         }
 
         guard let url = CanvasScheme.makeURL(

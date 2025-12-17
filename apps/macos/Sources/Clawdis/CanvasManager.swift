@@ -116,9 +116,13 @@ final class CanvasManager {
             if scheme == "https" || scheme == "http" || scheme == "file" { return url }
         }
 
-        // Convenience: existing absolute paths resolve as local files.
-        if trimmed.hasPrefix("/"), FileManager.default.fileExists(atPath: trimmed) {
-            return URL(fileURLWithPath: trimmed)
+        // Convenience: existing absolute *file* paths resolve as local files.
+        // (Avoid treating Canvas routes like "/" as filesystem paths.)
+        if trimmed.hasPrefix("/") {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: trimmed, isDirectory: &isDir), !isDir.boolValue {
+                return URL(fileURLWithPath: trimmed)
+            }
         }
 
         return nil
