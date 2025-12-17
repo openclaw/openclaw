@@ -3,6 +3,8 @@ import {
   type AgentEvent,
   AgentEventSchema,
   AgentParamsSchema,
+  type ChatAbortParams,
+  ChatAbortParamsSchema,
   type ChatEvent,
   ChatEventSchema,
   ChatHistoryParamsSchema,
@@ -137,6 +139,9 @@ export const validateCronRunsParams =
   ajv.compile<CronRunsParams>(CronRunsParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
+export const validateChatAbortParams = ajv.compile<ChatAbortParams>(
+  ChatAbortParamsSchema,
+);
 export const validateChatEvent = ajv.compile(ChatEventSchema);
 
 export function formatValidationErrors(

@@ -159,6 +159,63 @@ struct ChatTypingIndicatorBubble: View {
 }
 
 @MainActor
+struct ChatStreamingAssistantBubble: View {
+    let text: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Assistant (streaming)", systemImage: "sparkles")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ChatMarkdownBody(text: self.text)
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(ClawdisChatTheme.subtleCard))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+    }
+}
+
+@MainActor
+struct ChatPendingToolsBubble: View {
+    let toolCalls: [ClawdisChatPendingToolCall]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Running tools…", systemImage: "hammer")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            ForEach(self.toolCalls) { call in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(call.name)
+                        .font(.footnote.monospaced())
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    ProgressView().controlSize(.mini)
+                }
+                .padding(10)
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+        }
+        .padding(12)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(ClawdisChatTheme.subtleCard))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
+        .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
+    }
+}
+
+@MainActor
 private struct TypingDots: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var animate = false
@@ -199,6 +256,48 @@ private struct MarkdownTextView: View {
                 .font(.system(size: 14))
                 .foregroundStyle(.primary)
         }
+    }
+}
+
+@MainActor
+private struct ChatMarkdownBody: View {
+    let text: String
+
+    var body: some View {
+        let split = ChatMarkdownSplitter.split(markdown: self.text)
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(split.blocks) { block in
+                switch block.kind {
+                case .text:
+                    MarkdownTextView(text: block.text)
+                case let .code(language):
+                    CodeBlockView(code: block.text, language: language)
+                }
+            }
+
+            if !split.images.isEmpty {
+                ForEach(
+                    split.images,
+                    id: \ChatMarkdownSplitter.InlineImage.id)
+                { (item: ChatMarkdownSplitter.InlineImage) in
+                    if let img = item.image {
+                        ClawdisPlatformImageFactory.image(img)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 260)
+                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                    } else {
+                        Text(item.label.isEmpty ? "Image" : item.label)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .textSelection(.enabled)
     }
 }
 

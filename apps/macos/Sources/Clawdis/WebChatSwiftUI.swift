@@ -18,6 +18,31 @@ struct MacGatewayChatTransport: ClawdisChatTransport, Sendable {
         try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
     }
 
+    func abortRun(sessionKey: String, runId: String) async throws {
+        _ = try await GatewayConnection.shared.request(
+            method: "chat.abort",
+            params: [
+                "sessionKey": AnyCodable(sessionKey),
+                "runId": AnyCodable(runId),
+            ],
+            timeoutMs: 10_000)
+    }
+
+    func listSessions(limit: Int?) async throws -> ClawdisChatSessionsListResponse {
+        var params: [String: AnyCodable] = [
+            "includeGlobal": AnyCodable(true),
+            "includeUnknown": AnyCodable(false),
+        ]
+        if let limit {
+            params["limit"] = AnyCodable(limit)
+        }
+        let data = try await GatewayConnection.shared.request(
+            method: "sessions.list",
+            params: params,
+            timeoutMs: 15_000)
+        return try JSONDecoder().decode(ClawdisChatSessionsListResponse.self, from: data)
+    }
+
     func sendMessage(
         sessionKey: String,
         message: String,
@@ -88,6 +113,15 @@ struct MacGatewayChatTransport: ClawdisChatTransport, Sendable {
                     return nil
                 }
                 return .chat(chat)
+            case "agent":
+                guard let payload = evt.payload else { return nil }
+                guard let agent = try? JSONDecoder().decode(
+                    ClawdisAgentEventPayload.self,
+                    from: JSONEncoder().encode(payload))
+                else {
+                    return nil
+                }
+                return .agent(agent)
             default:
                 return nil
             }

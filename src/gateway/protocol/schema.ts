@@ -480,6 +480,14 @@ export const ChatSendParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ChatAbortParamsSchema = Type.Object(
+  {
+    sessionKey: NonEmptyString,
+    runId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const ChatEventSchema = Type.Object(
   {
     runId: NonEmptyString,
@@ -488,6 +496,7 @@ export const ChatEventSchema = Type.Object(
     state: Type.Union([
       Type.Literal("delta"),
       Type.Literal("final"),
+      Type.Literal("aborted"),
       Type.Literal("error"),
     ]),
     message: Type.Optional(Type.Unknown()),
@@ -533,6 +542,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   CronRunLogEntry: CronRunLogEntrySchema,
   ChatHistoryParams: ChatHistoryParamsSchema,
   ChatSendParams: ChatSendParamsSchema,
+  ChatAbortParams: ChatAbortParamsSchema,
   ChatEvent: ChatEventSchema,
   TickEvent: TickEventSchema,
   ShutdownEvent: ShutdownEventSchema,
@@ -570,6 +580,7 @@ export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
 export type CronRunParams = Static<typeof CronRunParamsSchema>;
 export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
+export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
 export type TickEvent = Static<typeof TickEventSchema>;
 export type ShutdownEvent = Static<typeof ShutdownEventSchema>;

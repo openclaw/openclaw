@@ -20,12 +20,17 @@ public final class ClawdisChatViewModel {
     public var thinkingLevel: String = "off"
     public private(set) var isLoading = false
     public private(set) var isSending = false
+    public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [ClawdisPendingAttachment] = []
     public private(set) var healthOK: Bool = false
     public private(set) var pendingRunCount: Int = 0
 
-    public let sessionKey: String
+    public private(set) var sessionKey: String
+    public private(set) var sessionId: String?
+    public private(set) var streamingAssistantText: String?
+    public private(set) var pendingToolCalls: [ClawdisChatPendingToolCall] = []
+    public private(set) var sessions: [ClawdisChatSessionEntry] = []
     private let transport: any ClawdisChatTransport
 
     @ObservationIgnored
@@ -37,6 +42,12 @@ public final class ClawdisChatViewModel {
     @ObservationIgnored
     private nonisolated(unsafe) var pendingRunTimeoutTasks: [String: Task<Void, Never>] = [:]
     private let pendingRunTimeoutMs: UInt64 = 120_000
+
+    private var pendingToolCallsById: [String: ClawdisChatPendingToolCall] = [:] {
+        didSet {
+            self.pendingToolCalls = self.pendingToolCallsById.values.sorted { ($0.startedAt ?? 0) < ($1.startedAt ?? 0) }
+        }
+    }
 
     private var lastHealthPollAt: Date?
 
@@ -75,6 +86,18 @@ public final class ClawdisChatViewModel {
         Task { await self.performSend() }
     }
 
+    public func abort() {
+        Task { await self.performAbort() }
+    }
+
+    public func refreshSessions(limit: Int? = nil) {
+        Task { await self.fetchSessions(limit: limit) }
+    }
+
+    public func switchSession(to sessionKey: String) {
+        Task { await self.performSwitchSession(to: sessionKey) }
+    }
+
     public func addAttachments(urls: [URL]) {
         Task { await self.loadAttachments(urls: urls) }
     }
@@ -89,7 +112,7 @@ public final class ClawdisChatViewModel {
 
     public var canSend: Bool {
         let trimmed = self.input.trimmingCharacters(in: .whitespacesAndNewlines)
-        return !self.isSending && (!trimmed.isEmpty || !self.attachments.isEmpty)
+        return !self.isSending && self.pendingRunCount == 0 && (!trimmed.isEmpty || !self.attachments.isEmpty)
     }
 
     // MARK: - Internals
@@ -99,6 +122,9 @@ public final class ClawdisChatViewModel {
         self.errorText = nil
         self.healthOK = false
         self.clearPendingRuns(reason: nil)
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
+        self.sessionId = nil
         defer { self.isLoading = false }
         do {
             do {
@@ -109,10 +135,12 @@ public final class ClawdisChatViewModel {
 
             let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
             self.messages = Self.decodeMessages(payload.messages ?? [])
+            self.sessionId = payload.sessionId
             if let level = payload.thinkingLevel, !level.isEmpty {
                 self.thinkingLevel = level
             }
             await self.pollHealthIfNeeded(force: true)
+            await self.fetchSessions(limit: 50)
             self.errorText = nil
         } catch {
             self.errorText = error.localizedDescription
@@ -140,15 +168,24 @@ public final class ClawdisChatViewModel {
         self.errorText = nil
         let runId = UUID().uuidString
         let messageText = trimmed.isEmpty && !self.attachments.isEmpty ? "See attached." : trimmed
+        self.pendingRuns.insert(runId)
+        self.armPendingRunTimeout(runId: runId)
+        self.pendingToolCallsById = [:]
+        self.streamingAssistantText = nil
 
         // Optimistically append user message to UI.
         var userContent: [ClawdisChatMessageContent] = [
             ClawdisChatMessageContent(
                 type: "text",
                 text: messageText,
+                thinking: nil,
+                thinkingSignature: nil,
                 mimeType: nil,
                 fileName: nil,
-                content: nil),
+                content: nil,
+                id: nil,
+                name: nil,
+                arguments: nil),
         ]
         let encodedAttachments = self.attachments.map { att -> ClawdisChatAttachmentPayload in
             ClawdisChatAttachmentPayload(
@@ -162,9 +199,14 @@ public final class ClawdisChatViewModel {
                 ClawdisChatMessageContent(
                     type: att.type,
                     text: nil,
+                    thinking: nil,
+                    thinkingSignature: nil,
                     mimeType: att.mimeType,
                     fileName: att.fileName,
-                    content: att.content))
+                    content: AnyCodable(att.content),
+                    id: nil,
+                    name: nil,
+                    arguments: nil))
         }
         self.messages.append(
             ClawdisChatMessage(
@@ -180,9 +222,13 @@ public final class ClawdisChatViewModel {
                 thinking: self.thinkingLevel,
                 idempotencyKey: runId,
                 attachments: encodedAttachments)
-            self.pendingRuns.insert(response.runId)
-            self.armPendingRunTimeout(runId: response.runId)
+            if response.runId != runId {
+                self.clearPendingRun(runId)
+                self.pendingRuns.insert(response.runId)
+                self.armPendingRunTimeout(runId: response.runId)
+            }
         } catch {
+            self.clearPendingRun(runId)
             self.errorText = error.localizedDescription
             chatUILogger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
         }
@@ -190,6 +236,39 @@ public final class ClawdisChatViewModel {
         self.input = ""
         self.attachments = []
         self.isSending = false
+    }
+
+    private func performAbort() async {
+        guard !self.pendingRuns.isEmpty else { return }
+        guard !self.isAborting else { return }
+        self.isAborting = true
+        defer { self.isAborting = false }
+
+        let runIds = Array(self.pendingRuns)
+        for runId in runIds {
+            do {
+                try await self.transport.abortRun(sessionKey: self.sessionKey, runId: runId)
+            } catch {
+                // Best-effort.
+            }
+        }
+    }
+
+    private func fetchSessions(limit: Int?) async {
+        do {
+            let res = try await self.transport.listSessions(limit: limit)
+            self.sessions = res.sessions
+        } catch {
+            // Best-effort.
+        }
+    }
+
+    private func performSwitchSession(to sessionKey: String) async {
+        let next = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !next.isEmpty else { return }
+        guard next != self.sessionKey else { return }
+        self.sessionKey = next
+        await self.bootstrap()
     }
 
     private func handleTransportEvent(_ evt: ClawdisChatTransportEvent) {
@@ -200,6 +279,8 @@ public final class ClawdisChatViewModel {
             Task { await self.pollHealthIfNeeded(force: false) }
         case let .chat(chat):
             self.handleChatEvent(chat)
+        case let .agent(agent):
+            self.handleAgentEvent(agent)
         case .seqGap:
             self.errorText = "Event stream interrupted; try refreshing."
             self.clearPendingRuns(reason: nil)
@@ -217,26 +298,63 @@ public final class ClawdisChatViewModel {
         }
 
         switch chat.state {
-        case "final":
-            if let raw = chat.message,
-               let msg = try? ChatPayloadDecoding.decode(raw, as: ClawdisChatMessage.self)
-            {
-                self.messages.append(msg)
+        case "final", "aborted", "error":
+            if chat.state == "error" {
+                self.errorText = chat.errorMessage ?? "Chat failed"
             }
             if let runId = chat.runId {
                 self.clearPendingRun(runId)
             } else if self.pendingRuns.count <= 1 {
                 self.clearPendingRuns(reason: nil)
             }
-        case "error":
-            self.errorText = chat.errorMessage ?? "Chat failed"
-            if let runId = chat.runId {
-                self.clearPendingRun(runId)
-            } else if self.pendingRuns.count <= 1 {
-                self.clearPendingRuns(reason: nil)
+            self.pendingToolCallsById = [:]
+            self.streamingAssistantText = nil
+            Task { await self.refreshHistoryAfterRun() }
+        default:
+            break
+        }
+    }
+
+    private func handleAgentEvent(_ evt: ClawdisAgentEventPayload) {
+        if let sessionId, evt.runId != sessionId {
+            return
+        }
+
+        switch evt.stream {
+        case "assistant":
+            if let text = evt.data["text"]?.value as? String {
+                self.streamingAssistantText = text
+            }
+        case "tool":
+            guard let phase = evt.data["phase"]?.value as? String else { return }
+            guard let name = evt.data["name"]?.value as? String else { return }
+            guard let toolCallId = evt.data["toolCallId"]?.value as? String else { return }
+            if phase == "start" {
+                let args = evt.data["args"]
+                self.pendingToolCallsById[toolCallId] = ClawdisChatPendingToolCall(
+                    toolCallId: toolCallId,
+                    name: name,
+                    args: args,
+                    startedAt: evt.ts.map(Double.init) ?? Date().timeIntervalSince1970 * 1000,
+                    isError: nil)
+            } else if phase == "result" {
+                self.pendingToolCallsById[toolCallId] = nil
             }
         default:
             break
+        }
+    }
+
+    private func refreshHistoryAfterRun() async {
+        do {
+            let payload = try await self.transport.requestHistory(sessionKey: self.sessionKey)
+            self.messages = Self.decodeMessages(payload.messages ?? [])
+            self.sessionId = payload.sessionId
+            if let level = payload.thinkingLevel, !level.isEmpty {
+                self.thinkingLevel = level
+            }
+        } catch {
+            chatUILogger.error("refresh history failed \(error.localizedDescription, privacy: .public)")
         }
     }
 

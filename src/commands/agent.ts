@@ -46,6 +46,7 @@ type AgentCommandOpts = {
   surface?: string;
   provider?: string; // delivery provider (whatsapp|telegram|...)
   bestEffortDeliver?: boolean;
+  abortSignal?: AbortSignal;
 };
 
 type SessionResolution = {
@@ -251,6 +252,7 @@ export async function agentCommand(
       verboseLevel: resolvedVerboseLevel,
       timeoutMs,
       runId: sessionId,
+      abortSignal: opts.abortSignal,
       onAgentEvent: (evt) => {
         emitAgentEvent({
           runId: sessionId,
@@ -269,6 +271,7 @@ export async function agentCommand(
         to: opts.to ?? null,
         sessionId,
         durationMs: Date.now() - startedAt,
+        aborted: result.meta.aborted ?? false,
       },
     });
   } catch (err) {
@@ -308,6 +311,7 @@ export async function agentCommand(
       model: modelUsed,
       contextTokens,
     };
+    next.abortedLastRun = result.meta.aborted ?? false;
     if (usage) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;

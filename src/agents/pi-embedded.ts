@@ -141,6 +141,7 @@ export async function runEmbeddedPiAgent(params: {
   verboseLevel?: VerboseLevel;
   timeoutMs: number;
   runId: string;
+  abortSignal?: AbortSignal;
   onPartialReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -246,7 +247,7 @@ export async function runEmbeddedPiAgent(params: {
       const toolMetaById = new Map<string, string | undefined>();
       let deltaBuffer = "";
       let lastStreamedAssistant: string | undefined;
-      let aborted = false;
+      let aborted = Boolean(params.abortSignal?.aborted);
 
       const unsubscribe = session.subscribe(
         (evt: AgentEvent | { type: string; [k: string]: unknown }) => {
@@ -342,18 +343,31 @@ export async function runEmbeddedPiAgent(params: {
                 if (chunk) {
                   deltaBuffer += chunk;
                   const next = deltaBuffer.trim();
-                  if (
-                    next &&
-                    next !== lastStreamedAssistant &&
-                    params.onPartialReply
-                  ) {
+                  if (next && next !== lastStreamedAssistant) {
                     lastStreamedAssistant = next;
                     const { text: cleanedText, mediaUrls } =
                       splitMediaFromOutput(next);
-                    void params.onPartialReply({
-                      text: cleanedText,
-                      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                    emitAgentEvent({
+                      runId: params.runId,
+                      stream: "assistant",
+                      data: {
+                        text: cleanedText,
+                        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                      },
                     });
+                    params.onAgentEvent?.({
+                      stream: "assistant",
+                      data: {
+                        text: cleanedText,
+                        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                      },
+                    });
+                    if (params.onPartialReply) {
+                      void params.onPartialReply({
+                        text: cleanedText,
+                        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                      });
+                    }
                   }
                 }
               }
@@ -385,15 +399,36 @@ export async function runEmbeddedPiAgent(params: {
 
       let messagesSnapshot: AppMessage[] = [];
       let sessionIdUsed = session.sessionId;
+      const onAbort = () => {
+        aborted = true;
+        void session.abort();
+      };
+      if (params.abortSignal) {
+        if (params.abortSignal.aborted) {
+          onAbort();
+        } else {
+          params.abortSignal.addEventListener("abort", onAbort, { once: true });
+        }
+      }
+      let promptError: unknown | null = null;
       try {
-        await session.prompt(params.prompt);
-        messagesSnapshot = session.messages.slice();
-        sessionIdUsed = session.sessionId;
+        try {
+          await session.prompt(params.prompt);
+        } catch (err) {
+          promptError = err;
+        } finally {
+          messagesSnapshot = session.messages.slice();
+          sessionIdUsed = session.sessionId;
+        }
       } finally {
         clearTimeout(abortTimer);
         unsubscribe();
         toolDebouncer.flush();
         session.dispose();
+        params.abortSignal?.removeEventListener?.("abort", onAbort);
+      }
+      if (promptError && !aborted) {
+        throw promptError;
       }
 
       const lastAssistant = messagesSnapshot

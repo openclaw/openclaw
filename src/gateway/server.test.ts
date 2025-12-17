@@ -1970,6 +1970,87 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("chat.abort cancels an in-flight chat.send", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const spy = vi.mocked(agentCommand);
+    spy.mockImplementationOnce(async (opts) => {
+      const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!signal) return resolve();
+        if (signal.aborted) return resolve();
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+
+    const abortedEventP = onceMessage(
+      ws,
+      (o) => o.type === "event" && o.event === "chat" && o.payload?.state === "aborted",
+    );
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "send-abort-1",
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-abort-1",
+          timeoutMs: 30_000,
+        },
+      }),
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "abort-1",
+        method: "chat.abort",
+        params: { sessionKey: "main", runId: "idem-abort-1" },
+      }),
+    );
+
+    const abortRes = await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "abort-1",
+    );
+    expect(abortRes.ok).toBe(true);
+
+    const sendRes = await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "send-abort-1",
+    );
+    expect(sendRes.ok).toBe(true);
+
+    const evt = await abortedEventP;
+    expect(evt.payload?.runId).toBe("idem-abort-1");
+    expect(evt.payload?.sessionKey).toBe("main");
+
+    ws.close();
+    await server.close();
+  });
+
   test("bridge RPC chat.history returns session messages", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");
@@ -2025,6 +2106,54 @@ describe("gateway server", () => {
     expect(payload.sessionId).toBe("sess-main");
     expect(Array.isArray(payload.messages)).toBe(true);
     expect(payload.messages?.length).toBeGreaterThan(0);
+
+    await server.close();
+  });
+
+  test("bridge RPC sessions.list returns session rows", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const res = await bridgeCall?.onRequest?.("ios-node", {
+      id: "r1",
+      method: "sessions.list",
+      paramsJSON: JSON.stringify({
+        includeGlobal: true,
+        includeUnknown: false,
+        limit: 50,
+      }),
+    });
+
+    expect(res?.ok).toBe(true);
+    const payload = JSON.parse(
+      String((res as { payloadJSON?: string }).payloadJSON ?? "{}"),
+    ) as {
+      sessions?: unknown[];
+      count?: number;
+      path?: string;
+    };
+    expect(Array.isArray(payload.sessions)).toBe(true);
+    expect(typeof payload.count).toBe("number");
+    expect(typeof payload.path).toBe("string");
 
     await server.close();
   });
@@ -2091,6 +2220,13 @@ describe("gateway server", () => {
 
     // Wait a tick for the bridge send to happen.
     await new Promise((r) => setTimeout(r, 25));
+
+    expect(bridgeSendEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nodeId: "ios-node",
+        event: "agent",
+      }),
+    );
 
     expect(bridgeSendEvent).toHaveBeenCalledWith(
       expect.objectContaining({

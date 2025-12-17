@@ -169,19 +169,38 @@ struct ClawdisChatComposer: View {
     }
 
     private var sendButton: some View {
-        Button {
-            self.viewModel.send()
-        } label: {
-            if self.viewModel.isSending {
-                ProgressView().controlSize(.small)
+        Group {
+            if self.viewModel.pendingRunCount > 0 {
+                Button {
+                    self.viewModel.abort()
+                } label: {
+                    if self.viewModel.isAborting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .controlSize(.small)
+                .disabled(self.viewModel.isAborting)
             } else {
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 13, weight: .semibold))
+                Button {
+                    self.viewModel.send()
+                } label: {
+                    if self.viewModel.isSending {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .disabled(!self.viewModel.canSend)
             }
         }
-        .buttonStyle(.borderedProminent)
-        .controlSize(.small)
-        .disabled(!self.viewModel.canSend)
     }
 
     #if os(macOS)

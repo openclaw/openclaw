@@ -9,6 +9,28 @@ struct IOSBridgeChatTransport: ClawdisChatTransport, Sendable {
         self.bridge = bridge
     }
 
+    func abortRun(sessionKey: String, runId: String) async throws {
+        struct Params: Codable {
+            var sessionKey: String
+            var runId: String
+        }
+        let data = try JSONEncoder().encode(Params(sessionKey: sessionKey, runId: runId))
+        let json = String(data: data, encoding: .utf8)
+        _ = try await self.bridge.request(method: "chat.abort", paramsJSON: json, timeoutSeconds: 10)
+    }
+
+    func listSessions(limit: Int?) async throws -> ClawdisChatSessionsListResponse {
+        struct Params: Codable {
+            var includeGlobal: Bool
+            var includeUnknown: Bool
+            var limit: Int?
+        }
+        let data = try JSONEncoder().encode(Params(includeGlobal: true, includeUnknown: false, limit: limit))
+        let json = String(data: data, encoding: .utf8)
+        let res = try await self.bridge.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
+        return try JSONDecoder().decode(ClawdisChatSessionsListResponse.self, from: res)
+    }
+
     func setActiveSessionKey(_ sessionKey: String) async throws {
         struct Subscribe: Codable { var sessionKey: String }
         let data = try JSONEncoder().encode(Subscribe(sessionKey: sessionKey))
@@ -78,6 +100,11 @@ struct IOSBridgeChatTransport: ClawdisChatTransport, Sendable {
                         guard let json = evt.payloadJSON, let data = json.data(using: .utf8) else { break }
                         if let payload = try? JSONDecoder().decode(ClawdisChatEventPayload.self, from: data) {
                             continuation.yield(.chat(payload))
+                        }
+                    case "agent":
+                        guard let json = evt.payloadJSON, let data = json.data(using: .utf8) else { break }
+                        if let payload = try? JSONDecoder().decode(ClawdisAgentEventPayload.self, from: data) {
+                            continuation.yield(.agent(payload))
                         }
                     default:
                         break

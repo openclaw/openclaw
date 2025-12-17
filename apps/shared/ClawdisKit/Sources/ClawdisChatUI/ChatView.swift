@@ -4,6 +4,7 @@ import SwiftUI
 public struct ClawdisChatView: View {
     @State private var viewModel: ClawdisChatViewModel
     @State private var scrollerBottomID = UUID()
+    @State private var showSessions = false
 
     public init(viewModel: ClawdisChatViewModel) {
         self._viewModel = State(initialValue: viewModel)
@@ -24,6 +25,9 @@ public struct ClawdisChatView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { self.viewModel.load() }
+        .sheet(isPresented: self.$showSessions) {
+            ChatSessionsSheet(viewModel: self.viewModel)
+        }
     }
 
     private var messageList: some View {
@@ -39,6 +43,16 @@ public struct ClawdisChatView: View {
 
                     if self.viewModel.pendingRunCount > 0 {
                         ChatTypingIndicatorBubble()
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if !self.viewModel.pendingToolCalls.isEmpty {
+                        ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+
+                    if let text = self.viewModel.streamingAssistantText, !text.isEmpty {
+                        ChatStreamingAssistantBubble(text: text)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
 
@@ -64,6 +78,23 @@ public struct ClawdisChatView: View {
                     Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+
+                    Button {
+                        self.showSessions = true
+                    } label: {
+                        Image(systemName: "tray.full")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Sessions")
+
+                    Button {
+                        self.viewModel.refresh()
+                    } label: {
+                        Image(systemName: "arrow.clockwise")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Refresh")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
