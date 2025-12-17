@@ -433,6 +433,45 @@ struct ClawdisCLI {
             return
         }
 
+        if case .nodeList = parsed.request, let payload = response.payload {
+            struct NodeListResult: Decodable {
+                struct Node: Decodable {
+                    var nodeId: String
+                    var displayName: String?
+                    var remoteAddress: String?
+                    var connected: Bool
+                    var capabilities: [String]?
+                }
+
+                var pairedNodeIds: [String]?
+                var connectedNodeIds: [String]?
+                var nodes: [Node]
+            }
+
+            if let decoded = try? JSONDecoder().decode(NodeListResult.self, from: payload) {
+                let pairedCount = decoded.pairedNodeIds?.count ?? decoded.nodes.count
+                let connectedCount = decoded.connectedNodeIds?.count ?? decoded.nodes.filter(\.connected).count
+                print("Paired: \(pairedCount) · Connected: \(connectedCount)")
+
+                for n in decoded.nodes {
+                    let nameTrimmed = n.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let name = nameTrimmed.isEmpty ? n.nodeId : nameTrimmed
+
+                    let ipTrimmed = n.remoteAddress?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let ip = ipTrimmed.isEmpty ? nil : ipTrimmed
+                    let caps = n.capabilities?.sorted().joined(separator: ",")
+                    let capsText = caps.map { "[\($0)]" } ?? "?"
+
+                    var parts: [String] = ["- \(name)", n.nodeId]
+                    if let ip { parts.append(ip) }
+                    parts.append(n.connected ? "connected" : "disconnected")
+                    parts.append("caps: \(capsText)")
+                    print(parts.joined(separator: " · "))
+                }
+                return
+            }
+        }
+
         switch parsed.kind {
         case .generic:
             if let payload = response.payload, let text = String(data: payload, encoding: .utf8), !text.isEmpty {
@@ -509,7 +548,7 @@ struct ClawdisCLI {
               [--session <key>] [--deliver] [--to <E.164>]
 
           Nodes:
-            clawdis-mac node list
+            clawdis-mac node list         # paired + connected nodes (+ capabilities when available)
             clawdis-mac node invoke --node <id> --command <name> [--params-json <json>]
 
           Canvas:

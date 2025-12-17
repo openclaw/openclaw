@@ -5,6 +5,23 @@ import OSLog
 enum ControlRequestHandler {
     private static let cameraCapture = CameraCaptureService()
 
+    struct NodeListNode: Codable {
+        var nodeId: String
+        var displayName: String?
+        var platform: String?
+        var version: String?
+        var remoteAddress: String?
+        var connected: Bool
+        var capabilities: [String]?
+    }
+
+    struct NodeListResult: Codable {
+        var ts: Int
+        var connectedNodeIds: [String]
+        var pairedNodeIds: [String]
+        var nodes: [NodeListNode]
+    }
+
     static func process(
         request: Request,
         notifier: NotificationManager = NotificationManager(),
@@ -394,12 +411,54 @@ enum ControlRequestHandler {
     }
 
     private static func handleNodeList() async -> Response {
-        let ids = await BridgeServer.shared.connectedNodeIds()
-        let payload = (try? JSONSerialization.data(
-            withJSONObject: ["connectedNodeIds": ids],
-            options: [.prettyPrinted]))
+        let paired = await BridgeServer.shared.pairedNodes()
+        let connected = await BridgeServer.shared.connectedNodes()
+        let result = self.buildNodeListResult(paired: paired, connected: connected)
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let payload = (try? encoder.encode(result))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
         return Response(ok: true, payload: Data(payload.utf8))
+    }
+
+    static func buildNodeListResult(paired: [PairedNode], connected: [BridgeNodeInfo]) -> NodeListResult {
+        let connectedById = Dictionary(uniqueKeysWithValues: connected.map { ($0.nodeId, $0) })
+
+        var nodesById: [String: NodeListNode] = [:]
+
+        for p in paired {
+            let live = connectedById[p.nodeId]
+            nodesById[p.nodeId] = NodeListNode(
+                nodeId: p.nodeId,
+                displayName: (live?.displayName ?? p.displayName),
+                platform: (live?.platform ?? p.platform),
+                version: (live?.version ?? p.version),
+                remoteAddress: live?.remoteAddress,
+                connected: live != nil,
+                capabilities: live?.caps)
+        }
+
+        for c in connected where nodesById[c.nodeId] == nil {
+            nodesById[c.nodeId] = NodeListNode(
+                nodeId: c.nodeId,
+                displayName: c.displayName,
+                platform: c.platform,
+                version: c.version,
+                remoteAddress: c.remoteAddress,
+                connected: true,
+                capabilities: c.caps)
+        }
+
+        let nodes = nodesById.values.sorted { a, b in
+            (a.displayName ?? a.nodeId) < (b.displayName ?? b.nodeId)
+        }
+
+        return NodeListResult(
+            ts: Int(Date().timeIntervalSince1970 * 1000),
+            connectedNodeIds: connected.map(\.nodeId).sorted(),
+            pairedNodeIds: paired.map(\.nodeId).sorted(),
+            nodes: nodes)
     }
 
     private static func handleNodeInvoke(

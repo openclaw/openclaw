@@ -74,6 +74,9 @@ UI automation is not part of `ClawdisIPC.Request`:
   - UI automation + capture: use `peekaboo …` (Clawdis hosts PeekabooBridge; see `docs/mac/peekaboo.md`)
   - `run -- cmd args... [--cwd] [--env KEY=VAL] [--timeout 30] [--needs-screen-recording]`
   - `status`
+  - Nodes (bridge-connected companions):
+    - `node list` — lists paired + currently connected nodes, including advertised capabilities (e.g. `canvas`, `camera`).
+    - `node invoke --node <id> --command <name> [--params-json <json>]`
 - Sounds: supply any macOS alert name with `--sound` per notification; omit the flag to use the system default. There is no longer a persisted “default sound” in the app UI.
 - Priority: `timeSensitive` is best-effort and falls back to `active` unless the app is signed with the Time Sensitive Notifications entitlement.
 - Delivery: `overlay` and `auto` show an in-app toast panel (bypasses Notification Center/Focus).
