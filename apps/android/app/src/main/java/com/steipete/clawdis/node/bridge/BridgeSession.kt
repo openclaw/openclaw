@@ -76,7 +76,7 @@ class BridgeSession(
     scope.launch(Dispatchers.IO) {
       job?.cancelAndJoin()
       job = null
-      onDisconnected("Disconnected")
+      onDisconnected("Offline")
     }
   }
 

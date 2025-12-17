@@ -45,7 +45,7 @@ class NodeRuntime(context: Context) {
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
 
-  private val _statusText = MutableStateFlow("Not connected")
+  private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
 
   private val _serverName = MutableStateFlow<String?>(null)
