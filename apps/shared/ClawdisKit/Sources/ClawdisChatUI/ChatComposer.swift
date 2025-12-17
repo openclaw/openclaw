@@ -17,8 +17,8 @@ struct ClawdisChatComposer: View {
     #endif
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 10) {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
                 self.thinkingPicker
                 Spacer()
                 self.refreshButton
@@ -38,7 +38,7 @@ struct ClawdisChatComposer: View {
                     .lineLimit(2)
             }
         }
-        .padding(10)
+        .padding(8)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(ClawdisChatTheme.card)
@@ -163,12 +163,12 @@ struct ClawdisChatComposer: View {
 
     private var editorOverlay: some View {
         ZStack(alignment: .topLeading) {
-            if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text("Message Clawd…")
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-            }
+                if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Message Clawd…")
+                        .foregroundStyle(.tertiary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 6)
+                }
 
             #if os(macOS)
             ChatComposerTextView(text: self.$viewModel.input) {

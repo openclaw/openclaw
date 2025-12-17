@@ -17,12 +17,12 @@ public struct ClawdisChatView: View {
             ClawdisChatTheme.surface
                 .ignoresSafeArea()
 
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 self.messageList
                 ClawdisChatComposer(viewModel: self.viewModel)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 8)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 6)
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -66,9 +66,9 @@ public struct ClawdisChatView: View {
                         .frame(height: 1)
                         .id(self.scrollerBottomID)
                 }
-                .padding(.top, 8)
-                .padding(.bottom, 8)
-                .padding(.horizontal, 10)
+                .padding(.top, 4)
+                .padding(.bottom, 6)
+                .padding(.horizontal, 8)
             }
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
