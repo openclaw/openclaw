@@ -515,7 +515,7 @@ struct ClawdisCLI {
           Canvas:
             clawdis-mac canvas show [--session <key>] [--target </...|https://...|file://...>]
               [--x <screenX> --y <screenY>] [--width <w> --height <h>]
-            clawdis-mac canvas a2ui push --jsonl <path> [--session <key>]
+            clawdis-mac canvas a2ui push --jsonl <path> [--session <key>]   # A2UI v0.8 JSONL
             clawdis-mac canvas a2ui reset [--session <key>]
             clawdis-mac canvas hide [--session <key>]
             clawdis-mac canvas eval --js <code> [--session <key>]

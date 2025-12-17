@@ -93,7 +93,7 @@ final class CanvasManager {
     func eval(sessionKey: String, javaScript: String) async throws -> String {
         _ = try self.show(sessionKey: sessionKey, path: nil)
         guard let controller = self.panelController else { return "" }
-        return await controller.eval(javaScript: javaScript)
+        return try await controller.eval(javaScript: javaScript)
     }
 
     func snapshot(sessionKey: String, outPath: String?) async throws -> String {

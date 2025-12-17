@@ -507,7 +507,8 @@ export class A2uiMessageProcessor implements MessageProcessor {
           surface,
           visited,
           dataContextPath,
-          idSuffix
+          idSuffix,
+          key
         );
       }
     }
@@ -725,10 +726,19 @@ export class A2uiMessageProcessor implements MessageProcessor {
     surface: Surface,
     visited: Set<string>,
     dataContextPath: string,
-    idSuffix = ""
+    idSuffix = "",
+    propertyKey: string | null = null
   ): ResolvedValue {
+    const isComponentIdReferenceKey = (key: string) =>
+      key === "child" || key.endsWith("Child");
+
     // 1. If it's a string that matches a component ID, build that node.
-    if (typeof value === "string" && surface.components.has(value)) {
+    if (
+      typeof value === "string" &&
+      propertyKey &&
+      isComponentIdReferenceKey(propertyKey) &&
+      surface.components.has(value)
+    ) {
       return this.#buildNodeRecursive(
         value,
         surface,
@@ -814,7 +824,8 @@ export class A2uiMessageProcessor implements MessageProcessor {
           surface,
           visited,
           dataContextPath,
-          idSuffix
+          idSuffix,
+          propertyKey
         )
       );
     }
@@ -843,7 +854,8 @@ export class A2uiMessageProcessor implements MessageProcessor {
           surface,
           visited,
           dataContextPath,
-          idSuffix
+          idSuffix,
+          key
         );
       }
       return newObj;

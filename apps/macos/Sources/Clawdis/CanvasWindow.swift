@@ -171,11 +171,11 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.webView.loadFileURL(fileURL, allowingReadAccessTo: accessDir)
     }
 
-    func eval(javaScript: String) async -> String {
-        await withCheckedContinuation { cont in
+    func eval(javaScript: String) async throws -> String {
+        try await withCheckedThrowingContinuation { cont in
             self.webView.evaluateJavaScript(javaScript) { result, error in
                 if let error {
-                    cont.resume(returning: "error: \(error.localizedDescription)")
+                    cont.resume(throwing: error)
                     return
                 }
                 if let result {

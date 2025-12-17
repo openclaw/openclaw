@@ -314,6 +314,43 @@ describe("A2uiMessageProcessor", () => {
             assert.strictEqual(plainTree.properties.children[0].id, "child");
             assert.strictEqual(plainTree.properties.children[0].type, "Text");
         });
+        it("should not treat enum-like strings as child component IDs", () => {
+            processor.processMessages([
+                {
+                    surfaceUpdate: {
+                        surfaceId: "@default",
+                        components: [
+                            {
+                                id: "root",
+                                component: {
+                                    Column: { children: { explicitList: ["body"] } },
+                                },
+                            },
+                            {
+                                id: "body",
+                                component: {
+                                    Text: {
+                                        text: { literalString: "Hello" },
+                                        usageHint: "body",
+                                    },
+                                },
+                            },
+                        ],
+                    },
+                },
+                {
+                    beginRendering: {
+                        root: "root",
+                        surfaceId: "@default",
+                    },
+                },
+            ]);
+            const tree = processor.getSurfaces().get("@default")?.componentTree;
+            const plainTree = toPlainObject(tree);
+            assert.strictEqual(plainTree.id, "root");
+            assert.strictEqual(plainTree.properties.children[0].id, "body");
+            assert.strictEqual(plainTree.properties.children[0].type, "Text");
+        });
         it("should throw an error on circular dependencies", () => {
             // First, load the components
             processor.processMessages([

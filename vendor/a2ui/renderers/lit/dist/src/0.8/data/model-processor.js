@@ -360,7 +360,7 @@ export class A2uiMessageProcessor {
         const resolvedProperties = new this.#objCtor();
         if (isObject(unresolvedProperties)) {
             for (const [key, value] of Object.entries(unresolvedProperties)) {
-                resolvedProperties[key] = this.#resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix);
+                resolvedProperties[key] = this.#resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix, key);
             }
         }
         visited.delete(fullId);
@@ -549,9 +549,13 @@ export class A2uiMessageProcessor {
      * a child node (a string that matches a component ID), an explicitList of
      * children, or a template, these will be built out here.
      */
-    #resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix = "") {
+    #resolvePropertyValue(value, surface, visited, dataContextPath, idSuffix = "", propertyKey = null) {
+        const isComponentIdReferenceKey = (key) => key === "child" || key.endsWith("Child");
         // 1. If it's a string that matches a component ID, build that node.
-        if (typeof value === "string" && surface.components.has(value)) {
+        if (typeof value === "string" &&
+            propertyKey &&
+            isComponentIdReferenceKey(propertyKey) &&
+            surface.components.has(value)) {
             return this.#buildNodeRecursive(value, surface, visited, dataContextPath, idSuffix);
         }
         // 2. If it's a ComponentArrayReference (e.g., a `children` property),
@@ -597,7 +601,7 @@ export class A2uiMessageProcessor {
         }
         // 3. If it's a plain array, resolve each of its items.
         if (Array.isArray(value)) {
-            return value.map((item) => this.#resolvePropertyValue(item, surface, visited, dataContextPath, idSuffix));
+            return value.map((item) => this.#resolvePropertyValue(item, surface, visited, dataContextPath, idSuffix, propertyKey));
         }
         // 4. If it's a plain object, resolve each of its properties.
         if (isObject(value)) {
@@ -617,7 +621,7 @@ export class A2uiMessageProcessor {
                     newObj[key] = propertyValue;
                     continue;
                 }
-                newObj[key] = this.#resolvePropertyValue(propertyValue, surface, visited, dataContextPath, idSuffix);
+                newObj[key] = this.#resolvePropertyValue(propertyValue, surface, visited, dataContextPath, idSuffix, key);
             }
             return newObj;
         }

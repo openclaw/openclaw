@@ -103,12 +103,26 @@ Related:
 
 ### Canvas A2UI
 
-Canvas includes a built-in A2UI renderer (Lit-based). The agent can drive it with JSONL “message” objects:
+Canvas includes a built-in **A2UI v0.8** renderer (Lit-based). The agent can drive it with JSONL **server→client protocol messages** (one JSON object per line):
 
 - `clawdis-mac canvas a2ui push --jsonl <path> [--session <key>]`
 - `clawdis-mac canvas a2ui reset [--session <key>]`
 
 `push` expects a JSONL file where **each line is a single JSON object** (parsed and forwarded to the in-page A2UI renderer).
+
+Minimal example (v0.8):
+
+```bash
+cat > /tmp/a2ui-v0.8.jsonl <<'EOF'
+{"surfaceUpdate":{"surfaceId":"main","components":[{"id":"root","component":{"Column":{"children":{"explicitList":["title","content"]}}}},{"id":"title","component":{"Text":{"text":{"literalString":"Canvas (A2UI v0.8)"},"usageHint":"h1"}}},{"id":"content","component":{"Text":{"text":{"literalString":"If you can read this, `canvas a2ui push` works."},"usageHint":"body"}}}]}}
+{"beginRendering":{"surfaceId":"main","root":"root"}}
+EOF
+
+clawdis-mac canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --session main
+```
+
+Notes:
+- This does **not** support the A2UI v0.9 examples using `createSurface`.
 
 ## Triggering agent runs from Canvas (deep links)
 
