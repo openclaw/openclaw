@@ -35,7 +35,7 @@ struct ConfigSettings: View {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Clawdis CLI config")
                     .font(.title3.weight(.semibold))
-                Text("Edit ~/.clawdis/clawdis.json (inbound.reply.agent/session).")
+                Text("Edit ~/.clawdis/clawdis.json (inbound.agent / inbound.session).")
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
@@ -110,7 +110,7 @@ struct ConfigSettings: View {
                                         }
                                         .help("Message body sent on each heartbeat")
                                 }
-                                Text("Heartbeats keep Pi sessions warm; 0 minutes disables them.")
+                                Text("Heartbeats keep agent sessions warm; 0 minutes disables them.")
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
