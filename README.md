@@ -101,6 +101,7 @@ pnpm clawdis gateway --force
 ### macOS Companion (Clawdis.app)
 
 - A menu bar app that can start/stop the Gateway, show health/presence, and provide a local ops UI.
+- Instances UI shows friendly hardware model names (from the vendored MIT dataset under `apps/macos/Sources/Clawdis/Resources/DeviceModels/`).
 - **Voice Wake** (on-device speech recognition) and Push-to-talk overlay.
 - **WebChat** embed + debug tooling (logs, status, heartbeats, sessions).
 - Hosts **PeekabooBridge** for UI automation brokering (for clawd workflows).

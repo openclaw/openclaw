@@ -39,7 +39,8 @@ enum InstanceIdentity {
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
 
-        let s = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+        let bytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        let s = String(decoding: bytes, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return s.isEmpty ? nil : s
     }()
 }

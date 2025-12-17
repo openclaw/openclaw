@@ -6,15 +6,18 @@ struct DevicePresentation: Sendable {
 }
 
 enum DeviceModelCatalog {
+    private static let modelIdentifierToName: [String: String] = loadModelIdentifierToName()
+
     static func presentation(deviceFamily: String?, modelIdentifier: String?) -> DevicePresentation? {
         let family = (deviceFamily ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let model = (modelIdentifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
 
-        let modelEntry = model.isEmpty ? nil : modelIdentifierTable[model]
-        let symbol = modelEntry?.symbol ?? fallbackSymbol(for: family, modelIdentifier: model)
+        let friendlyName = model.isEmpty ? nil : modelIdentifierToName[model]
+        let symbol = symbolFor(modelIdentifier: model, friendlyName: friendlyName)
+            ?? fallbackSymbol(for: family, modelIdentifier: model)
 
-        let title = if let name = modelEntry?.name, !name.isEmpty {
-            name
+        let title = if let friendlyName, !friendlyName.isEmpty {
+            friendlyName
         } else if !family.isEmpty, !model.isEmpty {
             "\(family) (\(model))"
         } else if !family.isEmpty {
@@ -27,6 +30,36 @@ enum DeviceModelCatalog {
 
         if title.isEmpty { return nil }
         return DevicePresentation(title: title, symbol: symbol)
+    }
+
+    private static func symbolFor(modelIdentifier rawModelIdentifier: String, friendlyName: String?) -> String? {
+        let modelIdentifier = rawModelIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !modelIdentifier.isEmpty else { return nil }
+
+        let lower = modelIdentifier.lowercased()
+        if lower.hasPrefix("ipad") { return "ipad" }
+        if lower.hasPrefix("iphone") { return "iphone" }
+        if lower.hasPrefix("ipod") { return "iphone" }
+        if lower.hasPrefix("watch") { return "applewatch" }
+        if lower.hasPrefix("appletv") { return "appletv" }
+        if lower.hasPrefix("audio") || lower.hasPrefix("homepod") { return "speaker" }
+
+        if lower.hasPrefix("macbook") || lower.hasPrefix("macbookpro") || lower.hasPrefix("macbookair") {
+            return "laptopcomputer"
+        }
+        if lower.hasPrefix("imac") || lower.hasPrefix("macmini") || lower.hasPrefix("macpro") || lower.hasPrefix("macstudio") {
+            return "desktopcomputer"
+        }
+
+        if lower.hasPrefix("mac"), let friendlyNameLower = friendlyName?.lowercased() {
+            if friendlyNameLower.contains("macbook") { return "laptopcomputer" }
+            if friendlyNameLower.contains("imac") { return "desktopcomputer" }
+            if friendlyNameLower.contains("mac mini") { return "desktopcomputer" }
+            if friendlyNameLower.contains("mac studio") { return "desktopcomputer" }
+            if friendlyNameLower.contains("mac pro") { return "desktopcomputer" }
+        }
+
+        return nil
     }
 
     private static func fallbackSymbol(for familyRaw: String, modelIdentifier: String) -> String? {
@@ -49,21 +82,62 @@ enum DeviceModelCatalog {
         }
     }
 
-    private struct ModelEntry: Sendable {
-        let name: String
-        let symbol: String?
+    private static func loadModelIdentifierToName() -> [String: String] {
+        var combined: [String: String] = [:]
+        combined.merge(loadMapping(resourceName: "ios-device-identifiers"), uniquingKeysWith: { current, _ in current })
+        combined.merge(loadMapping(resourceName: "mac-device-identifiers"), uniquingKeysWith: { current, _ in current })
+        return combined
     }
 
-    // Friendly model names for a small set of known identifiers.
-    // Extend this table as needed; unknown identifiers fall back to the raw value.
-    private static let modelIdentifierTable: [String: ModelEntry] = [
-        // iPad
-        "iPad16,5": .init(name: "iPad Pro 11-inch (M4)", symbol: "ipad"),
-        "iPad16,6": .init(name: "iPad Pro 13-inch (M4)", symbol: "ipad"),
+    private static func loadMapping(resourceName: String) -> [String: String] {
+        guard let url = Bundle.module.url(
+            forResource: resourceName,
+            withExtension: "json",
+            subdirectory: "DeviceModels")
+        else {
+            return [:]
+        }
 
-        // Mac
-        "Mac16,6": .init(name: "MacBook Pro (14-inch, 2024)", symbol: "laptopcomputer"),
-        "Mac16,8": .init(name: "MacBook Pro (16-inch, 2024)", symbol: "laptopcomputer"),
-    ]
+        do {
+            let data = try Data(contentsOf: url)
+            let decoded = try JSONDecoder().decode([String: NameValue].self, from: data)
+            return decoded.compactMapValues { $0.normalizedName }
+        } catch {
+            return [:]
+        }
+    }
+
+    private enum NameValue: Decodable {
+        case string(String)
+        case stringArray([String])
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.singleValueContainer()
+            if let s = try? container.decode(String.self) {
+                self = .string(s)
+                return
+            }
+            if let arr = try? container.decode([String].self) {
+                self = .stringArray(arr)
+                return
+            }
+            throw DecodingError.typeMismatch(
+                String.self,
+                .init(codingPath: decoder.codingPath, debugDescription: "Expected string or string array"))
+        }
+
+        var normalizedName: String? {
+            switch self {
+            case .string(let s):
+                let trimmed = s.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            case .stringArray(let arr):
+                let values = arr
+                    .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                    .filter { !$0.isEmpty }
+                guard !values.isEmpty else { return nil }
+                return values.joined(separator: " / ")
+            }
+        }
+    }
 }
-
