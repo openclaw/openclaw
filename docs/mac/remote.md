@@ -29,9 +29,8 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
 4) Health checks and Web Chat will now run through this SSH tunnel automatically.
 
 ## Web Chat over SSH
-- The mac app serves the WebChat assets locally (from the app bundle) and connects to the gateway over the forwarded WebSocket control port (default 18789).
-- The gateway’s own loopback WebChat HTTP server (default 18788, see `webchat.port`) is not required in remote mode.
-- Keep the feature enabled in *Settings → Config → Web chat*. Disable it to hide the menu entry entirely.
+- Web Chat connects to the gateway over the forwarded WebSocket control port (default 18789).
+- There is no separate WebChat HTTP server anymore.
 
 ## Permissions
 - The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine to grant them once.
@@ -44,7 +43,7 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
 ## Troubleshooting
 - **exit 127 / not found**: `clawdis` isn’t on PATH for non-login shells. Add it to `/etc/paths`, your shell rc, or symlink into `/usr/local/bin`/`/opt/homebrew/bin`.
 - **Health probe failed**: check SSH reachability, PATH, and that Baileys is logged in (`clawdis status --json`).
-- **Web Chat stuck**: confirm the gateway is running on the remote host and `webchat.enabled` is true; ensure the forwarded port matches *Settings → Config*. Since RPC is in-process, PATH is no longer a factor.
+- **Web Chat stuck**: confirm the gateway is running on the remote host and the forwarded port matches the gateway WS port; the UI requires a healthy WS connection.
 - **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
 
 ## Notification sounds

@@ -1,7 +1,0 @@
-/*!
-  Theme: Grayscale Dark
-  Author: Alexandre Gavioli (https://github.com/Alexx2/)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#b9b9b9;background:#101010}.hljs ::selection,.hljs::selection{background-color:#464646;color:#b9b9b9}.hljs-comment{color:#525252}.hljs-tag{color:#ababab}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#b9b9b9}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#7c7c7c}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#999}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#a0a0a0}.hljs-strong{font-weight:700;color:#a0a0a0}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#8e8e8e}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#868686}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#686868}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#747474}.hljs-emphasis{color:#747474;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#5e5e5e}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

@@ -39,7 +39,7 @@ WhatsApp / Telegram
               │
               ├─ Pi agent (RPC)
               ├─ CLI (clawdis …)
-              ├─ WebChat (loopback UI)
+              ├─ Chat UI (SwiftUI)
               ├─ macOS app (Clawdis.app)
               └─ iOS node (Iris) via Bridge + pairing
 ```
@@ -82,9 +82,6 @@ clawdis login
 
 # Run the Gateway (leave running)
 clawdis gateway --port 18789
-
-# Open the local WebChat UI
-clawdis webchat
 ```
 
 Send a test message (requires a running Gateway):

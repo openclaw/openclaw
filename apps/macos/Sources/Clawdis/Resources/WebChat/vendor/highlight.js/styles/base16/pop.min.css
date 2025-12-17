@@ -1,7 +1,0 @@
-/*!
-  Theme: Pop
-  Author: Chris Kempson (http://chriskempson.com)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#d0d0d0;background:#000}.hljs ::selection,.hljs::selection{background-color:#303030;color:#d0d0d0}.hljs-comment{color:#505050}.hljs-tag{color:#b0b0b0}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#d0d0d0}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#eb008a}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#f29333}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#f8ca12}.hljs-strong{font-weight:700;color:#f8ca12}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#37b349}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#0ab}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#0e5a94}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#b31e8d}.hljs-emphasis{color:#b31e8d;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#7a2d00}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

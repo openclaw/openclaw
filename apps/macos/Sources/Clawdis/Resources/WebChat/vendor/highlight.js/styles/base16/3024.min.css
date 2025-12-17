@@ -1,7 +1,0 @@
-/*!
-  Theme: 3024
-  Author: Jan T. Sott (http://github.com/idleberg)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#a5a2a2;background:#090300}.hljs ::selection,.hljs::selection{background-color:#4a4543;color:#a5a2a2}.hljs-comment{color:#5c5855}.hljs-tag{color:#807d7c}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#a5a2a2}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#db2d20}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#e8bbd0}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#fded02}.hljs-strong{font-weight:700;color:#fded02}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#01a252}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#b5e4f4}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#01a0e4}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#a16a94}.hljs-emphasis{color:#a16a94;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#cdab53}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

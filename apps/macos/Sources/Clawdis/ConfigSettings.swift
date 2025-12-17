@@ -22,8 +22,6 @@ struct ConfigSettings: View {
     @State private var allowAutosave = false
     @State private var heartbeatMinutes: Int?
     @State private var heartbeatBody: String = "HEARTBEAT"
-    @AppStorage(webChatEnabledKey) private var webChatEnabled: Bool = true
-    @AppStorage(webChatPortKey) private var webChatPort: Int = 18788
 
     // clawd browser settings (stored in ~/.clawdis/clawdis.json under "browser")
     @State private var browserEnabled: Bool = true
@@ -54,7 +52,6 @@ struct ConfigSettings: View {
             self.header
             self.agentSection
             self.heartbeatSection
-            self.webChatSection
             self.browserSection
             Spacer(minLength: 0)
         }
@@ -182,39 +179,6 @@ struct ConfigSettings: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     }
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var webChatSection: some View {
-        GroupBox("Web Chat") {
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
-                GridRow {
-                    self.gridLabel("Enabled")
-                    Toggle("", isOn: self.$webChatEnabled)
-                        .labelsHidden()
-                        .toggleStyle(.checkbox)
-                }
-                GridRow {
-                    self.gridLabel("Port")
-                    TextField("18788", value: self.$webChatPort, formatter: NumberFormatter())
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 100)
-                        .disabled(!self.webChatEnabled)
-                }
-                GridRow {
-                    Color.clear
-                        .frame(width: self.labelColumnWidth, height: 1)
-                    Text(
-                        """
-                        Mac app connects to the gateway’s loopback web chat on this port.
-                        Remote mode uses SSH -L to forward it.
-                        """)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
         }

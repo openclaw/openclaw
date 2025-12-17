@@ -37,7 +37,6 @@ Optional (advanced, can be hidden behind Debug initially):
 
 Clawdis already uses:
 - Gateway WebSocket: `18789`
-- WebChat HTTP: `18788`
 - Bridge (voice/iris): `18790`
 
 For the clawd browser-control server, use “family” ports:

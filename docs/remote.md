@@ -27,18 +27,12 @@ With the tunnel up:
 - `clawdis health` and `clawdis status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
 - `clawdis gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
 
-## WebChat over SSH
+## Chat UI over SSH
 
-Forward both the WebChat HTTP port and the Gateway WS port:
+WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects directly to the Gateway WebSocket.
 
-```bash
-ssh -N \
-  -L 18788:127.0.0.1:18788 \
-  -L 18789:127.0.0.1:18789 \
-  user@host
-```
-
-Then open `http://127.0.0.1:18788/webchat/` locally. (Details: `docs/webchat.md`.)
+- Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
+- On macOS, prefer the app’s “Remote over SSH” mode, which manages the tunnel automatically.
 
 ## macOS app “Remote over SSH”
 

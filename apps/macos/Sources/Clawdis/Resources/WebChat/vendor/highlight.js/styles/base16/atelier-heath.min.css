@@ -1,7 +1,0 @@
-/*!
-  Theme: Atelier Heath
-  Author: Bram de Haan (http://atelierbramdehaan.nl)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#ab9bab;background:#1b181b}.hljs ::selection,.hljs::selection{background-color:#695d69;color:#ab9bab}.hljs-comment{color:#776977}.hljs-tag{color:#9e8f9e}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#ab9bab}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#ca402b}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#a65926}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#bb8a35}.hljs-strong{font-weight:700;color:#bb8a35}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#918b3b}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#159393}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#516aec}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#7b59c0}.hljs-emphasis{color:#7b59c0;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#c3c}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

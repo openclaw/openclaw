@@ -16,7 +16,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
         self = GatewayAgentChannel(rawValue: normalized) ?? .last
     }
 
-    var isDeliverable: Bool { self == .whatsapp || self == .telegram }
+    var isDeliverable: Bool { self != .webchat }
 
     func shouldDeliver(_ deliver: Bool) -> Bool { deliver && self.isDeliverable }
 }

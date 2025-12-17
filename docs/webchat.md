@@ -3,41 +3,32 @@ summary: "Loopback WebChat static host and Gateway WS usage for chat UI"
 read_when:
   - Debugging or configuring WebChat access
 ---
-# WebChat (loopback + SSH tunnel)
+# WebChat (SwiftUI + Gateway WS)
 
-Updated: 2025-12-09
+Updated: 2025-12-17
 
 ## What it is
-- A local web UI for chatting with the Gateway, now WS-only for data.
-- Static assets served by the WebChat HTTP server (default port **18788**, configurable).
-- The browser/WebView connects directly to the Gateway WebSocket (`ws://127.0.0.1:18789` by default) for history, sends, and events. No file watching or HTTP RPC.
-- Trust model: access is granted by being on localhost or inside your SSH/Tailscale tunnel. No additional auth prompts once you can reach the box.
-- `webchat.gatewayPort` config can point at a non-default Gateway port if needed.
-
-## Endpoints
-- UI is served at the root: `http://127.0.0.1:<port>/` (legacy `/webchat/` still works).
-- `GET /` (or `/webchat/*`) → static assets only. No RPC endpoints.
-- Data plane is entirely on the Gateway WS (`ws://127.0.0.1:<gatewayPort>`): methods `chat.history`, `chat.send`; events `chat`, `presence`, `tick`, `health`.
+- A native SwiftUI chat UI (macOS app / iOS) that talks directly to the Gateway WebSocket.
+- No embedded browser/WKWebView and no bundled static WebChat HTTP server.
+- Data plane is entirely Gateway WS: methods `chat.history`, `chat.send`, `chat.abort`; events `chat`, `agent`, `presence`, `tick`, `health`.
 
 ## How it connects
-- Browser/WebView performs Gateway WS `connect`, then calls `chat.history` for bootstrap and `chat.send` for sends; listens to `chat/presence/tick/health` events.
-- No session file watching. History comes from the Gateway via `chat.history`.
+- The UI performs Gateway WS `connect`, then calls `chat.history` for bootstrap and `chat.send` for sends; it listens to `chat/agent/presence/tick/health` events.
+- History comes from the Gateway via `chat.history` (no local session file watching).
 - If Gateway WS is unavailable, the UI surfaces the error and blocks send.
 
 ## Remote use
-- SSH tunnel example: `ssh -N -L 18788:127.0.0.1:18788 -L 18789:127.0.0.1:18789 user@host`.
-- Browse to `http://127.0.0.1:18788/webchat/?session=<key>` through the tunnel; the backend WS also rides the tunnel.
+- In remote mode, the macOS app forwards the Gateway WebSocket control port via SSH and uses that for the SwiftUI chat UI.
+- You generally should not need to manage tunnels manually; see `RemoteTunnelManager` in the app.
 
 ## Config
-- `webchat.enabled` (default true)
-- `webchat.port` (default 18788)
-- Gateway WS port is set by `clawdis gateway --port`; WebChat expects it at 18789 unless overridden.
+- WebChat does not have a separate HTTP port/config anymore.
+- Gateway WS is configured via the app’s gateway endpoint settings (`GatewayEndpointStore`) or `clawdis gateway --port` when running locally.
 
 ## Failure handling
-- UI errors when the Gateway handshake fails or the WS drops; no HTTP fallback.
-- WebChat does not attempt fallback transports; the Gateway WS is required.
+- UI errors when the Gateway handshake fails or the WS drops.
+- No fallback transport; the Gateway WS is required.
 
 ## Dev notes
-- Assets live in `apps/macos/Sources/Clawdis/Resources/WebChat`.
-- Static host: `src/webchat/server.ts` (loopback-only HTTP).
-- macOS glue: `WebChatWindow.swift` + `WebChatTunnel` for SSH -L helpers; WKWebView talks directly to Gateway WS.
+- macOS glue: `apps/macos/Sources/Clawdis/WebChatSwiftUI.swift` + `apps/macos/Sources/Clawdis/WebChatManager.swift`.
+- Remote tunnel helper: `apps/macos/Sources/Clawdis/RemotePortTunnel.swift`.

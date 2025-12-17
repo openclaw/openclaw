@@ -1,1 +1,0 @@
-{"version":3,"file":"ConsoleBlock.d.ts","sourceRoot":"","sources":["../../src/components/ConsoleBlock.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,UAAU,EAAE,MAAM,KAAK,CAAC;AAMjC,qBAAa,YAAa,SAAQ,UAAU;IAC/B,OAAO,EAAE,MAAM,CAAM;IACrB,OAAO,EAAE,SAAS,GAAG,OAAO,CAAa;IAC5C,OAAO,CAAC,MAAM,CAAS;cAEb,gBAAgB,IAAI,WAAW,GAAG,gBAAgB;IAI5D,iBAAiB,IAAI,IAAI;YAKpB,IAAI;IAYT,OAAO;IAQP,MAAM;CAyBf"}

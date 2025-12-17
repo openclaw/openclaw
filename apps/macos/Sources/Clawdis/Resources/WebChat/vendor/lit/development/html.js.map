@@ -1,1 +1,0 @@
-{"version":3,"file":"html.js","sourceRoot":"","sources":["../src/html.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,UAAU,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html';\n"]}

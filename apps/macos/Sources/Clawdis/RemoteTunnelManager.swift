@@ -4,7 +4,7 @@ import Foundation
 actor RemoteTunnelManager {
     static let shared = RemoteTunnelManager()
 
-    private var controlTunnel: WebChatTunnel?
+    private var controlTunnel: RemotePortTunnel?
 
     func controlTunnelPortIfRunning() async -> UInt16? {
         if let tunnel = self.controlTunnel,
@@ -38,7 +38,7 @@ actor RemoteTunnelManager {
         if let local = await self.controlTunnelPortIfRunning() { return local }
 
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
-        let tunnel = try await WebChatTunnel.create(
+        let tunnel = try await RemotePortTunnel.create(
             remotePort: GatewayEnvironment.gatewayPort(),
             preferredLocalPort: desiredPort)
         self.controlTunnel = tunnel

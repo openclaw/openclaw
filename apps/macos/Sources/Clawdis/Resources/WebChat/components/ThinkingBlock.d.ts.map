@@ -1,1 +1,0 @@
-{"version":3,"file":"ThinkingBlock.d.ts","sourceRoot":"","sources":["../../src/components/ThinkingBlock.ts"],"names":[],"mappings":"AACA,OAAO,EAAQ,UAAU,EAAE,MAAM,KAAK,CAAC;AAIvC,qBACa,aAAc,SAAQ,UAAU;IAChC,OAAO,EAAG,MAAM,CAAC;IACA,WAAW,UAAS;IACxC,OAAO,CAAC,UAAU,CAAS;cAEjB,gBAAgB,IAAI,WAAW,GAAG,gBAAgB;IAI5D,iBAAiB,IAAI,IAAI;IAKlC,OAAO,CAAC,cAAc;IAIb,MAAM;CAkBf"}

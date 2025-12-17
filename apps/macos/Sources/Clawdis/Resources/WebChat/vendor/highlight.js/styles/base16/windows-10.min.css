@@ -1,7 +1,0 @@
-/*!
-  Theme: Windows 10
-  Author: Fergus Collins (https://github.com/C-Fergus)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#ccc;background:#0c0c0c}.hljs ::selection,.hljs::selection{background-color:#535353;color:#ccc}.hljs-comment{color:#767676}.hljs-tag{color:#b9b9b9}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#ccc}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#e74856}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#c19c00}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#f9f1a5}.hljs-strong{font-weight:700;color:#f9f1a5}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#16c60c}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#61d6d6}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#3b78ff}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#b4009e}.hljs-emphasis{color:#b4009e;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#13a10e}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

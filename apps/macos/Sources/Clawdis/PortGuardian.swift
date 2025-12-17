@@ -38,7 +38,7 @@ actor PortGuardian {
 
     func sweep(mode: AppState.ConnectionMode) async {
         self.logger.info("port sweep starting (mode=\(mode.rawValue, privacy: .public))")
-        let ports = [18788, 18789]
+        let ports = [18789]
         for port in ports {
             let listeners = await self.listeners(on: port)
             guard !listeners.isEmpty else { continue }
@@ -141,7 +141,7 @@ actor PortGuardian {
     }
 
     func diagnose(mode: AppState.ConnectionMode) async -> [PortReport] {
-        let ports = [18788, 18789]
+        let ports = [18789]
         var reports: [PortReport] = []
 
         for port in ports {
@@ -155,9 +155,7 @@ actor PortGuardian {
                 expectedDesc = "SSH tunnel to remote gateway"
                 okPredicate = { $0.command.lowercased().contains("ssh") }
             case .local:
-                expectedDesc = port == 18788
-                    ? "Gateway webchat/static host"
-                    : "Gateway websocket (node/tsx)"
+                expectedDesc = "Gateway websocket (node/tsx)"
                 okPredicate = { listener in
                     let c = listener.command.lowercased()
                     return expectedCommands.contains { c.contains($0) }
@@ -291,8 +289,6 @@ actor PortGuardian {
         case .remote:
             // Remote mode expects an SSH tunnel for the gateway WebSocket port.
             if port == 18789 { return cmd.contains("ssh") }
-            // WebChat assets may be served locally (Clawdis) or forwarded via an older SSH tunnel.
-            if port == 18788 { return cmd.contains("clawdis") || cmd.contains("ssh") }
             return false
         case .local:
             return expectedCommands.contains { cmd.contains($0) }

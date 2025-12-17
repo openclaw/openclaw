@@ -1,0 +1,1 @@
+{"version":3,"file":"Diff.d.ts","sourceRoot":"","sources":["../src/Diff.ts"],"names":[],"mappings":"AACA,OAAO,EAAE,KAAK,kBAAkB,EAAiC,MAAM,WAAW,CAAC;AAEnF,MAAM,WAAW,SAAU,SAAQ,kBAAkB;IAClD,OAAO,EAAE,MAAM,CAAC;IAChB,OAAO,EAAE,MAAM,CAAC;IAChB,KAAK,CAAC,EAAE,MAAM,CAAC;CACjB;AAED,eAAO,MAAM,IAAI,0CAkDf,CAAC"}

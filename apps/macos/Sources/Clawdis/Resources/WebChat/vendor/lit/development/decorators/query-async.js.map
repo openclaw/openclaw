@@ -1,1 +1,0 @@
-{"version":3,"file":"query-async.js","sourceRoot":"","sources":["../../src/decorators/query-async.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,iDAAiD,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from '@lit/reactive-element/decorators/query-async.js';\n"]}

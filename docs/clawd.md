@@ -70,13 +70,7 @@ clawdis login
 clawdis gateway --port 18789
 ```
 
-3) Start the local WebChat UI (optional, but great for debugging):
-
-```bash
-clawdis webchat
-```
-
-4) Put a minimal config in `~/.clawdis/clawdis.json`:
+3) Put a minimal config in `~/.clawdis/clawdis.json`:
 
 ```json5
 {

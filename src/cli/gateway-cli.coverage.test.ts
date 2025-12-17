@@ -26,8 +26,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 vi.mock("../gateway/server.js", () => ({
-  startGatewayServer: (port: number, opts: unknown) =>
-    startGatewayServer(port, opts),
+  startGatewayServer: (port: number) => startGatewayServer(port),
 }));
 
 vi.mock("../globals.js", () => ({

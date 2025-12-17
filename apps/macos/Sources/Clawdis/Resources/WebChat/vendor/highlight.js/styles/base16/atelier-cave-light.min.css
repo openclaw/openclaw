@@ -1,7 +1,0 @@
-/*!
-  Theme: Atelier Cave Light
-  Author: Bram de Haan (http://atelierbramdehaan.nl)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#585260;background:#efecf4}.hljs ::selection,.hljs::selection{background-color:#8b8792;color:#585260}.hljs-comment{color:#7e7887}.hljs-tag{color:#655f6d}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#585260}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#be4678}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#aa573c}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#a06e3b}.hljs-strong{font-weight:700;color:#a06e3b}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#2a9292}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#398bc6}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#576ddb}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#955ae7}.hljs-emphasis{color:#955ae7;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#bf40bf}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

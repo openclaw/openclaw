@@ -35,11 +35,6 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
-export type WebChatConfig = {
-  enabled?: boolean;
-  port?: number;
-};
-
 export type BrowserConfig = {
   enabled?: boolean;
   /** Base URL of the clawd browser control server. Default: http://127.0.0.1:18791 */
@@ -141,7 +136,6 @@ export type ClawdisConfig = {
   };
   web?: WebConfig;
   telegram?: TelegramConfig;
-  webchat?: WebChatConfig;
   cron?: CronConfig;
   bridge?: BridgeConfig;
   discovery?: DiscoveryConfig;
@@ -264,12 +258,6 @@ const ClawdisSchema = z.object({
           maxAttempts: z.number().int().min(0).optional(),
         })
         .optional(),
-    })
-    .optional(),
-  webchat: z
-    .object({
-      enabled: z.boolean().optional(),
-      port: z.number().int().positive().optional(),
     })
     .optional(),
   telegram: z

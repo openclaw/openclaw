@@ -1,1 +1,0 @@
-{"version":3,"file":"choose.js","sourceRoot":"","sources":["../../src/directives/choose.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,+BAA+B,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/directives/choose.js';\n"]}

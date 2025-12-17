@@ -1,7 +1,0 @@
-/*!
-  Theme: Equilibrium Gray Light
-  Author: Carlo Abelli
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#474747;background:#f1f1f1}.hljs ::selection,.hljs::selection{background-color:#d4d4d4;color:#474747}.hljs-comment{color:#777}.hljs-tag{color:#5e5e5e}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#474747}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#d02023}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#bf3e05}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#9d6f00}.hljs-strong{font-weight:700;color:#9d6f00}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#637200}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#007a72}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#0073b5}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#4e66b6}.hljs-emphasis{color:#4e66b6;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#c42775}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

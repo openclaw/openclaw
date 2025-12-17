@@ -1,1 +1,0 @@
-{"version":3,"file":"custom-element.js","sourceRoot":"","sources":["../../src/decorators/custom-element.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,oDAAoD,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from '@lit/reactive-element/decorators/custom-element.js';\n"]}

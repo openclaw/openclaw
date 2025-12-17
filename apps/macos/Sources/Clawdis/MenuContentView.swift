@@ -41,10 +41,8 @@ struct MenuContent: View {
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
-            if AppStateStore.webChatEnabled {
-                Button("Open Chat") {
-                    WebChatManager.shared.show(sessionKey: WebChatManager.shared.preferredSessionKey())
-                }
+            Button("Open Chat") {
+                WebChatManager.shared.show(sessionKey: WebChatManager.shared.preferredSessionKey())
             }
             Toggle(
                 isOn: Binding(
@@ -204,11 +202,6 @@ struct MenuContent: View {
                     Task { await DebugActions.sendTestNotification() }
                 } label: {
                     Label("Send Test Notification", systemImage: "bell")
-                }
-                Button {
-                    Task { await DebugActions.openChatInBrowser() }
-                } label: {
-                    Label("Open Chat in Browser…", systemImage: "safari")
                 }
                 Divider()
                 Button {

@@ -7,8 +7,6 @@ import {
   webAuthExists,
 } from "../web/session.js";
 
-const DEFAULT_WEBCHAT_PORT = 18788;
-
 export async function buildProviderSummary(
   cfg?: ClawdisConfig,
 ): Promise<string[]> {
@@ -34,13 +32,6 @@ export async function buildProviderSummary(
       ? chalk.green("Telegram: configured")
       : chalk.cyan("Telegram: not configured"),
   );
-
-  if (effective.webchat?.enabled === false) {
-    lines.push(chalk.yellow("WebChat: disabled"));
-  } else {
-    const port = effective.webchat?.port ?? DEFAULT_WEBCHAT_PORT;
-    lines.push(chalk.green(`WebChat: enabled (port ${port})`));
-  }
 
   const allowFrom = effective.inbound?.allowFrom?.length
     ? effective.inbound.allowFrom.map(normalizeE164).filter(Boolean)

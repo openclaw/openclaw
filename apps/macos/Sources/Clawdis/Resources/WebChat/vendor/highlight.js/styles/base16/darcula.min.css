@@ -1,7 +1,0 @@
-/*!
-  Theme: Darcula
-  Author: jetbrains
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#a9b7c6;background:#2b2b2b}.hljs ::selection,.hljs::selection{background-color:#323232;color:#a9b7c6}.hljs-comment{color:#606366}.hljs-tag{color:#a4a3a3}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#a9b7c6}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#4eade5}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#689757}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#bbb529}.hljs-strong{font-weight:700;color:#bbb529}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#6a8759}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#629755}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#9876aa}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#cc7832}.hljs-emphasis{color:#cc7832;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:grey}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

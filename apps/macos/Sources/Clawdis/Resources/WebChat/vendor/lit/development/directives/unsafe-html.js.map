@@ -1,1 +1,0 @@
-{"version":3,"file":"unsafe-html.js","sourceRoot":"","sources":["../../src/directives/unsafe-html.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,oCAAoC,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/directives/unsafe-html.js';\n"]}

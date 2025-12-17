@@ -89,7 +89,6 @@ import { normalizeE164 } from "../utils.js";
 import { setHeartbeatsEnabled } from "../web/auto-reply.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { requestReplyHeartbeatNow } from "../web/reply-heartbeat-wake.js";
-import { ensureWebChatServerFromConfig } from "../webchat/server.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
   type ConnectParams,
@@ -543,7 +542,6 @@ async function refreshHealthSnapshot(_opts?: { probe?: boolean }) {
 
 export async function startGatewayServer(
   port = 18789,
-  opts?: { webchatPort?: number },
 ): Promise<GatewayServer> {
   const host = "127.0.0.1";
   const httpServer: HttpServer = createHttpServer();
@@ -3418,19 +3416,6 @@ export async function startGatewayServer(
     `gateway listening on ws://127.0.0.1:${port} (PID ${process.pid})`,
   );
   defaultRuntime.log(`gateway log file: ${getResolvedLoggerSettings().file}`);
-
-  // Start loopback WebChat server (unless disabled via config).
-  void ensureWebChatServerFromConfig(opts?.webchatPort)
-    .then((webchat) => {
-      if (webchat) {
-        defaultRuntime.log(
-          `webchat listening on http://127.0.0.1:${webchat.port}/`,
-        );
-      }
-    })
-    .catch((err) => {
-      logError(`gateway: webchat failed to start: ${String(err)}`);
-    });
 
   // Start clawd browser control server (unless disabled via config).
   void startBrowserControlServerFromConfig(defaultRuntime).catch((err) => {

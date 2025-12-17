@@ -1,7 +1,0 @@
-/*!
-  Theme: Embers
-  Author: Jannik Siebert (https://github.com/janniks)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#a39a90;background:#16130f}.hljs ::selection,.hljs::selection{background-color:#433b32;color:#a39a90}.hljs-comment{color:#5a5047}.hljs-tag{color:#8a8075}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#a39a90}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#826d57}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#828257}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#6d8257}.hljs-strong{font-weight:700;color:#6d8257}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#57826d}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#576d82}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#6d5782}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#82576d}.hljs-emphasis{color:#82576d;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#825757}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

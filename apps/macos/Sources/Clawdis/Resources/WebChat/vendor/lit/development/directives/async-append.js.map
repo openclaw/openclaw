@@ -1,1 +1,0 @@
-{"version":3,"file":"async-append.js","sourceRoot":"","sources":["../../src/directives/async-append.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,qCAAqC,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/directives/async-append.js';\n"]}

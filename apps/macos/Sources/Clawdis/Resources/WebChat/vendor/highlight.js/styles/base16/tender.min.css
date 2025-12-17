@@ -1,7 +1,0 @@
-/*!
-  Theme: tender
-  Author: Jacobo Tabernero (https://github/com/jacoborus/tender.vim)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#eee;background:#282828}.hljs ::selection,.hljs::selection{background-color:#484848;color:#eee}.hljs-comment{color:#4c4c4c}.hljs-tag{color:#b8b8b8}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#eee}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#f43753}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#dc9656}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#ffc24b}.hljs-strong{font-weight:700;color:#ffc24b}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#c9d05c}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#73cef4}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#b3deef}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#d3b987}.hljs-emphasis{color:#d3b987;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#a16946}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

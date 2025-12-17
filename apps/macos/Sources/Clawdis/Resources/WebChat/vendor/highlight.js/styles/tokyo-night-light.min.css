@@ -1,8 +1,0 @@
-pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}/*!
-  Theme: Tokyo-night-light
-  origin: https://github.com/enkia/tokyo-night-vscode-theme
-  Description: Original highlight.js style
-  Author: (c) Henri Vandersleyen <[redacted-email]>
-  License: see project LICENSE
-  Touched: 2022
-*/.hljs-comment,.hljs-meta{color:#9699a3}.hljs-deletion,.hljs-doctag,.hljs-regexp,.hljs-selector-attr,.hljs-selector-class,.hljs-selector-id,.hljs-selector-pseudo,.hljs-tag,.hljs-template-tag,.hljs-variable.language_{color:#8c4351}.hljs-link,.hljs-literal,.hljs-number,.hljs-params,.hljs-template-variable,.hljs-type,.hljs-variable{color:#965027}.hljs-attribute,.hljs-built_in{color:#8f5e15}.hljs-keyword,.hljs-property,.hljs-subst,.hljs-title,.hljs-title.class_,.hljs-title.class_.inherited__,.hljs-title.function_{color:#0f4b6e}.hljs-selector-tag{color:#33635c}.hljs-addition,.hljs-bullet,.hljs-quote,.hljs-string,.hljs-symbol{color:#485e30}.hljs-code,.hljs-formula,.hljs-section{color:#34548a}.hljs-attr,.hljs-char.escape_,.hljs-keyword,.hljs-name,.hljs-operator{color:#5a4a78}.hljs-punctuation{color:#343b58}.hljs{background:#d5d6db;color:#565a6e}.hljs-emphasis{font-style:italic}.hljs-strong{font-weight:700}

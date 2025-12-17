@@ -1,7 +1,0 @@
-/*!
-  Theme: Gruvbox dark, soft
-  Author: Dawid Kurek ([redacted-email]), morhetz (https://github.com/morhetz/gruvbox)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#d5c4a1;background:#32302f}.hljs ::selection,.hljs::selection{background-color:#504945;color:#d5c4a1}.hljs-comment{color:#665c54}.hljs-tag{color:#bdae93}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#d5c4a1}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#fb4934}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#fe8019}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#fabd2f}.hljs-strong{font-weight:700;color:#fabd2f}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#b8bb26}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#8ec07c}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#83a598}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#d3869b}.hljs-emphasis{color:#d3869b;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#d65d0e}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

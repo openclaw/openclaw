@@ -1,7 +1,0 @@
-/* KaTeX CSS for math rendering in markdown */
-@import "katex/dist/katex.min.css";
-
-/* KaTeX display margin override */
-.katex-display {
-   margin: 0;
-}

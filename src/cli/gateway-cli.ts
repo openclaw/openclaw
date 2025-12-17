@@ -43,10 +43,6 @@ export function registerGatewayCli(program: Command) {
     .description("Run the WebSocket Gateway")
     .option("--port <port>", "Port for the gateway WebSocket", "18789")
     .option(
-      "--webchat-port <port>",
-      "Port for the loopback WebChat HTTP server (default 18788)",
-    )
-    .option(
       "--token <token>",
       "Shared token required in connect.params.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
     )
@@ -61,16 +57,6 @@ export function registerGatewayCli(program: Command) {
       const port = Number.parseInt(String(opts.port ?? "18789"), 10);
       if (Number.isNaN(port) || port <= 0) {
         defaultRuntime.error("Invalid port");
-        defaultRuntime.exit(1);
-      }
-      const webchatPort = opts.webchatPort
-        ? Number.parseInt(String(opts.webchatPort), 10)
-        : undefined;
-      if (
-        webchatPort !== undefined &&
-        (Number.isNaN(webchatPort) || webchatPort <= 0)
-      ) {
-        defaultRuntime.error("Invalid webchat port");
         defaultRuntime.exit(1);
       }
       if (opts.force) {
@@ -143,7 +129,7 @@ export function registerGatewayCli(program: Command) {
       process.once("SIGINT", onSigint);
 
       try {
-        server = await startGatewayServer(port, { webchatPort });
+        server = await startGatewayServer(port);
       } catch (err) {
         if (err instanceof GatewayLockError) {
           defaultRuntime.error(`Gateway failed to start: ${err.message}`);

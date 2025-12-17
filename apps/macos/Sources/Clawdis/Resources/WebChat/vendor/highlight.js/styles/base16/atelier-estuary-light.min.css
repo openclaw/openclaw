@@ -1,7 +1,0 @@
-/*!
-  Theme: Atelier Estuary Light
-  Author: Bram de Haan (http://atelierbramdehaan.nl)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#5f5e4e;background:#f4f3ec}.hljs ::selection,.hljs::selection{background-color:#929181;color:#5f5e4e}.hljs-comment{color:#878573}.hljs-tag{color:#6c6b5a}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#5f5e4e}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#ba6236}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#ae7313}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#a5980d}.hljs-strong{font-weight:700;color:#a5980d}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#7d9726}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#5b9d48}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#36a166}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#5f9182}.hljs-emphasis{color:#5f9182;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#9d6c7c}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

@@ -125,11 +125,6 @@ fi
 echo "🖼  Copying app icon"
 cp "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/Clawdis.icns" "$APP_ROOT/Contents/Resources/Clawdis.icns"
 
-echo "📦 Copying WebChat resources"
-rsync -a "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/WebChat" "$APP_ROOT/Contents/Resources/"
-echo "🧹 Removing unused pdfjs legacy bundle"
-rm -rf "$APP_ROOT/Contents/Resources/WebChat/vendor/pdfjs-dist/legacy"
-
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
 if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then

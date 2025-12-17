@@ -1,1 +1,0 @@
-{"version":3,"file":"async-directive.js","sourceRoot":"","sources":["../src/async-directive.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,6BAA6B,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/async-directive.js';\n"]}

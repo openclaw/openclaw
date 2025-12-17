@@ -1,7 +1,0 @@
-/*!
-  Theme: Atelier Lakeside
-  Author: Bram de Haan (http://atelierbramdehaan.nl)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#7ea2b4;background:#161b1d}.hljs ::selection,.hljs::selection{background-color:#516d7b;color:#7ea2b4}.hljs-comment{color:#5a7b8c}.hljs-tag{color:#7195a8}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#7ea2b4}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#d22d72}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#935c25}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#8a8a0f}.hljs-strong{font-weight:700;color:#8a8a0f}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#568c3b}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#2d8f6f}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#257fad}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#6b6bb8}.hljs-emphasis{color:#6b6bb8;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#b72dd2}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

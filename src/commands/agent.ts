@@ -355,7 +355,7 @@ export async function agentCommand(
     }
     if (deliveryProvider === "webchat") {
       const err = new Error(
-        "Delivering to WebChat is not supported via `clawdis agent`; use WebChat RPC instead.",
+        "Delivering to WebChat is not supported via `clawdis agent`; use WhatsApp/Telegram or run with --deliver=false.",
       );
       if (!bestEffortDeliver) throw err;
       logDeliveryError(err);

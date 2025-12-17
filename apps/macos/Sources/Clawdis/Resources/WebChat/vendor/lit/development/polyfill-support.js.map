@@ -1,1 +1,0 @@
-{"version":3,"file":"polyfill-support.js","sourceRoot":"","sources":["../src/polyfill-support.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,OAAO,iCAAiC,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nimport 'lit-element/polyfill-support.js';\n"]}

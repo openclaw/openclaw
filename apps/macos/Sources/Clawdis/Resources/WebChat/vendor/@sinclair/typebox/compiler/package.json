@@ -1,4 +1,0 @@
-{
-  "main": "../build/cjs/compiler/index.js",
-  "types": "../build/cjs/compiler/index.d.ts"
-}

@@ -1,7 +1,0 @@
-/*!
-  Theme: Rosé Pine Dawn
-  Author: Emilia Dunfelt <[redacted-email]>
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#575279;background:#faf4ed}.hljs ::selection,.hljs::selection{background-color:#f2e9de;color:#575279}.hljs-comment{color:#9893a5}.hljs-tag{color:#6e6a86}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#575279}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#1f1d2e}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#b4637a}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#ea9d34}.hljs-strong{font-weight:700;color:#ea9d34}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#d7827e}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#286983}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#56949f}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#907aa9}.hljs-emphasis{color:#907aa9;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#c5c3ce}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

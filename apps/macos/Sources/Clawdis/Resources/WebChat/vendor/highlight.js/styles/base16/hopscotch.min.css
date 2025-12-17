@@ -1,7 +1,0 @@
-/*!
-  Theme: Hopscotch
-  Author: Jan T. Sott
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#b9b5b8;background:#322931}.hljs ::selection,.hljs::selection{background-color:#5c545b;color:#b9b5b8}.hljs-comment{color:#797379}.hljs-tag{color:#989498}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#b9b5b8}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#dd464c}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#fd8b19}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#fdcc59}.hljs-strong{font-weight:700;color:#fdcc59}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#8fc13e}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#149b93}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#1290bf}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#c85e7c}.hljs-emphasis{color:#c85e7c;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#b33508}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

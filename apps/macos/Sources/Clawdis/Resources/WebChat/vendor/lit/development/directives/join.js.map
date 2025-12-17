@@ -1,1 +1,0 @@
-{"version":3,"file":"join.js","sourceRoot":"","sources":["../../src/directives/join.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,6BAA6B,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/directives/join.js';\n"]}

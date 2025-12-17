@@ -24,7 +24,6 @@ struct DebugSettings: View {
     @State private var portReports: [DebugActions.PortReport] = []
     @State private var portKillStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
-    @AppStorage(webChatSwiftUIEnabledKey) private var webChatSwiftUIEnabled: Bool = false
     @AppStorage(attachExistingGatewayOnlyKey) private var attachExistingGatewayOnly: Bool = false
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
 
@@ -278,7 +277,7 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text("Check which process owns 18788/18789 and suggest fixes.")
+                    Text("Check which process owns 18789 and suggest fixes.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -579,12 +578,10 @@ struct DebugSettings: View {
                     .frame(maxWidth: 280, alignment: .leading)
                 }
                 GridRow {
-                    self.gridLabel("Web chat")
-                    Toggle("Use SwiftUI web chat (glass)", isOn: self.$webChatSwiftUIEnabled)
-                        .toggleStyle(.checkbox)
-                        .help(
-                            "When enabled, the menu bar chat window/panel uses the native SwiftUI UI instead of the " +
-                                "bundled WKWebView.")
+                    self.gridLabel("Chat")
+                    Text("Native SwiftUI")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

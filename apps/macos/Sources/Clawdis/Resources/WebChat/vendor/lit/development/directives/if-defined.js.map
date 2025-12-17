@@ -1,1 +1,0 @@
-{"version":3,"file":"if-defined.js","sourceRoot":"","sources":["../../src/directives/if-defined.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,mCAAmC,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/directives/if-defined.js';\n"]}

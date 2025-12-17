@@ -1,0 +1,104 @@
+/* Markdown content styles using Tailwind utilities */
+
+.markdown-content h1 {
+   @apply text-2xl font-semibold mt-5 mb-2;
+}
+
+.markdown-content h2 {
+   @apply text-xl font-semibold mt-4 mb-2;
+}
+
+.markdown-content h3 {
+   @apply text-lg font-semibold mt-3 mb-2;
+}
+
+.markdown-content h4 {
+   @apply text-base font-semibold mt-3 mb-2;
+}
+
+.markdown-content h5 {
+   @apply text-sm font-semibold mt-2 mb-1;
+}
+
+.markdown-content h6 {
+   @apply text-xs font-semibold mt-2 mb-1;
+}
+
+.markdown-content p {
+   @apply leading-relaxed mt-4 first:mt-0;
+}
+
+.markdown-content a {
+   @apply text-primary underline hover:text-primary/80;
+}
+
+.markdown-content strong {
+   @apply font-semibold;
+}
+
+.markdown-content em {
+   @apply italic;
+}
+
+.markdown-content ul {
+   @apply list-disc my-4 pl-6 space-y-2;
+}
+
+.markdown-content ol {
+   @apply list-decimal my-4 pl-6 space-y-2;
+}
+
+.markdown-content li {
+   @apply leading-relaxed;
+}
+
+/* Nested lists should have less top margin */
+.markdown-content li > ul,
+.markdown-content li > ol {
+   @apply mt-2 mb-0;
+}
+
+/* Paragraphs in lists need proper spacing */
+.markdown-content li > p {
+   @apply mb-2;
+}
+
+.markdown-content li > p:last-child {
+   @apply mb-0;
+}
+
+.markdown-content blockquote {
+   @apply border-l-4 border-border pl-4 my-4 text-muted-foreground;
+}
+
+.markdown-content code:not(.hljs) {
+   @apply bg-muted text-foreground px-1.5 py-0.5 rounded text-sm;
+}
+
+.markdown-content table {
+   @apply w-full border-collapse m-0;
+}
+
+.markdown-content th {
+   @apply bg-muted text-foreground font-semibold p-2 border-b border-r border-border text-left;
+}
+
+.markdown-content th:last-child {
+   @apply border-r-0;
+}
+
+.markdown-content td {
+   @apply p-2 border-b border-r border-border;
+}
+
+.markdown-content td:last-child {
+   @apply border-r-0;
+}
+
+.markdown-content tr:last-child td {
+   @apply border-b-0;
+}
+
+.markdown-content hr {
+   @apply border-0 border-t border-border my-8;
+}

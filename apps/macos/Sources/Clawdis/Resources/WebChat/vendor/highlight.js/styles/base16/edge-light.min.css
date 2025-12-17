@@ -1,7 +1,0 @@
-/*!
-  Theme: Edge Light
-  Author: cjayross (https://github.com/cjayross)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#5e646f;background:#fafafa}.hljs ::selection,.hljs::selection{background-color:#d69822;color:#5e646f}.hljs-comment{color:#5e646f}.hljs-tag{color:#6587bf}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#5e646f}.hljs-operator{opacity:.7}.hljs-attr,.hljs-bullet,.hljs-deletion,.hljs-link,.hljs-literal,.hljs-name,.hljs-number,.hljs-selector-tag,.hljs-symbol,.hljs-template-variable,.hljs-variable,.hljs-variable.constant_{color:#db7070}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#d69822}.hljs-strong{font-weight:700;color:#d69822}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#7c9f4b}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#509c93}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#6587bf}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#b870ce}.hljs-emphasis{color:#b870ce;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#509c93}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

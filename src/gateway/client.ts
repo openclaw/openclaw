@@ -85,7 +85,7 @@ export class GatewayClient {
       minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
       client: {
-        name: this.opts.clientName ?? "webchat-backend",
+        name: this.opts.clientName ?? "gateway-client",
         version: this.opts.clientVersion ?? "dev",
         platform: this.opts.platform ?? process.platform,
         mode: this.opts.mode ?? "backend",

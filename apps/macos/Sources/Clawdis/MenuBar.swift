@@ -106,10 +106,6 @@ struct ClawdisApp: App {
 
     @MainActor
     private func toggleWebChatPanel() {
-        guard AppStateStore.webChatEnabled else {
-            self.isMenuPresented = true
-            return
-        }
         self.isMenuPresented = false
         WebChatManager.shared.togglePanel(
             sessionKey: WebChatManager.shared.preferredSessionKey(),
@@ -159,7 +155,7 @@ private final class StatusItemMouseHandlerView: NSView {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
-    private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChat")
+    private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "Chat")
     private let socketServer = ControlSocketServer()
     let updaterController: UpdaterProviding = makeUpdaterController()
 
@@ -192,9 +188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         self.scheduleFirstRunOnboardingIfNeeded()
 
-        // Developer/testing helper: auto-open WebChat when launched with --webchat
-        if CommandLine.arguments.contains("--webchat") {
-            self.webChatAutoLogger.debug("Auto-opening web chat via --webchat flag")
+        // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
+        if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
+            self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
             WebChatManager.shared.show(sessionKey: "main")
         }
     }

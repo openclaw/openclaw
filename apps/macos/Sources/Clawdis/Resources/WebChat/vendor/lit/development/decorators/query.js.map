@@ -1,1 +1,0 @@
-{"version":3,"file":"query.js","sourceRoot":"","sources":["../../src/decorators/query.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,2CAA2C,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from '@lit/reactive-element/decorators/query.js';\n"]}

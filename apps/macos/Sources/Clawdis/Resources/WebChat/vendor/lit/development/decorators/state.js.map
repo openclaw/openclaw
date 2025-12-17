@@ -1,1 +1,0 @@
-{"version":3,"file":"state.js","sourceRoot":"","sources":["../../src/decorators/state.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,2CAA2C,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2017 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from '@lit/reactive-element/decorators/state.js';\n"]}

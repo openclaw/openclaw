@@ -1,7 +1,0 @@
-/*!
-  Theme: Outrun Dark
-  Author: Hugo Delahousse (http://github.com/hugodelahousse/)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#d0d0fa;background:#00002a}.hljs ::selection,.hljs::selection{background-color:#30305a;color:#d0d0fa}.hljs-comment{color:#50507a}.hljs-tag{color:#b0b0da}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#d0d0fa}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#ff4242}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#fc8d28}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#f3e877}.hljs-strong{font-weight:700;color:#f3e877}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#59f176}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#0ef0f0}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#66b0ff}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#f10596}.hljs-emphasis{color:#f10596;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#f003ef}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

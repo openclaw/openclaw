@@ -85,7 +85,7 @@ Expose Canvas via the existing `clawdis-mac` → control socket → app routing 
 - Capture a snapshot image of the current canvas view.
 - Optionally set panel placement (screen `x/y` + `width/height`) when showing/navigating.
 
-This should be modeled after `WebChatManager`/`WebChatWindowController` but targeting `clawdis-canvas://…` URLs.
+This should be modeled after `WebChatManager`/`WebChatSwiftUIWindowController` but targeting `clawdis-canvas://…` URLs.
 
 Related:
 - For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdis://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See `docs/clawdis-mac.md`.

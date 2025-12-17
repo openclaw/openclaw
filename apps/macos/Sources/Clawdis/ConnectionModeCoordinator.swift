@@ -8,7 +8,7 @@ final class ConnectionModeCoordinator {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "connection")
 
     /// Apply the requested connection mode by starting/stopping local gateway,
-    /// managing the control-channel SSH tunnel, and cleaning up WebChat tunnels.
+    /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
         switch mode {
         case .local:

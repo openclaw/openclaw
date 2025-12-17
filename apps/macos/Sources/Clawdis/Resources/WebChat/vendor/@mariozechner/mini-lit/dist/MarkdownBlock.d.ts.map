@@ -1,0 +1,1 @@
+{"version":3,"file":"MarkdownBlock.d.ts","sourceRoot":"","sources":["../src/MarkdownBlock.ts"],"names":[],"mappings":"AACA,OAAO,EAAQ,UAAU,EAAE,MAAM,KAAK,CAAC;AAKvC,qBACa,aAAc,SAAQ,UAAU;IAC9B,OAAO,SAAM;IACb,UAAU,UAAS;IACnB,UAAU,UAAQ;cAEX,gBAAgB,IAAI,WAAW,GAAG,gBAAgB;IAI5D,iBAAiB;IAOjB,MAAM;CAmOjB"}

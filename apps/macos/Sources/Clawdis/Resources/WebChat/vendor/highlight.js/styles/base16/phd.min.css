@@ -1,7 +1,0 @@
-/*!
-  Theme: PhD
-  Author: Hennig Hasemann (http://leetless.de/vim.html)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#b8bbc2;background:#061229}.hljs ::selection,.hljs::selection{background-color:#4d5666;color:#b8bbc2}.hljs-comment{color:#717885}.hljs-tag{color:#9a99a3}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#b8bbc2}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#d07346}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#f0a000}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#fbd461}.hljs-strong{font-weight:700;color:#fbd461}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#99bf52}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#72b9bf}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#5299bf}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#9989cc}.hljs-emphasis{color:#9989cc;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#b08060}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

@@ -1,0 +1,1 @@
+{"version":3,"file":"CodeBlock.d.ts","sourceRoot":"","sources":["../src/CodeBlock.ts"],"names":[],"mappings":"AASA,OAAO,EAAE,UAAU,EAAmB,MAAM,KAAK,CAAC;AAIlD,OAAO,iBAAiB,CAAC;AAazB,qBACa,SAAU,SAAQ,UAAU;IAC1B,IAAI,SAAM;IACV,QAAQ,SAAM;cAEP,gBAAgB,IAAI,WAAW,GAAG,gBAAgB;IAI5D,iBAAiB;IAM1B,OAAO,CAAC,cAAc;IAUb,MAAM;CA4BjB"}

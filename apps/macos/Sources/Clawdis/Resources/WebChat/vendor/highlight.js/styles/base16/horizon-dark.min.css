@@ -1,7 +1,0 @@
-/*!
-  Theme: Horizon Dark
-  Author: Michaël Ball (http://github.com/michael-ball/)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#cbced0;background:#1c1e26}.hljs ::selection,.hljs::selection{background-color:#2e303e;color:#cbced0}.hljs-comment{color:#6f6f70}.hljs-tag{color:#9da0a2}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#cbced0}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#e93c58}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#e58d7d}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#efb993}.hljs-strong{font-weight:700;color:#efb993}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#efaf8e}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#24a8b4}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#df5273}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#b072d1}.hljs-emphasis{color:#b072d1;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#e4a382}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

@@ -91,9 +91,6 @@ vi.mock("../commands/health.js", () => ({
 vi.mock("../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
-vi.mock("../webchat/server.js", () => ({
-  ensureWebChatServerFromConfig: vi.fn().mockResolvedValue(null),
-}));
 vi.mock("../web/outbound.js", () => ({
   sendMessageWhatsApp: vi
     .fn()

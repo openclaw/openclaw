@@ -1,7 +1,0 @@
-/*!
-  Theme: Default Light
-  Author: Chris Kempson (http://chriskempson.com)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#383838;background:#f8f8f8}.hljs ::selection,.hljs::selection{background-color:#d8d8d8;color:#383838}.hljs-comment{color:#b8b8b8}.hljs-tag{color:#585858}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#383838}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#ab4642}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#dc9656}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#f7ca88}.hljs-strong{font-weight:700;color:#f7ca88}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#a1b56c}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#86c1b9}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#7cafc2}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#ba8baf}.hljs-emphasis{color:#ba8baf;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#a16946}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

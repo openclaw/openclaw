@@ -142,20 +142,6 @@ final class AppState {
         }
     }
 
-    var webChatEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatEnabled, forKey: webChatEnabledKey) } }
-    }
-
-    var webChatSwiftUIEnabled: Bool {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(
-            self.webChatSwiftUIEnabled,
-            forKey: webChatSwiftUIEnabledKey) } }
-    }
-
-    var webChatPort: Int {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.webChatPort, forKey: webChatPortKey) } }
-    }
-
     var canvasEnabled: Bool {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
@@ -243,10 +229,6 @@ final class AppState {
         self.remoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
-        self.webChatEnabled = UserDefaults.standard.object(forKey: webChatEnabledKey) as? Bool ?? true
-        self.webChatSwiftUIEnabled = UserDefaults.standard.object(forKey: webChatSwiftUIEnabledKey) as? Bool ?? false
-        let storedPort = UserDefaults.standard.integer(forKey: webChatPortKey)
-        self.webChatPort = storedPort > 0 ? storedPort : 18788
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
@@ -376,9 +358,6 @@ extension AppState {
         state.iconOverride = .system
         state.heartbeatsEnabled = true
         state.connectionMode = .local
-        state.webChatEnabled = true
-        state.webChatSwiftUIEnabled = false
-        state.webChatPort = 18788
         state.canvasEnabled = true
         state.remoteTarget = "[redacted-email]"
         state.remoteIdentity = "~/.ssh/id_ed25519"
@@ -397,19 +376,6 @@ enum AppStateStore {
         Task.detached(priority: .utility) {
             await LaunchAgentManager.set(enabled: enabled, bundlePath: Bundle.main.bundlePath)
         }
-    }
-
-    static var webChatEnabled: Bool {
-        UserDefaults.standard.object(forKey: webChatEnabledKey) as? Bool ?? true
-    }
-
-    static var webChatSwiftUIEnabled: Bool {
-        UserDefaults.standard.object(forKey: webChatSwiftUIEnabledKey) as? Bool ?? false
-    }
-
-    static var webChatPort: Int {
-        let stored = UserDefaults.standard.integer(forKey: webChatPortKey)
-        return stored > 0 ? stored : 18788
     }
 
     static var canvasEnabled: Bool {

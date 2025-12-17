@@ -1,7 +1,0 @@
-/*!
-  Theme: iA Light
-  Author: iA Inc. (modified by aramisgithub)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#181818;background:#f6f6f6}.hljs ::selection,.hljs::selection{background-color:#bde5f2;color:#181818}.hljs-comment{color:#898989}.hljs-tag{color:#767676}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#181818}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#9c5a02}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#c43e18}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#c48218}.hljs-strong{font-weight:700;color:#c48218}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#38781c}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#2d6bb1}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#48bac2}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#a94598}.hljs-emphasis{color:#a94598;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#8b6c37}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

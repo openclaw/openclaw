@@ -1,1 +1,0 @@
-{"version":3,"file":"cache.js","sourceRoot":"","sources":["../../src/directives/cache.ts"],"names":[],"mappings":"AAAA;;;;GAIG;AAEH,cAAc,8BAA8B,CAAC","sourcesContent":["/**\n * @license\n * Copyright 2021 Google LLC\n * SPDX-License-Identifier: BSD-3-Clause\n */\n\nexport * from 'lit-html/directives/cache.js';\n"]}

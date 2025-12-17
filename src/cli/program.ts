@@ -26,7 +26,6 @@ import { danger, info, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
-import { startWebChatServer } from "../webchat/server.js";
 import { registerCronCli } from "./cron-cli.js";
 import { createDefaultDeps } from "./deps.js";
 import { registerDnsCli } from "./dns-cli.js";
@@ -360,43 +359,6 @@ Shows token usage per session when the agent reports it; set inbound.agent.conte
         },
         defaultRuntime,
       );
-    });
-
-  program
-    .command("webchat")
-    .description("Start or query the loopback-only web chat server")
-    .option("--port <port>", "Port to bind (default 18788)")
-    .option("--json", "Return JSON", false)
-    .action(async (opts) => {
-      const port = opts.port
-        ? Number.parseInt(String(opts.port), 10)
-        : undefined;
-      const server = await startWebChatServer(port);
-      if (!server) {
-        const targetPort = port ?? 18788;
-        const msg = `webchat failed to start on http://127.0.0.1:${targetPort}/`;
-        if (opts.json) {
-          defaultRuntime.error(
-            JSON.stringify({ error: msg, port: targetPort }),
-          );
-        } else {
-          defaultRuntime.error(danger(msg));
-        }
-        defaultRuntime.exit(1);
-        return;
-      }
-      const payload = {
-        port: server.port,
-        basePath: "/",
-        host: "127.0.0.1",
-      };
-      if (opts.json) {
-        defaultRuntime.log(JSON.stringify(payload));
-      } else {
-        defaultRuntime.log(
-          info(`webchat listening on http://127.0.0.1:${server.port}/`),
-        );
-      }
     });
 
   const browser = program

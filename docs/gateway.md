@@ -61,10 +61,9 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 - `shutdown` — Gateway is exiting; payload includes `reason` and optional `restartExpectedMs`. Clients should reconnect.
 
 ## WebChat integration
-- WebChat serves static assets locally (default port 18788, configurable).
-- The WebChat backend keeps a single WS connection to the Gateway for control/data; all sends and agent runs flow through that connection.
-- Remote use goes through the same SSH/Tailscale tunnel; if a gateway token is configured, WebChat must include it during connect.
-- macOS app also connects via this WS (one socket); it hydrates presence from the initial snapshot and listens for `presence` events to update the UI.
+- WebChat is a native SwiftUI UI that talks directly to the Gateway WebSocket for history, sends, abort, and events.
+- Remote use goes through the same SSH/Tailscale tunnel; if a gateway token is configured, the client includes it during `connect`.
+- macOS app connects via a single WS (shared connection); it hydrates presence from the initial snapshot and listens for `presence` events to update the UI.
 
 ## Typing and validation
 - Server validates every inbound frame with AJV against JSON Schema emitted from the protocol definitions.

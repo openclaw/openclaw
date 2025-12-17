@@ -1,7 +1,0 @@
-/*!
-  Theme: Icy Dark
-  Author: icyphox (https://icyphox.ga)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#095b67;background:#021012}.hljs ::selection,.hljs::selection{background-color:#041f23;color:#095b67}.hljs-comment{color:#052e34}.hljs-tag{color:#064048}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#095b67}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#16c1d9}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#b3ebf2}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#80deea}.hljs-strong{font-weight:700;color:#80deea}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#4dd0e1}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#26c6da}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#00bcd4}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#00acc1}.hljs-emphasis{color:#00acc1;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#0097a7}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

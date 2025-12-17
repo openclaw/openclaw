@@ -1,7 +1,0 @@
-/*!
-  Theme: Kimber
-  Author: Mishka Nguyen (https://github.com/akhsiM)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#dedee7;background:#222}.hljs ::selection,.hljs::selection{background-color:#555d55;color:#dedee7}.hljs-comment{color:#644646}.hljs-tag{color:#5a5a5a}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#dedee7}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#c88c8c}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#476c88}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#d8b56d}.hljs-strong{font-weight:700;color:#d8b56d}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#99c899}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#78b4b4}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#537c9c}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#86cacd}.hljs-emphasis{color:#86cacd;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#704f4f}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}

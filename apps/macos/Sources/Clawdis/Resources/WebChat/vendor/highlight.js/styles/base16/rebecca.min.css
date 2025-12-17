@@ -1,7 +1,0 @@
-/*!
-  Theme: Rebecca
-  Author: Victor Borja (http://github.com/vic) based on Rebecca Theme (http://github.com/vic/rebecca-theme)
-  License: ~ MIT (or more permissive) [via base16-schemes-source]
-  Maintainer: @highlightjs/core-team
-  Version: 2021.09.0
-*/pre code.hljs{display:block;overflow-x:auto;padding:1em}code.hljs{padding:3px 5px}.hljs{color:#f1eff8;background:#292a44}.hljs ::selection,.hljs::selection{background-color:#383a62;color:#f1eff8}.hljs-comment{color:#669}.hljs-tag{color:#a0a0c5}.hljs-operator,.hljs-punctuation,.hljs-subst{color:#f1eff8}.hljs-operator{opacity:.7}.hljs-bullet,.hljs-deletion,.hljs-name,.hljs-selector-tag,.hljs-template-variable,.hljs-variable{color:#a0a0c5}.hljs-attr,.hljs-link,.hljs-literal,.hljs-number,.hljs-symbol,.hljs-variable.constant_{color:#efe4a1}.hljs-class .hljs-title,.hljs-title,.hljs-title.class_{color:#ae81ff}.hljs-strong{font-weight:700;color:#ae81ff}.hljs-addition,.hljs-code,.hljs-string,.hljs-title.class_.inherited__{color:#6dfedf}.hljs-built_in,.hljs-doctag,.hljs-keyword.hljs-atrule,.hljs-quote,.hljs-regexp{color:#8eaee0}.hljs-attribute,.hljs-function .hljs-title,.hljs-section,.hljs-title.function_,.ruby .hljs-property{color:#2de0a7}.diff .hljs-meta,.hljs-keyword,.hljs-template-tag,.hljs-type{color:#7aa5ff}.hljs-emphasis{color:#7aa5ff;font-style:italic}.hljs-meta,.hljs-meta .hljs-keyword,.hljs-meta .hljs-string{color:#ff79c6}.hljs-meta .hljs-keyword,.hljs-meta-keyword{font-weight:700}
