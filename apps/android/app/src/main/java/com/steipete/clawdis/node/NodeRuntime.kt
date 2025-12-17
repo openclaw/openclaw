@@ -1,6 +1,7 @@
 package com.steipete.clawdis.node
 
 import android.content.Context
+import android.os.Build
 import com.steipete.clawdis.node.bridge.BridgeDiscovery
 import com.steipete.clawdis.node.bridge.BridgeEndpoint
 import com.steipete.clawdis.node.bridge.BridgePairingClient
@@ -175,6 +176,10 @@ class NodeRuntime(context: Context) {
     scope.launch {
       _statusText.value = "Connecting…"
       val storedToken = prefs.loadBridgeToken()
+      val modelIdentifier = listOfNotNull(Build.MANUFACTURER, Build.MODEL)
+        .joinToString(" ")
+        .trim()
+        .ifEmpty { null }
       val resolved =
         if (storedToken.isNullOrBlank()) {
           _statusText.value = "Pairing…"
@@ -191,6 +196,8 @@ class NodeRuntime(context: Context) {
                 token = null,
                 platform = "Android",
                 version = "dev",
+                deviceFamily = "Android",
+                modelIdentifier = modelIdentifier,
                 caps = caps,
               ),
           )
@@ -214,6 +221,8 @@ class NodeRuntime(context: Context) {
             token = authToken,
             platform = "Android",
             version = "dev",
+            deviceFamily = "Android",
+            modelIdentifier = modelIdentifier,
             caps =
               buildList {
                 add("canvas")
