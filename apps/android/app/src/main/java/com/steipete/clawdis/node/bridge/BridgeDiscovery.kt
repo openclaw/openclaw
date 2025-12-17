@@ -6,6 +6,7 @@ import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
+import java.net.InetSocketAddress
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.xbill.DNS.ExtendedResolver
 import org.xbill.DNS.Lookup
+import org.xbill.DNS.SimpleResolver
 import org.xbill.DNS.AAAARecord
 import org.xbill.DNS.ARecord
 import org.xbill.DNS.PTRRecord
@@ -212,21 +214,28 @@ class BridgeDiscovery(
         cm.activeNetwork?.let(::add)
       }.distinct()
 
-    val addrs =
+    val servers =
       candidateNetworks
         .asSequence()
         .flatMap { n ->
           cm.getLinkProperties(n)?.dnsServers?.asSequence() ?: emptySequence()
         }
-        .mapNotNull { it.hostAddress }
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
-        .distinct()
+        .distinctBy { it.hostAddress ?: it.toString() }
         .toList()
-    if (addrs.isEmpty()) return null
+    if (servers.isEmpty()) return null
 
     return try {
-      ExtendedResolver(addrs.toTypedArray()).apply {
+      val resolvers =
+        servers.mapNotNull { addr ->
+          try {
+            SimpleResolver().apply { setAddress(InetSocketAddress(addr, 53)) }
+          } catch (_: Throwable) {
+            null
+          }
+        }
+      if (resolvers.isEmpty()) return null
+
+      ExtendedResolver(resolvers.toTypedArray()).apply {
         // Vienna -> London via tailnet: allow a bit more headroom than LAN mDNS.
         setTimeout(Duration.ofMillis(3000))
       }

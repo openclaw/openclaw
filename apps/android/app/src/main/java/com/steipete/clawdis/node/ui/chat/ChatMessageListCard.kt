@@ -1,0 +1,181 @@
+package com.steipete.clawdis.node.ui.chat
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowCircleDown
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.FolderOpen
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.FilledTonalIconButton
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import com.steipete.clawdis.node.chat.ChatMessage
+import com.steipete.clawdis.node.chat.ChatPendingToolCall
+
+@Composable
+fun ChatMessageListCard(
+  sessionKey: String,
+  healthOk: Boolean,
+  messages: List<ChatMessage>,
+  pendingRunCount: Int,
+  pendingToolCalls: List<ChatPendingToolCall>,
+  streamingAssistantText: String?,
+  onShowSessions: () -> Unit,
+  onRefresh: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val listState = rememberLazyListState()
+
+  LaunchedEffect(messages.size, pendingRunCount, pendingToolCalls.size, streamingAssistantText) {
+    val total =
+      messages.size +
+        (if (pendingRunCount > 0) 1 else 0) +
+        (if (pendingToolCalls.isNotEmpty()) 1 else 0) +
+        (if (!streamingAssistantText.isNullOrBlank()) 1 else 0)
+    if (total <= 0) return@LaunchedEffect
+    listState.animateScrollToItem(index = total - 1)
+  }
+
+  Card(
+    modifier = modifier.fillMaxWidth(),
+    shape = MaterialTheme.shapes.extraLarge,
+    colors =
+      CardDefaults.cardColors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+      ),
+    elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+  ) {
+    Box(modifier = Modifier.fillMaxSize()) {
+      LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        state = listState,
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 44.dp, bottom = 12.dp, start = 12.dp, end = 12.dp),
+      ) {
+        items(count = messages.size, key = { idx -> messages[idx].id }) { idx ->
+          ChatMessageBubble(message = messages[idx])
+        }
+
+        if (pendingRunCount > 0) {
+          item(key = "typing") {
+            ChatTypingIndicatorBubble()
+          }
+        }
+
+        if (pendingToolCalls.isNotEmpty()) {
+          item(key = "tools") {
+            ChatPendingToolsBubble(toolCalls = pendingToolCalls)
+          }
+        }
+
+        val stream = streamingAssistantText?.trim()
+        if (!stream.isNullOrEmpty()) {
+          item(key = "stream") {
+            ChatStreamingAssistantBubble(text = stream)
+          }
+        }
+      }
+
+      ChatStatusPill(
+        sessionKey = sessionKey,
+        healthOk = healthOk,
+        onShowSessions = onShowSessions,
+        onRefresh = onRefresh,
+        modifier = Modifier.align(Alignment.TopStart).padding(10.dp),
+      )
+
+      if (messages.isEmpty() && pendingRunCount == 0 && pendingToolCalls.isEmpty() && streamingAssistantText.isNullOrBlank()) {
+        EmptyChatHint(modifier = Modifier.align(Alignment.Center))
+      }
+    }
+  }
+}
+
+@Composable
+private fun ChatStatusPill(
+  sessionKey: String,
+  healthOk: Boolean,
+  onShowSessions: () -> Unit,
+  onRefresh: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Surface(
+    modifier = modifier,
+    shape = MaterialTheme.shapes.extraLarge,
+    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.90f),
+    shadowElevation = 4.dp,
+    tonalElevation = 2.dp,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Surface(
+        modifier = Modifier.size(7.dp),
+        shape = androidx.compose.foundation.shape.CircleShape,
+        color = if (healthOk) Color(0xFF2ECC71) else Color(0xFFF39C12),
+      ) {}
+
+      Text(
+        text = sessionKey,
+        style = MaterialTheme.typography.labelMedium,
+      )
+      Text(
+        text = if (healthOk) "Connected" else "Connecting…",
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.alpha(0.9f),
+      )
+
+      Spacer(modifier = Modifier.weight(1f))
+
+      FilledTonalIconButton(onClick = onShowSessions, modifier = Modifier.size(34.dp)) {
+        Icon(Icons.Default.FolderOpen, contentDescription = "Sessions")
+      }
+
+      FilledTonalIconButton(onClick = onRefresh, modifier = Modifier.size(34.dp)) {
+        Icon(Icons.Default.Refresh, contentDescription = "Refresh")
+      }
+    }
+  }
+}
+
+@Composable
+private fun EmptyChatHint(modifier: Modifier = Modifier) {
+  Row(
+    modifier = modifier.alpha(0.7f),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(8.dp),
+  ) {
+    Icon(
+      imageVector = Icons.Default.ArrowCircleDown,
+      contentDescription = null,
+      tint = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+      text = "Message Clawd…",
+      style = MaterialTheme.typography.bodyMedium,
+      color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+  }
+}

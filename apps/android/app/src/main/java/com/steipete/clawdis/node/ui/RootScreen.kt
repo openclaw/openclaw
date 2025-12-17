@@ -66,6 +66,7 @@ fun RootScreen(viewModel: MainViewModel) {
       PackageManager.PERMISSION_GRANTED
 
   Box(modifier = Modifier.fillMaxSize()) {
+    ClawdisIdleBackground(modifier = Modifier.fillMaxSize())
     CanvasView(viewModel = viewModel, modifier = Modifier.fillMaxSize())
   }
 

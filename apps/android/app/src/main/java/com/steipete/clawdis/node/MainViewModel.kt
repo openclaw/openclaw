@@ -3,6 +3,7 @@ package com.steipete.clawdis.node
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import com.steipete.clawdis.node.bridge.BridgeEndpoint
+import com.steipete.clawdis.node.chat.OutgoingAttachment
 import com.steipete.clawdis.node.node.CameraCaptureManager
 import com.steipete.clawdis.node.node.CanvasController
 import kotlinx.coroutines.flow.StateFlow
@@ -29,8 +30,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
 
-  val chatMessages: StateFlow<List<NodeRuntime.ChatMessage>> = runtime.chatMessages
+  val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
+  val chatSessionId: StateFlow<String?> = runtime.chatSessionId
+  val chatMessages = runtime.chatMessages
   val chatError: StateFlow<String?> = runtime.chatError
+  val chatHealthOk: StateFlow<Boolean> = runtime.chatHealthOk
+  val chatThinkingLevel: StateFlow<String> = runtime.chatThinkingLevel
+  val chatStreamingAssistantText: StateFlow<String?> = runtime.chatStreamingAssistantText
+  val chatPendingToolCalls = runtime.chatPendingToolCalls
+  val chatSessions = runtime.chatSessions
   val pendingRunCount: StateFlow<Int> = runtime.pendingRunCount
 
   fun setForeground(value: Boolean) {
@@ -85,7 +93,27 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.loadChat(sessionKey)
   }
 
-  fun sendChat(sessionKey: String = "main", message: String) {
-    runtime.sendChat(sessionKey, message)
+  fun refreshChat() {
+    runtime.refreshChat()
+  }
+
+  fun refreshChatSessions(limit: Int? = null) {
+    runtime.refreshChatSessions(limit = limit)
+  }
+
+  fun setChatThinkingLevel(level: String) {
+    runtime.setChatThinkingLevel(level)
+  }
+
+  fun switchChatSession(sessionKey: String) {
+    runtime.switchChatSession(sessionKey)
+  }
+
+  fun abortChat() {
+    runtime.abortChat()
+  }
+
+  fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
+    runtime.sendChat(message = message, thinking = thinking, attachments = attachments)
   }
 }

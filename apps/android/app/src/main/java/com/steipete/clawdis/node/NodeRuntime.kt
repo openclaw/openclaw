@@ -2,6 +2,11 @@ package com.steipete.clawdis.node
 
 import android.content.Context
 import android.os.Build
+import com.steipete.clawdis.node.chat.ChatController
+import com.steipete.clawdis.node.chat.ChatMessage
+import com.steipete.clawdis.node.chat.ChatPendingToolCall
+import com.steipete.clawdis.node.chat.ChatSessionEntry
+import com.steipete.clawdis.node.chat.OutgoingAttachment
 import com.steipete.clawdis.node.bridge.BridgeDiscovery
 import com.steipete.clawdis.node.bridge.BridgeEndpoint
 import com.steipete.clawdis.node.bridge.BridgePairingClient
@@ -62,12 +67,7 @@ class NodeRuntime(context: Context) {
         _isConnected.value = true
         scope.launch { refreshWakeWordsFromGateway() }
       },
-      onDisconnected = { message ->
-        _statusText.value = message
-        _serverName.value = null
-        _remoteAddress.value = null
-        _isConnected.value = false
-      },
+      onDisconnected = { message -> handleSessionDisconnected(message) },
       onEvent = { event, payloadJson ->
         handleBridgeEvent(event, payloadJson)
       },
@@ -75,6 +75,16 @@ class NodeRuntime(context: Context) {
         handleInvoke(req.command, req.paramsJson)
       },
     )
+
+  private val chat = ChatController(scope = scope, session = session, json = json)
+
+  private fun handleSessionDisconnected(message: String) {
+    _statusText.value = message
+    _serverName.value = null
+    _remoteAddress.value = null
+    _isConnected.value = false
+    chat.onDisconnected(message)
+  }
 
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
@@ -90,17 +100,16 @@ class NodeRuntime(context: Context) {
   private var suppressWakeWordsSync = false
   private var wakeWordsSyncJob: Job? = null
 
-  data class ChatMessage(val id: String, val role: String, val text: String, val timestampMs: Long?)
-
-  private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
-  val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
-
-  private val _chatError = MutableStateFlow<String?>(null)
-  val chatError: StateFlow<String?> = _chatError.asStateFlow()
-
-  private val pendingRuns = mutableSetOf<String>()
-  private val _pendingRunCount = MutableStateFlow(0)
-  val pendingRunCount: StateFlow<Int> = _pendingRunCount.asStateFlow()
+  val chatSessionKey: StateFlow<String> = chat.sessionKey
+  val chatSessionId: StateFlow<String?> = chat.sessionId
+  val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
+  val chatError: StateFlow<String?> = chat.errorText
+  val chatHealthOk: StateFlow<Boolean> = chat.healthOk
+  val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
+  val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
+  val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
+  val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
 
   init {
     scope.launch(Dispatchers.Default) {
@@ -248,57 +257,36 @@ class NodeRuntime(context: Context) {
   }
 
   fun loadChat(sessionKey: String = "main") {
-    scope.launch {
-      _chatError.value = null
-      try {
-        // Best-effort; push events are optional, but improve latency.
-        session.sendEvent("chat.subscribe", """{"sessionKey":"$sessionKey"}""")
-      } catch (_: Throwable) {
-        // ignore
-      }
-
-      try {
-        val res = session.request("chat.history", """{"sessionKey":"$sessionKey"}""")
-        _chatMessages.value = parseHistory(res)
-      } catch (e: Exception) {
-        _chatError.value = e.message
-      }
-    }
+    chat.load(sessionKey)
   }
 
-  fun sendChat(sessionKey: String = "main", message: String, thinking: String = "off") {
-    val trimmed = message.trim()
-    if (trimmed.isEmpty()) return
-    scope.launch {
-      _chatError.value = null
-      val idem = java.util.UUID.randomUUID().toString()
+  fun refreshChat() {
+    chat.refresh()
+  }
 
-      _chatMessages.value =
-        _chatMessages.value +
-          ChatMessage(
-            id = java.util.UUID.randomUUID().toString(),
-            role = "user",
-            text = trimmed,
-            timestampMs = System.currentTimeMillis(),
-          )
+  fun refreshChatSessions(limit: Int? = null) {
+    chat.refreshSessions(limit = limit)
+  }
 
-      try {
-        val params =
-          """{"sessionKey":"$sessionKey","message":${trimmed.toJsonString()},"thinking":"$thinking","timeoutMs":30000,"idempotencyKey":"$idem"}"""
-        val res = session.request("chat.send", params)
-        val runId = parseRunId(res) ?: idem
-        pendingRuns.add(runId)
-        _pendingRunCount.value = pendingRuns.size
-      } catch (e: Exception) {
-        _chatError.value = e.message
-      }
-    }
+  fun setChatThinkingLevel(level: String) {
+    chat.setThinkingLevel(level)
+  }
+
+  fun switchChatSession(sessionKey: String) {
+    chat.switchSession(sessionKey)
+  }
+
+  fun abortChat() {
+    chat.abort()
+  }
+
+  fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
+    chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
   }
 
   private fun handleBridgeEvent(event: String, payloadJson: String?) {
-    if (payloadJson.isNullOrBlank()) return
-
     if (event == "voicewake.changed") {
+      if (payloadJson.isNullOrBlank()) return
       try {
         val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
         val array = payload["triggers"] as? JsonArray ?: return
@@ -310,40 +298,7 @@ class NodeRuntime(context: Context) {
       return
     }
 
-    if (event != "chat") return
-
-    try {
-      val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
-      val state = payload["state"].asStringOrNull()
-      val runId = payload["runId"].asStringOrNull()
-      if (!runId.isNullOrBlank()) {
-        pendingRuns.remove(runId)
-        _pendingRunCount.value = pendingRuns.size
-      }
-
-      when (state) {
-        "final" -> {
-          val msgObj = payload["message"].asObjectOrNull()
-          val role = msgObj?.get("role").asStringOrNull() ?: "assistant"
-          val text = extractTextFromMessage(msgObj)
-          if (!text.isNullOrBlank()) {
-            _chatMessages.value =
-              _chatMessages.value +
-                ChatMessage(
-                  id = java.util.UUID.randomUUID().toString(),
-                  role = role,
-                  text = text,
-                  timestampMs = System.currentTimeMillis(),
-                )
-          }
-        }
-        "error" -> {
-          _chatError.value = payload["errorMessage"].asStringOrNull() ?: "Chat failed"
-        }
-      }
-    } catch (_: Throwable) {
-      // ignore
-    }
+    chat.handleBridgeEvent(event, payloadJson)
   }
 
   private fun applyWakeWordsFromGateway(words: List<String>) {
@@ -381,46 +336,6 @@ class NodeRuntime(context: Context) {
       applyWakeWordsFromGateway(triggers)
     } catch (_: Throwable) {
       // ignore
-    }
-  }
-
-  private fun parseHistory(historyJson: String): List<ChatMessage> {
-    val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return emptyList()
-    val raw = root["messages"] ?: return emptyList()
-    val array = raw as? JsonArray ?: return emptyList()
-    return array.mapNotNull { item ->
-      val obj = item as? JsonObject ?: return@mapNotNull null
-      val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-      val text = extractTextFromMessage(obj) ?: return@mapNotNull null
-      ChatMessage(
-        id = java.util.UUID.randomUUID().toString(),
-        role = role,
-        text = text,
-        timestampMs = null,
-      )
-    }
-  }
-
-  private fun extractTextFromMessage(msgObj: JsonObject?): String? {
-    if (msgObj == null) return null
-    val content = msgObj["content"] ?: return null
-    return when (content) {
-      is JsonPrimitive -> content.asStringOrNull()
-      else -> {
-        val arr = (content as? JsonArray) ?: return null
-        arr.mapNotNull { part ->
-          val p = part as? JsonObject ?: return@mapNotNull null
-          p["text"].asStringOrNull()
-        }.joinToString("\n").trim().ifBlank { null }
-      }
-    }
-  }
-
-  private fun parseRunId(resJson: String): String? {
-    return try {
-      json.parseToJsonElement(resJson).asObjectOrNull()?.get("runId").asStringOrNull()
-    } catch (_: Throwable) {
-      null
     }
   }
 
