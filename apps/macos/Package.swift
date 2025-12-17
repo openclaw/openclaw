@@ -48,10 +48,6 @@ let package = Package(
                 .product(name: "PeekabooBridge", package: "PeekabooCore"),
                 .product(name: "PeekabooAutomationKit", package: "PeekabooAutomationKit"),
             ],
-            exclude: [
-                // Legacy web-based WebChat assets (SwiftUI-only WebChat doesn't use these).
-                "Resources/WebChat",
-            ],
             resources: [
                 .copy("Resources/Clawdis.icns"),
                 .copy("Resources/CanvasA2UI"),
