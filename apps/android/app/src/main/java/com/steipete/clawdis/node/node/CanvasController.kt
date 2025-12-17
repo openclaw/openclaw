@@ -36,7 +36,12 @@ class CanvasController {
   private fun reload() {
     val wv = webView ?: return
     when (mode) {
-      Mode.WEB -> wv.loadUrl(url.trim())
+      Mode.WEB -> {
+        // Match iOS behavior: if URL is missing/invalid, keep the current page (canvas scaffold).
+        val trimmed = url.trim()
+        if (trimmed.isBlank()) return
+        wv.loadUrl(trimmed)
+      }
       Mode.CANVAS -> wv.loadDataWithBaseURL(null, canvasHtml, "text/html", "utf-8", null)
     }
   }

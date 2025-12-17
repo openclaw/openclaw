@@ -2,6 +2,7 @@ package com.steipete.clawdis.node.bridge
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
@@ -199,19 +200,35 @@ class BridgeDiscovery(
 
   private fun createUnicastResolver(): org.xbill.DNS.Resolver? {
     val cm = connectivity ?: return null
-    val net = cm.activeNetwork ?: return null
-    val dnsServers = cm.getLinkProperties(net)?.dnsServers ?: return null
+
+    // Prefer VPN DNS (Tailscale) when present; fall back to active network DNS.
+    val candidateNetworks =
+      buildList {
+        cm.allNetworks
+          .firstOrNull { n ->
+            val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+          }?.let(::add)
+        cm.activeNetwork?.let(::add)
+      }.distinct()
+
     val addrs =
-      dnsServers
+      candidateNetworks
+        .asSequence()
+        .flatMap { n ->
+          cm.getLinkProperties(n)?.dnsServers?.asSequence() ?: emptySequence()
+        }
         .mapNotNull { it.hostAddress }
         .map { it.trim() }
         .filter { it.isNotEmpty() }
         .distinct()
+        .toList()
     if (addrs.isEmpty()) return null
 
     return try {
       ExtendedResolver(addrs.toTypedArray()).apply {
-        setTimeout(Duration.ofMillis(1500))
+        // Vienna -> London via tailnet: allow a bit more headroom than LAN mDNS.
+        setTimeout(Duration.ofMillis(3000))
       }
     } catch (_: Throwable) {
       null
