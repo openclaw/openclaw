@@ -1,6 +1,5 @@
 package com.steipete.clawdis.node.ui
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -36,9 +35,9 @@ fun StatusPill(
     onClick = onClick,
     modifier = modifier,
     shape = RoundedCornerShape(14.dp),
-    color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.92f),
-    shadowElevation = 3.dp,
-    border = BorderStroke(0.5.dp, Color.White.copy(alpha = 0.10f)),
+    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    tonalElevation = 3.dp,
+    shadowElevation = 0.dp,
   ) {
     Row(
       modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
