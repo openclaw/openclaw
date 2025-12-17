@@ -1970,7 +1970,7 @@ describe("gateway server", () => {
     await server.close();
   });
 
-  test("chat.abort cancels an in-flight chat.send", async () => {
+  test("chat.abort cancels an in-flight chat.send", { timeout: 15000 }, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
@@ -1989,66 +1989,82 @@ describe("gateway server", () => {
     );
 
     const { server, ws } = await startServerWithClient();
-    await connectOk(ws);
+    try {
+      await connectOk(ws);
 
-    const spy = vi.mocked(agentCommand);
-    spy.mockImplementationOnce(async (opts) => {
-      const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
-      await new Promise<void>((resolve) => {
-        if (!signal) return resolve();
-        if (signal.aborted) return resolve();
-        signal.addEventListener("abort", () => resolve(), { once: true });
+      const spy = vi.mocked(agentCommand);
+      spy.mockImplementationOnce(async (opts) => {
+        const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+        await new Promise<void>((resolve) => {
+          if (!signal) return resolve();
+          if (signal.aborted) return resolve();
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
       });
-    });
 
-    const abortedEventP = onceMessage(
-      ws,
-      (o) => o.type === "event" && o.event === "chat" && o.payload?.state === "aborted",
-    );
+      const sendResP = onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "send-abort-1",
+        8000,
+      );
+      const abortResP = onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "abort-1",
+        8000,
+      );
+      const abortedEventP = onceMessage(
+        ws,
+        (o) => o.type === "event" && o.event === "chat" && o.payload?.state === "aborted",
+        8000,
+      );
 
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "send-abort-1",
-        method: "chat.send",
-        params: {
-          sessionKey: "main",
-          message: "hello",
-          idempotencyKey: "idem-abort-1",
-          timeoutMs: 30_000,
-        },
-      }),
-    );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "send-abort-1",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-abort-1",
+            timeoutMs: 30_000,
+          },
+        }),
+      );
 
-    await new Promise((r) => setTimeout(r, 10));
+      await new Promise<void>((resolve, reject) => {
+        const deadline = Date.now() + 1000;
+        const tick = () => {
+          if (spy.mock.calls.length > 0) return resolve();
+          if (Date.now() > deadline)
+            return reject(new Error("timeout waiting for agentCommand"));
+          setTimeout(tick, 5);
+        };
+        tick();
+      });
 
-    ws.send(
-      JSON.stringify({
-        type: "req",
-        id: "abort-1",
-        method: "chat.abort",
-        params: { sessionKey: "main", runId: "idem-abort-1" },
-      }),
-    );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "abort-1",
+          method: "chat.abort",
+          params: { sessionKey: "main", runId: "idem-abort-1" },
+        }),
+      );
 
-    const abortRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "abort-1",
-    );
-    expect(abortRes.ok).toBe(true);
+      const abortRes = await abortResP;
+      expect(abortRes.ok).toBe(true);
 
-    const sendRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "send-abort-1",
-    );
-    expect(sendRes.ok).toBe(true);
+      const sendRes = await sendResP;
+      expect(sendRes.ok).toBe(true);
 
-    const evt = await abortedEventP;
-    expect(evt.payload?.runId).toBe("idem-abort-1");
-    expect(evt.payload?.sessionKey).toBe("main");
-
-    ws.close();
-    await server.close();
+      const evt = await abortedEventP;
+      expect(evt.payload?.runId).toBe("idem-abort-1");
+      expect(evt.payload?.sessionKey).toBe("main");
+    } finally {
+      ws.close();
+      await server.close();
+    }
   });
 
   test("bridge RPC chat.history returns session messages", async () => {
