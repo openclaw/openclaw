@@ -104,6 +104,8 @@ struct SettingsViewSmokeTests {
                 ip: "127.0.0.1",
                 version: "1.0",
                 platform: "macos 15.0",
+                deviceFamily: "Mac",
+                modelIdentifier: "MacPreview",
                 lastInputSeconds: 12,
                 mode: "local",
                 reason: "test",
