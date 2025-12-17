@@ -17,7 +17,10 @@ The Gateway WebSocket stays loopback-only (`ws://127.0.0.1:18789`). Iris talks t
 ## Prerequisites
 
 - You can run the Gateway on the “master” machine.
-- Iris (iOS app) is on the same LAN (Bonjour/mDNS must work).
+- Iris (iOS app) can reach the gateway bridge:
+  - Same LAN with Bonjour/mDNS, **or**
+  - Same Tailscale tailnet using Wide-Area Bonjour / unicast DNS-SD (see below), **or**
+  - Manual bridge host/port (fallback)
 - You can run the CLI (`clawdis`) on the gateway machine (or via SSH).
 
 ## 1) Start the Gateway (with bridge enabled)
@@ -48,6 +51,16 @@ dns-sd -L "<instance name>" _clawdis-bridge._tcp local.
 ```
 
 More debugging notes: `docs/bonjour.md`.
+
+### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
+
+If Iris and the gateway are on different networks but connected via Tailscale, multicast mDNS won’t cross the boundary. Use Wide-Area Bonjour / unicast DNS-SD instead:
+
+1) Set up a DNS-SD zone (example `clawdis.internal.`) on the gateway host and publish `_clawdis-bridge._tcp` records.
+2) Configure Tailscale split DNS for `clawdis.internal` pointing at that DNS server.
+3) In Iris: Settings → Bridge → Advanced → set **Discovery Domain** to `clawdis.internal.`
+
+Details and example CoreDNS config: `docs/bonjour.md`.
 
 ## 3) Connect from Iris (iOS)
 

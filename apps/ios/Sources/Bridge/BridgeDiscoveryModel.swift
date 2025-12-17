@@ -27,6 +27,7 @@ final class BridgeDiscoveryModel {
     private var browser: NWBrowser?
     private var debugLoggingEnabled = false
     private var lastStableIDs = Set<String>()
+    private var serviceDomain: String = ClawdisBonjour.bridgeServiceDomain
 
     func setDebugLoggingEnabled(_ enabled: Bool) {
         let wasEnabled = self.debugLoggingEnabled
@@ -39,13 +40,25 @@ final class BridgeDiscoveryModel {
         }
     }
 
+    func setServiceDomain(_ domain: String?) {
+        let normalized = ClawdisBonjour.normalizeServiceDomain(domain)
+        guard normalized != self.serviceDomain else { return }
+        self.appendDebugLog("service domain: \(self.serviceDomain) → \(normalized)")
+        self.serviceDomain = normalized
+
+        if self.browser != nil {
+            self.stop()
+            self.start()
+        }
+    }
+
     func start() {
         if self.browser != nil { return }
         self.appendDebugLog("start()")
         let params = NWParameters.tcp
         params.includePeerToPeer = true
         let browser = NWBrowser(
-            for: .bonjour(type: ClawdisBonjour.bridgeServiceType, domain: ClawdisBonjour.bridgeServiceDomain),
+            for: .bonjour(type: ClawdisBonjour.bridgeServiceType, domain: self.serviceDomain),
             using: params)
 
         browser.stateUpdateHandler = { [weak self] state in

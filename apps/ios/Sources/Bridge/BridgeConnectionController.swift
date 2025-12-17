@@ -20,8 +20,9 @@ final class BridgeConnectionController {
         self.appModel = appModel
 
         BridgeSettingsStore.bootstrapPersistence()
-        self.discovery.setDebugLoggingEnabled(
-            UserDefaults.standard.bool(forKey: "bridge.discovery.debugLogs"))
+        let defaults = UserDefaults.standard
+        self.discovery.setDebugLoggingEnabled(defaults.bool(forKey: "bridge.discovery.debugLogs"))
+        self.discovery.setServiceDomain(defaults.string(forKey: "bridge.discovery.domain"))
 
         self.updateFromDiscovery()
         self.observeDiscovery()
@@ -33,6 +34,10 @@ final class BridgeConnectionController {
 
     func setDiscoveryDebugLoggingEnabled(_ enabled: Bool) {
         self.discovery.setDebugLoggingEnabled(enabled)
+    }
+
+    func setDiscoveryDomain(_ domain: String?) {
+        self.discovery.setServiceDomain(domain)
     }
 
     func setScenePhase(_ phase: ScenePhase) {
