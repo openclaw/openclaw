@@ -27,7 +27,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
-  val discoveryDomain: StateFlow<String> = runtime.discoveryDomain
 
   val chatMessages: StateFlow<List<NodeRuntime.ChatMessage>> = runtime.chatMessages
   val chatError: StateFlow<String?> = runtime.chatError
@@ -55,10 +54,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setManualPort(value: Int) {
     runtime.setManualPort(value)
-  }
-
-  fun setDiscoveryDomain(value: String) {
-    runtime.setDiscoveryDomain(value)
   }
 
   fun setWakeWords(words: List<String>) {

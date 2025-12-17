@@ -13,7 +13,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.xbill.DNS.Lookup
 import org.xbill.DNS.PTRRecord
@@ -24,16 +23,16 @@ import org.xbill.DNS.Type
 class BridgeDiscovery(
   context: Context,
   private val scope: CoroutineScope,
-  discoveryDomain: StateFlow<String>,
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
   private val serviceType = "_clawdis-bridge._tcp."
+  private val wideAreaDomain = "clawdis.internal."
 
-  private val byId = ConcurrentHashMap<String, BridgeEndpoint>()
+  private val localById = ConcurrentHashMap<String, BridgeEndpoint>()
+  private val unicastById = ConcurrentHashMap<String, BridgeEndpoint>()
   private val _bridges = MutableStateFlow<List<BridgeEndpoint>>(emptyList())
   val bridges: StateFlow<List<BridgeEndpoint>> = _bridges.asStateFlow()
 
-  private var activeDomain: String = normalizeDomain(discoveryDomain.value)
   private var unicastJob: Job? = null
 
   private val discoveryListener =
@@ -50,36 +49,14 @@ class BridgeDiscovery(
 
       override fun onServiceLost(serviceInfo: NsdServiceInfo) {
         val id = stableId(serviceInfo.serviceName, "local.")
-        byId.remove(id)
+        localById.remove(id)
         publish()
       }
     }
 
   init {
-    scope.launch {
-      discoveryDomain.collect { raw ->
-        val normalized = normalizeDomain(raw)
-        if (normalized == activeDomain) return@collect
-        activeDomain = normalized
-        restartDiscovery()
-      }
-    }
-    restartDiscovery()
-  }
-
-  private fun restartDiscovery() {
-    byId.clear()
-    publish()
-
-    stopLocalDiscovery()
-    unicastJob?.cancel()
-    unicastJob = null
-
-    if (activeDomain == "local.") {
-      startLocalDiscovery()
-    } else {
-      startUnicastDiscovery(activeDomain)
-    }
+    startLocalDiscovery()
+    startUnicastDiscovery(wideAreaDomain)
   }
 
   private fun startLocalDiscovery() {
@@ -125,7 +102,7 @@ class BridgeDiscovery(
 
           val displayName = txt(resolved, "displayName") ?: resolved.serviceName
           val id = stableId(resolved.serviceName, "local.")
-          byId[id] = BridgeEndpoint(stableId = id, name = displayName, host = host, port = port)
+          localById[id] = BridgeEndpoint(stableId = id, name = displayName, host = host, port = port)
           publish()
         }
       },
@@ -133,7 +110,8 @@ class BridgeDiscovery(
   }
 
   private fun publish() {
-    _bridges.value = byId.values.sortedBy { it.name.lowercase() }
+    _bridges.value =
+      (localById.values + unicastById.values).sortedBy { it.name.lowercase() }
   }
 
   private fun stableId(serviceName: String, domain: String): String {
@@ -181,8 +159,8 @@ class BridgeDiscovery(
       next[id] = BridgeEndpoint(stableId = id, name = displayName, host = host, port = port)
     }
 
-    byId.clear()
-    byId.putAll(next)
+    unicastById.clear()
+    unicastById.putAll(next)
     publish()
   }
 
@@ -195,12 +173,6 @@ class BridgeDiscovery(
         instanceFqdn.substringBefore(serviceType)
       }
     return normalizeName(stripTrailingDot(withoutSuffix))
-  }
-
-  private fun normalizeDomain(raw: String): String {
-    val trimmed = raw.trim().lowercase()
-    if (trimmed.isEmpty() || trimmed == "local" || trimmed == "local.") return "local."
-    return if (trimmed.endsWith(".")) trimmed else "$trimmed."
   }
 
   private fun stripTrailingDot(raw: String): String {

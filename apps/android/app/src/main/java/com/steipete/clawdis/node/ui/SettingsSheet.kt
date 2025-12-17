@@ -51,7 +51,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
-  val discoveryDomain by viewModel.discoveryDomain.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
@@ -181,15 +180,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
         Switch(checked = manualEnabled, onCheckedChange = viewModel::setManualEnabled)
         Text(if (manualEnabled) "Manual Bridge Enabled" else "Manual Bridge Disabled")
       }
-    }
-    item {
-      OutlinedTextField(
-        value = discoveryDomain,
-        onValueChange = viewModel::setDiscoveryDomain,
-        label = { Text("Discovery Domain (leave empty for local.)") },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-      )
     }
     item {
       OutlinedTextField(

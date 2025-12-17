@@ -36,7 +36,7 @@ Confirm in logs you see something like:
 
 For tailnet-only setups (recommended for Vienna ⇄ London), bind the bridge to the gateway machine’s Tailscale IP instead:
 
-- Set `CLAWDIS_BRIDGE_HOST=<TAILNET_IPV4>` on the gateway host.
+- Set `bridge.bind: "tailnet"` in `~/.clawdis/clawdis.json` on the gateway host.
 - Restart the Gateway / macOS menubar app.
 
 ## 2) Verify Bonjour discovery (optional but recommended)
@@ -63,7 +63,6 @@ If Iris and the gateway are on different networks but connected via Tailscale, m
 
 1) Set up a DNS-SD zone (example `clawdis.internal.`) on the gateway host and publish `_clawdis-bridge._tcp` records.
 2) Configure Tailscale split DNS for `clawdis.internal` pointing at that DNS server.
-3) In Iris: Settings → Bridge → Advanced → set **Discovery Domain** to `clawdis.internal.`
 
 Details and example CoreDNS config: `docs/bonjour.md`.
 

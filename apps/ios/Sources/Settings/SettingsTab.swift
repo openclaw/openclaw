@@ -26,7 +26,6 @@ struct SettingsTab: View {
     @AppStorage("bridge.manual.enabled") private var manualBridgeEnabled: Bool = false
     @AppStorage("bridge.manual.host") private var manualBridgeHost: String = ""
     @AppStorage("bridge.manual.port") private var manualBridgePort: Int = 18790
-    @AppStorage("bridge.discovery.domain") private var discoveryDomain: String = ""
     @AppStorage("bridge.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
     @State private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
@@ -133,20 +132,6 @@ struct SettingsTab: View {
                         TextField("Port", value: self.$manualBridgePort, format: .number)
                             .keyboardType(.numberPad)
 
-                        TextField("Discovery Domain", text: self.$discoveryDomain)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .onChange(of: self.discoveryDomain) { _, newValue in
-                                self.bridgeController.setDiscoveryDomain(newValue)
-                            }
-
-                        Text(
-                            "Default discovery domain is “local.” (mDNS on the same LAN). "
-                                +
-                                "For Wide-Area Bonjour / Unicast DNS-SD (e.g. over Tailscale), set a unicast DNS zone like “clawdis.internal.” and configure Tailnet split DNS accordingly.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-
                         Button {
                             Task { await self.connectManual() }
                         } label: {
@@ -194,7 +179,6 @@ struct SettingsTab: View {
             }
             .onAppear {
                 self.localIPAddress = Self.primaryIPv4Address()
-                self.bridgeController.setDiscoveryDomain(self.discoveryDomain)
             }
             .onChange(of: self.preferredBridgeStableID) { _, newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)

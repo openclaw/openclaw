@@ -33,7 +33,7 @@ class NodeRuntime(context: Context) {
   val camera = CameraCaptureManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
-  private val discovery = BridgeDiscovery(appContext, scope = scope, discoveryDomain = prefs.discoveryDomain)
+  private val discovery = BridgeDiscovery(appContext, scope = scope)
   val bridges: StateFlow<List<BridgeEndpoint>> = discovery.bridges
 
   private val _isConnected = MutableStateFlow(false)
@@ -82,7 +82,6 @@ class NodeRuntime(context: Context) {
   val manualEnabled: StateFlow<Boolean> = prefs.manualEnabled
   val manualHost: StateFlow<String> = prefs.manualHost
   val manualPort: StateFlow<Int> = prefs.manualPort
-  val discoveryDomain: StateFlow<String> = prefs.discoveryDomain
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
 
   private var didAutoConnect = false
@@ -156,10 +155,6 @@ class NodeRuntime(context: Context) {
 
   fun setManualPort(value: Int) {
     prefs.setManualPort(value)
-  }
-
-  fun setDiscoveryDomain(value: String) {
-    prefs.setDiscoveryDomain(value)
   }
 
   fun setWakeWords(words: List<String>) {

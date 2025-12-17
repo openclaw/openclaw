@@ -50,9 +50,6 @@ class SecurePrefs(context: Context) {
   private val _manualPort = MutableStateFlow(prefs.getInt("bridge.manual.port", 18790))
   val manualPort: StateFlow<Int> = _manualPort
 
-  private val _discoveryDomain = MutableStateFlow(prefs.getString("bridge.discovery.domain", "")!!)
-  val discoveryDomain: StateFlow<String> = _discoveryDomain
-
   private val _lastDiscoveredStableId =
     MutableStateFlow(prefs.getString("bridge.lastDiscoveredStableId", "")!!)
   val lastDiscoveredStableId: StateFlow<String> = _lastDiscoveredStableId
@@ -91,12 +88,6 @@ class SecurePrefs(context: Context) {
   fun setManualPort(value: Int) {
     prefs.edit().putInt("bridge.manual.port", value).apply()
     _manualPort.value = value
-  }
-
-  fun setDiscoveryDomain(value: String) {
-    val trimmed = value.trim()
-    prefs.edit().putString("bridge.discovery.domain", trimmed).apply()
-    _discoveryDomain.value = trimmed
   }
 
   fun loadBridgeToken(): String? {

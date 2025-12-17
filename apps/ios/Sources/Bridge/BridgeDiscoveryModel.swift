@@ -24,10 +24,11 @@ final class BridgeDiscoveryModel {
     var statusText: String = "Idle"
     private(set) var debugLog: [DebugLogEntry] = []
 
-    private var browser: NWBrowser?
+    private var browsers: [String: NWBrowser] = [:]
+    private var bridgesByDomain: [String: [DiscoveredBridge]] = [:]
+    private var statesByDomain: [String: NWBrowser.State] = [:]
     private var debugLoggingEnabled = false
     private var lastStableIDs = Set<String>()
-    private var serviceDomain: String = ClawdisBonjour.bridgeServiceDomain
 
     func setDebugLoggingEnabled(_ enabled: Bool) {
         let wasEnabled = self.debugLoggingEnabled
@@ -40,101 +41,140 @@ final class BridgeDiscoveryModel {
         }
     }
 
-    func setServiceDomain(_ domain: String?) {
-        let normalized = ClawdisBonjour.normalizeServiceDomain(domain)
-        guard normalized != self.serviceDomain else { return }
-        self.appendDebugLog("service domain: \(self.serviceDomain) → \(normalized)")
-        self.serviceDomain = normalized
-
-        if self.browser != nil {
-            self.stop()
-            self.start()
-        }
-    }
-
     func start() {
-        if self.browser != nil { return }
+        if !self.browsers.isEmpty { return }
         self.appendDebugLog("start()")
-        let params = NWParameters.tcp
-        params.includePeerToPeer = true
-        let browser = NWBrowser(
-            for: .bonjour(type: ClawdisBonjour.bridgeServiceType, domain: self.serviceDomain),
-            using: params)
 
-        browser.stateUpdateHandler = { [weak self] state in
-            Task { @MainActor in
-                guard let self else { return }
-                switch state {
-                case .setup:
-                    self.statusText = "Setup"
-                    self.appendDebugLog("state: setup")
-                case .ready:
-                    self.statusText = "Searching…"
-                    self.appendDebugLog("state: ready")
-                case let .failed(err):
-                    self.statusText = "Failed: \(err)"
-                    self.appendDebugLog("state: failed (\(err))")
-                    self.browser?.cancel()
-                    self.browser = nil
-                case .cancelled:
-                    self.statusText = "Stopped"
-                    self.appendDebugLog("state: cancelled")
-                    self.browser = nil
-                case let .waiting(err):
-                    self.statusText = "Waiting: \(err)"
-                    self.appendDebugLog("state: waiting (\(err))")
-                @unknown default:
-                    self.statusText = "Unknown"
-                    self.appendDebugLog("state: unknown")
+        for domain in ClawdisBonjour.bridgeServiceDomains {
+            let params = NWParameters.tcp
+            params.includePeerToPeer = true
+            let browser = NWBrowser(
+                for: .bonjour(type: ClawdisBonjour.bridgeServiceType, domain: domain),
+                using: params)
+
+            browser.stateUpdateHandler = { [weak self] state in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.statesByDomain[domain] = state
+                    self.updateStatusText()
+                    self.appendDebugLog("state[\(domain)]: \(Self.prettyState(state))")
                 }
             }
-        }
 
-        browser.browseResultsChangedHandler = { [weak self] results, _ in
-            Task { @MainActor in
-                guard let self else { return }
-                let next = results.compactMap { result -> DiscoveredBridge? in
-                    switch result.endpoint {
-                    case let .service(name, _, _, _):
-                        let decodedName = BonjourEscapes.decode(name)
-                        let advertisedName = result.endpoint.txtRecord?.dictionary["displayName"]
-                        let prettyAdvertised = advertisedName
-                            .map(Self.prettifyInstanceName)
-                            .flatMap { $0.isEmpty ? nil : $0 }
-                        let prettyName = prettyAdvertised ?? Self.prettifyInstanceName(decodedName)
-                        return DiscoveredBridge(
-                            name: prettyName,
-                            endpoint: result.endpoint,
-                            stableID: BridgeEndpointID.stableID(result.endpoint),
-                            debugID: BridgeEndpointID.prettyDescription(result.endpoint))
-                    default:
-                        return nil
+            browser.browseResultsChangedHandler = { [weak self] results, _ in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.bridgesByDomain[domain] = results.compactMap { result -> DiscoveredBridge? in
+                        switch result.endpoint {
+                        case let .service(name, _, _, _):
+                            let decodedName = BonjourEscapes.decode(name)
+                            let advertisedName = result.endpoint.txtRecord?.dictionary["displayName"]
+                            let prettyAdvertised = advertisedName
+                                .map(Self.prettifyInstanceName)
+                                .flatMap { $0.isEmpty ? nil : $0 }
+                            let prettyName = prettyAdvertised ?? Self.prettifyInstanceName(decodedName)
+                            return DiscoveredBridge(
+                                name: prettyName,
+                                endpoint: result.endpoint,
+                                stableID: BridgeEndpointID.stableID(result.endpoint),
+                                debugID: BridgeEndpointID.prettyDescription(result.endpoint))
+                        default:
+                            return nil
+                        }
                     }
-                }
-                .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+                    .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
 
-                let nextIDs = Set(next.map(\.stableID))
-                let added = nextIDs.subtracting(self.lastStableIDs)
-                let removed = self.lastStableIDs.subtracting(nextIDs)
-                if !added.isEmpty || !removed.isEmpty {
-                    self.appendDebugLog(
-                        "results: total=\(next.count) added=\(added.count) removed=\(removed.count)")
+                    self.recomputeBridges()
                 }
-                self.lastStableIDs = nextIDs
-                self.bridges = next
             }
-        }
 
-        self.browser = browser
-        browser.start(queue: DispatchQueue(label: "com.steipete.clawdis.ios.bridge-discovery"))
+            self.browsers[domain] = browser
+            browser.start(queue: DispatchQueue(label: "com.steipete.clawdis.ios.bridge-discovery.\(domain)"))
+        }
     }
 
     func stop() {
         self.appendDebugLog("stop()")
-        self.browser?.cancel()
-        self.browser = nil
+        for browser in self.browsers.values {
+            browser.cancel()
+        }
+        self.browsers = [:]
+        self.bridgesByDomain = [:]
+        self.statesByDomain = [:]
         self.bridges = []
         self.statusText = "Stopped"
+    }
+
+    private func recomputeBridges() {
+        let next = self.bridgesByDomain.values
+            .flatMap { $0 }
+            .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+
+        let nextIDs = Set(next.map(\.stableID))
+        let added = nextIDs.subtracting(self.lastStableIDs)
+        let removed = self.lastStableIDs.subtracting(nextIDs)
+        if !added.isEmpty || !removed.isEmpty {
+            self.appendDebugLog("results: total=\(next.count) added=\(added.count) removed=\(removed.count)")
+        }
+        self.lastStableIDs = nextIDs
+        self.bridges = next
+    }
+
+    private func updateStatusText() {
+        let states = Array(self.statesByDomain.values)
+        if states.isEmpty {
+            self.statusText = self.browsers.isEmpty ? "Idle" : "Setup"
+            return
+        }
+
+        if let failed = states.first(where: { state in
+            if case .failed = state { return true }
+            return false
+        }) {
+            if case let .failed(err) = failed {
+                self.statusText = "Failed: \(err)"
+                return
+            }
+        }
+
+        if let waiting = states.first(where: { state in
+            if case .waiting = state { return true }
+            return false
+        }) {
+            if case let .waiting(err) = waiting {
+                self.statusText = "Waiting: \(err)"
+                return
+            }
+        }
+
+        if states.contains(where: { if case .ready = $0 { return true } else { return false } }) {
+            self.statusText = "Searching…"
+            return
+        }
+
+        if states.contains(where: { if case .setup = $0 { return true } else { return false } }) {
+            self.statusText = "Setup"
+            return
+        }
+
+        self.statusText = "Searching…"
+    }
+
+    private static func prettyState(_ state: NWBrowser.State) -> String {
+        switch state {
+        case .setup:
+            "setup"
+        case .ready:
+            "ready"
+        case let .failed(err):
+            "failed (\(err))"
+        case .cancelled:
+            "cancelled"
+        case let .waiting(err):
+            "waiting (\(err))"
+        @unknown default:
+            "unknown"
+        }
     }
 
     private func appendDebugLog(_ message: String) {
