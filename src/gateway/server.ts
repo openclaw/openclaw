@@ -241,12 +241,9 @@ function isLoopbackAddress(ip: string | undefined): boolean {
 
 let presenceVersion = 1;
 let healthVersion = 1;
-let seq = 0;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
-// Track per-run sequence to detect out-of-order/lost agent events.
-const agentRunSeq = new Map<string, number>();
 
 function buildSnapshot(): Snapshot {
   const presence = listSystemPresence();
@@ -277,17 +274,6 @@ type DedupeEntry = {
   payload?: unknown;
   error?: ErrorShape;
 };
-const dedupe = new Map<string, DedupeEntry>();
-// Map agent sessionId -> {sessionKey, clientRunId} for chat events (WS WebChat clients).
-const chatRunSessions = new Map<
-  string,
-  { sessionKey: string; clientRunId: string }
->();
-const chatRunBuffers = new Map<string, string>();
-const chatAbortControllers = new Map<
-  string,
-  { controller: AbortController; sessionId: string; sessionKey: string }
->();
 
 const getGatewayToken = () => process.env.CLAWDIS_GATEWAY_TOKEN;
 
@@ -582,6 +568,20 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
   const providerAbort = new AbortController();
   const providerTasks: Array<Promise<unknown>> = [];
   const clients = new Set<Client>();
+  let seq = 0;
+  // Track per-run sequence to detect out-of-order/lost agent events.
+  const agentRunSeq = new Map<string, number>();
+  const dedupe = new Map<string, DedupeEntry>();
+  // Map agent sessionId -> {sessionKey, clientRunId} for chat events (WS WebChat clients).
+  const chatRunSessions = new Map<
+    string,
+    { sessionKey: string; clientRunId: string }
+  >();
+  const chatRunBuffers = new Map<string, string>();
+  const chatAbortControllers = new Map<
+    string,
+    { controller: AbortController; sessionId: string; sessionKey: string }
+  >();
   const cfgAtStart = loadConfig();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
 
@@ -1201,18 +1201,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             lastChannel: entry?.lastChannel,
             lastTo: entry?.lastTo,
           };
-          if (store) {
-            store[p.sessionKey] = sessionEntry;
-            if (storePath) {
-              await saveSessionStore(storePath, store);
-            }
-          }
-
           const clientRunId = p.idempotencyKey;
-          chatRunSessions.set(sessionId, {
-            sessionKey: p.sessionKey,
-            clientRunId,
-          });
 
           const cached = dedupe.get(`chat:${clientRunId}`);
           if (cached) {
@@ -1228,14 +1217,25 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
             };
           }
 
-          const abortController = new AbortController();
-          chatAbortControllers.set(clientRunId, {
-            controller: abortController,
-            sessionId,
-            sessionKey: p.sessionKey,
-          });
-
           try {
+            const abortController = new AbortController();
+            chatAbortControllers.set(clientRunId, {
+              controller: abortController,
+              sessionId,
+              sessionKey: p.sessionKey,
+            });
+            chatRunSessions.set(sessionId, {
+              sessionKey: p.sessionKey,
+              clientRunId,
+            });
+
+            if (store) {
+              store[p.sessionKey] = sessionEntry;
+              if (storePath) {
+                await saveSessionStore(storePath, store);
+              }
+            }
+
             await agentCommand(
               {
                 message: messageWithAttachments,
@@ -2287,17 +2287,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                 lastChannel: entry?.lastChannel,
                 lastTo: entry?.lastTo,
               };
-              if (store) {
-                store[p.sessionKey] = sessionEntry;
-                if (storePath) {
-                  await saveSessionStore(storePath, store);
-                }
-              }
               const clientRunId = p.idempotencyKey;
-              chatRunSessions.set(sessionId, {
-                sessionKey: p.sessionKey,
-                clientRunId,
-              });
 
               const cached = dedupe.get(`chat:${clientRunId}`);
               if (cached) {
@@ -2314,6 +2304,17 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                   sessionId,
                   sessionKey: p.sessionKey,
                 });
+                chatRunSessions.set(sessionId, {
+                  sessionKey: p.sessionKey,
+                  clientRunId,
+                });
+
+                if (store) {
+                  store[p.sessionKey] = sessionEntry;
+                  if (storePath) {
+                    await saveSessionStore(storePath, store);
+                  }
+                }
 
                 await agentCommand(
                   {

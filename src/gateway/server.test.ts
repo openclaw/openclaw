@@ -68,6 +68,22 @@ let testSessionStorePath: string | undefined;
 let testAllowFrom: string[] | undefined;
 let testCronStorePath: string | undefined;
 let testCronEnabled: boolean | undefined = false;
+const sessionStoreSaveDelayMs = vi.hoisted(() => ({ value: 0 }));
+vi.mock("../config/sessions.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/sessions.js")>(
+    "../config/sessions.js",
+  );
+  return {
+    ...actual,
+    saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
+      const delay = sessionStoreSaveDelayMs.value;
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      return actual.saveSessionStore(storePath, store as never);
+    }),
+  };
+});
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
     inbound: {
@@ -109,6 +125,7 @@ beforeEach(async () => {
   previousHome = process.env.HOME;
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gateway-home-"));
   process.env.HOME = tempHome;
+  sessionStoreSaveDelayMs.value = 0;
 });
 
 afterEach(async () => {
@@ -2075,6 +2092,93 @@ describe("gateway server", () => {
     },
   );
 
+  test("chat.abort cancels while saving the session store", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    sessionStoreSaveDelayMs.value = 120;
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const spy = vi.mocked(agentCommand);
+    spy.mockImplementationOnce(async (opts) => {
+      const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!signal) return resolve();
+        if (signal.aborted) return resolve();
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+
+    const abortedEventP = onceMessage(
+      ws,
+      (o) =>
+        o.type === "event" &&
+        o.event === "chat" &&
+        o.payload?.state === "aborted",
+    );
+
+    const sendResP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "send-abort-save-1",
+    );
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "send-abort-save-1",
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-abort-save-1",
+          timeoutMs: 30_000,
+        },
+      }),
+    );
+
+    const abortResP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "abort-save-1",
+    );
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "abort-save-1",
+        method: "chat.abort",
+        params: { sessionKey: "main", runId: "idem-abort-save-1" },
+      }),
+    );
+
+    const abortRes = await abortResP;
+    expect(abortRes.ok).toBe(true);
+
+    const sendRes = await sendResP;
+    expect(sendRes.ok).toBe(true);
+
+    const evt = await abortedEventP;
+    expect(evt.payload?.runId).toBe("idem-abort-save-1");
+    expect(evt.payload?.sessionKey).toBe("main");
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.abort returns aborted=false for unknown runId", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");
@@ -2450,6 +2554,69 @@ describe("gateway server", () => {
         event: "chat",
       }),
     );
+
+    await server.close();
+  });
+
+  test("bridge chat.abort cancels while saving the session store", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    sessionStoreSaveDelayMs.value = 120;
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onRequest).toBeDefined();
+
+    const spy = vi.mocked(agentCommand);
+    spy.mockImplementationOnce(async (opts) => {
+      const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!signal) return resolve();
+        if (signal.aborted) return resolve();
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+
+    const sendP = bridgeCall?.onRequest?.("ios-node", {
+      id: "send-abort-save-bridge-1",
+      method: "chat.send",
+      paramsJSON: JSON.stringify({
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-abort-save-bridge-1",
+        timeoutMs: 30_000,
+      }),
+    });
+
+    const abortRes = await bridgeCall?.onRequest?.("ios-node", {
+      id: "abort-save-bridge-1",
+      method: "chat.abort",
+      paramsJSON: JSON.stringify({
+        sessionKey: "main",
+        runId: "idem-abort-save-bridge-1",
+      }),
+    });
+
+    expect(abortRes?.ok).toBe(true);
+
+    const sendRes = await sendP;
+    expect(sendRes?.ok).toBe(true);
 
     await server.close();
   });
