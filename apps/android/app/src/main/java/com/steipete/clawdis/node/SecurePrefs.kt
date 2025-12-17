@@ -14,6 +14,7 @@ import java.util.UUID
 class SecurePrefs(context: Context) {
   companion object {
     val defaultWakeWords: List<String> = listOf("clawd", "claude")
+    private const val displayNameKey = "node.displayName"
   }
 
   private val json = Json { ignoreUnknownKeys = true }
@@ -35,7 +36,8 @@ class SecurePrefs(context: Context) {
   private val _instanceId = MutableStateFlow(loadOrCreateInstanceId())
   val instanceId: StateFlow<String> = _instanceId
 
-  private val _displayName = MutableStateFlow(prefs.getString("node.displayName", "Android Node")!!)
+  private val _displayName =
+    MutableStateFlow(loadOrMigrateDisplayName(context = context))
   val displayName: StateFlow<String> = _displayName
 
   private val _cameraEnabled = MutableStateFlow(prefs.getBoolean("camera.enabled", true))
@@ -68,7 +70,7 @@ class SecurePrefs(context: Context) {
 
   fun setDisplayName(value: String) {
     val trimmed = value.trim()
-    prefs.edit().putString("node.displayName", trimmed).apply()
+    prefs.edit().putString(displayNameKey, trimmed).apply()
     _displayName.value = trimmed
   }
 
@@ -114,6 +116,17 @@ class SecurePrefs(context: Context) {
     val fresh = UUID.randomUUID().toString()
     prefs.edit().putString("node.instanceId", fresh).apply()
     return fresh
+  }
+
+  private fun loadOrMigrateDisplayName(context: Context): String {
+    val existing = prefs.getString(displayNameKey, null)?.trim().orEmpty()
+    if (existing.isNotEmpty() && existing != "Android Node") return existing
+
+    val candidate = DeviceNames.bestDefaultNodeName(context).trim()
+    val resolved = candidate.ifEmpty { "Android Node" }
+
+    prefs.edit().putString(displayNameKey, resolved).apply()
+    return resolved
   }
 
   fun setWakeWords(words: List<String>) {

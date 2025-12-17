@@ -126,7 +126,7 @@ final class BridgeConnectionController {
     private func makeHello(token: String) -> BridgeHello {
         let defaults = UserDefaults.standard
         let nodeId = defaults.string(forKey: "node.instanceId") ?? "ios-node"
-        let displayName = defaults.string(forKey: "node.displayName") ?? "iOS Node"
+        let displayName = self.resolvedDisplayName(defaults: defaults)
 
         return BridgeHello(
             nodeId: nodeId,
@@ -137,6 +137,21 @@ final class BridgeConnectionController {
             deviceFamily: self.deviceFamily(),
             modelIdentifier: self.modelIdentifier(),
             caps: self.currentCaps())
+    }
+
+    private func resolvedDisplayName(defaults: UserDefaults) -> String {
+        let key = "node.displayName"
+        let existing = defaults.string(forKey: key)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !existing.isEmpty, existing != "iOS Node" { return existing }
+
+        let deviceName = UIDevice.current.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let candidate = deviceName.isEmpty ? "iOS Node" : deviceName
+
+        if existing.isEmpty || existing == "iOS Node" {
+            defaults.set(candidate, forKey: key)
+        }
+
+        return candidate
     }
 
     private func currentCaps() -> [String] {
