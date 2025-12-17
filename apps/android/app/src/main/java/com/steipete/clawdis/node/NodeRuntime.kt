@@ -178,6 +178,10 @@ class NodeRuntime(context: Context) {
       val resolved =
         if (storedToken.isNullOrBlank()) {
           _statusText.value = "Pairing…"
+          val caps = buildList {
+            add("canvas")
+            if (cameraEnabled.value) add("camera")
+          }
           BridgePairingClient().pairAndHello(
             endpoint = endpoint,
             hello =
@@ -187,6 +191,7 @@ class NodeRuntime(context: Context) {
                 token = null,
                 platform = "Android",
                 version = "dev",
+                caps = caps,
               ),
           )
         } else {
@@ -209,6 +214,11 @@ class NodeRuntime(context: Context) {
             token = authToken,
             platform = "Android",
             version = "dev",
+            caps =
+              buildList {
+                add("canvas")
+                if (cameraEnabled.value) add("camera")
+              },
           ),
       )
     }

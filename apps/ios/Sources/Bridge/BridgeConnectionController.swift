@@ -134,7 +134,21 @@ final class BridgeConnectionController {
             platform: self.platformString(),
             version: self.appVersion(),
             deviceFamily: self.deviceFamily(),
-            modelIdentifier: self.modelIdentifier())
+            modelIdentifier: self.modelIdentifier(),
+            caps: self.currentCaps())
+    }
+
+    private func currentCaps() -> [String] {
+        var caps: [String] = ["canvas"]
+
+        // Default-on: if the key doesn't exist yet, treat it as enabled.
+        let cameraEnabled =
+            UserDefaults.standard.object(forKey: "camera.enabled") == nil
+                ? true
+                : UserDefaults.standard.bool(forKey: "camera.enabled")
+        if cameraEnabled { caps.append("camera") }
+
+        return caps
     }
 
     private func platformString() -> String {

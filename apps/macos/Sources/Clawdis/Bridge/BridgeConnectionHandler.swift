@@ -3,6 +3,15 @@ import Foundation
 import Network
 import OSLog
 
+struct BridgeNodeInfo: Sendable {
+    var nodeId: String
+    var displayName: String?
+    var platform: String?
+    var version: String?
+    var remoteAddress: String?
+    var caps: [String]?
+}
+
 actor BridgeConnectionHandler {
     private let connection: NWConnection
     private let logger: Logger
@@ -38,7 +47,7 @@ actor BridgeConnectionHandler {
         var serverName: String
         var resolveAuth: @Sendable (BridgeHello) async -> AuthResult
         var handlePair: @Sendable (BridgePairRequest) async -> PairResult
-        var onAuthenticated: (@Sendable (String) async -> Void)?
+        var onAuthenticated: (@Sendable (BridgeNodeInfo) async -> Void)?
         var onEvent: (@Sendable (String, BridgeEventFrame) async -> Void)?
         var onRequest: (@Sendable (String, BridgeRPCRequest) async -> BridgeRPCResponse)?
     }
@@ -46,7 +55,7 @@ actor BridgeConnectionHandler {
     func run(
         resolveAuth: @escaping @Sendable (BridgeHello) async -> AuthResult,
         handlePair: @escaping @Sendable (BridgePairRequest) async -> PairResult,
-        onAuthenticated: (@Sendable (String) async -> Void)? = nil,
+        onAuthenticated: (@Sendable (BridgeNodeInfo) async -> Void)? = nil,
         onDisconnected: (@Sendable (String) async -> Void)? = nil,
         onEvent: (@Sendable (String, BridgeEventFrame) async -> Void)? = nil,
         onRequest: (@Sendable (String, BridgeRPCRequest) async -> BridgeRPCResponse)? = nil) async
@@ -125,11 +134,19 @@ actor BridgeConnectionHandler {
     {
         do {
             let hello = try self.decoder.decode(BridgeHello.self, from: data)
-            self.nodeId = hello.nodeId
+            let nodeId = hello.nodeId.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.nodeId = nodeId
             let result = await context.resolveAuth(hello)
             await self.handleAuthResult(result, serverName: context.serverName)
-            if case .ok = result, let nodeId = self.nodeId {
-                await context.onAuthenticated?(nodeId)
+            if case .ok = result {
+                await context.onAuthenticated?(
+                    BridgeNodeInfo(
+                        nodeId: nodeId,
+                        displayName: hello.displayName,
+                        platform: hello.platform,
+                        version: hello.version,
+                        remoteAddress: self.remoteAddressString(),
+                        caps: hello.caps))
             }
         } catch {
             await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)
@@ -142,18 +159,27 @@ actor BridgeConnectionHandler {
     {
         do {
             let req = try self.decoder.decode(BridgePairRequest.self, from: data)
-            self.nodeId = req.nodeId
+            let nodeId = req.nodeId.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.nodeId = nodeId
             let enriched = BridgePairRequest(
                 type: req.type,
-                nodeId: req.nodeId,
+                nodeId: nodeId,
                 displayName: req.displayName,
                 platform: req.platform,
                 version: req.version,
+                caps: req.caps,
                 remoteAddress: self.remoteAddressString())
             let result = await context.handlePair(enriched)
             await self.handlePairResult(result, serverName: context.serverName)
-            if case .ok = result, let nodeId = self.nodeId {
-                await context.onAuthenticated?(nodeId)
+            if case .ok = result {
+                await context.onAuthenticated?(
+                    BridgeNodeInfo(
+                        nodeId: nodeId,
+                        displayName: enriched.displayName,
+                        platform: enriched.platform,
+                        version: enriched.version,
+                        remoteAddress: enriched.remoteAddress,
+                        caps: enriched.caps))
             }
         } catch {
             await self.sendError(code: "INVALID_REQUEST", message: error.localizedDescription)

@@ -3,6 +3,7 @@ package com.steipete.clawdis.node.bridge
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonNull
@@ -24,6 +25,7 @@ class BridgePairingClient {
     val token: String?,
     val platform: String?,
     val version: String?,
+    val caps: List<String>?,
   )
 
   data class PairResult(val ok: Boolean, val token: String?, val error: String? = null)
@@ -55,6 +57,7 @@ class BridgePairingClient {
             hello.token?.let { put("token", JsonPrimitive(it)) }
             hello.platform?.let { put("platform", JsonPrimitive(it)) }
             hello.version?.let { put("version", JsonPrimitive(it)) }
+            hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
           },
         )
 
@@ -76,6 +79,7 @@ class BridgePairingClient {
                 hello.displayName?.let { put("displayName", JsonPrimitive(it)) }
                 hello.platform?.let { put("platform", JsonPrimitive(it)) }
                 hello.version?.let { put("version", JsonPrimitive(it)) }
+                hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
               },
             )
 

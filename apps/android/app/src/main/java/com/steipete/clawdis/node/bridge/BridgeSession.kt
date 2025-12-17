@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonElement
@@ -39,6 +40,7 @@ class BridgeSession(
     val token: String?,
     val platform: String?,
     val version: String?,
+    val caps: List<String>?,
   )
 
   data class InvokeRequest(val id: String, val command: String, val paramsJson: String?)
@@ -191,6 +193,7 @@ class BridgeSession(
             hello.token?.let { put("token", JsonPrimitive(it)) }
             hello.platform?.let { put("platform", JsonPrimitive(it)) }
             hello.version?.let { put("version", JsonPrimitive(it)) }
+            hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
           },
         )
 

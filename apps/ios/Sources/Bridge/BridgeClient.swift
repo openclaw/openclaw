@@ -53,7 +53,8 @@ actor BridgeClient {
                     platform: hello.platform,
                     version: hello.version,
                     deviceFamily: hello.deviceFamily,
-                    modelIdentifier: hello.modelIdentifier),
+                    modelIdentifier: hello.modelIdentifier,
+                    caps: hello.caps),
                 over: connection)
 
             onStatus?("Waiting for approval…")

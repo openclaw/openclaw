@@ -65,6 +65,7 @@ public struct BridgeHello: Codable, Sendable {
     public let version: String?
     public let deviceFamily: String?
     public let modelIdentifier: String?
+    public let caps: [String]?
 
     public init(
         type: String = "hello",
@@ -74,7 +75,8 @@ public struct BridgeHello: Codable, Sendable {
         platform: String?,
         version: String?,
         deviceFamily: String? = nil,
-        modelIdentifier: String? = nil)
+        modelIdentifier: String? = nil,
+        caps: [String]? = nil)
     {
         self.type = type
         self.nodeId = nodeId
@@ -84,6 +86,7 @@ public struct BridgeHello: Codable, Sendable {
         self.version = version
         self.deviceFamily = deviceFamily
         self.modelIdentifier = modelIdentifier
+        self.caps = caps
     }
 }
 
@@ -105,6 +108,7 @@ public struct BridgePairRequest: Codable, Sendable {
     public let version: String?
     public let deviceFamily: String?
     public let modelIdentifier: String?
+    public let caps: [String]?
     public let remoteAddress: String?
 
     public init(
@@ -115,6 +119,7 @@ public struct BridgePairRequest: Codable, Sendable {
         version: String?,
         deviceFamily: String? = nil,
         modelIdentifier: String? = nil,
+        caps: [String]? = nil,
         remoteAddress: String? = nil)
     {
         self.type = type
@@ -124,6 +129,7 @@ public struct BridgePairRequest: Codable, Sendable {
         self.version = version
         self.deviceFamily = deviceFamily
         self.modelIdentifier = modelIdentifier
+        self.caps = caps
         self.remoteAddress = remoteAddress
     }
 }

@@ -13,6 +13,7 @@ actor BridgeServer {
     private var isRunning = false
     private var store: PairedNodesStore?
     private var connections: [String: BridgeConnectionHandler] = [:]
+    private var nodeInfoById: [String: BridgeNodeInfo] = [:]
     private var presenceTasks: [String: Task<Void, Never>] = [:]
     private var chatSubscriptions: [String: Set<String>] = [:]
     private var gatewayPushTask: Task<Void, Never>?
@@ -73,7 +74,7 @@ actor BridgeServer {
     }
 
     private func handle(connection: NWConnection) async {
-        let handler = BridgeConnectionHandler(connection: connection, logger: self.logger)
+            let handler = BridgeConnectionHandler(connection: connection, logger: self.logger)
         await handler.run(
             resolveAuth: { [weak self] hello in
                 await self?.authorize(hello: hello) ?? .error(code: "UNAVAILABLE", message: "bridge unavailable")
@@ -81,8 +82,8 @@ actor BridgeServer {
             handlePair: { [weak self] request in
                 await self?.pair(request: request) ?? .error(code: "UNAVAILABLE", message: "bridge unavailable")
             },
-            onAuthenticated: { [weak self] nodeId in
-                await self?.registerConnection(handler: handler, nodeId: nodeId)
+            onAuthenticated: { [weak self] node in
+                await self?.registerConnection(handler: handler, node: node)
             },
             onDisconnected: { [weak self] nodeId in
                 await self?.unregisterConnection(nodeId: nodeId)
@@ -112,10 +113,22 @@ actor BridgeServer {
         Array(self.connections.keys).sorted()
     }
 
-    private func registerConnection(handler: BridgeConnectionHandler, nodeId: String) async {
-        self.connections[nodeId] = handler
-        await self.beaconPresence(nodeId: nodeId, reason: "connect")
-        self.startPresenceTask(nodeId: nodeId)
+    func connectedNodes() -> [BridgeNodeInfo] {
+        self.nodeInfoById.values.sorted { a, b in
+            (a.displayName ?? a.nodeId) < (b.displayName ?? b.nodeId)
+        }
+    }
+
+    func pairedNodes() async -> [PairedNode] {
+        guard let store = self.store else { return [] }
+        return await store.all()
+    }
+
+    private func registerConnection(handler: BridgeConnectionHandler, node: BridgeNodeInfo) async {
+        self.connections[node.nodeId] = handler
+        self.nodeInfoById[node.nodeId] = node
+        await self.beaconPresence(nodeId: node.nodeId, reason: "connect")
+        self.startPresenceTask(nodeId: node.nodeId)
         self.ensureGatewayPushTask()
     }
 
@@ -123,6 +136,7 @@ actor BridgeServer {
         await self.beaconPresence(nodeId: nodeId, reason: "disconnect")
         self.stopPresenceTask(nodeId: nodeId)
         self.connections.removeValue(forKey: nodeId)
+        self.nodeInfoById.removeValue(forKey: nodeId)
         self.chatSubscriptions[nodeId] = nil
         self.stopGatewayPushTaskIfIdle()
     }
