@@ -160,6 +160,9 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.canvasEnabled, forKey: canvasEnabledKey) } }
     }
 
+    /// Tracks whether the Canvas panel is currently visible (not persisted).
+    var canvasPanelVisible: Bool = false
+
     var peekabooBridgeEnabled: Bool {
         didSet {
             self.ifNotPreview {

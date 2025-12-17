@@ -81,6 +81,9 @@ struct ClawdisApp: App {
             self.isPanelVisible = visible
             self.updateStatusHighlight()
         }
+        CanvasManager.shared.onPanelVisibilityChanged = { [self] visible in
+            self.state.canvasPanelVisible = visible
+        }
         CanvasManager.shared.defaultAnchorProvider = { [self] in self.statusButtonScreenFrame() }
 
         let handler = StatusItemMouseHandlerView()

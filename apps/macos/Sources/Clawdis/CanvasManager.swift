@@ -9,6 +9,8 @@ final class CanvasManager {
     private var panelController: CanvasWindowController?
     private var panelSessionKey: String?
 
+    var onPanelVisibilityChanged: ((Bool) -> Void)?
+
     /// Optional anchor provider (e.g. menu bar status item). If nil, Canvas anchors to the mouse cursor.
     var defaultAnchorProvider: (() -> NSRect?)?
 
@@ -29,6 +31,9 @@ final class CanvasManager {
             .nonEmpty
 
         if let controller = self.panelController, self.panelSessionKey == session {
+            controller.onVisibilityChanged = { [weak self] visible in
+                self?.onPanelVisibilityChanged?(visible)
+            }
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
 
@@ -58,6 +63,9 @@ final class CanvasManager {
             sessionKey: session,
             root: Self.canvasRoot,
             presentation: .panel(anchorProvider: anchorProvider))
+        controller.onVisibilityChanged = { [weak self] visible in
+            self?.onPanelVisibilityChanged?(visible)
+        }
         self.panelController = controller
         self.panelSessionKey = session
         controller.applyPreferredPlacement(placement)

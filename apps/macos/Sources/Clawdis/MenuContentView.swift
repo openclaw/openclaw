@@ -63,6 +63,15 @@ struct MenuContent: View {
                     CanvasManager.shared.hideAll()
                 }
             }
+            if self.state.canvasEnabled {
+                Button(self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas") {
+                    if self.state.canvasPanelVisible {
+                        CanvasManager.shared.hideAll()
+                    } else {
+                        _ = try? CanvasManager.shared.show(sessionKey: "main", path: "/")
+                    }
+                }
+            }
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
