@@ -225,6 +225,8 @@ describe("node bridge server", () => {
       displayName?: string;
       platform?: string;
       version?: string;
+      deviceFamily?: string;
+      modelIdentifier?: string;
       remoteIp?: string;
     } | null = null;
 
@@ -233,6 +235,8 @@ describe("node bridge server", () => {
       displayName?: string;
       platform?: string;
       version?: string;
+      deviceFamily?: string;
+      modelIdentifier?: string;
       remoteIp?: string;
     } | null = null;
 
@@ -262,6 +266,8 @@ describe("node bridge server", () => {
       displayName: "Iris",
       platform: "ios",
       version: "1.0",
+      deviceFamily: "iPad",
+      modelIdentifier: "iPad16,6",
     });
 
     // Approve the pending request from the gateway side.
@@ -296,6 +302,8 @@ describe("node bridge server", () => {
       displayName: "Different name",
       platform: "ios",
       version: "2.0",
+      deviceFamily: "iPad",
+      modelIdentifier: "iPad99,1",
     });
     const line3 = JSON.parse(await readLine2()) as { type: string };
     expect(line3.type).toBe("hello-ok");
@@ -310,6 +318,8 @@ describe("node bridge server", () => {
     expect(lastAuthed?.displayName).toBe("Iris");
     expect(lastAuthed?.platform).toBe("ios");
     expect(lastAuthed?.version).toBe("1.0");
+    expect(lastAuthed?.deviceFamily).toBe("iPad");
+    expect(lastAuthed?.modelIdentifier).toBe("iPad16,6");
     expect(lastAuthed?.remoteIp?.includes("127.0.0.1")).toBe(true);
 
     socket2.destroy();

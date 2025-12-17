@@ -70,6 +70,11 @@ struct InstancesSettings: View {
                 if let platform = inst.platform, let prettyPlatform = self.prettyPlatform(platform) {
                     self.label(icon: self.platformIcon(platform), text: prettyPlatform)
                 }
+                if let deviceText = self.deviceDescription(inst),
+                   let deviceIcon = self.deviceIcon(inst)
+                {
+                    self.label(icon: deviceIcon, text: deviceText)
+                }
                 self.label(icon: "clock", text: inst.lastInputDescription)
                 if let mode = inst.mode { self.label(icon: "network", text: mode) }
                 if let reason = inst.reason, !reason.isEmpty {
@@ -113,6 +118,28 @@ struct InstancesSettings: View {
         default:
             return "cpu"
         }
+    }
+
+    private func deviceIcon(_ inst: InstanceInfo) -> String? {
+        let family = inst.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if family.isEmpty { return nil }
+        switch family.lowercased() {
+        case "ipad":
+            return "ipad"
+        case "iphone":
+            return "iphone"
+        case "mac":
+            return "laptopcomputer"
+        default:
+            return "cpu"
+        }
+    }
+
+    private func deviceDescription(_ inst: InstanceInfo) -> String? {
+        let model = inst.modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !model.isEmpty { return model }
+        let family = inst.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return family.isEmpty ? nil : family
     }
 
     private func prettyPlatform(_ raw: String) -> String? {

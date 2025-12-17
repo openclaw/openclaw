@@ -2109,6 +2109,8 @@ describe("gateway server", () => {
         name: "fingerprint",
         version: "9.9.9",
         platform: "test",
+        deviceFamily: "iPad",
+        modelIdentifier: "iPad16,6",
         mode: "ui",
         instanceId: "abc",
       },
@@ -2133,6 +2135,8 @@ describe("gateway server", () => {
     expect(clientEntry?.host).toBe("fingerprint");
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");
+    expect(clientEntry?.deviceFamily).toBe("iPad");
+    expect(clientEntry?.modelIdentifier).toBe("iPad16,6");
 
     ws.close();
     await server.close();

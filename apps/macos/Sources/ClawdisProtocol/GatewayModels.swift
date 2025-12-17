@@ -168,6 +168,8 @@ public struct PresenceEntry: Codable {
     public let ip: String?
     public let version: String?
     public let platform: String?
+    public let devicefamily: String?
+    public let modelidentifier: String?
     public let mode: String?
     public let lastinputseconds: Int?
     public let reason: String?
@@ -181,6 +183,8 @@ public struct PresenceEntry: Codable {
         ip: String?,
         version: String?,
         platform: String?,
+        devicefamily: String?,
+        modelidentifier: String?,
         mode: String?,
         lastinputseconds: Int?,
         reason: String?,
@@ -193,6 +197,8 @@ public struct PresenceEntry: Codable {
         self.ip = ip
         self.version = version
         self.platform = platform
+        self.devicefamily = devicefamily
+        self.modelidentifier = modelidentifier
         self.mode = mode
         self.lastinputseconds = lastinputseconds
         self.reason = reason
@@ -206,6 +212,8 @@ public struct PresenceEntry: Codable {
         case ip
         case version
         case platform
+        case devicefamily = "deviceFamily"
+        case modelidentifier = "modelIdentifier"
         case mode
         case lastinputseconds = "lastInputSeconds"
         case reason

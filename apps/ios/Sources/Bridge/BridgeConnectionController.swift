@@ -3,6 +3,7 @@ import Foundation
 import Network
 import Observation
 import SwiftUI
+import UIKit
 
 @MainActor
 @Observable
@@ -131,12 +132,43 @@ final class BridgeConnectionController {
             displayName: displayName,
             token: token,
             platform: self.platformString(),
-            version: self.appVersion())
+            version: self.appVersion(),
+            deviceFamily: self.deviceFamily(),
+            modelIdentifier: self.modelIdentifier())
     }
 
     private func platformString() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
-        return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+        let name: String
+        switch UIDevice.current.userInterfaceIdiom {
+        case .pad:
+            name = "iPadOS"
+        case .phone:
+            name = "iOS"
+        default:
+            name = "iOS"
+        }
+        return "\(name) \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+    }
+
+    private func deviceFamily() -> String {
+        switch UIDevice.current.userInterfaceIdiom {
+        case .pad:
+            return "iPad"
+        case .phone:
+            return "iPhone"
+        default:
+            return "iOS"
+        }
+    }
+
+    private func modelIdentifier() -> String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
+            String(decoding: ptr.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        return machine.isEmpty ? "unknown" : machine
     }
 
     private func appVersion() -> String {

@@ -17,6 +17,8 @@ type BridgeHelloFrame = {
   token?: string;
   platform?: string;
   version?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
 };
 
 type BridgePairRequestFrame = {
@@ -25,6 +27,8 @@ type BridgePairRequestFrame = {
   displayName?: string;
   platform?: string;
   version?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
   remoteAddress?: string;
 };
 
@@ -108,6 +112,8 @@ export type NodeBridgeClientInfo = {
   displayName?: string;
   platform?: string;
   version?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
   remoteIp?: string;
 };
 
@@ -263,6 +269,8 @@ export async function startNodeBridgeServer(
         displayName: verified.node.displayName ?? hello.displayName,
         platform: verified.node.platform ?? hello.platform,
         version: verified.node.version ?? hello.version,
+        deviceFamily: verified.node.deviceFamily ?? hello.deviceFamily,
+        modelIdentifier: verified.node.modelIdentifier ?? hello.modelIdentifier,
         remoteIp: remoteAddress,
       };
       connections.set(nodeId, { socket, nodeInfo, invokeWaiters });
@@ -319,6 +327,8 @@ export async function startNodeBridgeServer(
           displayName: req.displayName,
           platform: req.platform,
           version: req.version,
+          deviceFamily: req.deviceFamily,
+          modelIdentifier: req.modelIdentifier,
           remoteIp: remoteAddress,
         },
         opts.pairingBaseDir,
@@ -347,6 +357,8 @@ export async function startNodeBridgeServer(
         displayName: req.displayName,
         platform: req.platform,
         version: req.version,
+        deviceFamily: req.deviceFamily,
+        modelIdentifier: req.modelIdentifier,
         remoteIp: remoteAddress,
       };
       connections.set(nodeId, { socket, nodeInfo, invokeWaiters });

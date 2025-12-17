@@ -23,7 +23,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 
 ## Phase 1 — Protocol specification
 - Frames (WS text JSON, all with explicit `type`):
-  - `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{name,version,platform,mode,instanceId}, caps, auth:{token?}, locale?, userAgent?}}`
+  - `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{name,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId}, caps, auth:{token?}, locale?, userAgent?}}`
   - `res {type:"res", id, ok:true, payload: hello-ok }` (or `ok:false` then close)
   - `hello-ok {type:"hello-ok", protocol:<chosen>, server:{version,commit,host,connId}, features:{methods,events}, snapshot:{presence[], health, stateVersion:{presence,health}, uptimeMs}, policy:{maxPayload, maxBufferedBytes, tickIntervalMs}}`
   - `req {type:"req", id, method, params?}`
@@ -31,7 +31,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
   - `event {type:"event", event, payload, seq?, stateVersion?}` (presence/tick/shutdown/agent)
   - `close` (standard WS close codes; policy uses 1008 for slow consumer/unauthorized, 1012/1001 for restart)
 - Payload types:
-  - `PresenceEntry {host, ip, version, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId?}`
+  - `PresenceEntry {host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId?}`
   - `HealthSnapshot` (match existing `clawdis health --json` fields)
   - `AgentEvent` (streamed tool/output; `{runId, seq, stream, data, ts}`)
   - `TickEvent {ts}`

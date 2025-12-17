@@ -192,7 +192,7 @@ actor GatewayChannelActor {
         let clientName = InstanceIdentity.displayName
 
         let reqId = UUID().uuidString
-        let client: [String: ProtoAnyCodable] = [
+        var client: [String: ProtoAnyCodable] = [
             "name": ProtoAnyCodable(clientName),
             "version": ProtoAnyCodable(
                 Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
@@ -200,6 +200,10 @@ actor GatewayChannelActor {
             "mode": ProtoAnyCodable("app"),
             "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
         ]
+        client["deviceFamily"] = ProtoAnyCodable("Mac")
+        if let model = InstanceIdentity.modelIdentifier {
+            client["modelIdentifier"] = ProtoAnyCodable(model)
+        }
         var params: [String: ProtoAnyCodable] = [
             "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),

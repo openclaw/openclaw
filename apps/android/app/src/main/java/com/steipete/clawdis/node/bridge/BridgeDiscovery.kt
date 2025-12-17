@@ -1,10 +1,12 @@
 package com.steipete.clawdis.node.bridge
 
 import android.content.Context
+import android.net.ConnectivityManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
 import java.net.InetAddress
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.xbill.DNS.ExtendedResolver
 import org.xbill.DNS.Lookup
 import org.xbill.DNS.PTRRecord
 import org.xbill.DNS.SRVRecord
@@ -25,6 +28,7 @@ class BridgeDiscovery(
   private val scope: CoroutineScope,
 ) {
   private val nsd = context.getSystemService(NsdManager::class.java)
+  private val connectivity = context.getSystemService(ConnectivityManager::class.java)
   private val serviceType = "_clawdis-bridge._tcp."
   private val wideAreaDomain = "clawdis.internal."
 
@@ -100,8 +104,10 @@ class BridgeDiscovery(
           val port = resolved.port
           if (port <= 0) return
 
-          val displayName = txt(resolved, "displayName") ?: resolved.serviceName
-          val id = stableId(resolved.serviceName, "local.")
+          val rawServiceName = resolved.serviceName
+          val serviceName = BonjourEscapes.decode(rawServiceName)
+          val displayName = BonjourEscapes.decode(txt(resolved, "displayName") ?: serviceName)
+          val id = stableId(serviceName, "local.")
           localById[id] = BridgeEndpoint(stableId = id, name = displayName, host = host, port = port)
           publish()
         }
@@ -133,13 +139,15 @@ class BridgeDiscovery(
   }
 
   private suspend fun refreshUnicast(domain: String) {
+    val resolver = createUnicastResolver()
     val ptrName = "${serviceType}${domain}"
-    val ptrRecords = lookup(ptrName, Type.PTR).mapNotNull { it as? PTRRecord }
+    val ptrRecords = lookup(ptrName, Type.PTR, resolver).mapNotNull { it as? PTRRecord }
 
     val next = LinkedHashMap<String, BridgeEndpoint>()
     for (ptr in ptrRecords) {
       val instanceFqdn = ptr.target.toString()
-      val srv = lookup(instanceFqdn, Type.SRV).firstOrNull { it is SRVRecord } as? SRVRecord ?: continue
+      val srv =
+        lookup(instanceFqdn, Type.SRV, resolver).firstOrNull { it is SRVRecord } as? SRVRecord ?: continue
       val port = srv.port
       if (port <= 0) continue
 
@@ -152,9 +160,9 @@ class BridgeDiscovery(
           null
         } ?: continue
 
-      val txt = lookup(instanceFqdn, Type.TXT).mapNotNull { it as? TXTRecord }
-      val instanceName = decodeInstanceName(instanceFqdn, domain)
-      val displayName = txtValue(txt, "displayName") ?: instanceName
+      val txt = lookup(instanceFqdn, Type.TXT, resolver).mapNotNull { it as? TXTRecord }
+      val instanceName = BonjourEscapes.decode(decodeInstanceName(instanceFqdn, domain))
+      val displayName = BonjourEscapes.decode(txtValue(txt, "displayName") ?: instanceName)
       val id = stableId(instanceName, domain)
       next[id] = BridgeEndpoint(stableId = id, name = displayName, host = host, port = port)
     }
@@ -179,12 +187,38 @@ class BridgeDiscovery(
     return raw.removeSuffix(".")
   }
 
-  private fun lookup(name: String, type: Int): List<org.xbill.DNS.Record> {
+  private fun lookup(name: String, type: Int, resolver: org.xbill.DNS.Resolver?): List<org.xbill.DNS.Record> {
     return try {
-      val out = Lookup(name, type).run() ?: return emptyList()
+      val lookup = Lookup(name, type)
+      if (resolver != null) {
+        lookup.setResolver(resolver)
+        lookup.setCache(null)
+      }
+      val out = lookup.run() ?: return emptyList()
       out.toList()
     } catch (_: Throwable) {
       emptyList()
+    }
+  }
+
+  private fun createUnicastResolver(): org.xbill.DNS.Resolver? {
+    val cm = connectivity ?: return null
+    val net = cm.activeNetwork ?: return null
+    val dnsServers = cm.getLinkProperties(net)?.dnsServers ?: return null
+    val addrs =
+      dnsServers
+        .mapNotNull { it.hostAddress }
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .distinct()
+    if (addrs.isEmpty()) return null
+
+    return try {
+      ExtendedResolver(addrs.toTypedArray()).apply {
+        setTimeout(Duration.ofMillis(1500))
+      }
+    } catch (_: Throwable) {
+      null
     }
   }
 

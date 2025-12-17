@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum InstanceIdentity {
@@ -29,5 +30,16 @@ enum InstanceIdentity {
             return name
         }
         return "clawdis-mac"
+    }()
+
+    static let modelIdentifier: String? = {
+        var size = 0
+        guard sysctlbyname("hw.model", nil, &size, nil, 0) == 0, size > 1 else { return nil }
+
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("hw.model", &buffer, &size, nil, 0) == 0 else { return nil }
+
+        let s = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+        return s.isEmpty ? nil : s
     }()
 }

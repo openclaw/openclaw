@@ -9,6 +9,8 @@ export type NodePairingPendingRequest = {
   displayName?: string;
   platform?: string;
   version?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
   remoteIp?: string;
   isRepair?: boolean;
   ts: number;
@@ -20,6 +22,8 @@ export type NodePairingPairedNode = {
   displayName?: string;
   platform?: string;
   version?: string;
+  deviceFamily?: string;
+  modelIdentifier?: string;
   remoteIp?: string;
   createdAtMs: number;
   approvedAtMs: number;
@@ -172,6 +176,8 @@ export async function requestNodePairing(
       displayName: req.displayName,
       platform: req.platform,
       version: req.version,
+      deviceFamily: req.deviceFamily,
+      modelIdentifier: req.modelIdentifier,
       remoteIp: req.remoteIp,
       isRepair,
       ts: Date.now(),
@@ -199,6 +205,8 @@ export async function approveNodePairing(
       displayName: pending.displayName,
       platform: pending.platform,
       version: pending.version,
+      deviceFamily: pending.deviceFamily,
+      modelIdentifier: pending.modelIdentifier,
       remoteIp: pending.remoteIp,
       createdAtMs: existing?.createdAtMs ?? now,
       approvedAtMs: now,

@@ -20,6 +20,8 @@ Presence entries are structured objects with (some) fields:
 - `host`: a human-readable name (often the machine name)
 - `ip`: best-effort IP address (may be missing or stale)
 - `version`: client version string
+- `deviceFamily` (optional): hardware family like `iPad`, `iPhone`, `Mac`
+- `modelIdentifier` (optional): hardware model identifier like `iPad16,6` or `Mac16,6`
 - `mode`: e.g. `gateway`, `app`, `webchat`, `cli`
 - `lastInputSeconds` (optional): “seconds since last user input” for that client machine
 - `reason`: a short marker like `self`, `connect`, `periodic`, `instances-refresh`

@@ -1300,12 +1300,16 @@ export async function startGatewayServer(
           const ip = node.remoteIp?.trim();
           const version = node.version?.trim() || "unknown";
           const platform = node.platform?.trim() || undefined;
+          const deviceFamily = node.deviceFamily?.trim() || undefined;
+          const modelIdentifier = node.modelIdentifier?.trim() || undefined;
           const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason iris-connected`;
           upsertPresence(node.nodeId, {
             host,
             ip,
             version,
             platform,
+            deviceFamily,
+            modelIdentifier,
             mode: "remote",
             reason: "iris-connected",
             lastInputSeconds: 0,
@@ -1342,12 +1346,16 @@ export async function startGatewayServer(
           const ip = node.remoteIp?.trim();
           const version = node.version?.trim() || "unknown";
           const platform = node.platform?.trim() || undefined;
+          const deviceFamily = node.deviceFamily?.trim() || undefined;
+          const modelIdentifier = node.modelIdentifier?.trim() || undefined;
           const text = `Node: ${host}${ip ? ` (${ip})` : ""} · app ${version} · last input 0s ago · mode remote · reason iris-disconnected`;
           upsertPresence(node.nodeId, {
             host,
             ip,
             version,
             platform,
+            deviceFamily,
+            modelIdentifier,
             mode: "remote",
             reason: "iris-disconnected",
             lastInputSeconds: 0,
@@ -1743,6 +1751,8 @@ export async function startGatewayServer(
               ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
               version: connectParams.client.version,
               platform: connectParams.client.platform,
+              deviceFamily: connectParams.client.deviceFamily,
+              modelIdentifier: connectParams.client.modelIdentifier,
               mode: connectParams.client.mode,
               instanceId: connectParams.client.instanceId,
               reason: "connect",
@@ -2424,6 +2434,14 @@ export async function startGatewayServer(
               typeof params.version === "string" ? params.version : undefined;
             const platform =
               typeof params.platform === "string" ? params.platform : undefined;
+            const deviceFamily =
+              typeof params.deviceFamily === "string"
+                ? params.deviceFamily
+                : undefined;
+            const modelIdentifier =
+              typeof params.modelIdentifier === "string"
+                ? params.modelIdentifier
+                : undefined;
             const lastInputSeconds =
               typeof params.lastInputSeconds === "number" &&
               Number.isFinite(params.lastInputSeconds)
@@ -2444,6 +2462,8 @@ export async function startGatewayServer(
               mode,
               version,
               platform,
+              deviceFamily,
+              modelIdentifier,
               lastInputSeconds,
               reason,
               tags,

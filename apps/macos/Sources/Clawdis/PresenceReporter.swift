@@ -35,6 +35,7 @@ final class PresenceReporter {
         let host = InstanceIdentity.displayName
         let ip = Self.primaryIPv4Address() ?? "ip-unknown"
         let version = Self.appVersionString()
+        let platform = Self.platformString()
         let lastInput = Self.lastInputSeconds()
         let text = Self.composePresenceSummary(mode: mode, reason: reason)
         var params: [String: AnyHashable] = [
@@ -43,8 +44,11 @@ final class PresenceReporter {
             "ip": AnyHashable(ip),
             "mode": AnyHashable(mode),
             "version": AnyHashable(version),
+            "platform": AnyHashable(platform),
+            "deviceFamily": AnyHashable("Mac"),
             "reason": AnyHashable(reason),
         ]
+        if let model = InstanceIdentity.modelIdentifier { params["modelIdentifier"] = AnyHashable(model) }
         if let lastInput { params["lastInputSeconds"] = AnyHashable(lastInput) }
         do {
             try await ControlChannel.shared.sendSystemEvent(text, params: params)
@@ -76,6 +80,11 @@ final class PresenceReporter {
             }
         }
         return version
+    }
+
+    private static func platformString() -> String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "macos \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
     private static func lastInputSeconds() -> Int? {

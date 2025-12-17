@@ -10,6 +10,8 @@ struct InstanceInfo: Identifiable, Codable {
     let ip: String?
     let version: String?
     let platform: String?
+    let deviceFamily: String?
+    let modelIdentifier: String?
     let lastInputSeconds: Int?
     let mode: String?
     let reason: String?
@@ -284,6 +286,8 @@ final class InstancesStore {
                 ip: entry.ip,
                 version: entry.version,
                 platform: entry.platform,
+                deviceFamily: entry.devicefamily,
+                modelIdentifier: entry.modelidentifier,
                 lastInputSeconds: entry.lastinputseconds,
                 mode: entry.mode,
                 reason: entry.reason,
@@ -308,6 +312,8 @@ extension InstancesStore {
             ip: "10.0.0.12",
             version: "1.2.3",
             platform: "macos 26.2.0",
+            deviceFamily: "Mac",
+            modelIdentifier: "Mac16,6",
             lastInputSeconds: 12,
             mode: "local",
             reason: "preview",
@@ -319,6 +325,8 @@ extension InstancesStore {
             ip: "100.64.0.2",
             version: "1.2.3",
             platform: "linux 6.6.0",
+            deviceFamily: "Linux",
+            modelIdentifier: "x86_64",
             lastInputSeconds: 45,
             mode: "remote",
             reason: "preview",
