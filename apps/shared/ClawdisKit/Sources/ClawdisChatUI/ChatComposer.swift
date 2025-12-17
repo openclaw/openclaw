@@ -38,7 +38,7 @@ struct ClawdisChatComposer: View {
                     .lineLimit(2)
             }
         }
-        .padding(12)
+        .padding(10)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(ClawdisChatTheme.card)
@@ -115,9 +115,8 @@ struct ClawdisChatComposer: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .padding(.horizontal, 10)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
                     .background(Color.accentColor.opacity(0.08))
                     .clipShape(Capsule())
                 }

@@ -17,12 +17,12 @@ public struct ClawdisChatView: View {
             ClawdisChatTheme.surface
                 .ignoresSafeArea()
 
-            VStack(spacing: 10) {
+            VStack(spacing: 8) {
                 self.messageList
                 ClawdisChatComposer(viewModel: self.viewModel)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 8)
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -39,7 +39,7 @@ public struct ClawdisChatView: View {
     private var messageList: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(spacing: 14) {
+                LazyVStack(spacing: 12) {
                     ForEach(self.viewModel.messages) { msg in
                         ChatMessageBubble(message: msg)
                             .frame(
@@ -66,9 +66,9 @@ public struct ClawdisChatView: View {
                         .frame(height: 1)
                         .id(self.scrollerBottomID)
                 }
-                .padding(.top, 12)
-                .padding(.bottom, 10)
-                .padding(.horizontal, 12)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
+                .padding(.horizontal, 10)
             }
             .background(
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
