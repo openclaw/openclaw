@@ -5,7 +5,6 @@ import android.net.ConnectivityManager
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
 import android.os.Build
-import java.net.InetAddress
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +17,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.xbill.DNS.ExtendedResolver
 import org.xbill.DNS.Lookup
+import org.xbill.DNS.AAAARecord
+import org.xbill.DNS.ARecord
 import org.xbill.DNS.PTRRecord
 import org.xbill.DNS.SRVRecord
 import org.xbill.DNS.TXTRecord
@@ -52,7 +53,8 @@ class BridgeDiscovery(
       }
 
       override fun onServiceLost(serviceInfo: NsdServiceInfo) {
-        val id = stableId(serviceInfo.serviceName, "local.")
+        val serviceName = BonjourEscapes.decode(serviceInfo.serviceName)
+        val id = stableId(serviceName, "local.")
         localById.remove(id)
         publish()
       }
@@ -151,14 +153,8 @@ class BridgeDiscovery(
       val port = srv.port
       if (port <= 0) continue
 
-      val targetName = stripTrailingDot(srv.target.toString())
-      val host =
-        try {
-          val addrs = InetAddress.getAllByName(targetName).mapNotNull { it.hostAddress }
-          addrs.firstOrNull { !it.contains(":") } ?: addrs.firstOrNull()
-        } catch (_: Throwable) {
-          null
-        } ?: continue
+      val targetFqdn = srv.target.toString()
+      val host = resolveHost(targetFqdn, resolver) ?: continue
 
       val txt = lookup(instanceFqdn, Type.TXT, resolver).mapNotNull { it as? TXTRecord }
       val instanceName = BonjourEscapes.decode(decodeInstanceName(instanceFqdn, domain))
@@ -239,5 +235,18 @@ class BridgeDiscovery(
       }
     }
     return null
+  }
+
+  private fun resolveHost(hostname: String, resolver: org.xbill.DNS.Resolver?): String? {
+    val a =
+      lookup(hostname, Type.A, resolver)
+        .mapNotNull { it as? ARecord }
+        .mapNotNull { it.address?.hostAddress }
+    val aaaa =
+      lookup(hostname, Type.AAAA, resolver)
+        .mapNotNull { it as? AAAARecord }
+        .mapNotNull { it.address?.hostAddress }
+
+    return a.firstOrNull() ?: aaaa.firstOrNull()
   }
 }
