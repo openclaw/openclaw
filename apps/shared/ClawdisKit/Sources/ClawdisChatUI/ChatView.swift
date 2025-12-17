@@ -66,7 +66,7 @@ public struct ClawdisChatView: View {
                         .frame(height: 1)
                         .id(self.scrollerBottomID)
                 }
-                .padding(.top, 40)
+                .padding(.top, 12)
                 .padding(.bottom, 10)
                 .padding(.horizontal, 12)
             }
@@ -74,42 +74,6 @@ public struct ClawdisChatView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .fill(ClawdisChatTheme.card)
                     .shadow(color: .black.opacity(0.05), radius: 12, y: 6))
-            .overlay(alignment: .topLeading) {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(self.viewModel.healthOK ? .green : .orange)
-                        .frame(width: 7, height: 7)
-                    Text(self.viewModel.sessionKey)
-                        .font(.caption.weight(.semibold))
-                    Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 0)
-
-                    if self.showsSessionSwitcher {
-                        Button {
-                            self.showSessions = true
-                        } label: {
-                            Image(systemName: "tray.full")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Sessions")
-                    }
-
-                    Button {
-                        self.viewModel.refresh()
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Refresh")
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(ClawdisChatTheme.subtleCard)
-                .clipShape(Capsule())
-                .padding(10)
-            }
             .onChange(of: self.viewModel.messages.count) { _, _ in
                 withAnimation(.snappy(duration: 0.22)) {
                     proxy.scrollTo(self.scrollerBottomID, anchor: .bottom)

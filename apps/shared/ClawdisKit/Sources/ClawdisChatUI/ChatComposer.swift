@@ -21,6 +21,7 @@ struct ClawdisChatComposer: View {
             HStack(spacing: 10) {
                 self.thinkingPicker
                 Spacer()
+                self.refreshButton
                 self.attachmentPicker
             }
 
@@ -134,10 +135,30 @@ struct ClawdisChatComposer: View {
                 self.editorOverlay
             }
             .overlay(alignment: .bottomTrailing) {
-                self.sendButton
-                    .padding(8)
+                VStack(alignment: .trailing, spacing: 6) {
+                    self.connectionPill
+                    self.sendButton
+                }
+                .padding(8)
             }
             .frame(minHeight: 44, idealHeight: 44, maxHeight: 96)
+    }
+
+    private var connectionPill: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(self.viewModel.healthOK ? .green : .orange)
+                .frame(width: 7, height: 7)
+            Text(self.viewModel.sessionKey)
+                .font(.caption2.weight(.semibold))
+            Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(ClawdisChatTheme.subtleCard)
+        .clipShape(Capsule())
     }
 
     private var editorOverlay: some View {
@@ -201,6 +222,17 @@ struct ClawdisChatComposer: View {
                 .disabled(!self.viewModel.canSend)
             }
         }
+    }
+
+    private var refreshButton: some View {
+        Button {
+            self.viewModel.refresh()
+        } label: {
+            Image(systemName: "arrow.clockwise")
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+        .help("Refresh")
     }
 
     #if os(macOS)
