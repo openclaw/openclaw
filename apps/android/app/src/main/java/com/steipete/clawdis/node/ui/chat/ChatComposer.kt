@@ -41,7 +41,6 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun ChatComposer(
-  sessionKey: String,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
@@ -112,7 +111,6 @@ fun ChatComposer(
       )
 
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ConnectionPill(sessionKey = sessionKey, healthOk = healthOk)
         Spacer(modifier = Modifier.weight(1f))
 
         if (pendingRunCount > 0) {
@@ -217,32 +215,6 @@ private fun AttachmentChip(fileName: String, onRemove: () -> Unit) {
       ) {
         Text("×")
       }
-    }
-  }
-}
-
-@Composable
-private fun ConnectionPill(sessionKey: String, healthOk: Boolean) {
-  Surface(
-    shape = RoundedCornerShape(999.dp),
-    color = MaterialTheme.colorScheme.surfaceContainerLow,
-  ) {
-    Row(
-      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Surface(
-        modifier = Modifier.size(7.dp),
-        shape = androidx.compose.foundation.shape.CircleShape,
-        color = if (healthOk) Color(0xFF2ECC71) else Color(0xFFF39C12),
-      ) {}
-      Text(sessionKey, style = MaterialTheme.typography.labelSmall)
-      Text(
-        if (healthOk) "Connected" else "Connecting…",
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
     }
   }
 }

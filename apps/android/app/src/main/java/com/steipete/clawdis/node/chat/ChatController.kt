@@ -62,7 +62,8 @@ class ChatController(
 
   fun onDisconnected(message: String) {
     _healthOk.value = false
-    _errorText.value = message
+    // Not an error; keep connection status in the UI pill.
+    _errorText.value = null
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()

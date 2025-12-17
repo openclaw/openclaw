@@ -34,6 +34,7 @@ import com.steipete.clawdis.node.chat.ChatPendingToolCall
 @Composable
 fun ChatMessageListCard(
   sessionKey: String,
+  isBridgeConnected: Boolean,
   healthOk: Boolean,
   messages: List<ChatMessage>,
   pendingRunCount: Int,
@@ -97,6 +98,7 @@ fun ChatMessageListCard(
 
       ChatStatusPill(
         sessionKey = sessionKey,
+        isBridgeConnected = isBridgeConnected,
         healthOk = healthOk,
         onShowSessions = onShowSessions,
         onRefresh = onRefresh,
@@ -113,11 +115,25 @@ fun ChatMessageListCard(
 @Composable
 private fun ChatStatusPill(
   sessionKey: String,
+  isBridgeConnected: Boolean,
   healthOk: Boolean,
   onShowSessions: () -> Unit,
   onRefresh: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val statusText =
+    when {
+      !isBridgeConnected -> "Offline"
+      healthOk -> "Connected"
+      else -> "Connecting…"
+    }
+  val statusColor =
+    when {
+      !isBridgeConnected -> Color(0xFF9E9E9E)
+      healthOk -> Color(0xFF2ECC71)
+      else -> Color(0xFFF39C12)
+    }
+
   Surface(
     modifier = modifier,
     shape = MaterialTheme.shapes.large,
@@ -133,7 +149,7 @@ private fun ChatStatusPill(
       Surface(
         modifier = Modifier.size(7.dp),
         shape = androidx.compose.foundation.shape.CircleShape,
-        color = if (healthOk) Color(0xFF2ECC71) else Color(0xFFF39C12),
+        color = statusColor,
       ) {}
 
       Text(
@@ -141,7 +157,7 @@ private fun ChatStatusPill(
         style = MaterialTheme.typography.labelMedium,
       )
       Text(
-        text = if (healthOk) "Connected" else "Connecting…",
+        text = statusText,
         style = MaterialTheme.typography.labelMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.alpha(0.9f),

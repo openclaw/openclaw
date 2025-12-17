@@ -33,6 +33,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
+  val isBridgeConnected by viewModel.isConnected.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
@@ -79,6 +80,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   ) {
     ChatMessageListCard(
       sessionKey = sessionKey,
+      isBridgeConnected = isBridgeConnected,
       healthOk = healthOk,
       messages = messages,
       pendingRunCount = pendingRunCount,
@@ -90,7 +92,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     )
 
     ChatComposer(
-      sessionKey = sessionKey,
       healthOk = healthOk,
       thinkingLevel = thinkingLevel,
       pendingRunCount = pendingRunCount,
