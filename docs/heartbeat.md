@@ -5,16 +5,16 @@ read_when:
 ---
 # Heartbeat polling plan (2025-11-26)
 
-Goal: add a simple heartbeat poll for command-based auto-replies (Pi) that only notifies users when something matters, using the `HEARTBEAT_OK` sentinel. The heartbeat body we send is `HEARTBEAT /think:high` so the model can easily spot it.
+Goal: add a simple heartbeat poll for the embedded agent that only notifies users when something matters, using the `HEARTBEAT_OK` sentinel. The heartbeat body we send is `HEARTBEAT` so the model can easily spot it.
 
 ## Prompt contract
-- Extend the Pi system/identity text to explain: “If this is a heartbeat poll and nothing needs attention, reply exactly `HEARTBEAT_OK` and nothing else. For any alert, do **not** include `HEARTBEAT_OK`; just return the alert text.” Heartbeat prompt body is `HEARTBEAT /think:high`.
+- Extend the agent system prompt to explain: “If this is a heartbeat poll and nothing needs attention, reply exactly `HEARTBEAT_OK` and nothing else. For any alert, do **not** include `HEARTBEAT_OK`; just return the alert text.” Heartbeat prompt body is `HEARTBEAT`.
 - Keep existing WhatsApp length guidance; forbid burying the sentinel inside alerts.
 
 ## Config & defaults
-- New config key: `inbound.reply.heartbeatMinutes` (number of minutes; `0` or undefined disables).
-- Default: 30 minutes when a command-mode reply is configured.
-- New optional idle override for heartbeats: `inbound.reply.session.heartbeatIdleMinutes` (defaults to `idleMinutes`). Heartbeat skips do **not** update the session `updatedAt` so idle expiry still works.
+- New config key: `inbound.agent.heartbeatMinutes` (number of minutes; `0` disables).
+- Default: 30 minutes.
+- New optional idle override for heartbeats: `inbound.session.heartbeatIdleMinutes` (defaults to `idleMinutes`). Heartbeat skips do **not** update the session `updatedAt` so idle expiry still works.
 
 ## Poller behavior
 - When gateway runs with command-mode auto-reply, start a timer with the resolved heartbeat interval.

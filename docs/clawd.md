@@ -90,20 +90,17 @@ Now message the assistant number from your allowlisted phone.
 
 ## Give the agent a workspace (AGENTS.md)
 
-Pi (the bundled coding agent) will read operating instructions and “memory” from its current working directory.
+Clawd reads operating instructions and “memory” from its workspace directory.
 
-By default, Clawdis uses `~/.clawdis/workspace` as the agent workspace, and will create it (plus a starter `AGENTS.md`) automatically on first agent run.
+By default, Clawdis uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`) automatically on setup/first agent run.
 
 Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up.
 
-From the CLAWDIS repo:
-
 ```bash
-mkdir -p ~/.clawdis/workspace
-cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
+clawdis setup
 ```
 
-Optional: choose a different workspace with `inbound.workspace` (supports `~`). `inbound.reply.cwd` still works and overrides it.
+Optional: choose a different workspace with `inbound.workspace` (supports `~`).
 
 ```json5
 {
@@ -115,8 +112,8 @@ Optional: choose a different workspace with `inbound.workspace` (supports `~`). 
 
 ## The config that turns it into “an assistant”
 
-CLAWDIS defaults to a good Pi setup even without `inbound.reply`, but you’ll usually want to tune:
-- session intro (personality + instructions)
+CLAWDIS defaults to a good assistant setup, but you’ll usually want to tune:
+- persona/instructions in `SOUL.md`
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
 
@@ -127,25 +124,24 @@ Example:
   logging: { level: "info" },
   inbound: {
     allowFrom: ["+15555550123"],
+    workspace: "~/clawd",
     groupChat: {
       requireMention: true,
       mentionPatterns: ["@clawd", "clawd"]
     },
-    reply: {
-      mode: "command",
-      // Pi is bundled; CLAWDIS forces --mode rpc for Pi runs.
-      command: ["pi", "--mode", "rpc", "{{BodyStripped}}"],
+    agent: {
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      thinkingDefault: "high",
       timeoutSeconds: 1800,
-      bodyPrefix: "/think:high ",
-      session: {
-        scope: "per-sender",
-        resetTriggers: ["/new"],
-        idleMinutes: 10080,
-        sendSystemOnce: true,
-        sessionIntro: "You are Clawd, a helpful space lobster assistant. Be concise for chat, save long output to files, and be careful with secrets."
-      },
       // Start with 0; enable later.
       heartbeatMinutes: 0
+    },
+    session: {
+      scope: "per-sender",
+      resetTriggers: ["/new"],
+      idleMinutes: 10080,
+      mainKey: "main"
     }
   }
 }
@@ -159,17 +155,15 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-When `heartbeatMinutes > 0`, CLAWDIS periodically runs a heartbeat prompt (default: `HEARTBEAT /think:high`).
+When `inbound.agent.heartbeatMinutes > 0`, CLAWDIS periodically runs a heartbeat prompt (default: `HEARTBEAT`).
 
 - If the agent replies with `HEARTBEAT_OK` (exact token), CLAWDIS suppresses outbound delivery for that heartbeat.
-- If you want a special command for heartbeats, set `inbound.reply.heartbeatCommand`.
 
 ```json5
 {
   inbound: {
-    reply: {
-      heartbeatMinutes: 30,
-      heartbeatCommand: ["pi", "--mode", "rpc", "HEARTBEAT /think:high"]
+    agent: {
+      heartbeatMinutes: 30
     }
   }
 }

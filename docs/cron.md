@@ -14,7 +14,7 @@ Last updated: 2025-12-13
 ## Context
 
 Clawdis already has:
-- A **periodic reply heartbeat** that runs the agent with `HEARTBEAT /think:high` and suppresses `HEARTBEAT_OK` (`src/web/auto-reply.ts`).
+- A **periodic reply heartbeat** that runs the agent with `HEARTBEAT` and suppresses `HEARTBEAT_OK` (`src/web/auto-reply.ts`).
 - A lightweight, in-memory **system event queue** (`enqueueSystemEvent`) that is injected into the next **main session** turn (`drainSystemEvents` in `src/auto-reply/reply.ts`).
 - A WebSocket **Gateway** daemon that is intended to be always-on (`docs/gateway.md`).
 

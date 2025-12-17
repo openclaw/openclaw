@@ -17,7 +17,7 @@ read_when:
 ## Resolution order
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`inbound.reply.thinkingDefault` in config).
+3. Global default (`inbound.agent.thinkingDefault` in config).
 4. Fallback: off.
 
 ## Setting a session default
@@ -26,7 +26,7 @@ read_when:
 - Confirmation reply is sent (`Thinking level set to high.` / `Thinking disabled.`). If the level is invalid (e.g. `/thinking big`), the command is rejected with a hint and the session state is left unchanged.
 
 ## Application by agent
-- **Pi**: injects `--thinking <level>` (skipped for `off`). Other agent paths have been removed.
+- **Embedded Pi**: the resolved level is passed to the in-process Pi agent runtime.
 
 ## Verbose directives (/verbose or /v)
 - Levels: `on|full` or `off` (default).
@@ -35,7 +35,7 @@ read_when:
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `[🛠️ <tool-name> <arg>]` when available (path/command); the tool output itself is not forwarded.
 
 ## Heartbeats
-- Heartbeat probe body is `HEARTBEAT /think:high`, so it always asks for max thinking on the probe. Inline directive wins; session/global defaults are used only when no directive is present.
+- Heartbeat probe body is `HEARTBEAT`. Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 
 ## Web chat UI
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.

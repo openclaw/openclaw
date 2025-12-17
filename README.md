@@ -155,7 +155,7 @@ Optional: enable/configure clawd’s dedicated browser control (defaults are alr
 - [Configuration Guide](./docs/configuration.md)
 - [Gateway runbook](./docs/gateway.md)
 - [Discovery + transports](./docs/discovery.md)
-- [Agent Integration](./docs/agents.md)
+- [Agent Runtime](./docs/agent.md)
 - [Group Chats](./docs/group-messages.md)
 - [Security](./docs/security.md)
 - [Troubleshooting](./docs/troubleshooting.md)
@@ -221,7 +221,7 @@ In chat, send `/status` to see if the agent is reachable, how much context the s
 
 ### Sessions, surfaces, and WebChat
 
-- Direct chats now share a canonical session key `main` by default (configurable via `inbound.reply.session.mainKey`). Groups stay isolated as `group:<jid>`.
+- Direct chats now share a canonical session key `main` by default (configurable via `inbound.session.mainKey`). Groups stay isolated as `group:<jid>`.
 - WebChat attaches to `main` and hydrates history from `~/.clawdis/sessions/<SessionId>.jsonl`, so desktop view mirrors WhatsApp/Telegram turns.
 - Inbound contexts carry a `Surface` hint (e.g., `whatsapp`, `webchat`, `telegram`) for logging; replies still go back to the originating surface deterministically.
 - Every inbound message is wrapped for the agent as `[Surface FROM HOST/IP TIMESTAMP] body`:

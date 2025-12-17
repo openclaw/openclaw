@@ -8,18 +8,20 @@ read_when:
 
 CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comments + trailing commas allowed).
 
-If the file is missing, CLAWDIS uses safe-ish defaults (bundled Pi in RPC mode + per-sender sessions). You usually only need a config to:
+If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`inbound.allowFrom`)
 - tune group mention behavior (`inbound.groupChat`)
-- customize the agent command (`inbound.reply.command`)
- - set the agent’s identity (`identity`)
+- set the agent’s workspace (`inbound.workspace`)
+- tune the embedded agent (`inbound.agent`) and session behavior (`inbound.session`)
+- set the agent’s identity (`identity`)
 
 ## Minimal config (recommended starting point)
 
 ```json5
 {
   inbound: {
-    allowFrom: ["+15555550123"]
+    allowFrom: ["+15555550123"],
+    workspace: "~/clawd"
   }
 }
 ```
@@ -33,7 +35,6 @@ Optional agent identity used for defaults and UX. This is written by the macOS o
 If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
 - `inbound.responsePrefix` from `identity.emoji`
 - `inbound.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
-- `inbound.reply.session.sessionIntro` when `inbound.reply` is present (and for default Pi runs)
 
 ```json5
 {
@@ -78,58 +79,57 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-### `inbound.reply`
+### `inbound.workspace`
 
-Controls how CLAWDIS produces replies. Two modes:
-- `mode: "text"` — static reply from config (useful for testing)
-- `mode: "command"` — run a local command and use its stdout as the reply (typical)
+Sets the **single global workspace directory** used by the agent for file operations.
 
-If you **omit** `inbound.reply`, CLAWDIS defaults to the bundled Pi binary in **RPC** mode:
-- command (base): `pi --mode rpc {{BodyStripped}}`
-- per-sender sessions + `/new` resets
+Default: `~/clawd`.
 
-Safety default: when invoking Pi, CLAWDIS always passes `--provider` and `--model` (unless you already specified them).
+```json5
+{
+  inbound: { workspace: "~/clawd" }
+}
+```
 
-Example command-mode config:
+### `inbound.agent`
+
+Controls the embedded agent runtime (provider/model/thinking/verbose/timeouts).
 
 ```json5
 {
   inbound: {
-    // Preferred: the agent workspace directory (used as default cwd for agent runs; supports ~).
-    workspace: "~/.clawdis/workspace",
-    reply: {
-      mode: "command",
-      // Example: run the bundled agent (Pi) in RPC mode
-      command: ["pi", "--mode", "rpc", "{{BodyStripped}}"],
-      // Optional override: working directory for this reply command (supports ~).
-      // If omitted, `inbound.workspace` is used.
-      cwd: "~/.clawdis/workspace",
-      timeoutSeconds: 1800,
+    workspace: "~/clawd",
+    agent: {
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      thinkingDefault: "low",
+      verboseDefault: "off",
+      timeoutSeconds: 600,
+      mediaMaxMb: 5,
       heartbeatMinutes: 30,
-      // Optional: override the command used for heartbeat runs
-      heartbeatCommand: ["pi", "--mode", "rpc", "HEARTBEAT /think:high"],
-      session: {
-        scope: "per-sender",
-        idleMinutes: 10080,
-        resetTriggers: ["/new"],
-        sessionIntro: "You are Clawd. Be a good lobster."
-      },
-      agent: {
-        kind: "pi",
-        format: "json",
-        // Only used for status/usage labeling (Pi may report its own model)
-        provider: "anthropic",
-        model: "claude-opus-4-5",
-        contextTokens: 200000
-      }
+      contextTokens: 200000
     }
   }
 }
 ```
 
-Notes:
-- `inbound.workspace` sets the default working directory for agent runs (supports `~` and is resolved to an absolute path).
-- `inbound.reply.cwd` overrides the working directory for that specific reply command.
+### `inbound.session`
+
+Controls session scoping, idle expiry, reset triggers, and where the session store is written.
+
+```json5
+{
+  inbound: {
+    session: {
+      scope: "per-sender",
+      idleMinutes: 60,
+      resetTriggers: ["/new"],
+      store: "~/.clawdis/sessions/sessions.json",
+      mainKey: "main"
+    }
+  }
+}
+```
 
 ### `browser` (clawd-managed Chrome)
 
@@ -156,7 +156,7 @@ Defaults:
 
 ## Template variables
 
-Template placeholders are expanded in `inbound.reply.command`, `sessionIntro`, `bodyPrefix`, and other templated strings.
+Template placeholders are expanded in `inbound.transcribeAudio.command` (and any future templated command fields).
 
 | Variable | Description |
 |----------|-------------|
@@ -193,5 +193,5 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wa
 
 ---
 
-*Next: [Agent Integration](./agents.md)* 🦞
+*Next: [Agent Runtime](./agent.md)* 🦞
 <!-- {% endraw %} -->

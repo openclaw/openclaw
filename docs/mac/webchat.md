@@ -5,7 +5,7 @@ read_when:
 ---
 # Web Chat (macOS app)
 
-The macOS menu bar app embeds the WebChat UI in a WKWebView and reuses the **primary Clawd session** (`main` by default, configurable via `inbound.reply.session.mainKey`).
+The macOS menu bar app embeds the WebChat UI in a WKWebView and reuses the **primary Clawd session** (`main` by default, configurable via `inbound.session.mainKey`).
 
 - **Local mode**: loads the gateway’s loopback WebChat HTTP server (default port 18788, see `webchat.port`).
 - **Remote mode**: serves the WebChat assets locally from the mac app bundle (via `WebChatServer`) and only forwards the gateway WebSocket control port over SSH.
