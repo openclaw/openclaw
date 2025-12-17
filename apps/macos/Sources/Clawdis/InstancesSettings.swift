@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct InstancesSettings: View {
@@ -76,7 +77,13 @@ struct InstancesSettings: View {
                     deviceFamily: inst.deviceFamily,
                     modelIdentifier: inst.modelIdentifier)
                 {
-                    self.label(icon: device.symbol, text: device.title)
+                    // Avoid showing generic "Mac"/"iPhone"/etc when we already show the OS + role.
+                    let family = (inst.deviceFamily ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !family.isEmpty, device.title != family {
+                        self.label(icon: device.symbol, text: device.title)
+                    } else if family.isEmpty {
+                        self.label(icon: device.symbol, text: device.title)
+                    }
                 }
 
                 // Last local input is helpful for interactive nodes, but noisy/meaningless for the gateway.
@@ -90,11 +97,15 @@ struct InstancesSettings: View {
                         .help(self.presenceUpdateSourceHelp(inst.reason ?? ""))
                 }
             }
-            Text(inst.text)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
         .padding(.vertical, 6)
+        .help(inst.text)
+        .contextMenu {
+            Button("Copy Debug Summary") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(inst.text, forType: .string)
+            }
+        }
     }
 
     private func label(icon: String?, text: String) -> some View {
