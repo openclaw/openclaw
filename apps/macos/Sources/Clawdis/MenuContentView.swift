@@ -68,7 +68,8 @@ struct MenuContent: View {
                     if self.state.canvasPanelVisible {
                         CanvasManager.shared.hideAll()
                     } else {
-                        _ = try? CanvasManager.shared.show(sessionKey: "main", path: "/")
+                        // Don't force a navigation on re-open: preserve the current web view state.
+                        _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
                     }
                 }
             }
