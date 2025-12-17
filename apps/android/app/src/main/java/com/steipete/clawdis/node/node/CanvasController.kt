@@ -137,6 +137,9 @@ private val canvasHtml =
       <title>Canvas</title>
       <style>
         :root { color-scheme: dark; }
+        @media (prefers-reduced-motion: reduce) {
+          body::before, body::after { animation: none !important; }
+        }
         html,body { height:100%; margin:0; }
         body {
           background: radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.18), rgba(0,0,0,0) 55%),
@@ -157,6 +160,31 @@ private val canvasHtml =
           transform: rotate(-7deg);
           opacity: 0.55;
           pointer-events: none;
+          animation: clawdis-grid-drift 22s linear infinite;
+        }
+        body::after {
+          content:"";
+          position: fixed;
+          inset: -35%;
+          background:
+            radial-gradient(900px 700px at 30% 30%, rgba(42,113,255,0.16), rgba(0,0,0,0) 60%),
+            radial-gradient(800px 650px at 70% 35%, rgba(255,0,138,0.12), rgba(0,0,0,0) 62%),
+            radial-gradient(900px 800px at 55% 75%, rgba(0,209,255,0.10), rgba(0,0,0,0) 62%);
+          filter: blur(28px);
+          opacity: 0.55;
+          mix-blend-mode: screen;
+          pointer-events: none;
+          animation: clawdis-glow-drift 18s ease-in-out infinite alternate;
+        }
+        @keyframes clawdis-grid-drift {
+          0%   { transform: translate3d(-18px, 12px, 0) rotate(-7deg); opacity: 0.50; }
+          50%  { transform: translate3d( 14px,-10px, 0) rotate(-6.2deg); opacity: 0.62; }
+          100% { transform: translate3d(-10px,  8px, 0) rotate(-7.4deg); opacity: 0.52; }
+        }
+        @keyframes clawdis-glow-drift {
+          0%   { transform: translate3d(-26px, 18px, 0) scale(1.02); opacity: 0.42; }
+          50%  { transform: translate3d( 20px,-14px, 0) scale(1.05); opacity: 0.55; }
+          100% { transform: translate3d(-12px, 10px, 0) scale(1.03); opacity: 0.46; }
         }
         canvas {
           display:block;
@@ -181,14 +209,14 @@ private val canvasHtml =
           backdrop-filter: blur(14px);
         }
         #clawdis-status .title {
-          font: 600 20px system-ui, sans-serif;
+          font: 600 20px -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
           letter-spacing: 0.2px;
           color: rgba(255,255,255,0.92);
           text-shadow: 0 0 22px rgba(42, 113, 255, 0.35);
         }
         #clawdis-status .subtitle {
           margin-top: 6px;
-          font: 500 12px system-ui, sans-serif;
+          font: 500 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
           color: rgba(255,255,255,0.58);
         }
       </style>
