@@ -51,6 +51,7 @@ let package = Package(
             resources: [
                 .copy("Resources/Clawdis.icns"),
                 .copy("Resources/WebChat"),
+                .copy("Resources/CanvasA2UI"),
             ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),

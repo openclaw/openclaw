@@ -60,13 +60,15 @@ public struct CanvasPlacement: Codable, Sendable {
 public enum CanvasShowStatus: String, Codable, Sendable {
     /// Panel was shown, but no navigation occurred (no target passed and session already existed).
     case shown
-    /// Target was an http(s) URL.
+    /// Target was a direct URL (http(s) or file).
     case web
     /// Local canvas target resolved to an existing file.
     case ok
     /// Local canvas target did not resolve to a file (404 page).
     case notFound
-    /// Local canvas root ("/") has no index, so the welcome page is shown.
+    /// Local canvas root ("/") has no index, so the built-in A2UI shell is shown.
+    case a2uiShell
+    /// Legacy fallback when the built-in shell isn't available (dev misconfiguration).
     case welcome
 }
 
@@ -96,6 +98,13 @@ public struct CanvasShowResult: Codable, Sendable {
     }
 }
 
+// MARK: - Canvas A2UI
+
+public enum CanvasA2UICommand: String, Codable, Sendable {
+    case pushJSONL
+    case reset
+}
+
 public enum Request: Sendable {
     case notify(
         title: String,
@@ -117,6 +126,7 @@ public enum Request: Sendable {
     case canvasHide(session: String)
     case canvasEval(session: String, javaScript: String)
     case canvasSnapshot(session: String, outPath: String?)
+    case canvasA2UI(session: String, command: CanvasA2UICommand, jsonl: String?)
     case nodeList
     case nodeInvoke(nodeId: String, command: String, paramsJSON: String?)
     case cameraSnap(facing: CameraFacing?, maxWidth: Int?, quality: Double?, outPath: String?)
@@ -151,6 +161,8 @@ extension Request: Codable {
         case path
         case javaScript
         case outPath
+        case canvasA2UICommand
+        case jsonl
         case facing
         case maxWidth
         case quality
@@ -173,6 +185,7 @@ extension Request: Codable {
         case canvasHide
         case canvasEval
         case canvasSnapshot
+        case canvasA2UI
         case nodeList
         case nodeInvoke
         case cameraSnap
@@ -236,6 +249,12 @@ extension Request: Codable {
             try container.encode(Kind.canvasSnapshot, forKey: .type)
             try container.encode(session, forKey: .session)
             try container.encodeIfPresent(outPath, forKey: .outPath)
+
+        case let .canvasA2UI(session, command, jsonl):
+            try container.encode(Kind.canvasA2UI, forKey: .type)
+            try container.encode(session, forKey: .session)
+            try container.encode(command, forKey: .canvasA2UICommand)
+            try container.encodeIfPresent(jsonl, forKey: .jsonl)
 
         case .nodeList:
             try container.encode(Kind.nodeList, forKey: .type)
@@ -320,6 +339,12 @@ extension Request: Codable {
             let session = try container.decode(String.self, forKey: .session)
             let outPath = try container.decodeIfPresent(String.self, forKey: .outPath)
             self = .canvasSnapshot(session: session, outPath: outPath)
+
+        case .canvasA2UI:
+            let session = try container.decode(String.self, forKey: .session)
+            let command = try container.decode(CanvasA2UICommand.self, forKey: .canvasA2UICommand)
+            let jsonl = try container.decodeIfPresent(String.self, forKey: .jsonl)
+            self = .canvasA2UI(session: session, command: command, jsonl: jsonl)
 
         case .nodeList:
             self = .nodeList

@@ -100,7 +100,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         if case let .panel(anchorProvider) = self.presentation {
             self.presentAnchoredPanel(anchorProvider: anchorProvider)
             if let path {
-                self.goto(path: path)
+                self.load(target: path)
             }
             return
         }
@@ -109,7 +109,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         if let path {
-            self.goto(path: path)
+            self.load(target: path)
         }
         self.onVisibilityChanged?(true)
     }
@@ -124,14 +124,27 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         self.onVisibilityChanged?(false)
     }
 
-    func goto(path: String) {
-        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+    func load(target: String) {
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased(),
-           scheme == "https" || scheme == "http"
-        {
-            canvasWindowLogger.debug("canvas goto web \(url.absoluteString, privacy: .public)")
-            self.webView.load(URLRequest(url: url))
+        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
+            if scheme == "https" || scheme == "http" {
+                canvasWindowLogger.debug("canvas load url \(url.absoluteString, privacy: .public)")
+                self.webView.load(URLRequest(url: url))
+                return
+            }
+            if scheme == "file" {
+                canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
+                self.loadFile(url)
+                return
+            }
+        }
+
+        // Convenience: absolute paths resolve as local files when they exist.
+        if trimmed.hasPrefix("/"), FileManager.default.fileExists(atPath: trimmed) {
+            let url = URL(fileURLWithPath: trimmed)
+            canvasWindowLogger.debug("canvas load file \(url.absoluteString, privacy: .public)")
+            self.loadFile(url)
             return
         }
 
@@ -144,8 +157,14 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
                     "invalid canvas url session=\(self.sessionKey, privacy: .public) path=\(trimmed, privacy: .public)")
             return
         }
-        canvasWindowLogger.debug("canvas goto canvas \(url.absoluteString, privacy: .public)")
+        canvasWindowLogger.debug("canvas load canvas \(url.absoluteString, privacy: .public)")
         self.webView.load(URLRequest(url: url))
+    }
+
+    private func loadFile(_ url: URL) {
+        let fileURL = url.isFileURL ? url : URL(fileURLWithPath: url.path)
+        let accessDir = fileURL.deletingLastPathComponent()
+        self.webView.loadFileURL(fileURL, allowingReadAccessTo: accessDir)
     }
 
     func eval(javaScript: String) async -> String {

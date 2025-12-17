@@ -28,20 +28,17 @@ final class CanvasManager {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty
 
-        let isWebTarget = Self.isWebTarget(normalizedTarget)
-
         if let controller = self.panelController, self.panelSessionKey == session {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
-                controller.goto(path: normalizedTarget)
+                controller.load(target: normalizedTarget)
                 return self.makeShowResult(
                     directory: controller.directoryPath,
                     target: target,
-                    effectiveTarget: normalizedTarget,
-                    isWebTarget: isWebTarget)
+                    effectiveTarget: normalizedTarget)
             }
 
             return CanvasShowResult(
@@ -72,8 +69,7 @@ final class CanvasManager {
         return self.makeShowResult(
             directory: controller.directoryPath,
             target: target,
-            effectiveTarget: effectiveTarget,
-            isWebTarget: isWebTarget)
+            effectiveTarget: effectiveTarget)
     }
 
     func hide(sessionKey: String) {
@@ -111,18 +107,29 @@ final class CanvasManager {
 
     // MARK: - Helpers
 
-    private static func isWebTarget(_ target: String?) -> Bool {
-        guard let target, let url = URL(string: target), let scheme = url.scheme?.lowercased() else { return false }
-        return scheme == "https" || scheme == "http"
+    private static func directURL(for target: String?) -> URL? {
+        guard let target else { return nil }
+        let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
+            if scheme == "https" || scheme == "http" || scheme == "file" { return url }
+        }
+
+        // Convenience: existing absolute paths resolve as local files.
+        if trimmed.hasPrefix("/"), FileManager.default.fileExists(atPath: trimmed) {
+            return URL(fileURLWithPath: trimmed)
+        }
+
+        return nil
     }
 
     private func makeShowResult(
         directory: String,
         target: String?,
-        effectiveTarget: String,
-        isWebTarget: Bool) -> CanvasShowResult
+        effectiveTarget: String) -> CanvasShowResult
     {
-        if isWebTarget, let url = URL(string: effectiveTarget) {
+        if let url = Self.directURL(for: effectiveTarget) {
             return CanvasShowResult(
                 directory: directory,
                 target: target,
@@ -151,12 +158,12 @@ final class CanvasManager {
         if path.hasPrefix("/") { path.removeFirst() }
         path = path.removingPercentEncoding ?? path
 
-        // Root special-case: welcome page when no index exists.
+        // Root special-case: built-in shell page when no index exists.
         if path.isEmpty {
             let a = sessionDir.appendingPathComponent("index.html", isDirectory: false)
             let b = sessionDir.appendingPathComponent("index.htm", isDirectory: false)
             if fm.fileExists(atPath: a.path) || fm.fileExists(atPath: b.path) { return .ok }
-            return .welcome
+            return Self.hasBundledA2UIShell() ? .a2uiShell : .welcome
         }
 
         // Direct file or directory.
@@ -186,6 +193,14 @@ final class CanvasManager {
         if fm.fileExists(atPath: a.path) { return true }
         let b = dir.appendingPathComponent("index.htm", isDirectory: false)
         return fm.fileExists(atPath: b.path)
+    }
+
+    private static func hasBundledA2UIShell() -> Bool {
+        guard let base = Bundle.module.resourceURL?.appendingPathComponent("CanvasA2UI", isDirectory: true) else {
+            return false
+        }
+        let index = base.appendingPathComponent("index.html", isDirectory: false)
+        return FileManager.default.fileExists(atPath: index.path)
     }
 }
 

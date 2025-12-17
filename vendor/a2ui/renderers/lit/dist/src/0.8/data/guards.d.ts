@@ -1,0 +1,24 @@
+import { ComponentArrayReference, ResolvedAudioPlayer, ResolvedButton, ResolvedCard, ResolvedCheckbox, ResolvedColumn, ResolvedDateTimeInput, ResolvedDivider, ResolvedIcon, ResolvedImage, ResolvedList, ResolvedModal, ResolvedMultipleChoice, ResolvedRow, ResolvedSlider, ResolvedTabs, ResolvedText, ResolvedTextField, ResolvedVideo, ValueMap } from "../types/types";
+export declare function isValueMap(value: unknown): value is ValueMap;
+export declare function isPath(key: string, value: unknown): value is string;
+export declare function isObject(value: unknown): value is Record<string, unknown>;
+export declare function isComponentArrayReference(value: unknown): value is ComponentArrayReference;
+export declare function isResolvedAudioPlayer(props: unknown): props is ResolvedAudioPlayer;
+export declare function isResolvedButton(props: unknown): props is ResolvedButton;
+export declare function isResolvedCard(props: unknown): props is ResolvedCard;
+export declare function isResolvedCheckbox(props: unknown): props is ResolvedCheckbox;
+export declare function isResolvedColumn(props: unknown): props is ResolvedColumn;
+export declare function isResolvedDateTimeInput(props: unknown): props is ResolvedDateTimeInput;
+export declare function isResolvedDivider(props: unknown): props is ResolvedDivider;
+export declare function isResolvedImage(props: unknown): props is ResolvedImage;
+export declare function isResolvedIcon(props: unknown): props is ResolvedIcon;
+export declare function isResolvedList(props: unknown): props is ResolvedList;
+export declare function isResolvedModal(props: unknown): props is ResolvedModal;
+export declare function isResolvedMultipleChoice(props: unknown): props is ResolvedMultipleChoice;
+export declare function isResolvedRow(props: unknown): props is ResolvedRow;
+export declare function isResolvedSlider(props: unknown): props is ResolvedSlider;
+export declare function isResolvedTabs(props: unknown): props is ResolvedTabs;
+export declare function isResolvedText(props: unknown): props is ResolvedText;
+export declare function isResolvedTextField(props: unknown): props is ResolvedTextField;
+export declare function isResolvedVideo(props: unknown): props is ResolvedVideo;
+//# sourceMappingURL=guards.d.ts.map

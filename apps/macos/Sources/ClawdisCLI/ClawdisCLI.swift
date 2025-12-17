@@ -248,6 +248,8 @@ struct ClawdisCLI {
             return ParsedCLIRequest(
                 request: .canvasShow(session: session, path: target, placement: placement),
                 kind: .generic)
+        case "a2ui":
+            return try self.parseCanvasA2UI(args: &args)
         case "hide":
             var session = "main"
             while !args.isEmpty {
@@ -283,6 +285,44 @@ struct ClawdisCLI {
                 }
             }
             return ParsedCLIRequest(request: .canvasSnapshot(session: session, outPath: outPath), kind: .generic)
+        default:
+            throw CLIError.help
+        }
+    }
+
+    private static func parseCanvasA2UI(args: inout [String]) throws -> ParsedCLIRequest {
+        guard let sub = args.popFirst() else { throw CLIError.help }
+        switch sub {
+        case "push":
+            var session = "main"
+            var jsonlPath: String?
+            while !args.isEmpty {
+                let arg = args.removeFirst()
+                switch arg {
+                case "--session": session = args.popFirst() ?? session
+                case "--jsonl": jsonlPath = args.popFirst()
+                default: break
+                }
+            }
+            guard let jsonlPath else { throw CLIError.help }
+            let jsonl = try String(contentsOfFile: jsonlPath, encoding: .utf8)
+            return ParsedCLIRequest(
+                request: .canvasA2UI(session: session, command: .pushJSONL, jsonl: jsonl),
+                kind: .generic)
+
+        case "reset":
+            var session = "main"
+            while !args.isEmpty {
+                let arg = args.removeFirst()
+                switch arg {
+                case "--session": session = args.popFirst() ?? session
+                default: break
+                }
+            }
+            return ParsedCLIRequest(
+                request: .canvasA2UI(session: session, command: .reset, jsonl: nil),
+                kind: .generic)
+
         default:
             throw CLIError.help
         }
@@ -473,8 +513,10 @@ struct ClawdisCLI {
             clawdis-mac node invoke --node <id> --command <name> [--params-json <json>]
 
           Canvas:
-            clawdis-mac canvas show [--session <key>] [--target </...|https://...>]
+            clawdis-mac canvas show [--session <key>] [--target </...|https://...|file://...>]
               [--x <screenX> --y <screenY>] [--width <w> --height <h>]
+            clawdis-mac canvas a2ui push --jsonl <path> [--session <key>]
+            clawdis-mac canvas a2ui reset [--session <key>]
             clawdis-mac canvas hide [--session <key>]
             clawdis-mac canvas eval --js <code> [--session <key>]
             clawdis-mac canvas snapshot [--out <path>] [--session <key>]

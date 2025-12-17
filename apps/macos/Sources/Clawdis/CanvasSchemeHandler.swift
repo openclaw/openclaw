@@ -7,6 +7,8 @@ private let canvasLogger = Logger(subsystem: "com.steipete.clawdis", category: "
 final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     private let root: URL
 
+    private static let builtinPrefix = "__clawdis__/a2ui"
+
     init(root: URL) {
         self.root = root
     }
@@ -64,6 +66,10 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         if path.hasPrefix("/") { path.removeFirst() }
         path = path.removingPercentEncoding ?? path
 
+        if let builtin = self.builtinResponse(requestPath: path) {
+            return builtin
+        }
+
         // Special-case: welcome page when root index is missing.
         if path.isEmpty {
             let indexA = sessionRoot.appendingPathComponent("index.html", isDirectory: false)
@@ -71,7 +77,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             if !FileManager.default.fileExists(atPath: indexA.path),
                !FileManager.default.fileExists(atPath: indexB.path)
             {
-                return self.welcomePage(sessionRoot: sessionRoot)
+                return self.a2uiShellPage(sessionRoot: sessionRoot)
             }
         }
 
@@ -195,6 +201,54 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         <div style="margin-top:10px;"><code>\(escaped)</code></div>
         """
         return self.html(body, title: "Canvas")
+    }
+
+    private func a2uiShellPage(sessionRoot: URL) -> CanvasResponse {
+        // Default Canvas UX: when no index exists, show the built-in A2UI shell.
+        if let data = self.loadBundledResourceData(subdirectory: "CanvasA2UI", relativePath: "index.html") {
+            return CanvasResponse(mime: "text/html", data: data)
+        }
+
+        // Fallback for dev misconfiguration: show the classic welcome page.
+        return self.welcomePage(sessionRoot: sessionRoot)
+    }
+
+    private func builtinResponse(requestPath: String) -> CanvasResponse? {
+        let trimmed = requestPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        guard trimmed == Self.builtinPrefix
+            || trimmed == Self.builtinPrefix + "/"
+            || trimmed.hasPrefix(Self.builtinPrefix + "/")
+        else { return nil }
+
+        let relative: String
+        if trimmed == Self.builtinPrefix || trimmed == Self.builtinPrefix + "/" {
+            relative = "index.html"
+        } else {
+            relative = String(trimmed.dropFirst((Self.builtinPrefix + "/").count))
+        }
+
+        if relative.isEmpty { return self.html("Not Found", title: "Canvas: 404") }
+        if relative.contains("..") || relative.contains("\\") {
+            return self.html("Forbidden", title: "Canvas: 403")
+        }
+
+        guard let data = self.loadBundledResourceData(subdirectory: "CanvasA2UI", relativePath: relative) else {
+            return self.html("Not Found", title: "Canvas: 404")
+        }
+
+        let ext = (relative as NSString).pathExtension
+        let mime = CanvasScheme.mimeType(forExtension: ext)
+        return CanvasResponse(mime: mime, data: data)
+    }
+
+    private func loadBundledResourceData(subdirectory: String, relativePath: String) -> Data? {
+        guard let base = Bundle.module.resourceURL?.appendingPathComponent(subdirectory, isDirectory: true) else {
+            return nil
+        }
+        let url = base.appendingPathComponent(relativePath, isDirectory: false)
+        return try? Data(contentsOf: url)
     }
 
     private func textEncodingName(forMimeType mimeType: String) -> String? {

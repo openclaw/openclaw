@@ -161,5 +161,13 @@ struct ControlRequestHandlerTests {
         }
         #expect(snap.ok == false)
         #expect(snap.message == "Canvas disabled by user")
+
+        let a2ui = try await Self.withDefaultOverride(pauseDefaultsKey, value: false) {
+            try await Self.withDefaultOverride(canvasEnabledKey, value: false) {
+                try await ControlRequestHandler.process(request: .canvasA2UI(session: "s", command: .reset, jsonl: nil))
+            }
+        }
+        #expect(a2ui.ok == false)
+        #expect(a2ui.message == "Canvas disabled by user")
     }
 }

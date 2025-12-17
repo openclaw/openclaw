@@ -67,6 +67,9 @@ enum ControlRequestHandler {
         case let .canvasSnapshot(session, outPath):
             return await self.handleCanvasSnapshot(session: session, outPath: outPath)
 
+        case let .canvasA2UI(session, command, jsonl):
+            return await self.handleCanvasA2UI(session: session, command: command, jsonl: jsonl)
+
         case .nodeList:
             return await self.handleNodeList()
 
@@ -226,6 +229,86 @@ enum ControlRequestHandler {
         } catch {
             return Response(ok: false, message: error.localizedDescription)
         }
+    }
+
+    private static func handleCanvasA2UI(session: String, command: CanvasA2UICommand, jsonl: String?) async -> Response {
+        guard self.canvasEnabled() else { return Response(ok: false, message: "Canvas disabled by user") }
+        do {
+            // Ensure the Canvas is visible and the default page is loaded.
+            _ = try await MainActor.run {
+                try CanvasManager.shared.show(sessionKey: session, path: "/")
+            }
+
+            let ready = await Self.waitForCanvasA2UI(session: session, timeoutMs: 2_000)
+            guard ready else { return Response(ok: false, message: "A2UI not ready") }
+
+            let js: String
+            switch command {
+            case .reset:
+                js = """
+                (() => {
+                  if (!globalThis.clawdisA2UI) { return "missing clawdisA2UI"; }
+                  globalThis.clawdisA2UI.reset();
+                  return "ok";
+                })()
+                """
+
+            case .pushJSONL:
+                guard let jsonl, !jsonl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    return Response(ok: false, message: "missing jsonl")
+                }
+                let messages: [Any]
+                do {
+                    messages = try Self.parseJSONL(jsonl)
+                } catch {
+                    return Response(ok: false, message: "invalid jsonl: \(error.localizedDescription)")
+                }
+                let data = try JSONSerialization.data(withJSONObject: messages, options: [])
+                let json = String(data: data, encoding: .utf8) ?? "[]"
+                js = """
+                (() => {
+                  if (!globalThis.clawdisA2UI) { return "missing clawdisA2UI"; }
+                  const messages = \(json);
+                  globalThis.clawdisA2UI.applyMessages(messages);
+                  return "ok";
+                })()
+                """
+            }
+
+            let result = try await CanvasManager.shared.eval(sessionKey: session, javaScript: js)
+            return Response(ok: true, payload: Data(result.utf8))
+        } catch {
+            return Response(ok: false, message: error.localizedDescription)
+        }
+    }
+
+    private static func parseJSONL(_ text: String) throws -> [Any] {
+        var out: [Any] = []
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            let data = Data(line.utf8)
+            let obj = try JSONSerialization.jsonObject(with: data, options: [])
+            out.append(obj)
+        }
+        return out
+    }
+
+    private static func waitForCanvasA2UI(session: String, timeoutMs: Int) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(timeoutMs))
+        while clock.now < deadline {
+            do {
+                let res = try await CanvasManager.shared.eval(
+                    sessionKey: session,
+                    javaScript: "(() => globalThis.clawdisA2UI ? 'ready' : '')()")
+                if res == "ready" { return true }
+            } catch {
+                // Ignore; keep waiting.
+            }
+            try? await Task.sleep(nanoseconds: 60_000_000)
+        }
+        return false
     }
 
     private static func handleNodeList() async -> Response {

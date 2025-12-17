@@ -39,9 +39,17 @@ Routing model:
 
 Directory listings are not served.
 
-When `/` has no `index.html` yet, the handler serves a built-in welcome page with:
-- The resolved on-disk session directory path.
-- A short “create index.html” hint.
+When `/` has no `index.html` yet, the handler serves a **built-in A2UI shell** (bundled with the macOS app).
+This gives the agent a ready-to-render UI surface without requiring any on-disk HTML.
+
+If the A2UI shell resources are missing (dev misconfiguration), Canvas falls back to a simple built-in welcome page.
+
+### Reserved built-in paths
+
+The scheme handler serves bundled assets under:
+- `clawdis-canvas://<session>/__clawdis__/a2ui/...`
+
+This is reserved for app-owned assets (not session content) and is backed by `Bundle.module` resources.
 
 ### Suggested on-disk location
 
@@ -81,6 +89,26 @@ This should be modeled after `WebChatManager`/`WebChatWindowController` but targ
 
 Related:
 - For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdis://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See `docs/clawdis-mac.md`.
+
+## Agent commands (current)
+
+`clawdis-mac` exposes Canvas via the control socket. For agent use, prefer `--json` so you can read the structured `CanvasShowResult` (including `status`).
+
+- `clawdis-mac canvas show [--session <key>] [--target <...>] [--x/--y/--width/--height]`
+  - Local targets map into the session directory via the custom scheme (directory targets resolve `index.html|index.htm`).
+  - If `/` has no index file, Canvas shows the built-in A2UI shell and returns `status: "a2uiShell"`.
+- `clawdis-mac canvas hide [--session <key>]`
+- `clawdis-mac canvas eval --js <code> [--session <key>]`
+- `clawdis-mac canvas snapshot [--out <path>] [--session <key>]`
+
+### Canvas A2UI
+
+Canvas includes a built-in A2UI renderer (Lit-based). The agent can drive it with JSONL “message” objects:
+
+- `clawdis-mac canvas a2ui push --jsonl <path> [--session <key>]`
+- `clawdis-mac canvas a2ui reset [--session <key>]`
+
+`push` expects a JSONL file where **each line is a single JSON object** (parsed and forwarded to the in-page A2UI renderer).
 
 ## Triggering agent runs from Canvas (deep links)
 
