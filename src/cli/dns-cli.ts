@@ -70,6 +70,16 @@ function mkdirSudoIfNeeded(dirPath: string): void {
   run("sudo", ["mkdir", "-p", dirPath], { inherit: true });
 }
 
+function zoneFileNeedsBootstrap(zonePath: string): boolean {
+  if (!fs.existsSync(zonePath)) return true;
+  try {
+    const content = fs.readFileSync(zonePath, "utf-8");
+    return !/\bSOA\b/.test(content) || !/\bNS\b/.test(content);
+  } catch {
+    return true;
+  }
+}
+
 function detectBrewPrefix(): string {
   const out = run("brew", ["--prefix"]);
   const prefix = out.trim();
@@ -185,7 +195,7 @@ export function registerDnsCli(program: Command) {
 
       // Ensure the gateway can write its zone file path.
       await fs.promises.mkdir(path.dirname(zonePath), { recursive: true });
-      if (!fs.existsSync(zonePath)) {
+      if (zoneFileNeedsBootstrap(zonePath)) {
         const y = new Date().getUTCFullYear();
         const m = String(new Date().getUTCMonth() + 1).padStart(2, "0");
         const d = String(new Date().getUTCDate()).padStart(2, "0");
