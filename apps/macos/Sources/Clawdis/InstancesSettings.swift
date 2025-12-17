@@ -70,10 +70,11 @@ struct InstancesSettings: View {
                 if let platform = inst.platform, let prettyPlatform = self.prettyPlatform(platform) {
                     self.label(icon: self.platformIcon(platform), text: prettyPlatform)
                 }
-                if let deviceText = self.deviceDescription(inst),
-                   let deviceIcon = self.deviceIcon(inst)
+                if let device = DeviceModelCatalog.presentation(
+                    deviceFamily: inst.deviceFamily,
+                    modelIdentifier: inst.modelIdentifier)
                 {
-                    self.label(icon: deviceIcon, text: deviceText)
+                    self.label(icon: device.symbol, text: device.title)
                 }
                 self.label(icon: "clock", text: inst.lastInputDescription)
                 if let mode = inst.mode { self.label(icon: "network", text: mode) }
@@ -94,9 +95,11 @@ struct InstancesSettings: View {
         .padding(.vertical, 6)
     }
 
-    private func label(icon: String, text: String) -> some View {
+    private func label(icon: String?, text: String) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: icon).foregroundStyle(.secondary).font(.caption)
+            if let icon {
+                Image(systemName: icon).foregroundStyle(.secondary).font(.caption)
+            }
             Text(text)
         }
         .font(.footnote)
@@ -120,28 +123,6 @@ struct InstancesSettings: View {
         }
     }
 
-    private func deviceIcon(_ inst: InstanceInfo) -> String? {
-        let family = inst.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if family.isEmpty { return nil }
-        switch family.lowercased() {
-        case "ipad":
-            return "ipad"
-        case "iphone":
-            return "iphone"
-        case "mac":
-            return "laptopcomputer"
-        default:
-            return "cpu"
-        }
-    }
-
-    private func deviceDescription(_ inst: InstanceInfo) -> String? {
-        let family = inst.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let model = inst.modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !family.isEmpty, !model.isEmpty { return "\(family) (\(model))" }
-        if !model.isEmpty { return model }
-        return family.isEmpty ? nil : family
-    }
     private func prettyPlatform(_ raw: String) -> String? {
         let (prefix, version) = self.parsePlatform(raw)
         if prefix.isEmpty { return nil }

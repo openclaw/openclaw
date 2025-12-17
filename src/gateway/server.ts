@@ -949,7 +949,10 @@ export async function startGatewayServer(
           if (!key) {
             return {
               ok: false,
-              error: { code: ErrorCodes.INVALID_REQUEST, message: "key required" },
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "key required",
+              },
             };
           }
 
@@ -1102,7 +1105,10 @@ export async function startGatewayServer(
           chatAbortControllers.delete(runId);
           chatRunBuffers.delete(runId);
           const current = chatRunSessions.get(active.sessionId);
-          if (current?.clientRunId === runId && current.sessionKey === sessionKey) {
+          if (
+            current?.clientRunId === runId &&
+            current.sessionKey === sessionKey
+          ) {
             chatRunSessions.delete(active.sessionId);
           }
 
@@ -1688,12 +1694,12 @@ export async function startGatewayServer(
     agentRunSeq.set(evt.runId, evt.seq);
     broadcast("agent", evt);
 
-	    const chatLink = chatRunSessions.get(evt.runId);
-	    if (chatLink) {
-	      // Map agent bus events to chat events for WS WebChat clients.
-	      // Use clientRunId so the webchat can correlate with its pending promise.
-	      const { sessionKey, clientRunId } = chatLink;
-	      bridgeSendToSession(sessionKey, "agent", evt);
+    const chatLink = chatRunSessions.get(evt.runId);
+    if (chatLink) {
+      // Map agent bus events to chat events for WS WebChat clients.
+      // Use clientRunId so the webchat can correlate with its pending promise.
+      const { sessionKey, clientRunId } = chatLink;
+      bridgeSendToSession(sessionKey, "agent", evt);
       const base = {
         runId: clientRunId,
         sessionKey,
@@ -2026,1175 +2032,257 @@ export async function startGatewayServer(
 
         void (async () => {
           switch (req.method) {
-          case "connect": {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                "connect is only valid as the first request",
-              ),
-            );
-            break;
-          }
-          case "voicewake.get": {
-            try {
-              const cfg = await loadVoiceWakeConfig();
-              respond(true, { triggers: cfg.triggers });
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "voicewake.set": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!Array.isArray(params.triggers)) {
+            case "connect": {
               respond(
                 false,
                 undefined,
                 errorShape(
                   ErrorCodes.INVALID_REQUEST,
-                  "voicewake.set requires triggers: string[]",
+                  "connect is only valid as the first request",
                 ),
               );
               break;
             }
-            try {
-              const triggers = normalizeVoiceWakeTriggers(params.triggers);
-              const cfg = await setVoiceWakeTriggers(triggers);
-              broadcastVoiceWakeChanged(cfg.triggers);
-              respond(true, { triggers: cfg.triggers });
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "health": {
-            const now = Date.now();
-            const cached = healthCache;
-            if (cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
-              respond(true, cached, undefined, { cached: true });
-              void refreshHealthSnapshot({ probe: false }).catch((err) =>
-                logError(
-                  `background health refresh failed: ${formatError(err)}`,
-                ),
-              );
-              break;
-            }
-            try {
-              const snap = await refreshHealthSnapshot({ probe: false });
-              respond(true, snap, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "chat.history": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateChatHistoryParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid chat.history params: ${formatValidationErrors(validateChatHistoryParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const { sessionKey, limit } = params as {
-              sessionKey: string;
-              limit?: number;
-            };
-            const { storePath, entry } = loadSessionEntry(sessionKey);
-            const sessionId = entry?.sessionId;
-            const rawMessages =
-              sessionId && storePath
-                ? readSessionMessages(sessionId, storePath)
-                : [];
-            const hardMax = 1000;
-            const defaultLimit = 200;
-            const requested = typeof limit === "number" ? limit : defaultLimit;
-            const max = Math.min(hardMax, requested);
-            const sliced =
-              rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
-            const capped = capArrayByJsonBytes(
-              sliced,
-              MAX_CHAT_HISTORY_MESSAGES_BYTES,
-            ).items;
-            const thinkingLevel =
-              entry?.thinkingLevel ??
-              loadConfig().inbound?.agent?.thinkingDefault ??
-              "off";
-            respond(true, {
-              sessionKey,
-              sessionId,
-              messages: capped,
-              thinkingLevel,
-            });
-            break;
-          }
-          case "chat.abort": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateChatAbortParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid chat.abort params: ${formatValidationErrors(validateChatAbortParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const { sessionKey, runId } = params as {
-              sessionKey: string;
-              runId: string;
-            };
-            const active = chatAbortControllers.get(runId);
-            if (!active) {
-              respond(true, { ok: true, aborted: false });
-              break;
-            }
-            if (active.sessionKey !== sessionKey) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  "runId does not match sessionKey",
-                ),
-              );
-              break;
-            }
-
-            active.controller.abort();
-            chatAbortControllers.delete(runId);
-            chatRunBuffers.delete(runId);
-            const current = chatRunSessions.get(active.sessionId);
-            if (
-              current?.clientRunId === runId &&
-              current.sessionKey === sessionKey
-            ) {
-              chatRunSessions.delete(active.sessionId);
-            }
-
-            const payload = {
-              runId,
-              sessionKey,
-              seq: (agentRunSeq.get(active.sessionId) ?? 0) + 1,
-              state: "aborted" as const,
-            };
-            broadcast("chat", payload);
-            bridgeSendToSession(sessionKey, "chat", payload);
-            respond(true, { ok: true, aborted: true });
-            break;
-          }
-          case "chat.send": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateChatSendParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as {
-              sessionKey: string;
-              message: string;
-              thinking?: string;
-              deliver?: boolean;
-              attachments?: Array<{
-                type?: string;
-                mimeType?: string;
-                fileName?: string;
-                content?: unknown;
-              }>;
-              timeoutMs?: number;
-              idempotencyKey: string;
-            };
-            const timeoutMs = Math.min(
-              Math.max(p.timeoutMs ?? 30_000, 0),
-              30_000,
-            );
-            const normalizedAttachments =
-              p.attachments?.map((a) => ({
-                type: typeof a?.type === "string" ? a.type : undefined,
-                mimeType:
-                  typeof a?.mimeType === "string" ? a.mimeType : undefined,
-                fileName:
-                  typeof a?.fileName === "string" ? a.fileName : undefined,
-                content:
-                  typeof a?.content === "string"
-                    ? a.content
-                    : ArrayBuffer.isView(a?.content)
-                      ? Buffer.from(
-                          a.content.buffer,
-                          a.content.byteOffset,
-                          a.content.byteLength,
-                        ).toString("base64")
-                      : undefined,
-              })) ?? [];
-            let messageWithAttachments = p.message;
-            if (normalizedAttachments.length > 0) {
+            case "voicewake.get": {
               try {
-                messageWithAttachments = buildMessageWithAttachments(
-                  p.message,
-                  normalizedAttachments,
-                  { maxBytes: 5_000_000 },
-                );
+                const cfg = await loadVoiceWakeConfig();
+                respond(true, { triggers: cfg.triggers });
               } catch (err) {
                 respond(
                   false,
                   undefined,
-                  errorShape(ErrorCodes.INVALID_REQUEST, String(err)),
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
                 );
-                break;
               }
-            }
-            const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
-            const now = Date.now();
-            const sessionId = entry?.sessionId ?? randomUUID();
-            const sessionEntry: SessionEntry = {
-              sessionId,
-              updatedAt: now,
-              thinkingLevel: entry?.thinkingLevel,
-              verboseLevel: entry?.verboseLevel,
-              systemSent: entry?.systemSent,
-              lastChannel: entry?.lastChannel,
-              lastTo: entry?.lastTo,
-            };
-            if (store) {
-              store[p.sessionKey] = sessionEntry;
-              if (storePath) {
-                await saveSessionStore(storePath, store);
-              }
-            }
-            const clientRunId = p.idempotencyKey;
-            chatRunSessions.set(sessionId, {
-              sessionKey: p.sessionKey,
-              clientRunId,
-            });
-
-            const cached = dedupe.get(`chat:${clientRunId}`);
-            if (cached) {
-              respond(cached.ok, cached.payload, cached.error, {
-                cached: true,
-              });
               break;
             }
-
-            try {
-              const abortController = new AbortController();
-              chatAbortControllers.set(clientRunId, {
-                controller: abortController,
-                sessionId,
-                sessionKey: p.sessionKey,
-              });
-
-              await agentCommand(
-                {
-                  message: messageWithAttachments,
-                  sessionId,
-                  thinking: p.thinking,
-                  deliver: p.deliver,
-                  timeout: Math.ceil(timeoutMs / 1000).toString(),
-                  surface: "WebChat",
-                  abortSignal: abortController.signal,
-                },
-                defaultRuntime,
-                deps,
-              );
-              const payload = {
-                runId: clientRunId,
-                status: "ok" as const,
-              };
-              dedupe.set(`chat:${clientRunId}`, {
-                ts: Date.now(),
-                ok: true,
-                payload,
-              });
-              respond(true, payload, undefined, { runId: clientRunId });
-            } catch (err) {
-              const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-              const payload = {
-                runId: clientRunId,
-                status: "error" as const,
-                summary: String(err),
-              };
-              dedupe.set(`chat:${clientRunId}`, {
-                ts: Date.now(),
-                ok: false,
-                payload,
-                error,
-              });
-              respond(false, payload, error, {
-                runId: clientRunId,
-                error: formatForLog(err),
-              });
-            } finally {
-              chatAbortControllers.delete(clientRunId);
-            }
-            break;
-          }
-          case "wake": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateWakeParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid wake params: ${formatValidationErrors(validateWakeParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as {
-              mode: "now" | "next-heartbeat";
-              text: string;
-            };
-            const result = cron.wake({ mode: p.mode, text: p.text });
-            respond(true, result, undefined);
-            break;
-          }
-          case "cron.list": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronListParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.list params: ${formatValidationErrors(validateCronListParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as { includeDisabled?: boolean };
-            const jobs = await cron.list({
-              includeDisabled: p.includeDisabled,
-            });
-            respond(true, { jobs }, undefined);
-            break;
-          }
-          case "cron.status": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronStatusParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.status params: ${formatValidationErrors(validateCronStatusParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const status = await cron.status();
-            respond(true, status, undefined);
-            break;
-          }
-          case "cron.add": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronAddParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.add params: ${formatValidationErrors(validateCronAddParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const job = await cron.add(params as unknown as CronJobCreate);
-            respond(true, job, undefined);
-            break;
-          }
-          case "cron.update": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronUpdateParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.update params: ${formatValidationErrors(validateCronUpdateParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as { id: string; patch: Record<string, unknown> };
-            const job = await cron.update(
-              p.id,
-              p.patch as unknown as CronJobPatch,
-            );
-            respond(true, job, undefined);
-            break;
-          }
-          case "cron.remove": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronRemoveParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.remove params: ${formatValidationErrors(validateCronRemoveParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as { id: string };
-            const result = await cron.remove(p.id);
-            respond(true, result, undefined);
-            break;
-          }
-          case "cron.run": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronRunParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.run params: ${formatValidationErrors(validateCronRunParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as { id: string; mode?: "due" | "force" };
-            const result = await cron.run(p.id, p.mode);
-            respond(true, result, undefined);
-            break;
-          }
-          case "cron.runs": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateCronRunsParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid cron.runs params: ${formatValidationErrors(validateCronRunsParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as { id: string; limit?: number };
-            const logPath = resolveCronRunLogPath({
-              storePath: cronStorePath,
-              jobId: p.id,
-            });
-            const entries = await readCronRunLogEntries(logPath, {
-              limit: p.limit,
-              jobId: p.id,
-            });
-            respond(true, { entries }, undefined);
-            break;
-          }
-          case "status": {
-            const status = await getStatusSummary();
-            respond(true, status, undefined);
-            break;
-          }
-          case "sessions.list": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateSessionsListParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid sessions.list params: ${formatValidationErrors(validateSessionsListParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as SessionsListParams;
-            const cfg = loadConfig();
-            const storePath = resolveStorePath(cfg.inbound?.session?.store);
-            const store = loadSessionStore(storePath);
-            const result = listSessionsFromStore({
-              cfg,
-              storePath,
-              store,
-              opts: p,
-            });
-            respond(true, result, undefined);
-            break;
-          }
-          case "sessions.patch": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateSessionsPatchParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid sessions.patch params: ${formatValidationErrors(validateSessionsPatchParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as SessionsPatchParams;
-            const key = String(p.key ?? "").trim();
-            if (!key) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
-              );
-              break;
-            }
-
-            const cfg = loadConfig();
-            const storePath = resolveStorePath(cfg.inbound?.session?.store);
-            const store = loadSessionStore(storePath);
-            const now = Date.now();
-
-            const existing = store[key];
-            const next: SessionEntry = existing
-              ? {
-                  ...existing,
-                  updatedAt: Math.max(existing.updatedAt ?? 0, now),
-                }
-              : { sessionId: randomUUID(), updatedAt: now };
-
-            if ("thinkingLevel" in p) {
-              const raw = p.thinkingLevel;
-              if (raw === null) {
-                delete next.thinkingLevel;
-              } else if (raw !== undefined) {
-                const normalized = normalizeThinkLevel(String(raw));
-                if (!normalized) {
-                  respond(
-                    false,
-                    undefined,
-                    errorShape(
-                      ErrorCodes.INVALID_REQUEST,
-                      "invalid thinkingLevel (use off|minimal|low|medium|high)",
-                    ),
-                  );
-                  break;
-                }
-                if (normalized === "off") delete next.thinkingLevel;
-                else next.thinkingLevel = normalized;
-              }
-            }
-
-            if ("verboseLevel" in p) {
-              const raw = p.verboseLevel;
-              if (raw === null) {
-                delete next.verboseLevel;
-              } else if (raw !== undefined) {
-                const normalized = normalizeVerboseLevel(String(raw));
-                if (!normalized) {
-                  respond(
-                    false,
-                    undefined,
-                    errorShape(
-                      ErrorCodes.INVALID_REQUEST,
-                      'invalid verboseLevel (use "on"|"off")',
-                    ),
-                  );
-                  break;
-                }
-                if (normalized === "off") delete next.verboseLevel;
-                else next.verboseLevel = normalized;
-              }
-            }
-
-            store[key] = next;
-            await saveSessionStore(storePath, store);
-            const result: SessionsPatchResult = {
-              ok: true,
-              path: storePath,
-              key,
-              entry: next,
-            };
-            respond(true, result, undefined);
-            break;
-          }
-          case "last-heartbeat": {
-            respond(true, getLastHeartbeatEvent(), undefined);
-            break;
-          }
-          case "set-heartbeats": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            const enabled = params.enabled;
-            if (typeof enabled !== "boolean") {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  "invalid set-heartbeats params: enabled (boolean) required",
-                ),
-              );
-              break;
-            }
-            setHeartbeatsEnabled(enabled);
-            respond(true, { ok: true, enabled }, undefined);
-            break;
-          }
-          case "system-presence": {
-            const presence = listSystemPresence();
-            respond(true, presence, undefined);
-            break;
-          }
-          case "system-event": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            const text = String(params.text ?? "").trim();
-            if (!text) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.INVALID_REQUEST, "text required"),
-              );
-              break;
-            }
-            const instanceId =
-              typeof params.instanceId === "string"
-                ? params.instanceId
-                : undefined;
-            const host =
-              typeof params.host === "string" ? params.host : undefined;
-            const ip = typeof params.ip === "string" ? params.ip : undefined;
-            const mode =
-              typeof params.mode === "string" ? params.mode : undefined;
-            const version =
-              typeof params.version === "string" ? params.version : undefined;
-            const platform =
-              typeof params.platform === "string" ? params.platform : undefined;
-            const deviceFamily =
-              typeof params.deviceFamily === "string"
-                ? params.deviceFamily
-                : undefined;
-            const modelIdentifier =
-              typeof params.modelIdentifier === "string"
-                ? params.modelIdentifier
-                : undefined;
-            const lastInputSeconds =
-              typeof params.lastInputSeconds === "number" &&
-              Number.isFinite(params.lastInputSeconds)
-                ? params.lastInputSeconds
-                : undefined;
-            const reason =
-              typeof params.reason === "string" ? params.reason : undefined;
-            const tags =
-              Array.isArray(params.tags) &&
-              params.tags.every((t) => typeof t === "string")
-                ? (params.tags as string[])
-                : undefined;
-            updateSystemPresence({
-              text,
-              instanceId,
-              host,
-              ip,
-              mode,
-              version,
-              platform,
-              deviceFamily,
-              modelIdentifier,
-              lastInputSeconds,
-              reason,
-              tags,
-            });
-            const isNodePresenceLine = text.startsWith("Node:");
-            const normalizedReason = (reason ?? "").toLowerCase();
-            const looksPeriodic =
-              normalizedReason.startsWith("periodic") ||
-              normalizedReason === "heartbeat";
-            if (!(isNodePresenceLine && looksPeriodic)) {
-              const compactNodeText =
-                isNodePresenceLine && (host || ip || version || mode || reason)
-                  ? `Node: ${host?.trim() || "Unknown"}${ip ? ` (${ip})` : ""} · app ${version?.trim() || "unknown"} · mode ${mode?.trim() || "unknown"} · reason ${reason?.trim() || "event"}`
-                  : text;
-              enqueueSystemEvent(compactNodeText);
-            }
-            presenceVersion += 1;
-            broadcast(
-              "presence",
-              { presence: listSystemPresence() },
-              {
-                dropIfSlow: true,
-                stateVersion: {
-                  presence: presenceVersion,
-                  health: healthVersion,
-                },
-              },
-            );
-            respond(true, { ok: true }, undefined);
-            break;
-          }
-          case "node.pair.request": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodePairRequestParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.pair.request params: ${formatValidationErrors(validateNodePairRequestParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const p = params as {
-              nodeId: string;
-              displayName?: string;
-              platform?: string;
-              version?: string;
-              remoteIp?: string;
-            };
-            try {
-              const result = await requestNodePairing({
-                nodeId: p.nodeId,
-                displayName: p.displayName,
-                platform: p.platform,
-                version: p.version,
-                remoteIp: p.remoteIp,
-              });
-              if (result.status === "pending" && result.created) {
-                broadcast("node.pair.requested", result.request, {
-                  dropIfSlow: true,
-                });
-              }
-              respond(true, result, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "node.pair.list": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodePairListParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.pair.list params: ${formatValidationErrors(validateNodePairListParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            try {
-              const list = await listNodePairing();
-              respond(true, list, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "node.pair.approve": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodePairApproveParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.pair.approve params: ${formatValidationErrors(validateNodePairApproveParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const { requestId } = params as { requestId: string };
-            try {
-              const approved = await approveNodePairing(requestId);
-              if (!approved) {
-                respond(
-                  false,
-                  undefined,
-                  errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"),
-                );
-                break;
-              }
-              broadcast(
-                "node.pair.resolved",
-                {
-                  requestId,
-                  nodeId: approved.node.nodeId,
-                  decision: "approved",
-                  ts: Date.now(),
-                },
-                { dropIfSlow: true },
-              );
-              respond(true, approved, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "node.pair.reject": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodePairRejectParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.pair.reject params: ${formatValidationErrors(validateNodePairRejectParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const { requestId } = params as { requestId: string };
-            try {
-              const rejected = await rejectNodePairing(requestId);
-              if (!rejected) {
-                respond(
-                  false,
-                  undefined,
-                  errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"),
-                );
-                break;
-              }
-              broadcast(
-                "node.pair.resolved",
-                {
-                  requestId,
-                  nodeId: rejected.nodeId,
-                  decision: "rejected",
-                  ts: Date.now(),
-                },
-                { dropIfSlow: true },
-              );
-              respond(true, rejected, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "node.pair.verify": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodePairVerifyParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.pair.verify params: ${formatValidationErrors(validateNodePairVerifyParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const { nodeId, token } = params as {
-              nodeId: string;
-              token: string;
-            };
-            try {
-              const result = await verifyNodeToken(nodeId, token);
-              respond(true, result, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "node.list": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodeListParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.list params: ${formatValidationErrors(validateNodeListParams.errors)}`,
-                ),
-              );
-              break;
-            }
-
-            try {
-              const list = await listNodePairing();
-              const connected = bridge?.listConnected?.() ?? [];
-              const connectedById = new Map(
-                connected.map((n) => [n.nodeId, n]),
-              );
-
-              const nodes = list.paired.map((n) => {
-                const live = connectedById.get(n.nodeId);
-                return {
-                  nodeId: n.nodeId,
-                  displayName: live?.displayName ?? n.displayName,
-                  platform: live?.platform ?? n.platform,
-                  version: live?.version ?? n.version,
-                  remoteIp: live?.remoteIp ?? n.remoteIp,
-                  connected: Boolean(live),
-                };
-              });
-
-              respond(true, { ts: Date.now(), nodes }, undefined);
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "node.invoke": {
-            const params = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateNodeInvokeParams(params)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid node.invoke params: ${formatValidationErrors(validateNodeInvokeParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            if (!bridge) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, "bridge not running"),
-              );
-              break;
-            }
-            const p = params as {
-              nodeId: string;
-              command: string;
-              params?: unknown;
-              timeoutMs?: number;
-              idempotencyKey: string;
-            };
-            const nodeId = String(p.nodeId ?? "").trim();
-            const command = String(p.command ?? "").trim();
-            if (!nodeId || !command) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  "nodeId and command required",
-                ),
-              );
-              break;
-            }
-
-            try {
-              const paramsJSON =
-                "params" in p && p.params !== undefined
-                  ? JSON.stringify(p.params)
-                  : null;
-              const res = await bridge.invoke({
-                nodeId,
-                command,
-                paramsJSON,
-                timeoutMs: p.timeoutMs,
-              });
-              if (!res.ok) {
+            case "voicewake.set": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!Array.isArray(params.triggers)) {
                 respond(
                   false,
                   undefined,
                   errorShape(
-                    ErrorCodes.UNAVAILABLE,
-                    res.error?.message ?? "node invoke failed",
-                    { details: { nodeError: res.error ?? null } },
+                    ErrorCodes.INVALID_REQUEST,
+                    "voicewake.set requires triggers: string[]",
                   ),
                 );
                 break;
               }
-              const payload =
-                typeof res.payloadJSON === "string" && res.payloadJSON.trim()
-                  ? (() => {
-                      try {
-                        return JSON.parse(res.payloadJSON) as unknown;
-                      } catch {
-                        return { payloadJSON: res.payloadJSON };
-                      }
-                    })()
-                  : undefined;
-              respond(
-                true,
-                {
-                  ok: true,
-                  nodeId,
-                  command,
-                  payload,
-                  payloadJSON: res.payloadJSON ?? null,
-                },
-                undefined,
-              );
-            } catch (err) {
-              respond(
-                false,
-                undefined,
-                errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
-              );
-            }
-            break;
-          }
-          case "send": {
-            const p = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateSendParams(p)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid send params: ${formatValidationErrors(validateSendParams.errors)}`,
-                ),
-              );
-              break;
-            }
-            const params = p as {
-              to: string;
-              message: string;
-              mediaUrl?: string;
-              provider?: string;
-              idempotencyKey: string;
-            };
-            const idem = params.idempotencyKey;
-            const cached = dedupe.get(`send:${idem}`);
-            if (cached) {
-              respond(cached.ok, cached.payload, cached.error, {
-                cached: true,
-              });
-              break;
-            }
-            const to = params.to.trim();
-            const message = params.message.trim();
-            const provider = (params.provider ?? "whatsapp").toLowerCase();
-            try {
-              if (provider === "telegram") {
-                const result = await sendMessageTelegram(to, message, {
-                  mediaUrl: params.mediaUrl,
-                  verbose: isVerbose(),
-                });
-                const payload = {
-                  runId: idem,
-                  messageId: result.messageId,
-                  chatId: result.chatId,
-                  provider,
-                };
-                dedupe.set(`send:${idem}`, {
-                  ts: Date.now(),
-                  ok: true,
-                  payload,
-                });
-                respond(true, payload, undefined, { provider });
-              } else {
-                const result = await sendMessageWhatsApp(to, message, {
-                  mediaUrl: params.mediaUrl,
-                  verbose: isVerbose(),
-                });
-                const payload = {
-                  runId: idem,
-                  messageId: result.messageId,
-                  toJid: result.toJid ?? `${to}@s.whatsapp.net`,
-                  provider,
-                };
-                dedupe.set(`send:${idem}`, {
-                  ts: Date.now(),
-                  ok: true,
-                  payload,
-                });
-                respond(true, payload, undefined, { provider });
+              try {
+                const triggers = normalizeVoiceWakeTriggers(params.triggers);
+                const cfg = await setVoiceWakeTriggers(triggers);
+                broadcastVoiceWakeChanged(cfg.triggers);
+                respond(true, { triggers: cfg.triggers });
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
               }
-            } catch (err) {
-              const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
-              dedupe.set(`send:${idem}`, { ts: Date.now(), ok: false, error });
-              respond(false, undefined, error, {
-                provider,
-                error: formatForLog(err),
-              });
+              break;
             }
-            break;
-          }
-          case "agent": {
-            const p = (req.params ?? {}) as Record<string, unknown>;
-            if (!validateAgentParams(p)) {
-              respond(
-                false,
-                undefined,
-                errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  `invalid agent params: ${formatValidationErrors(validateAgentParams.errors)}`,
-                ),
+            case "health": {
+              const now = Date.now();
+              const cached = healthCache;
+              if (cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
+                respond(true, cached, undefined, { cached: true });
+                void refreshHealthSnapshot({ probe: false }).catch((err) =>
+                  logError(
+                    `background health refresh failed: ${formatError(err)}`,
+                  ),
+                );
+                break;
+              }
+              try {
+                const snap = await refreshHealthSnapshot({ probe: false });
+                respond(true, snap, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "chat.history": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateChatHistoryParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid chat.history params: ${formatValidationErrors(validateChatHistoryParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const { sessionKey, limit } = params as {
+                sessionKey: string;
+                limit?: number;
+              };
+              const { storePath, entry } = loadSessionEntry(sessionKey);
+              const sessionId = entry?.sessionId;
+              const rawMessages =
+                sessionId && storePath
+                  ? readSessionMessages(sessionId, storePath)
+                  : [];
+              const hardMax = 1000;
+              const defaultLimit = 200;
+              const requested =
+                typeof limit === "number" ? limit : defaultLimit;
+              const max = Math.min(hardMax, requested);
+              const sliced =
+                rawMessages.length > max
+                  ? rawMessages.slice(-max)
+                  : rawMessages;
+              const capped = capArrayByJsonBytes(
+                sliced,
+                MAX_CHAT_HISTORY_MESSAGES_BYTES,
+              ).items;
+              const thinkingLevel =
+                entry?.thinkingLevel ??
+                loadConfig().inbound?.agent?.thinkingDefault ??
+                "off";
+              respond(true, {
+                sessionKey,
+                sessionId,
+                messages: capped,
+                thinkingLevel,
+              });
+              break;
+            }
+            case "chat.abort": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateChatAbortParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid chat.abort params: ${formatValidationErrors(validateChatAbortParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const { sessionKey, runId } = params as {
+                sessionKey: string;
+                runId: string;
+              };
+              const active = chatAbortControllers.get(runId);
+              if (!active) {
+                respond(true, { ok: true, aborted: false });
+                break;
+              }
+              if (active.sessionKey !== sessionKey) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    "runId does not match sessionKey",
+                  ),
+                );
+                break;
+              }
+
+              active.controller.abort();
+              chatAbortControllers.delete(runId);
+              chatRunBuffers.delete(runId);
+              const current = chatRunSessions.get(active.sessionId);
+              if (
+                current?.clientRunId === runId &&
+                current.sessionKey === sessionKey
+              ) {
+                chatRunSessions.delete(active.sessionId);
+              }
+
+              const payload = {
+                runId,
+                sessionKey,
+                seq: (agentRunSeq.get(active.sessionId) ?? 0) + 1,
+                state: "aborted" as const,
+              };
+              broadcast("chat", payload);
+              bridgeSendToSession(sessionKey, "chat", payload);
+              respond(true, { ok: true, aborted: true });
+              break;
+            }
+            case "chat.send": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateChatSendParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as {
+                sessionKey: string;
+                message: string;
+                thinking?: string;
+                deliver?: boolean;
+                attachments?: Array<{
+                  type?: string;
+                  mimeType?: string;
+                  fileName?: string;
+                  content?: unknown;
+                }>;
+                timeoutMs?: number;
+                idempotencyKey: string;
+              };
+              const timeoutMs = Math.min(
+                Math.max(p.timeoutMs ?? 30_000, 0),
+                30_000,
               );
-              break;
-            }
-            const params = p as {
-              message: string;
-              to?: string;
-              sessionId?: string;
-              sessionKey?: string;
-              thinking?: string;
-              deliver?: boolean;
-              channel?: string;
-              idempotencyKey: string;
-              timeout?: number;
-            };
-            const idem = params.idempotencyKey;
-            const cached = dedupe.get(`agent:${idem}`);
-            if (cached) {
-              respond(cached.ok, cached.payload, cached.error, {
-                cached: true,
-              });
-              break;
-            }
-            const message = params.message.trim();
-
-            const requestedSessionKey =
-              typeof params.sessionKey === "string" && params.sessionKey.trim()
-                ? params.sessionKey.trim()
-                : undefined;
-            let resolvedSessionId = params.sessionId?.trim() || undefined;
-            let sessionEntry: SessionEntry | undefined;
-            let bestEffortDeliver = false;
-            let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
-
-            if (requestedSessionKey) {
-              const { cfg, storePath, store, entry } =
-                loadSessionEntry(requestedSessionKey);
-              cfgForAgent = cfg;
+              const normalizedAttachments =
+                p.attachments?.map((a) => ({
+                  type: typeof a?.type === "string" ? a.type : undefined,
+                  mimeType:
+                    typeof a?.mimeType === "string" ? a.mimeType : undefined,
+                  fileName:
+                    typeof a?.fileName === "string" ? a.fileName : undefined,
+                  content:
+                    typeof a?.content === "string"
+                      ? a.content
+                      : ArrayBuffer.isView(a?.content)
+                        ? Buffer.from(
+                            a.content.buffer,
+                            a.content.byteOffset,
+                            a.content.byteLength,
+                          ).toString("base64")
+                        : undefined,
+                })) ?? [];
+              let messageWithAttachments = p.message;
+              if (normalizedAttachments.length > 0) {
+                try {
+                  messageWithAttachments = buildMessageWithAttachments(
+                    p.message,
+                    normalizedAttachments,
+                    { maxBytes: 5_000_000 },
+                  );
+                } catch (err) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(ErrorCodes.INVALID_REQUEST, String(err)),
+                  );
+                  break;
+                }
+              }
+              const { storePath, store, entry } = loadSessionEntry(
+                p.sessionKey,
+              );
               const now = Date.now();
               const sessionId = entry?.sessionId ?? randomUUID();
-              sessionEntry = {
+              const sessionEntry: SessionEntry = {
                 sessionId,
                 updatedAt: now,
                 thinkingLevel: entry?.thinkingLevel,
@@ -3204,175 +2292,1109 @@ export async function startGatewayServer(
                 lastTo: entry?.lastTo,
               };
               if (store) {
-                store[requestedSessionKey] = sessionEntry;
+                store[p.sessionKey] = sessionEntry;
                 if (storePath) {
                   await saveSessionStore(storePath, store);
                 }
               }
-              resolvedSessionId = sessionId;
-              const mainKey =
-                (cfg.inbound?.session?.mainKey ?? "main").trim() || "main";
-              if (requestedSessionKey === mainKey) {
-                chatRunSessions.set(sessionId, {
-                  sessionKey: requestedSessionKey,
-                  clientRunId: idem,
+              const clientRunId = p.idempotencyKey;
+              chatRunSessions.set(sessionId, {
+                sessionKey: p.sessionKey,
+                clientRunId,
+              });
+
+              const cached = dedupe.get(`chat:${clientRunId}`);
+              if (cached) {
+                respond(cached.ok, cached.payload, cached.error, {
+                  cached: true,
                 });
-                bestEffortDeliver = true;
+                break;
               }
-            }
 
-            const runId = resolvedSessionId || randomUUID();
+              try {
+                const abortController = new AbortController();
+                chatAbortControllers.set(clientRunId, {
+                  controller: abortController,
+                  sessionId,
+                  sessionKey: p.sessionKey,
+                });
 
-            const requestedChannelRaw =
-              typeof params.channel === "string" ? params.channel.trim() : "";
-            const requestedChannel = requestedChannelRaw
-              ? requestedChannelRaw.toLowerCase()
-              : "last";
-
-            const lastChannel = sessionEntry?.lastChannel;
-            const lastTo =
-              typeof sessionEntry?.lastTo === "string"
-                ? sessionEntry.lastTo.trim()
-                : "";
-
-            const resolvedChannel = (() => {
-              if (requestedChannel === "last") {
-                // WebChat is not a deliverable surface. Treat it as "unset" for routing,
-                // so VoiceWake and CLI callers don't get stuck with deliver=false.
-                return lastChannel && lastChannel !== "webchat"
-                  ? lastChannel
-                  : "whatsapp";
-              }
-              if (
-                requestedChannel === "whatsapp" ||
-                requestedChannel === "telegram" ||
-                requestedChannel === "webchat"
-              ) {
-                return requestedChannel;
-              }
-              return lastChannel && lastChannel !== "webchat"
-                ? lastChannel
-                : "whatsapp";
-            })();
-
-            const resolvedTo = (() => {
-              const explicit =
-                typeof params.to === "string" && params.to.trim()
-                  ? params.to.trim()
-                  : undefined;
-              if (explicit) return explicit;
-              if (
-                resolvedChannel === "whatsapp" ||
-                resolvedChannel === "telegram"
-              ) {
-                return lastTo || undefined;
-              }
-              return undefined;
-            })();
-
-            const sanitizedTo = (() => {
-              // If we derived a WhatsApp recipient from session "lastTo", ensure it is still valid
-              // for the configured allowlist. Otherwise, fall back to the first allowed number so
-              // voice wake doesn't silently route to stale/test recipients.
-              if (resolvedChannel !== "whatsapp") return resolvedTo;
-              const explicit =
-                typeof params.to === "string" && params.to.trim()
-                  ? params.to.trim()
-                  : undefined;
-              if (explicit) return resolvedTo;
-
-              const cfg = cfgForAgent ?? loadConfig();
-              const rawAllow = cfg.inbound?.allowFrom ?? [];
-              if (rawAllow.includes("*")) return resolvedTo;
-              const allowFrom = rawAllow
-                .map((val) => normalizeE164(val))
-                .filter((val) => val.length > 1);
-              if (allowFrom.length === 0) return resolvedTo;
-
-              const normalizedLast =
-                typeof resolvedTo === "string" && resolvedTo.trim()
-                  ? normalizeE164(resolvedTo)
-                  : undefined;
-              if (normalizedLast && allowFrom.includes(normalizedLast)) {
-                return normalizedLast;
-              }
-              return allowFrom[0];
-            })();
-
-            const deliver =
-              params.deliver === true && resolvedChannel !== "webchat";
-
-            const accepted = { runId, status: "accepted" as const };
-            // Store an in-flight ack so retries do not spawn a second run.
-            dedupe.set(`agent:${idem}`, {
-              ts: Date.now(),
-              ok: true,
-              payload: accepted,
-            });
-            respond(true, accepted, undefined, { runId });
-
-            void agentCommand(
-              {
-                message,
-                to: sanitizedTo,
-                sessionId: resolvedSessionId,
-                thinking: params.thinking,
-                deliver,
-                provider: resolvedChannel,
-                timeout: params.timeout?.toString(),
-                bestEffortDeliver,
-                surface: "VoiceWake",
-              },
-              defaultRuntime,
-              deps,
-            )
-              .then(() => {
+                await agentCommand(
+                  {
+                    message: messageWithAttachments,
+                    sessionId,
+                    thinking: p.thinking,
+                    deliver: p.deliver,
+                    timeout: Math.ceil(timeoutMs / 1000).toString(),
+                    surface: "WebChat",
+                    abortSignal: abortController.signal,
+                  },
+                  defaultRuntime,
+                  deps,
+                );
                 const payload = {
-                  runId,
+                  runId: clientRunId,
                   status: "ok" as const,
-                  summary: "completed",
                 };
-                dedupe.set(`agent:${idem}`, {
+                dedupe.set(`chat:${clientRunId}`, {
                   ts: Date.now(),
                   ok: true,
                   payload,
                 });
-                // Send a second res frame (same id) so TS clients with expectFinal can wait.
-                // Swift clients will typically treat the first res as the result and ignore this.
-                respond(true, payload, undefined, { runId });
-              })
-              .catch((err) => {
+                respond(true, payload, undefined, { runId: clientRunId });
+              } catch (err) {
                 const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
                 const payload = {
-                  runId,
+                  runId: clientRunId,
                   status: "error" as const,
                   summary: String(err),
                 };
-                dedupe.set(`agent:${idem}`, {
+                dedupe.set(`chat:${clientRunId}`, {
                   ts: Date.now(),
                   ok: false,
                   payload,
                   error,
                 });
                 respond(false, payload, error, {
-                  runId,
+                  runId: clientRunId,
                   error: formatForLog(err),
                 });
+              } finally {
+                chatAbortControllers.delete(clientRunId);
+              }
+              break;
+            }
+            case "wake": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateWakeParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid wake params: ${formatValidationErrors(validateWakeParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as {
+                mode: "now" | "next-heartbeat";
+                text: string;
+              };
+              const result = cron.wake({ mode: p.mode, text: p.text });
+              respond(true, result, undefined);
+              break;
+            }
+            case "cron.list": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronListParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.list params: ${formatValidationErrors(validateCronListParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as { includeDisabled?: boolean };
+              const jobs = await cron.list({
+                includeDisabled: p.includeDisabled,
               });
-            break;
+              respond(true, { jobs }, undefined);
+              break;
+            }
+            case "cron.status": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronStatusParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.status params: ${formatValidationErrors(validateCronStatusParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const status = await cron.status();
+              respond(true, status, undefined);
+              break;
+            }
+            case "cron.add": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronAddParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.add params: ${formatValidationErrors(validateCronAddParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const job = await cron.add(params as unknown as CronJobCreate);
+              respond(true, job, undefined);
+              break;
+            }
+            case "cron.update": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronUpdateParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.update params: ${formatValidationErrors(validateCronUpdateParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as {
+                id: string;
+                patch: Record<string, unknown>;
+              };
+              const job = await cron.update(
+                p.id,
+                p.patch as unknown as CronJobPatch,
+              );
+              respond(true, job, undefined);
+              break;
+            }
+            case "cron.remove": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronRemoveParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.remove params: ${formatValidationErrors(validateCronRemoveParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as { id: string };
+              const result = await cron.remove(p.id);
+              respond(true, result, undefined);
+              break;
+            }
+            case "cron.run": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronRunParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.run params: ${formatValidationErrors(validateCronRunParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as { id: string; mode?: "due" | "force" };
+              const result = await cron.run(p.id, p.mode);
+              respond(true, result, undefined);
+              break;
+            }
+            case "cron.runs": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateCronRunsParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid cron.runs params: ${formatValidationErrors(validateCronRunsParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as { id: string; limit?: number };
+              const logPath = resolveCronRunLogPath({
+                storePath: cronStorePath,
+                jobId: p.id,
+              });
+              const entries = await readCronRunLogEntries(logPath, {
+                limit: p.limit,
+                jobId: p.id,
+              });
+              respond(true, { entries }, undefined);
+              break;
+            }
+            case "status": {
+              const status = await getStatusSummary();
+              respond(true, status, undefined);
+              break;
+            }
+            case "sessions.list": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateSessionsListParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid sessions.list params: ${formatValidationErrors(validateSessionsListParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as SessionsListParams;
+              const cfg = loadConfig();
+              const storePath = resolveStorePath(cfg.inbound?.session?.store);
+              const store = loadSessionStore(storePath);
+              const result = listSessionsFromStore({
+                cfg,
+                storePath,
+                store,
+                opts: p,
+              });
+              respond(true, result, undefined);
+              break;
+            }
+            case "sessions.patch": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateSessionsPatchParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid sessions.patch params: ${formatValidationErrors(validateSessionsPatchParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as SessionsPatchParams;
+              const key = String(p.key ?? "").trim();
+              if (!key) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
+                );
+                break;
+              }
+
+              const cfg = loadConfig();
+              const storePath = resolveStorePath(cfg.inbound?.session?.store);
+              const store = loadSessionStore(storePath);
+              const now = Date.now();
+
+              const existing = store[key];
+              const next: SessionEntry = existing
+                ? {
+                    ...existing,
+                    updatedAt: Math.max(existing.updatedAt ?? 0, now),
+                  }
+                : { sessionId: randomUUID(), updatedAt: now };
+
+              if ("thinkingLevel" in p) {
+                const raw = p.thinkingLevel;
+                if (raw === null) {
+                  delete next.thinkingLevel;
+                } else if (raw !== undefined) {
+                  const normalized = normalizeThinkLevel(String(raw));
+                  if (!normalized) {
+                    respond(
+                      false,
+                      undefined,
+                      errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        "invalid thinkingLevel (use off|minimal|low|medium|high)",
+                      ),
+                    );
+                    break;
+                  }
+                  if (normalized === "off") delete next.thinkingLevel;
+                  else next.thinkingLevel = normalized;
+                }
+              }
+
+              if ("verboseLevel" in p) {
+                const raw = p.verboseLevel;
+                if (raw === null) {
+                  delete next.verboseLevel;
+                } else if (raw !== undefined) {
+                  const normalized = normalizeVerboseLevel(String(raw));
+                  if (!normalized) {
+                    respond(
+                      false,
+                      undefined,
+                      errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        'invalid verboseLevel (use "on"|"off")',
+                      ),
+                    );
+                    break;
+                  }
+                  if (normalized === "off") delete next.verboseLevel;
+                  else next.verboseLevel = normalized;
+                }
+              }
+
+              store[key] = next;
+              await saveSessionStore(storePath, store);
+              const result: SessionsPatchResult = {
+                ok: true,
+                path: storePath,
+                key,
+                entry: next,
+              };
+              respond(true, result, undefined);
+              break;
+            }
+            case "last-heartbeat": {
+              respond(true, getLastHeartbeatEvent(), undefined);
+              break;
+            }
+            case "set-heartbeats": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              const enabled = params.enabled;
+              if (typeof enabled !== "boolean") {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    "invalid set-heartbeats params: enabled (boolean) required",
+                  ),
+                );
+                break;
+              }
+              setHeartbeatsEnabled(enabled);
+              respond(true, { ok: true, enabled }, undefined);
+              break;
+            }
+            case "system-presence": {
+              const presence = listSystemPresence();
+              respond(true, presence, undefined);
+              break;
+            }
+            case "system-event": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              const text = String(params.text ?? "").trim();
+              if (!text) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, "text required"),
+                );
+                break;
+              }
+              const instanceId =
+                typeof params.instanceId === "string"
+                  ? params.instanceId
+                  : undefined;
+              const host =
+                typeof params.host === "string" ? params.host : undefined;
+              const ip = typeof params.ip === "string" ? params.ip : undefined;
+              const mode =
+                typeof params.mode === "string" ? params.mode : undefined;
+              const version =
+                typeof params.version === "string" ? params.version : undefined;
+              const platform =
+                typeof params.platform === "string"
+                  ? params.platform
+                  : undefined;
+              const deviceFamily =
+                typeof params.deviceFamily === "string"
+                  ? params.deviceFamily
+                  : undefined;
+              const modelIdentifier =
+                typeof params.modelIdentifier === "string"
+                  ? params.modelIdentifier
+                  : undefined;
+              const lastInputSeconds =
+                typeof params.lastInputSeconds === "number" &&
+                Number.isFinite(params.lastInputSeconds)
+                  ? params.lastInputSeconds
+                  : undefined;
+              const reason =
+                typeof params.reason === "string" ? params.reason : undefined;
+              const tags =
+                Array.isArray(params.tags) &&
+                params.tags.every((t) => typeof t === "string")
+                  ? (params.tags as string[])
+                  : undefined;
+              updateSystemPresence({
+                text,
+                instanceId,
+                host,
+                ip,
+                mode,
+                version,
+                platform,
+                deviceFamily,
+                modelIdentifier,
+                lastInputSeconds,
+                reason,
+                tags,
+              });
+              const isNodePresenceLine = text.startsWith("Node:");
+              const normalizedReason = (reason ?? "").toLowerCase();
+              const looksPeriodic =
+                normalizedReason.startsWith("periodic") ||
+                normalizedReason === "heartbeat";
+              if (!(isNodePresenceLine && looksPeriodic)) {
+                const compactNodeText =
+                  isNodePresenceLine &&
+                  (host || ip || version || mode || reason)
+                    ? `Node: ${host?.trim() || "Unknown"}${ip ? ` (${ip})` : ""} · app ${version?.trim() || "unknown"} · mode ${mode?.trim() || "unknown"} · reason ${reason?.trim() || "event"}`
+                    : text;
+                enqueueSystemEvent(compactNodeText);
+              }
+              presenceVersion += 1;
+              broadcast(
+                "presence",
+                { presence: listSystemPresence() },
+                {
+                  dropIfSlow: true,
+                  stateVersion: {
+                    presence: presenceVersion,
+                    health: healthVersion,
+                  },
+                },
+              );
+              respond(true, { ok: true }, undefined);
+              break;
+            }
+            case "node.pair.request": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodePairRequestParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.pair.request params: ${formatValidationErrors(validateNodePairRequestParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as {
+                nodeId: string;
+                displayName?: string;
+                platform?: string;
+                version?: string;
+                remoteIp?: string;
+              };
+              try {
+                const result = await requestNodePairing({
+                  nodeId: p.nodeId,
+                  displayName: p.displayName,
+                  platform: p.platform,
+                  version: p.version,
+                  remoteIp: p.remoteIp,
+                });
+                if (result.status === "pending" && result.created) {
+                  broadcast("node.pair.requested", result.request, {
+                    dropIfSlow: true,
+                  });
+                }
+                respond(true, result, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "node.pair.list": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodePairListParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.pair.list params: ${formatValidationErrors(validateNodePairListParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              try {
+                const list = await listNodePairing();
+                respond(true, list, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "node.pair.approve": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodePairApproveParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.pair.approve params: ${formatValidationErrors(validateNodePairApproveParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const { requestId } = params as { requestId: string };
+              try {
+                const approved = await approveNodePairing(requestId);
+                if (!approved) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"),
+                  );
+                  break;
+                }
+                broadcast(
+                  "node.pair.resolved",
+                  {
+                    requestId,
+                    nodeId: approved.node.nodeId,
+                    decision: "approved",
+                    ts: Date.now(),
+                  },
+                  { dropIfSlow: true },
+                );
+                respond(true, approved, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "node.pair.reject": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodePairRejectParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.pair.reject params: ${formatValidationErrors(validateNodePairRejectParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const { requestId } = params as { requestId: string };
+              try {
+                const rejected = await rejectNodePairing(requestId);
+                if (!rejected) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"),
+                  );
+                  break;
+                }
+                broadcast(
+                  "node.pair.resolved",
+                  {
+                    requestId,
+                    nodeId: rejected.nodeId,
+                    decision: "rejected",
+                    ts: Date.now(),
+                  },
+                  { dropIfSlow: true },
+                );
+                respond(true, rejected, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "node.pair.verify": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodePairVerifyParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.pair.verify params: ${formatValidationErrors(validateNodePairVerifyParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const { nodeId, token } = params as {
+                nodeId: string;
+                token: string;
+              };
+              try {
+                const result = await verifyNodeToken(nodeId, token);
+                respond(true, result, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "node.list": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodeListParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.list params: ${formatValidationErrors(validateNodeListParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+
+              try {
+                const list = await listNodePairing();
+                const connected = bridge?.listConnected?.() ?? [];
+                const connectedById = new Map(
+                  connected.map((n) => [n.nodeId, n]),
+                );
+
+                const nodes = list.paired.map((n) => {
+                  const live = connectedById.get(n.nodeId);
+                  return {
+                    nodeId: n.nodeId,
+                    displayName: live?.displayName ?? n.displayName,
+                    platform: live?.platform ?? n.platform,
+                    version: live?.version ?? n.version,
+                    remoteIp: live?.remoteIp ?? n.remoteIp,
+                    connected: Boolean(live),
+                  };
+                });
+
+                respond(true, { ts: Date.now(), nodes }, undefined);
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "node.invoke": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateNodeInvokeParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid node.invoke params: ${formatValidationErrors(validateNodeInvokeParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              if (!bridge) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, "bridge not running"),
+                );
+                break;
+              }
+              const p = params as {
+                nodeId: string;
+                command: string;
+                params?: unknown;
+                timeoutMs?: number;
+                idempotencyKey: string;
+              };
+              const nodeId = String(p.nodeId ?? "").trim();
+              const command = String(p.command ?? "").trim();
+              if (!nodeId || !command) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    "nodeId and command required",
+                  ),
+                );
+                break;
+              }
+
+              try {
+                const paramsJSON =
+                  "params" in p && p.params !== undefined
+                    ? JSON.stringify(p.params)
+                    : null;
+                const res = await bridge.invoke({
+                  nodeId,
+                  command,
+                  paramsJSON,
+                  timeoutMs: p.timeoutMs,
+                });
+                if (!res.ok) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(
+                      ErrorCodes.UNAVAILABLE,
+                      res.error?.message ?? "node invoke failed",
+                      { details: { nodeError: res.error ?? null } },
+                    ),
+                  );
+                  break;
+                }
+                const payload =
+                  typeof res.payloadJSON === "string" && res.payloadJSON.trim()
+                    ? (() => {
+                        try {
+                          return JSON.parse(res.payloadJSON) as unknown;
+                        } catch {
+                          return { payloadJSON: res.payloadJSON };
+                        }
+                      })()
+                    : undefined;
+                respond(
+                  true,
+                  {
+                    ok: true,
+                    nodeId,
+                    command,
+                    payload,
+                    payloadJSON: res.payloadJSON ?? null,
+                  },
+                  undefined,
+                );
+              } catch (err) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)),
+                );
+              }
+              break;
+            }
+            case "send": {
+              const p = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateSendParams(p)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid send params: ${formatValidationErrors(validateSendParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const params = p as {
+                to: string;
+                message: string;
+                mediaUrl?: string;
+                provider?: string;
+                idempotencyKey: string;
+              };
+              const idem = params.idempotencyKey;
+              const cached = dedupe.get(`send:${idem}`);
+              if (cached) {
+                respond(cached.ok, cached.payload, cached.error, {
+                  cached: true,
+                });
+                break;
+              }
+              const to = params.to.trim();
+              const message = params.message.trim();
+              const provider = (params.provider ?? "whatsapp").toLowerCase();
+              try {
+                if (provider === "telegram") {
+                  const result = await sendMessageTelegram(to, message, {
+                    mediaUrl: params.mediaUrl,
+                    verbose: isVerbose(),
+                  });
+                  const payload = {
+                    runId: idem,
+                    messageId: result.messageId,
+                    chatId: result.chatId,
+                    provider,
+                  };
+                  dedupe.set(`send:${idem}`, {
+                    ts: Date.now(),
+                    ok: true,
+                    payload,
+                  });
+                  respond(true, payload, undefined, { provider });
+                } else {
+                  const result = await sendMessageWhatsApp(to, message, {
+                    mediaUrl: params.mediaUrl,
+                    verbose: isVerbose(),
+                  });
+                  const payload = {
+                    runId: idem,
+                    messageId: result.messageId,
+                    toJid: result.toJid ?? `${to}@s.whatsapp.net`,
+                    provider,
+                  };
+                  dedupe.set(`send:${idem}`, {
+                    ts: Date.now(),
+                    ok: true,
+                    payload,
+                  });
+                  respond(true, payload, undefined, { provider });
+                }
+              } catch (err) {
+                const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+                dedupe.set(`send:${idem}`, {
+                  ts: Date.now(),
+                  ok: false,
+                  error,
+                });
+                respond(false, undefined, error, {
+                  provider,
+                  error: formatForLog(err),
+                });
+              }
+              break;
+            }
+            case "agent": {
+              const p = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateAgentParams(p)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid agent params: ${formatValidationErrors(validateAgentParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const params = p as {
+                message: string;
+                to?: string;
+                sessionId?: string;
+                sessionKey?: string;
+                thinking?: string;
+                deliver?: boolean;
+                channel?: string;
+                idempotencyKey: string;
+                timeout?: number;
+              };
+              const idem = params.idempotencyKey;
+              const cached = dedupe.get(`agent:${idem}`);
+              if (cached) {
+                respond(cached.ok, cached.payload, cached.error, {
+                  cached: true,
+                });
+                break;
+              }
+              const message = params.message.trim();
+
+              const requestedSessionKey =
+                typeof params.sessionKey === "string" &&
+                params.sessionKey.trim()
+                  ? params.sessionKey.trim()
+                  : undefined;
+              let resolvedSessionId = params.sessionId?.trim() || undefined;
+              let sessionEntry: SessionEntry | undefined;
+              let bestEffortDeliver = false;
+              let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
+
+              if (requestedSessionKey) {
+                const { cfg, storePath, store, entry } =
+                  loadSessionEntry(requestedSessionKey);
+                cfgForAgent = cfg;
+                const now = Date.now();
+                const sessionId = entry?.sessionId ?? randomUUID();
+                sessionEntry = {
+                  sessionId,
+                  updatedAt: now,
+                  thinkingLevel: entry?.thinkingLevel,
+                  verboseLevel: entry?.verboseLevel,
+                  systemSent: entry?.systemSent,
+                  lastChannel: entry?.lastChannel,
+                  lastTo: entry?.lastTo,
+                };
+                if (store) {
+                  store[requestedSessionKey] = sessionEntry;
+                  if (storePath) {
+                    await saveSessionStore(storePath, store);
+                  }
+                }
+                resolvedSessionId = sessionId;
+                const mainKey =
+                  (cfg.inbound?.session?.mainKey ?? "main").trim() || "main";
+                if (requestedSessionKey === mainKey) {
+                  chatRunSessions.set(sessionId, {
+                    sessionKey: requestedSessionKey,
+                    clientRunId: idem,
+                  });
+                  bestEffortDeliver = true;
+                }
+              }
+
+              const runId = resolvedSessionId || randomUUID();
+
+              const requestedChannelRaw =
+                typeof params.channel === "string" ? params.channel.trim() : "";
+              const requestedChannel = requestedChannelRaw
+                ? requestedChannelRaw.toLowerCase()
+                : "last";
+
+              const lastChannel = sessionEntry?.lastChannel;
+              const lastTo =
+                typeof sessionEntry?.lastTo === "string"
+                  ? sessionEntry.lastTo.trim()
+                  : "";
+
+              const resolvedChannel = (() => {
+                if (requestedChannel === "last") {
+                  // WebChat is not a deliverable surface. Treat it as "unset" for routing,
+                  // so VoiceWake and CLI callers don't get stuck with deliver=false.
+                  return lastChannel && lastChannel !== "webchat"
+                    ? lastChannel
+                    : "whatsapp";
+                }
+                if (
+                  requestedChannel === "whatsapp" ||
+                  requestedChannel === "telegram" ||
+                  requestedChannel === "webchat"
+                ) {
+                  return requestedChannel;
+                }
+                return lastChannel && lastChannel !== "webchat"
+                  ? lastChannel
+                  : "whatsapp";
+              })();
+
+              const resolvedTo = (() => {
+                const explicit =
+                  typeof params.to === "string" && params.to.trim()
+                    ? params.to.trim()
+                    : undefined;
+                if (explicit) return explicit;
+                if (
+                  resolvedChannel === "whatsapp" ||
+                  resolvedChannel === "telegram"
+                ) {
+                  return lastTo || undefined;
+                }
+                return undefined;
+              })();
+
+              const sanitizedTo = (() => {
+                // If we derived a WhatsApp recipient from session "lastTo", ensure it is still valid
+                // for the configured allowlist. Otherwise, fall back to the first allowed number so
+                // voice wake doesn't silently route to stale/test recipients.
+                if (resolvedChannel !== "whatsapp") return resolvedTo;
+                const explicit =
+                  typeof params.to === "string" && params.to.trim()
+                    ? params.to.trim()
+                    : undefined;
+                if (explicit) return resolvedTo;
+
+                const cfg = cfgForAgent ?? loadConfig();
+                const rawAllow = cfg.inbound?.allowFrom ?? [];
+                if (rawAllow.includes("*")) return resolvedTo;
+                const allowFrom = rawAllow
+                  .map((val) => normalizeE164(val))
+                  .filter((val) => val.length > 1);
+                if (allowFrom.length === 0) return resolvedTo;
+
+                const normalizedLast =
+                  typeof resolvedTo === "string" && resolvedTo.trim()
+                    ? normalizeE164(resolvedTo)
+                    : undefined;
+                if (normalizedLast && allowFrom.includes(normalizedLast)) {
+                  return normalizedLast;
+                }
+                return allowFrom[0];
+              })();
+
+              const deliver =
+                params.deliver === true && resolvedChannel !== "webchat";
+
+              const accepted = { runId, status: "accepted" as const };
+              // Store an in-flight ack so retries do not spawn a second run.
+              dedupe.set(`agent:${idem}`, {
+                ts: Date.now(),
+                ok: true,
+                payload: accepted,
+              });
+              respond(true, accepted, undefined, { runId });
+
+              void agentCommand(
+                {
+                  message,
+                  to: sanitizedTo,
+                  sessionId: resolvedSessionId,
+                  thinking: params.thinking,
+                  deliver,
+                  provider: resolvedChannel,
+                  timeout: params.timeout?.toString(),
+                  bestEffortDeliver,
+                  surface: "VoiceWake",
+                },
+                defaultRuntime,
+                deps,
+              )
+                .then(() => {
+                  const payload = {
+                    runId,
+                    status: "ok" as const,
+                    summary: "completed",
+                  };
+                  dedupe.set(`agent:${idem}`, {
+                    ts: Date.now(),
+                    ok: true,
+                    payload,
+                  });
+                  // Send a second res frame (same id) so TS clients with expectFinal can wait.
+                  // Swift clients will typically treat the first res as the result and ignore this.
+                  respond(true, payload, undefined, { runId });
+                })
+                .catch((err) => {
+                  const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+                  const payload = {
+                    runId,
+                    status: "error" as const,
+                    summary: String(err),
+                  };
+                  dedupe.set(`agent:${idem}`, {
+                    ts: Date.now(),
+                    ok: false,
+                    payload,
+                    error,
+                  });
+                  respond(false, payload, error, {
+                    runId,
+                    error: formatForLog(err),
+                  });
+                });
+              break;
+            }
+            default: {
+              respond(
+                false,
+                undefined,
+                errorShape(
+                  ErrorCodes.INVALID_REQUEST,
+                  `unknown method: ${req.method}`,
+                ),
+              );
+              break;
+            }
           }
-          default: {
-            respond(
-              false,
-              undefined,
-              errorShape(
-                ErrorCodes.INVALID_REQUEST,
-                `unknown method: ${req.method}`,
-              ),
-            );
-            break;
-          }
-        }
         })().catch((err) => {
           logError(`gateway: request handler failed: ${formatForLog(err)}`);
           respond(
