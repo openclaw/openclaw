@@ -1,27 +1,13 @@
-import type { AgentTool } from "@mariozechner/pi-ai";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-ai";
 import { codingTools, readTool } from "@mariozechner/pi-coding-agent";
 
 import { detectMime } from "../media/mime.js";
 
 // TODO(steipete): Remove this wrapper once pi-mono ships file-magic MIME detection
 // for `read` image payloads in `@mariozechner/pi-coding-agent` (then switch back to `codingTools` directly).
-type ImageContentBlock = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
-
-type TextContentBlock = {
-  type: "text";
-  text: string;
-};
-
-type ToolResult = {
-  content: Array<
-    ImageContentBlock | TextContentBlock | Record<string, unknown>
-  >;
-  details?: unknown;
-};
+type ToolContentBlock = AgentToolResult<unknown>["content"][number];
+type ImageContentBlock = Extract<ToolContentBlock, { type: "image" }>;
+type TextContentBlock = Extract<ToolContentBlock, { type: "text" }>;
 
 function sniffMimeFromBase64(base64: string): string | undefined {
   const trimmed = base64.trim();
@@ -48,18 +34,18 @@ function rewriteReadImageHeader(text: string, mimeType: string): string {
 }
 
 function normalizeReadImageResult(
-  result: ToolResult,
+  result: AgentToolResult<unknown>,
   filePath: string,
-): ToolResult {
+): AgentToolResult<unknown> {
   const content = Array.isArray(result.content) ? result.content : [];
 
   const image = content.find(
     (b): b is ImageContentBlock =>
       !!b &&
       typeof b === "object" &&
-      (b as ImageContentBlock).type === "image" &&
-      typeof (b as ImageContentBlock).data === "string" &&
-      typeof (b as ImageContentBlock).mimeType === "string",
+      (b as { type?: unknown }).type === "image" &&
+      typeof (b as { data?: unknown }).data === "string" &&
+      typeof (b as { mimeType?: unknown }).mimeType === "string",
   );
   if (!image) return result;
 
@@ -82,19 +68,19 @@ function normalizeReadImageResult(
     if (
       block &&
       typeof block === "object" &&
-      (block as ImageContentBlock).type === "image"
+      (block as { type?: unknown }).type === "image"
     ) {
-      const b = block as ImageContentBlock;
-      return { ...b, mimeType: sniffed };
+      const b = block as ImageContentBlock & { mimeType: string };
+      return { ...b, mimeType: sniffed } satisfies ImageContentBlock;
     }
     if (
       block &&
       typeof block === "object" &&
-      (block as TextContentBlock).type === "text" &&
-      typeof (block as TextContentBlock).text === "string"
+      (block as { type?: unknown }).type === "text" &&
+      typeof (block as { text?: unknown }).text === "string"
     ) {
-      const b = block as TextContentBlock;
-      return { ...b, text: rewriteReadImageHeader(b.text, sniffed) };
+      const b = block as TextContentBlock & { text: string };
+      return { ...b, text: rewriteReadImageHeader(b.text, sniffed) } satisfies TextContentBlock;
     }
     return block;
   });
@@ -102,15 +88,13 @@ function normalizeReadImageResult(
   return { ...result, content: nextContent };
 }
 
-function createClawdisReadTool(base: AgentTool): AgentTool {
+type AnyAgentTool = AgentTool<any, any>;
+
+function createClawdisReadTool(base: AnyAgentTool): AnyAgentTool {
   return {
     ...base,
     execute: async (toolCallId, params, signal) => {
-      const result = (await base.execute(
-        toolCallId,
-        params,
-        signal,
-      )) as ToolResult;
+      const result = (await base.execute(toolCallId, params as any, signal)) as AgentToolResult<unknown>;
       const record =
         params && typeof params === "object"
           ? (params as Record<string, unknown>)
@@ -122,8 +106,8 @@ function createClawdisReadTool(base: AgentTool): AgentTool {
   };
 }
 
-export function createClawdisCodingTools(): AgentTool[] {
-  return codingTools.map((tool) =>
-    tool.name === readTool.name ? createClawdisReadTool(tool) : tool,
+export function createClawdisCodingTools(): AnyAgentTool[] {
+  return (codingTools as unknown as AnyAgentTool[]).map((tool) =>
+    tool.name === readTool.name ? createClawdisReadTool(tool) : (tool as AnyAgentTool),
   );
 }
