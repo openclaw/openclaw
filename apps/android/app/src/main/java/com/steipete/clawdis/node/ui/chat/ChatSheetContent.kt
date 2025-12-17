@@ -33,7 +33,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
-  val isBridgeConnected by viewModel.isConnected.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
@@ -79,19 +78,15 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     verticalArrangement = Arrangement.spacedBy(10.dp),
   ) {
     ChatMessageListCard(
-      sessionKey = sessionKey,
-      isBridgeConnected = isBridgeConnected,
-      healthOk = healthOk,
       messages = messages,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
-      onShowSessions = { showSessions = true },
-      onRefresh = { viewModel.refreshChat() },
       modifier = Modifier.weight(1f, fill = true),
     )
 
     ChatComposer(
+      sessionKey = sessionKey,
       healthOk = healthOk,
       thinkingLevel = thinkingLevel,
       pendingRunCount = pendingRunCount,
@@ -100,6 +95,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
       onSetThinkingLevel = { level -> viewModel.setChatThinkingLevel(level) },
+      onShowSessions = { showSessions = true },
       onRefresh = { viewModel.refreshChat() },
       onAbort = { viewModel.abortChat() },
       onSend = { text ->

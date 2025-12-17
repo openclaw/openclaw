@@ -15,6 +15,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.FolderOpen
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.ButtonDefaults
@@ -41,6 +42,7 @@ import androidx.compose.ui.unit.dp
 
 @Composable
 fun ChatComposer(
+  sessionKey: String,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
@@ -49,6 +51,7 @@ fun ChatComposer(
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
+  onShowSessions: () -> Unit,
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
   onSend: (text: String) -> Unit,
@@ -88,6 +91,10 @@ fun ChatComposer(
 
         Spacer(modifier = Modifier.weight(1f))
 
+        FilledTonalIconButton(onClick = onShowSessions, modifier = Modifier.size(42.dp)) {
+          Icon(Icons.Default.FolderOpen, contentDescription = "Sessions")
+        }
+
         FilledTonalIconButton(onClick = onRefresh, modifier = Modifier.size(42.dp)) {
           Icon(Icons.Default.Refresh, contentDescription = "Refresh")
         }
@@ -111,6 +118,7 @@ fun ChatComposer(
       )
 
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        ConnectionPill(sessionKey = sessionKey, healthOk = healthOk)
         Spacer(modifier = Modifier.weight(1f))
 
         if (pendingRunCount > 0) {
@@ -143,6 +151,32 @@ fun ChatComposer(
           maxLines = 2,
         )
       }
+    }
+  }
+}
+
+@Composable
+private fun ConnectionPill(sessionKey: String, healthOk: Boolean) {
+  Surface(
+    shape = RoundedCornerShape(999.dp),
+    color = MaterialTheme.colorScheme.surfaceContainerHighest,
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Surface(
+        modifier = Modifier.size(7.dp),
+        shape = androidx.compose.foundation.shape.CircleShape,
+        color = if (healthOk) Color(0xFF2ECC71) else Color(0xFFF39C12),
+      ) {}
+      Text(sessionKey, style = MaterialTheme.typography.labelSmall)
+      Text(
+        if (healthOk) "Connected" else "Connecting…",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
     }
   }
 }
