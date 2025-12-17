@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 
 export type SystemPresence = {
@@ -49,6 +50,17 @@ function initSelfPresence() {
   const ip = resolvePrimaryIPv4() ?? undefined;
   const version =
     process.env.CLAWDIS_VERSION ?? process.env.npm_package_version ?? "unknown";
+  const modelIdentifier = (() => {
+    const p = os.platform();
+    if (p === "darwin") {
+      const res = spawnSync("sysctl", ["-n", "hw.model"], {
+        encoding: "utf-8",
+      });
+      const out = typeof res.stdout === "string" ? res.stdout.trim() : "";
+      return out.length > 0 ? out : undefined;
+    }
+    return os.arch();
+  })();
   const platform = (() => {
     const p = os.platform();
     const rel = os.release();
@@ -70,6 +82,7 @@ function initSelfPresence() {
     version,
     platform,
     deviceFamily,
+    modelIdentifier,
     mode: "gateway",
     reason: "self",
     text,

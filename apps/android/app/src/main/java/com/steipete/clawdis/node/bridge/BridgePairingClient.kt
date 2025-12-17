@@ -28,6 +28,9 @@ class BridgePairingClient {
     val deviceFamily: String?,
     val modelIdentifier: String?,
     val caps: List<String>?,
+    val deviceFamily: String?,
+    val modelIdentifier: String?,
+    val caps: List<String>?,
   )
 
   data class PairResult(val ok: Boolean, val token: String?, val error: String? = null)

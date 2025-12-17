@@ -46,6 +46,8 @@ class BridgePairingClientTest {
             token = "token-123",
             platform = "Android",
             version = "test",
+            deviceFamily = "Android",
+            modelIdentifier = "SM-X000",
           ),
       )
     assertTrue(res.ok)
@@ -91,6 +93,8 @@ class BridgePairingClientTest {
             token = null,
             platform = "Android",
             version = "test",
+            deviceFamily = "Android",
+            modelIdentifier = "SM-X000",
           ),
       )
     assertTrue(res.ok)
@@ -98,4 +102,3 @@ class BridgePairingClientTest {
     server.await()
   }
 }
-

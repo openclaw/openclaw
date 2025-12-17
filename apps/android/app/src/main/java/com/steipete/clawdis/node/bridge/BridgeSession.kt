@@ -43,6 +43,9 @@ class BridgeSession(
     val deviceFamily: String?,
     val modelIdentifier: String?,
     val caps: List<String>?,
+    val deviceFamily: String?,
+    val modelIdentifier: String?,
+    val caps: List<String>?,
   )
 
   data class InvokeRequest(val id: String, val command: String, val paramsJson: String?)

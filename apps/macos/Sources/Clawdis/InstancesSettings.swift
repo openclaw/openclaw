@@ -136,12 +136,12 @@ struct InstancesSettings: View {
     }
 
     private func deviceDescription(_ inst: InstanceInfo) -> String? {
-        let model = inst.modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !model.isEmpty { return model }
         let family = inst.deviceFamily?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let model = inst.modelIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !family.isEmpty, !model.isEmpty { return "\(family) (\(model))" }
+        if !model.isEmpty { return model }
         return family.isEmpty ? nil : family
     }
-
     private func prettyPlatform(_ raw: String) -> String? {
         let (prefix, version) = self.parsePlatform(raw)
         if prefix.isEmpty { return nil }
