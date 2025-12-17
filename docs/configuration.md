@@ -154,6 +154,51 @@ Defaults:
 }
 ```
 
+### `bridge` (Iris/node bridge server)
+
+The Gateway can expose a simple TCP bridge for nodes (iOS/Android “Iris”), typically on port `18790`.
+
+Defaults:
+- enabled: `true`
+- port: `18790`
+- bind: `lan` (binds to `0.0.0.0`)
+
+Bind modes:
+- `lan`: `0.0.0.0` (reachable on any interface, including LAN/Wi‑Fi and Tailscale)
+- `tailnet`: bind only to the machine’s Tailscale IP (recommended for Vienna ⇄ London)
+- `loopback`: `127.0.0.1` (local only)
+- `auto`: prefer tailnet IP if present, else `lan`
+
+```json5
+{
+  bridge: {
+    enabled: true,
+    port: 18790,
+    bind: "tailnet"
+  }
+}
+```
+
+### `discovery.wideArea` (Wide-Area Bonjour / unicast DNS‑SD)
+
+When enabled, the Gateway writes a unicast DNS-SD zone for `_clawdis-bridge._tcp` under `~/.clawdis/dns/` using the standard discovery domain `clawdis.internal.`
+
+To make iOS/Android discover across networks (Vienna ⇄ London), pair this with:
+- a DNS server on the gateway host serving `clawdis.internal.` (CoreDNS is recommended)
+- Tailscale **split DNS** so clients resolve `clawdis.internal` via that server
+
+One-time setup helper (gateway host):
+
+```bash
+clawdis dns setup --apply
+```
+
+```json5
+{
+  discovery: { wideArea: { enabled: true } }
+}
+```
+
 ## Template variables
 
 Template placeholders are expanded in `inbound.transcribeAudio.command` (and any future templated command fields).

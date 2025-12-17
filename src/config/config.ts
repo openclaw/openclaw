@@ -75,6 +75,29 @@ export type GroupChatConfig = {
   historyLimit?: number;
 };
 
+export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
+
+export type BridgeConfig = {
+  enabled?: boolean;
+  port?: number;
+  /**
+   * Bind address policy for the Iris bridge server.
+   * - auto: prefer tailnet IP when present, else LAN (0.0.0.0)
+   * - lan:  0.0.0.0 (reachable on local network + any forwarded interfaces)
+   * - tailnet: bind only to the Tailscale interface IP (100.64.0.0/10)
+   * - loopback: 127.0.0.1
+   */
+  bind?: BridgeBindMode;
+};
+
+export type WideAreaDiscoveryConfig = {
+  enabled?: boolean;
+};
+
+export type DiscoveryConfig = {
+  wideArea?: WideAreaDiscoveryConfig;
+};
+
 export type ClawdisConfig = {
   identity?: {
     name?: string;
@@ -120,6 +143,8 @@ export type ClawdisConfig = {
   telegram?: TelegramConfig;
   webchat?: WebChatConfig;
   cron?: CronConfig;
+  bridge?: BridgeConfig;
+  discovery?: DiscoveryConfig;
 };
 
 // New branding path (preferred)
@@ -257,6 +282,29 @@ const ClawdisSchema = z.object({
       webhookUrl: z.string().optional(),
       webhookSecret: z.string().optional(),
       webhookPath: z.string().optional(),
+    })
+    .optional(),
+  bridge: z
+    .object({
+      enabled: z.boolean().optional(),
+      port: z.number().int().positive().optional(),
+      bind: z
+        .union([
+          z.literal("auto"),
+          z.literal("lan"),
+          z.literal("tailnet"),
+          z.literal("loopback"),
+        ])
+        .optional(),
+    })
+    .optional(),
+  discovery: z
+    .object({
+      wideArea: z
+        .object({
+          enabled: z.boolean().optional(),
+        })
+        .optional(),
     })
     .optional(),
 });

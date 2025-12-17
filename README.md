@@ -61,8 +61,9 @@ Only the Pi CLI is supported now; legacy Claude/Codex/Gemini paths have been rem
 
 - **One Gateway per host**. The Gateway is the only process allowed to own the WhatsApp Web session.
 - **Loopback-first**: the Gateway WebSocket listens on `ws://127.0.0.1:18789` and is not exposed on the LAN.
-- **Bridge for nodes**: when enabled, the Gateway also exposes a LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
+- **Bridge for nodes**: when enabled, the Gateway also exposes a bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable). For tailnet-only setups, set `bridge.bind: "tailnet"` in `~/.clawdis/clawdis.json`.
 - **Remote control**: use a VPN/tailnet or an SSH tunnel (`ssh -N -L 18789:127.0.0.1:18789 user@host`). The macOS app can drive this flow.
+- **Wide-Area Bonjour (optional)**: for auto-discovery across networks (Vienna ⇄ London) over Tailscale, use unicast DNS-SD on `clawdis.internal.`; see `docs/bonjour.md`.
 
 ## Codebase
 
@@ -155,6 +156,7 @@ Optional: enable/configure clawd’s dedicated browser control (defaults are alr
 - [Configuration Guide](./docs/configuration.md)
 - [Gateway runbook](./docs/gateway.md)
 - [Discovery + transports](./docs/discovery.md)
+- [Bonjour / mDNS + Wide-Area Bonjour](./docs/bonjour.md)
 - [Agent Runtime](./docs/agent.md)
 - [Group Chats](./docs/group-messages.md)
 - [Security](./docs/security.md)

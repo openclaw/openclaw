@@ -60,7 +60,8 @@ Troubleshooting and beacon details: `docs/bonjour.md`.
 Disable/override:
 - `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.
 - `CLAWDIS_BRIDGE_ENABLED=0` disables the bridge listener.
-- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` control bind/port.
+- `bridge.bind` / `bridge.port` in `~/.clawdis/clawdis.json` control bridge bind/port (preferred).
+- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
 - `CLAWDIS_SSH_PORT` overrides the SSH port advertised in the master beacon (defaults to 22).
 - `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in the master beacon.
 

@@ -17,54 +17,33 @@ High level:
 1) Run a DNS server on the gateway host (reachable via tailnet IP).
 2) Publish DNS-SD records for `_clawdis-bridge._tcp` in a dedicated zone (example: `clawdis.internal.`).
 3) Configure Tailscale **split DNS** so `clawdis.internal` resolves via that DNS server for clients (including iOS).
-4) In Iris: Settings → Bridge → Advanced → set **Discovery Domain** to `clawdis.internal.`
 
-### Example: CoreDNS on macOS (gateway host)
+Clawdis standardizes on the discovery domain `clawdis.internal.` for this mode. iOS/Android nodes browse both `local.` and `clawdis.internal.` automatically (no per-device knob).
 
-On the gateway host (macOS):
+### Gateway config (recommended)
+
+On the gateway host (the machine running the Gateway bridge), add to `~/.clawdis/clawdis.json` (JSON5):
+
+```json5
+{
+  bridge: { bind: "tailnet" }, // tailnet-only (recommended)
+  discovery: { wideArea: { enabled: true } } // enables clawdis.internal DNS-SD publishing
+}
+```
+
+### One-time DNS server setup (gateway host)
+
+On the gateway host (macOS), run:
 
 ```bash
-brew install coredns
-
-sudo mkdir -p /opt/homebrew/etc/coredns
-sudo tee /opt/homebrew/etc/coredns/Corefile >/dev/null <<'EOF'
-clawdis.internal:53 {
-    # Security: bind only to tailnet IPs so this DNS server is *not* reachable
-    # via LAN/Wi‑Fi/public interfaces.
-    #
-    # Replace `<TAILNET_IPV4>` / `<TAILNET_IPV6>` with this machine’s Tailscale IPs.
-    bind <TAILNET_IPV4> <TAILNET_IPV6>
-    log
-    errors
-    file /opt/homebrew/etc/coredns/clawdis.internal.db
-}
-EOF
-
-# Replace `<TAILNET_IPV4>` with the gateway machine’s tailnet IP.
-sudo tee /opt/homebrew/etc/coredns/clawdis.internal.db >/dev/null <<'EOF'
-$ORIGIN clawdis.internal.
-$TTL 60
-
-@ IN SOA ns.clawdis.internal. hostmaster.clawdis.internal. (
-  2025121701 ; serial
-  60         ; refresh
-  60         ; retry
-  604800     ; expire
-  60         ; minimum
-)
-
-@  IN NS ns
-ns IN A <TAILNET_IPV4>
-
-gw-london IN A <TAILNET_IPV4>
-
-_clawdis-bridge._tcp IN PTR ClawdisBridgeLondon._clawdis-bridge._tcp
-ClawdisBridgeLondon._clawdis-bridge._tcp IN SRV 0 0 18790 gw-london
-ClawdisBridgeLondon._clawdis-bridge._tcp IN TXT "displayName=Mac Studio (London)"
-EOF
-
-sudo brew services start coredns
+clawdis dns setup --apply
 ```
+
+This installs CoreDNS and configures it to:
+- listen on port 53 **only** on the gateway’s Tailscale interface IPs
+- serve the zone `clawdis.internal.` from the gateway-owned zone file `~/.clawdis/dns/clawdis.internal.db`
+
+The Gateway writes/updates that zone file when `discovery.wideArea.enabled` is true.
 
 Validate from any tailnet-connected machine:
 
@@ -88,7 +67,7 @@ The bridge port (default `18790`) is a plain TCP service. By default it binds to
 
 For a tailnet-only setup, bind it to the Tailscale IP instead:
 
-- Set `CLAWDIS_BRIDGE_HOST=<TAILNET_IPV4>` on the gateway host.
+- Set `bridge.bind: "tailnet"` in `~/.clawdis/clawdis.json`.
 - Restart the Gateway (or restart the macOS menubar app via `./scripts/restart-mac.sh` on that machine).
 
 This keeps the bridge reachable only from devices on your tailnet (unless you intentionally expose it some other way).
@@ -169,9 +148,10 @@ Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\\DDD` 
 
 - `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.
 - `CLAWDIS_BRIDGE_ENABLED=0` disables the bridge listener (and therefore the bridge beacon).
-- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` control bridge bind/port.
+- `bridge.bind` / `bridge.port` in `~/.clawdis/clawdis.json` control bridge bind/port (preferred).
+- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
 - `CLAWDIS_SSH_PORT` overrides the SSH port advertised in `_clawdis-master._tcp`.
-- `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in `_clawdis-master._tcp`.
+- `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in `_clawdis-master._tcp` (wide-area discovery uses `clawdis.internal.` automatically when enabled).
 
 ## Related docs
 

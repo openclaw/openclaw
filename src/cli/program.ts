@@ -29,6 +29,7 @@ import { VERSION } from "../version.js";
 import { startWebChatServer } from "../webchat/server.js";
 import { registerCronCli } from "./cron-cli.js";
 import { createDefaultDeps } from "./deps.js";
+import { registerDnsCli } from "./dns-cli.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { forceFreePort } from "./ports.js";
@@ -248,6 +249,7 @@ Examples:
   registerGatewayCli(program);
   registerNodesCli(program);
   registerCronCli(program);
+  registerDnsCli(program);
 
   program
     .command("status")

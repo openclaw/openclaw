@@ -62,10 +62,18 @@ import {
   upsertPresence,
 } from "../infra/system-presence.js";
 import {
+  pickPrimaryTailnetIPv4,
+  pickPrimaryTailnetIPv6,
+} from "../infra/tailnet.js";
+import {
   defaultVoiceWakeTriggers,
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
+import {
+  WIDE_AREA_DISCOVERY_DOMAIN,
+  writeWideAreaBridgeZone,
+} from "../infra/widearea-dns.js";
 import { logError, logInfo, logWarn } from "../logger.js";
 import {
   getChildLogger,
@@ -715,12 +723,51 @@ export async function startGatewayServer(
     }
   };
 
-  const bridgeHost = process.env.CLAWDIS_BRIDGE_HOST ?? "0.0.0.0";
-  const bridgePort =
-    process.env.CLAWDIS_BRIDGE_PORT !== undefined
-      ? Number.parseInt(process.env.CLAWDIS_BRIDGE_PORT, 10)
-      : 18790;
-  const bridgeEnabled = process.env.CLAWDIS_BRIDGE_ENABLED !== "0";
+  const wideAreaDiscoveryEnabled =
+    cfgAtStart.discovery?.wideArea?.enabled === true;
+
+  const bridgeEnabled = (() => {
+    if (cfgAtStart.bridge?.enabled !== undefined)
+      return cfgAtStart.bridge.enabled === true;
+    return process.env.CLAWDIS_BRIDGE_ENABLED !== "0";
+  })();
+
+  const bridgePort = (() => {
+    if (
+      typeof cfgAtStart.bridge?.port === "number" &&
+      cfgAtStart.bridge.port > 0
+    ) {
+      return cfgAtStart.bridge.port;
+    }
+    if (process.env.CLAWDIS_BRIDGE_PORT !== undefined) {
+      const parsed = Number.parseInt(process.env.CLAWDIS_BRIDGE_PORT, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : 18790;
+    }
+    return 18790;
+  })();
+
+  const bridgeHost = (() => {
+    // Back-compat: allow an env var override when no bind policy is configured.
+    if (cfgAtStart.bridge?.bind === undefined) {
+      const env = process.env.CLAWDIS_BRIDGE_HOST?.trim();
+      if (env) return env;
+    }
+
+    const bind =
+      cfgAtStart.bridge?.bind ?? (wideAreaDiscoveryEnabled ? "tailnet" : "lan");
+    if (bind === "loopback") return "127.0.0.1";
+    if (bind === "lan") return "0.0.0.0";
+
+    const tailnetIPv4 = pickPrimaryTailnetIPv4();
+    const tailnetIPv6 = pickPrimaryTailnetIPv6();
+    if (bind === "tailnet") {
+      return tailnetIPv4 ?? tailnetIPv6 ?? null;
+    }
+    if (bind === "auto") {
+      return tailnetIPv4 ?? tailnetIPv6 ?? "0.0.0.0";
+    }
+    return "0.0.0.0";
+  })();
 
   const bridgeSubscribe = (nodeId: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();
@@ -1241,7 +1288,7 @@ export async function startGatewayServer(
 
   const machineDisplayName = await getMachineDisplayName();
 
-  if (bridgeEnabled && bridgePort > 0) {
+  if (bridgeEnabled && bridgePort > 0 && bridgeHost) {
     try {
       const started = await startNodeBridgeServer({
         host: bridgeHost,
@@ -1334,6 +1381,10 @@ export async function startGatewayServer(
     } catch (err) {
       logWarn(`gateway: bridge failed to start: ${String(err)}`);
     }
+  } else if (bridgeEnabled && bridgePort > 0 && !bridgeHost) {
+    logWarn(
+      "gateway: bridge bind policy requested tailnet IP, but no tailnet interface was found; refusing to start bridge",
+    );
   }
 
   try {
@@ -1345,8 +1396,11 @@ export async function startGatewayServer(
         : undefined;
 
     const tailnetDnsEnv = process.env.CLAWDIS_TAILNET_DNS?.trim();
-    const tailnetDns =
-      tailnetDnsEnv && tailnetDnsEnv.length > 0 ? tailnetDnsEnv : undefined;
+    const tailnetDns = wideAreaDiscoveryEnabled
+      ? WIDE_AREA_DISCOVERY_DOMAIN
+      : tailnetDnsEnv && tailnetDnsEnv.length > 0
+        ? tailnetDnsEnv
+        : undefined;
 
     const bonjour = await startGatewayBonjourAdvertiser({
       instanceName: formatBonjourInstanceName(machineDisplayName),
@@ -1358,6 +1412,30 @@ export async function startGatewayServer(
     bonjourStop = bonjour.stop;
   } catch (err) {
     logWarn(`gateway: bonjour advertising failed: ${String(err)}`);
+  }
+
+  if (wideAreaDiscoveryEnabled && bridge?.port) {
+    const tailnetIPv4 = pickPrimaryTailnetIPv4();
+    if (!tailnetIPv4) {
+      logWarn(
+        "gateway: discovery.wideArea.enabled is true, but no Tailscale IPv4 address was found; skipping unicast DNS-SD zone update",
+      );
+    } else {
+      try {
+        const tailnetIPv6 = pickPrimaryTailnetIPv6();
+        const result = await writeWideAreaBridgeZone({
+          bridgePort: bridge.port,
+          displayName: formatBonjourInstanceName(machineDisplayName),
+          tailnetIPv4,
+          tailnetIPv6: tailnetIPv6 ?? undefined,
+        });
+        defaultRuntime.log(
+          `discovery: wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${WIDE_AREA_DISCOVERY_DOMAIN} → ${result.zonePath})`,
+        );
+      } catch (err) {
+        logWarn(`gateway: wide-area discovery update failed: ${String(err)}`);
+      }
+    }
   }
 
   broadcastHealthUpdate = (snap: HealthSummary) => {
