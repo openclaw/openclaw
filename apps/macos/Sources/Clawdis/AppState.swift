@@ -131,7 +131,7 @@ final class AppState {
         didSet {
             self.ifNotPreview {
                 UserDefaults.standard.set(self.heartbeatsEnabled, forKey: heartbeatsEnabledKey)
-                Task { _ = await AgentRPC.shared.setHeartbeatsEnabled(self.heartbeatsEnabled) }
+                Task { _ = await GatewayConnection.shared.setHeartbeatsEnabled(self.heartbeatsEnabled) }
             }
         }
     }

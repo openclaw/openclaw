@@ -167,8 +167,8 @@ actor BridgeServer {
             let sessionKey = payload.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
                 ?? "node-\(nodeId)"
 
-            _ = await AgentRPC.shared.send(
-                text: text,
+            _ = await GatewayConnection.shared.sendAgent(
+                message: text,
                 thinking: "low",
                 sessionKey: sessionKey,
                 deliver: false,
@@ -193,8 +193,8 @@ actor BridgeServer {
             let to = link.to?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             let channel = link.channel?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
 
-            _ = await AgentRPC.shared.send(
-                text: message,
+            _ = await GatewayConnection.shared.sendAgent(
+                message: message,
                 thinking: thinking,
                 sessionKey: sessionKey,
                 deliver: link.deliver,
@@ -357,9 +357,7 @@ actor BridgeServer {
             ]
             if let ip { params["ip"] = ip }
             if let version { params["version"] = version }
-            _ = try await AgentRPC.shared.controlRequest(
-                method: "system-event",
-                params: ControlRequestParams(raw: params))
+            _ = try await GatewayConnection.shared.controlRequest(method: "system-event", params: params)
         } catch {
             // Best-effort only.
         }

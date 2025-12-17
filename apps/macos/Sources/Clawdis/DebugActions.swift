@@ -115,7 +115,7 @@ enum DebugActions {
 
     static func sendTestHeartbeat() async -> Result<ControlHeartbeatEvent?, Error> {
         do {
-            _ = await AgentRPC.shared.setHeartbeatsEnabled(true)
+            _ = await GatewayConnection.shared.setHeartbeatsEnabled(true)
             await ControlChannel.shared.configure()
             let data = try await ControlChannel.shared.request(method: "last-heartbeat")
             if let evt = try? JSONDecoder().decode(ControlHeartbeatEvent.self, from: data) {

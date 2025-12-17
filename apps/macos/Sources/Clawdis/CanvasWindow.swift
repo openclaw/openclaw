@@ -550,8 +550,8 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
             : "A2UI action: \(name)\n\n```json\n\(json)\n```"
 
         Task {
-            let result = await AgentRPC.shared.send(
-                text: text,
+            let result = await GatewayConnection.shared.sendAgent(
+                message: text,
                 thinking: nil,
                 sessionKey: self.sessionKey,
                 deliver: false,

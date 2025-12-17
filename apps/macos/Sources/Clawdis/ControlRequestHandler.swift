@@ -140,7 +140,7 @@ enum ControlRequestHandler {
     }
 
     private static func handleRPCStatus() async -> Response {
-        let result = await AgentRPC.shared.status()
+        let result = await GatewayConnection.shared.status()
         return Response(ok: result.ok, message: result.error)
     }
 
@@ -169,15 +169,15 @@ enum ControlRequestHandler {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return Response(ok: false, message: "message empty") }
         let sessionKey = session ?? "main"
-        let rpcResult = await AgentRPC.shared.send(
-            text: trimmed,
+        let rpcResult = await GatewayConnection.shared.sendAgent(
+            message: trimmed,
             thinking: thinking,
             sessionKey: sessionKey,
             deliver: deliver,
             to: to,
             channel: nil)
         return rpcResult.ok
-            ? Response(ok: true, message: rpcResult.text ?? "sent")
+            ? Response(ok: true, message: "sent")
             : Response(ok: false, message: rpcResult.error ?? "failed to send")
     }
 

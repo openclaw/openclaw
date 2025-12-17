@@ -1,10 +1,11 @@
 import ClawdisProtocol
 import Foundation
+import OSLog
 
 /// Single, shared Gateway websocket connection for the whole app.
 ///
 /// This owns exactly one `GatewayChannelActor` and reuses it across all callers
-/// (ControlChannel, AgentRPC, SwiftUI WebChat, etc.).
+/// (ControlChannel, debug actions, SwiftUI WebChat, etc.).
 actor GatewayConnection {
     static let shared = GatewayConnection()
 
@@ -110,5 +111,74 @@ actor GatewayConnection {
 
     private static func defaultConfigProvider() async throws -> Config {
         try await GatewayEndpointStore.shared.requireConfig()
+    }
+}
+
+private let gatewayControlLogger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.control")
+
+extension GatewayConnection {
+    private static func wrapParams(_ raw: [String: Any]?) -> [String: AnyCodable]? {
+        guard let raw else { return nil }
+        return raw.reduce(into: [String: AnyCodable]()) { acc, pair in
+            acc[pair.key] = AnyCodable(pair.value)
+        }
+    }
+
+    func controlRequest(
+        method: String,
+        params: [String: Any]? = nil,
+        timeoutMs: Double? = nil) async throws -> Data
+    {
+        try await self.request(method: method, params: Self.wrapParams(params), timeoutMs: timeoutMs)
+    }
+
+    func status() async -> (ok: Bool, error: String?) {
+        do {
+            let data = try await self.controlRequest(method: "status")
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               (obj["ok"] as? Bool) ?? true
+            {
+                return (true, nil)
+            }
+            return (false, "status error")
+        } catch {
+            return (false, error.localizedDescription)
+        }
+    }
+
+    func setHeartbeatsEnabled(_ enabled: Bool) async -> Bool {
+        do {
+            _ = try await self.controlRequest(method: "set-heartbeats", params: ["enabled": enabled])
+            return true
+        } catch {
+            gatewayControlLogger.error("setHeartbeatsEnabled failed \(error.localizedDescription, privacy: .public)")
+            return false
+        }
+    }
+
+    func sendAgent(
+        message: String,
+        thinking: String?,
+        sessionKey: String,
+        deliver: Bool,
+        to: String?,
+        channel: String? = nil,
+        idempotencyKey: String = UUID().uuidString) async -> (ok: Bool, error: String?)
+    {
+        do {
+            let params: [String: Any] = [
+                "message": message,
+                "sessionKey": sessionKey,
+                "thinking": thinking ?? "default",
+                "deliver": deliver,
+                "to": to ?? "",
+                "channel": channel ?? "",
+                "idempotencyKey": idempotencyKey,
+            ]
+            _ = try await self.controlRequest(method: "agent", params: params)
+            return (true, nil)
+        } catch {
+            return (false, error.localizedDescription)
+        }
     }
 }
