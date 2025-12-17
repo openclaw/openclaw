@@ -25,6 +25,23 @@
     - Now it hops back to the main actor before mutating state.
   - Preserve in-page state when closing Canvas (hide the window instead of closing the `WKWebView`).
   - Fix another “Canvas looks hung” source: node pairing approval used `NSAlert.runModal()` on the main actor, which stalls Canvas/IPC while the alert is open.
+  - Add UX feedback + better agent prompting:
+    - Show a small “Sending/Working” spinner when a button is clicked.
+    - Show “Updated/Failed” toasts (failures include the gateway error string).
+    - Send a compact, unambiguous agent message that includes machine identity + Canvas context (instead of a big JSON markdown block).
+    - Native acks the click back into the page via `clawdis:a2ui-action-status` so the UI can switch from “Sending…” to “Working…” immediately.
+
+## Suggested message format (token-efficient)
+We want the model to immediately understand:
+- This is a **Canvas UI event** (not user chat).
+- It happened on **this specific Mac**.
+- Default behavior is to **update the Canvas UI** (unless the button context says otherwise).
+
+Proposed message line (single-line, parseable):
+
+```
+CANVAS_A2UI action=<name> session=<sessionKey> surface=<surfaceId> component=<componentId> host=<machine> instance=<instanceId> ctx=<json?> default=update_canvas
+```
 
 ## Follow-ups
 - Add a small “action sent / failed” debug overlay in the A2UI shell (dev-only) to make failures obvious.

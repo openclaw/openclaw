@@ -115,6 +115,8 @@ const clawdisTheme = {
 class ClawdisA2UIHost extends LitElement {
   static properties = {
     surfaces: { state: true },
+    pendingAction: { state: true },
+    toast: { state: true },
   };
 
   #processor = v0_8.Data.createSignalA2uiMessageProcessor();
@@ -124,11 +126,15 @@ class ClawdisA2UIHost extends LitElement {
   });
 
   surfaces = [];
+  pendingAction = null;
+  toast = null;
+  #statusListener = null;
 
   static styles = css`
     :host {
       display: block;
       height: 100%;
+      position: relative;
       box-sizing: border-box;
       padding: 12px;
     }
@@ -141,6 +147,71 @@ class ClawdisA2UIHost extends LitElement {
       overflow: auto;
       padding-bottom: 24px;
     }
+
+    .status {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      top: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      color: rgba(255, 255, 255, 0.92);
+      font: 13px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      pointer-events: none;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+      z-index: 5;
+    }
+
+    .toast {
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      bottom: 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(255, 255, 255, 0.18);
+      color: rgba(255, 255, 255, 0.92);
+      font: 13px/1.2 -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      pointer-events: none;
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 10px 24px rgba(0, 0, 0, 0.25);
+      z-index: 5;
+    }
+
+    .toast.error {
+      border-color: rgba(255, 109, 109, 0.35);
+      color: rgba(255, 223, 223, 0.98);
+    }
+
+    .spinner {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      border-top-color: rgba(255, 255, 255, 0.92);
+      animation: spin 0.75s linear infinite;
+    }
+
+    @keyframes spin {
+      from {
+        transform: rotate(0deg);
+      }
+      to {
+        transform: rotate(360deg);
+      }
+    }
   `;
 
   connectedCallback() {
@@ -151,7 +222,48 @@ class ClawdisA2UIHost extends LitElement {
       getSurfaces: () => Array.from(this.#processor.getSurfaces().keys()),
     };
     this.addEventListener("a2uiaction", (evt) => this.#handleA2UIAction(evt));
+    this.#statusListener = (evt) => this.#handleActionStatus(evt);
+    globalThis.addEventListener("clawdis:a2ui-action-status", this.#statusListener);
     this.#syncSurfaces();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.#statusListener) {
+      globalThis.removeEventListener("clawdis:a2ui-action-status", this.#statusListener);
+      this.#statusListener = null;
+    }
+  }
+
+  #makeActionId() {
+    return globalThis.crypto?.randomUUID?.() ?? `a2ui_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+
+  #setToast(text, kind = "ok", timeoutMs = 1400) {
+    const toast = { text, kind, expiresAt: Date.now() + timeoutMs };
+    this.toast = toast;
+    this.requestUpdate();
+    setTimeout(() => {
+      if (this.toast === toast) {
+        this.toast = null;
+        this.requestUpdate();
+      }
+    }, timeoutMs + 30);
+  }
+
+  #handleActionStatus(evt) {
+    const detail = evt?.detail ?? null;
+    if (!detail || typeof detail.id !== "string") return;
+    if (!this.pendingAction || this.pendingAction.id !== detail.id) return;
+
+    if (detail.ok) {
+      this.pendingAction = { ...this.pendingAction, phase: "sent", sentAt: Date.now() };
+    } else {
+      const msg = typeof detail.error === "string" && detail.error ? detail.error : "send failed";
+      this.pendingAction = { ...this.pendingAction, phase: "error", error: msg };
+      this.#setToast(`Failed: ${msg}`, "error", 4500);
+    }
+    this.requestUpdate();
   }
 
   #handleA2UIAction(evt) {
@@ -208,7 +320,12 @@ class ClawdisA2UIHost extends LitElement {
       }
     }
 
+    const actionId = this.#makeActionId();
+    this.pendingAction = { id: actionId, name, phase: "sending", startedAt: Date.now() };
+    this.requestUpdate();
+
     const userAction = {
+      id: actionId,
       name,
       surfaceId: surfaceId ?? "main",
       sourceComponentId,
@@ -220,7 +337,16 @@ class ClawdisA2UIHost extends LitElement {
 
     const handler = globalThis.webkit?.messageHandlers?.clawdisCanvasA2UIAction;
     if (handler?.postMessage) {
-      handler.postMessage({ userAction });
+      try {
+        handler.postMessage({ userAction });
+      } catch (e) {
+        const msg = String(e?.message ?? e);
+        this.pendingAction = { id: actionId, name, phase: "error", startedAt: Date.now(), error: msg };
+        this.#setToast(`Failed: ${msg}`, "error", 4500);
+      }
+    } else {
+      this.pendingAction = { id: actionId, name, phase: "error", startedAt: Date.now(), error: "missing native bridge" };
+      this.#setToast("Failed: missing native bridge", "error", 4500);
     }
   }
 
@@ -230,6 +356,10 @@ class ClawdisA2UIHost extends LitElement {
     }
     this.#processor.processMessages(messages);
     this.#syncSurfaces();
+    if (this.pendingAction?.phase === "sent") {
+      this.#setToast(`Updated: ${this.pendingAction.name}`, "ok", 1100);
+      this.pendingAction = null;
+    }
     this.requestUpdate();
     return { ok: true, surfaces: this.surfaces.map(([id]) => id) };
   }
@@ -237,6 +367,7 @@ class ClawdisA2UIHost extends LitElement {
   reset() {
     this.#processor.clearSurfaces();
     this.#syncSurfaces();
+    this.pendingAction = null;
     this.requestUpdate();
     return { ok: true };
   }
@@ -253,7 +384,23 @@ class ClawdisA2UIHost extends LitElement {
       </div>`;
     }
 
-    return html`<section id="surfaces">
+    const statusText =
+      this.pendingAction?.phase === "sent"
+        ? `Working: ${this.pendingAction.name}`
+        : this.pendingAction?.phase === "sending"
+          ? `Sending: ${this.pendingAction.name}`
+          : this.pendingAction?.phase === "error"
+            ? `Failed: ${this.pendingAction.name}`
+            : "";
+
+    return html`
+      ${this.pendingAction && this.pendingAction.phase !== "error"
+        ? html`<div class="status"><div class="spinner"></div><div>${statusText}</div></div>`
+        : ""}
+      ${this.toast
+        ? html`<div class="toast ${this.toast.kind === "error" ? "error" : ""}">${this.toast.text}</div>`
+        : ""}
+      <section id="surfaces">
       ${repeat(
         this.surfaces,
         ([surfaceId]) => surfaceId,
