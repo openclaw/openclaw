@@ -3019,10 +3019,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
 	                idempotencyKey: string;
 	              };
 	              const nodeId = String(p.nodeId ?? "").trim();
-	              const rawCommand = String(p.command ?? "").trim();
-	              const command = rawCommand.startsWith("canvas.")
-	                ? `screen.${rawCommand.slice("canvas.".length)}`
-	                : rawCommand;
+	              const command = String(p.command ?? "").trim();
 	              if (!nodeId || !command) {
 	                respond(
 	                  false,

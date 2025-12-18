@@ -347,7 +347,7 @@ export function registerNodesCli(program: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .requiredOption(
         "--command <command>",
-        "Command (e.g. screen.eval or canvas.eval)",
+        "Command (e.g. canvas.eval)",
       )
       .option("--params <json>", "JSON object string for params", "{}")
       .option(

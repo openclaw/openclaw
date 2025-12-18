@@ -388,7 +388,7 @@ describe("node bridge server", () => {
 
     const res = await server.invoke({
       nodeId: "n5",
-      command: "screen.eval",
+      command: "canvas.eval",
       paramsJSON: JSON.stringify({ javaScript: "1+1" }),
       timeoutMs: 3000,
     });
@@ -397,7 +397,7 @@ describe("node bridge server", () => {
     const payload = JSON.parse(String(res.payloadJSON ?? "null")) as {
       echo?: string;
     };
-    expect(payload.echo).toBe("screen.eval");
+    expect(payload.echo).toBe("canvas.eval");
 
     await responder;
     socket.destroy();

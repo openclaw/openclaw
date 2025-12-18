@@ -126,7 +126,7 @@ describe("cli program", () => {
       .mockResolvedValueOnce({
         ok: true,
         nodeId: "ios-node",
-        command: "screen.eval",
+        command: "canvas.eval",
         payload: { result: "ok" },
       });
 
@@ -139,7 +139,7 @@ describe("cli program", () => {
         "--node",
         "ios-node",
         "--command",
-        "screen.eval",
+        "canvas.eval",
         "--params",
         '{"javaScript":"1+1"}',
       ],
@@ -156,7 +156,7 @@ describe("cli program", () => {
         method: "node.invoke",
         params: {
           nodeId: "ios-node",
-          command: "screen.eval",
+          command: "canvas.eval",
           params: { javaScript: "1+1" },
           timeoutMs: 15000,
           idempotencyKey: "idem-test",
