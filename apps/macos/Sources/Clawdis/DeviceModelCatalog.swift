@@ -31,7 +31,11 @@ enum DeviceModelCatalog {
         return DevicePresentation(title: title, symbol: symbol)
     }
 
-    static func symbol(deviceFamily familyRaw: String, modelIdentifier modelIdentifierRaw: String, friendlyName: String?) -> String? {
+    static func symbol(
+        deviceFamily familyRaw: String,
+        modelIdentifier modelIdentifierRaw: String,
+        friendlyName: String?) -> String?
+    {
         let family = familyRaw.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelIdentifier = modelIdentifierRaw.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -80,7 +84,7 @@ enum DeviceModelCatalog {
         case "mac":
             return "laptopcomputer"
         case "android":
-            return "logo.android"
+            return "android"
         case "linux":
             return "cpu"
         default:
