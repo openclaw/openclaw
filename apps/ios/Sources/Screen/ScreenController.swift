@@ -6,12 +6,21 @@ import WebKit
 @MainActor
 @Observable
 final class ScreenController {
+    enum Mode: Sendable {
+        case canvas
+        case web
+    }
+
     let webView: WKWebView
     private let navigationDelegate: ScreenNavigationDelegate
     private let a2uiActionHandler: CanvasA2UIActionMessageHandler
 
     var urlString: String = ""
     var errorText: String?
+
+    var mode: Mode {
+        self.urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .canvas : .web
+    }
 
     /// Callback invoked when a clawdis:// deep link is tapped in the canvas
     var onDeepLink: ((URL) -> Void)?
