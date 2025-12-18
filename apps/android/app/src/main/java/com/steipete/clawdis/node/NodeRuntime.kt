@@ -16,6 +16,10 @@ import com.steipete.clawdis.node.bridge.BridgePairingClient
 import com.steipete.clawdis.node.bridge.BridgeSession
 import com.steipete.clawdis.node.node.CameraCaptureManager
 import com.steipete.clawdis.node.node.CanvasController
+import com.steipete.clawdis.node.protocol.ClawdisCapability
+import com.steipete.clawdis.node.protocol.ClawdisCameraCommand
+import com.steipete.clawdis.node.protocol.ClawdisCanvasCommand
+import com.steipete.clawdis.node.protocol.ClawdisInvokeCommandAliases
 import com.steipete.clawdis.node.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -264,15 +268,17 @@ class NodeRuntime(context: Context) {
         .ifEmpty { null }
       val resolved =
         if (storedToken.isNullOrBlank()) {
-          _statusText.value = "Pairing…"
-          val caps = buildList {
-            add("canvas")
-            if (cameraEnabled.value) add("camera")
-            if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) add("voiceWake")
-          }
-          BridgePairingClient().pairAndHello(
-            endpoint = endpoint,
-            hello =
+	          _statusText.value = "Pairing…"
+	          val caps = buildList {
+	            add(ClawdisCapability.Canvas.rawValue)
+	            if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
+	            if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
+	              add(ClawdisCapability.VoiceWake.rawValue)
+	            }
+	          }
+	          BridgePairingClient().pairAndHello(
+	            endpoint = endpoint,
+	            hello =
               BridgePairingClient.Hello(
                 nodeId = instanceId.value,
                 displayName = displayName.value,
@@ -305,17 +311,19 @@ class NodeRuntime(context: Context) {
             platform = "Android",
             version = "dev",
             deviceFamily = "Android",
-            modelIdentifier = modelIdentifier,
-            caps =
-              buildList {
-                add("canvas")
-                if (cameraEnabled.value) add("camera")
-                if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) add("voiceWake")
-              },
-          ),
-      )
-    }
-  }
+	            modelIdentifier = modelIdentifier,
+	            caps =
+	              buildList {
+	                add(ClawdisCapability.Canvas.rawValue)
+	                if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
+	                if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
+	                  add(ClawdisCapability.VoiceWake.rawValue)
+	                }
+	              },
+	          ),
+	      )
+	    }
+	  }
 
   private fun hasRecordAudioPermission(): Boolean {
     return (
@@ -422,7 +430,13 @@ class NodeRuntime(context: Context) {
   }
 
   private suspend fun handleInvoke(command: String, paramsJson: String?): BridgeSession.InvokeResult {
-    if (command.startsWith("canvas.") || command.startsWith("camera.")) {
+    // Back-compat: accept screen.* commands and map them to canvas.*.
+    val canonicalCommand = ClawdisInvokeCommandAliases.canonicalizeScreenToCanvas(command)
+
+    if (
+      canonicalCommand.startsWith(ClawdisCanvasCommand.NamespacePrefix) ||
+        canonicalCommand.startsWith(ClawdisCameraCommand.NamespacePrefix)
+      ) {
       if (!isForeground.value) {
         return BridgeSession.InvokeResult.error(
           code = "NODE_BACKGROUND_UNAVAILABLE",
@@ -430,27 +444,27 @@ class NodeRuntime(context: Context) {
         )
       }
     }
-    if (command.startsWith("camera.") && !cameraEnabled.value) {
+    if (canonicalCommand.startsWith(ClawdisCameraCommand.NamespacePrefix) && !cameraEnabled.value) {
       return BridgeSession.InvokeResult.error(
         code = "CAMERA_DISABLED",
         message = "CAMERA_DISABLED: enable Camera in Settings",
       )
     }
 
-    return when (command) {
-      "canvas.show" -> BridgeSession.InvokeResult.ok(null)
-      "canvas.hide" -> BridgeSession.InvokeResult.ok(null)
-      "canvas.setMode" -> {
+    return when (canonicalCommand) {
+      ClawdisCanvasCommand.Show.rawValue -> BridgeSession.InvokeResult.ok(null)
+      ClawdisCanvasCommand.Hide.rawValue -> BridgeSession.InvokeResult.ok(null)
+      ClawdisCanvasCommand.SetMode.rawValue -> {
         val mode = CanvasController.parseMode(paramsJson)
         canvas.setMode(mode)
         BridgeSession.InvokeResult.ok(null)
       }
-      "canvas.navigate" -> {
+      ClawdisCanvasCommand.Navigate.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
         if (url != null) canvas.navigate(url)
         BridgeSession.InvokeResult.ok(null)
       }
-      "canvas.eval" -> {
+      ClawdisCanvasCommand.Eval.rawValue -> {
         val js =
           CanvasController.parseEvalJs(paramsJson)
             ?: return BridgeSession.InvokeResult.error(
@@ -468,7 +482,7 @@ class NodeRuntime(context: Context) {
           }
         BridgeSession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
       }
-      "canvas.snapshot" -> {
+      ClawdisCanvasCommand.Snapshot.rawValue -> {
         val maxWidth = CanvasController.parseSnapshotMaxWidth(paramsJson)
         val base64 =
           try {
@@ -481,11 +495,11 @@ class NodeRuntime(context: Context) {
           }
         BridgeSession.InvokeResult.ok("""{"format":"png","base64":"$base64"}""")
       }
-      "camera.snap" -> {
+      ClawdisCameraCommand.Snap.rawValue -> {
         val res = camera.snap(paramsJson)
         BridgeSession.InvokeResult.ok(res.payloadJson)
       }
-      "camera.clip" -> {
+      ClawdisCameraCommand.Clip.rawValue -> {
         val includeAudio = paramsJson?.contains("\"includeAudio\":true") != false
         if (includeAudio) externalAudioCaptureActive.value = true
         try {
