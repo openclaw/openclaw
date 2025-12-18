@@ -6,12 +6,12 @@ public enum ClawdisScreenMode: String, Codable, Sendable {
 }
 
 public enum ClawdisScreenCommand: String, Codable, Sendable {
-    case show = "screen.show"
-    case hide = "screen.hide"
-    case setMode = "screen.setMode"
-    case navigate = "screen.navigate"
-    case evalJS = "screen.eval"
-    case snapshot = "screen.snapshot"
+    case show = "canvas.show"
+    case hide = "canvas.hide"
+    case setMode = "canvas.setMode"
+    case navigate = "canvas.navigate"
+    case evalJS = "canvas.eval"
+    case snapshot = "canvas.snapshot"
 }
 
 public struct ClawdisScreenNavigateParams: Codable, Sendable, Equatable {

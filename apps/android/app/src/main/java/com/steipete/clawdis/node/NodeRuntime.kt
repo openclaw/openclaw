@@ -422,11 +422,11 @@ class NodeRuntime(context: Context) {
   }
 
   private suspend fun handleInvoke(command: String, paramsJson: String?): BridgeSession.InvokeResult {
-    if (command.startsWith("screen.") || command.startsWith("camera.")) {
+    if (command.startsWith("canvas.") || command.startsWith("camera.")) {
       if (!isForeground.value) {
         return BridgeSession.InvokeResult.error(
           code = "NODE_BACKGROUND_UNAVAILABLE",
-          message = "NODE_BACKGROUND_UNAVAILABLE: screen/camera commands require foreground",
+          message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera commands require foreground",
         )
       }
     }
@@ -438,19 +438,19 @@ class NodeRuntime(context: Context) {
     }
 
     return when (command) {
-      "screen.show" -> BridgeSession.InvokeResult.ok(null)
-      "screen.hide" -> BridgeSession.InvokeResult.ok(null)
-      "screen.setMode" -> {
+      "canvas.show" -> BridgeSession.InvokeResult.ok(null)
+      "canvas.hide" -> BridgeSession.InvokeResult.ok(null)
+      "canvas.setMode" -> {
         val mode = CanvasController.parseMode(paramsJson)
         canvas.setMode(mode)
         BridgeSession.InvokeResult.ok(null)
       }
-      "screen.navigate" -> {
+      "canvas.navigate" -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
         if (url != null) canvas.navigate(url)
         BridgeSession.InvokeResult.ok(null)
       }
-      "screen.eval" -> {
+      "canvas.eval" -> {
         val js =
           CanvasController.parseEvalJs(paramsJson)
             ?: return BridgeSession.InvokeResult.error(
@@ -468,7 +468,7 @@ class NodeRuntime(context: Context) {
           }
         BridgeSession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
       }
-      "screen.snapshot" -> {
+      "canvas.snapshot" -> {
         val maxWidth = CanvasController.parseSnapshotMaxWidth(paramsJson)
         val base64 =
           try {

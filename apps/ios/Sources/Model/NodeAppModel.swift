@@ -265,16 +265,15 @@ final class NodeAppModel {
     }
 
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
-        // Alias for "canvas" capability: accept canvas.* commands and map them to screen.*.
-        let command = ClawdisInvokeCommandAliases.canonicalizeCanvasToScreen(req.command)
+        let command = req.command
 
-        if command.hasPrefix("screen.") || command.hasPrefix("camera."), self.isBackgrounded {
+        if command.hasPrefix("canvas.") || command.hasPrefix("camera."), self.isBackgrounded {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
                 error: ClawdisNodeError(
                     code: .backgroundUnavailable,
-                    message: "NODE_BACKGROUND_UNAVAILABLE: screen/camera commands require foreground"))
+                    message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera commands require foreground"))
         }
 
         if command.hasPrefix("camera."), !self.isCameraEnabled() {

@@ -185,7 +185,7 @@ class BridgeSessionTest {
             writer.flush()
 
             // Ask the node to invoke something; handler will throw.
-            writer.write("""{"type":"invoke","id":"i1","command":"screen.snapshot","paramsJSON":null}""")
+            writer.write("""{"type":"invoke","id":"i1","command":"canvas.snapshot","paramsJSON":null}""")
             writer.write("\n")
             writer.flush()
 
