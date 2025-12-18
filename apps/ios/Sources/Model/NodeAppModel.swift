@@ -403,9 +403,24 @@ final class NodeAppModel {
 
             case ClawdisCanvasCommand.snapshot.rawValue:
                 let params = try? Self.decodeParams(ClawdisCanvasSnapshotParams.self, from: req.paramsJSON)
-                let maxWidth = params?.maxWidth.map { CGFloat($0) }
-                let base64 = try await self.screen.snapshotPNGBase64(maxWidth: maxWidth)
-                let payload = try Self.encodePayload(["format": "png", "base64": base64])
+                let format = params?.format ?? .jpeg
+                let maxWidth: CGFloat? = {
+                    if let raw = params?.maxWidth, raw > 0 { return CGFloat(raw) }
+                    // Keep default snapshots comfortably below the gateway client's maxPayload.
+                    // For full-res, clients should explicitly request a larger maxWidth.
+                    return switch format {
+                    case .png: 900
+                    case .jpeg: 1600
+                    }
+                }()
+                let base64 = try await self.screen.snapshotBase64(
+                    maxWidth: maxWidth,
+                    format: format,
+                    quality: params?.quality)
+                let payload = try Self.encodePayload([
+                    "format": format == .jpeg ? "jpeg" : "png",
+                    "base64": base64,
+                ])
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
             case ClawdisCanvasA2UICommand.reset.rawValue:

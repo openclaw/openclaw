@@ -147,11 +147,54 @@ final class ScreenController {
         return data.base64EncodedString()
     }
 
+    func snapshotBase64(
+        maxWidth: CGFloat? = nil,
+        format: ClawdisCanvasSnapshotFormat,
+        quality: Double? = nil) async throws -> String
+    {
+        let config = WKSnapshotConfiguration()
+        if let maxWidth {
+            config.snapshotWidth = NSNumber(value: Double(maxWidth))
+        }
+        let image: UIImage = try await withCheckedThrowingContinuation { cont in
+            self.webView.takeSnapshot(with: config) { image, error in
+                if let error {
+                    cont.resume(throwing: error)
+                    return
+                }
+                guard let image else {
+                    cont.resume(throwing: NSError(domain: "Screen", code: 2, userInfo: [
+                        NSLocalizedDescriptionKey: "snapshot failed",
+                    ]))
+                    return
+                }
+                cont.resume(returning: image)
+            }
+        }
+
+        let data: Data?
+        switch format {
+        case .png:
+            data = image.pngData()
+        case .jpeg:
+            let q = (quality ?? 0.82).clamped(to: 0.1...1.0)
+            data = image.jpegData(compressionQuality: q)
+        }
+        guard let data else {
+            throw NSError(domain: "Screen", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "snapshot encode failed",
+            ])
+        }
+        return data.base64EncodedString()
+    }
+
     // SwiftPM flattens resource directories; ensure resource filenames are unique.
     private static let canvasScaffoldURL: URL? = ClawdisKitResources.bundle.url(
         forResource: "scaffold",
         withExtension: "html")
-    private static let a2uiIndexURL: URL? = ClawdisKitResources.bundle.url(forResource: "index", withExtension: "html")
+    private static let a2uiIndexURL: URL? = ClawdisKitResources.bundle.url(
+        forResource: "index",
+        withExtension: "html")
 
     fileprivate func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }
@@ -167,6 +210,14 @@ final class ScreenController {
             return true
         }
         return false
+    }
+}
+
+extension Double {
+    fileprivate func clamped(to range: ClosedRange<Double>) -> Double {
+        if self < range.lowerBound { return range.lowerBound }
+        if self > range.upperBound { return range.upperBound }
+        return self
     }
 }
 
