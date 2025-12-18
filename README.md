@@ -124,7 +124,7 @@ Iris is an internal/prototype iOS app that connects as a **remote node**:
 
 - **Voice trigger:** forwards transcripts into the Gateway (agent runs + wakeups).
 - **Canvas screen:** a WKWebView + `<canvas>` surface the agent can control (via `screen.eval` / `screen.snapshot` over `node.invoke`).
-- **Discovery + pairing:** finds the bridge via Bonjour (`_clawdis-bridge._tcp`) and uses Gateway-owned pairing (`clawdis nodes pending|approve`).
+- **Discovery + pairing:** finds the bridge via Bonjour (`_clawdis-bridge._tcp`) and uses Gateway-owned pairing (`clawdis nodes pending|approve`); `clawdis nodes status` shows paired nodes + capabilities.
 
 Runbook: `docs/ios/connect.md`
 
@@ -201,7 +201,7 @@ Bot-mode support (grammY only) shares the same `main` session as WhatsApp/WebCha
 | `clawdis gateway health|status|send|agent|call` | Gateway WS clients; assume a running gateway. |
 | `clawdis wake` | Enqueue a system event and optionally trigger a heartbeat via the Gateway. |
 | `clawdis cron ...` | Manage scheduled jobs (via Gateway). |
-| `clawdis nodes ...` | Manage Gateway-owned node pairing. |
+| `clawdis nodes ...` | Manage nodes (pairing + status) via the Gateway. |
 | `clawdis status` | Web session health + session store summary |
 | `clawdis health` | Reports cached provider state from the running gateway. |
 | `clawdis webchat` | Start the loopback-only WebChat HTTP server |

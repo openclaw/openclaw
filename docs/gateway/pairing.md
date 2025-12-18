@@ -70,6 +70,7 @@ CLI must be able to fully operate without any GUI:
 - `clawdis nodes pending`
 - `clawdis nodes approve <requestId>`
 - `clawdis nodes reject <requestId>`
+- `clawdis nodes status` (paired nodes + connection status/capabilities)
 
 Optional interactive helper:
 - `clawdis nodes watch` (subscribe to `node.pair.requested` and prompt in-place)

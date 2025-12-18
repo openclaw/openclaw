@@ -82,9 +82,9 @@ Pairing details: `docs/gateway/pairing.md`.
 
 ## 5) Verify the node is connected
 
-- Via nodes list:
+- Via nodes status:
   ```bash
-  clawdis nodes list
+  clawdis nodes status
   ```
 - Via Gateway:
   ```bash
