@@ -38,14 +38,15 @@ export function injectCanvasLiveReload(html: string): string {
   function postToNode(payload) {
     try {
       const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
-      const ios = globalThis.webkit?.messageHandlers?.[actionHandlerName]?.postMessage;
-      if (typeof ios === "function") {
-        ios(raw);
+      const iosHandler = globalThis.webkit?.messageHandlers?.[actionHandlerName];
+      if (iosHandler && typeof iosHandler.postMessage === "function") {
+        iosHandler.postMessage(raw);
         return true;
       }
-      const android = globalThis[actionHandlerName]?.postMessage;
-      if (typeof android === "function") {
-        android(raw);
+      const androidHandler = globalThis[actionHandlerName];
+      if (androidHandler && typeof androidHandler.postMessage === "function") {
+        // Important: call as a method on the interface object (binding matters on Android WebView).
+        androidHandler.postMessage(raw);
         return true;
       }
     } catch {}
