@@ -19,7 +19,6 @@ import com.steipete.clawdis.node.node.CanvasController
 import com.steipete.clawdis.node.protocol.ClawdisCapability
 import com.steipete.clawdis.node.protocol.ClawdisCameraCommand
 import com.steipete.clawdis.node.protocol.ClawdisCanvasCommand
-import com.steipete.clawdis.node.protocol.ClawdisInvokeCommandAliases
 import com.steipete.clawdis.node.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -446,12 +445,9 @@ class NodeRuntime(context: Context) {
   }
 
   private suspend fun handleInvoke(command: String, paramsJson: String?): BridgeSession.InvokeResult {
-    // Back-compat: accept screen.* commands and map them to canvas.*.
-    val canonicalCommand = ClawdisInvokeCommandAliases.canonicalizeScreenToCanvas(command)
-
     if (
-      canonicalCommand.startsWith(ClawdisCanvasCommand.NamespacePrefix) ||
-        canonicalCommand.startsWith(ClawdisCameraCommand.NamespacePrefix)
+      command.startsWith(ClawdisCanvasCommand.NamespacePrefix) ||
+        command.startsWith(ClawdisCameraCommand.NamespacePrefix)
       ) {
       if (!isForeground.value) {
         return BridgeSession.InvokeResult.error(
@@ -460,14 +456,14 @@ class NodeRuntime(context: Context) {
         )
       }
     }
-    if (canonicalCommand.startsWith(ClawdisCameraCommand.NamespacePrefix) && !cameraEnabled.value) {
+    if (command.startsWith(ClawdisCameraCommand.NamespacePrefix) && !cameraEnabled.value) {
       return BridgeSession.InvokeResult.error(
         code = "CAMERA_DISABLED",
         message = "CAMERA_DISABLED: enable Camera in Settings",
       )
     }
 
-    return when (canonicalCommand) {
+    return when (command) {
       ClawdisCanvasCommand.Show.rawValue -> BridgeSession.InvokeResult.ok(null)
       ClawdisCanvasCommand.Hide.rawValue -> BridgeSession.InvokeResult.ok(null)
       ClawdisCanvasCommand.SetMode.rawValue -> {

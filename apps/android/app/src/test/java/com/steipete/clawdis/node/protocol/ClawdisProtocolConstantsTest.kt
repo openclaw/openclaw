@@ -5,36 +5,13 @@ import org.junit.Test
 
 class ClawdisProtocolConstantsTest {
   @Test
-  fun mapsKnownScreenCommandsToCanvas() {
-    val mappings =
-      listOf(
-        Pair(ClawdisScreenCommand.Show, ClawdisCanvasCommand.Show),
-        Pair(ClawdisScreenCommand.Hide, ClawdisCanvasCommand.Hide),
-        Pair(ClawdisScreenCommand.SetMode, ClawdisCanvasCommand.SetMode),
-        Pair(ClawdisScreenCommand.Navigate, ClawdisCanvasCommand.Navigate),
-        Pair(ClawdisScreenCommand.Eval, ClawdisCanvasCommand.Eval),
-        Pair(ClawdisScreenCommand.Snapshot, ClawdisCanvasCommand.Snapshot),
-      )
-
-    for ((screen, canvas) in mappings) {
-      assertEquals(
-        canvas.rawValue,
-        ClawdisInvokeCommandAliases.canonicalizeScreenToCanvas(screen.rawValue),
-      )
-    }
-  }
-
-  @Test
-  fun mapsUnknownScreenNamespaceToCanvas() {
-    assertEquals("canvas.foo", ClawdisInvokeCommandAliases.canonicalizeScreenToCanvas("screen.foo"))
-  }
-
-  @Test
-  fun leavesNonScreenCommandsUnchanged() {
-    assertEquals(
-      ClawdisCameraCommand.Snap.rawValue,
-      ClawdisInvokeCommandAliases.canonicalizeScreenToCanvas(ClawdisCameraCommand.Snap.rawValue),
-    )
+  fun canvasCommandsUseStableStrings() {
+    assertEquals("canvas.show", ClawdisCanvasCommand.Show.rawValue)
+    assertEquals("canvas.hide", ClawdisCanvasCommand.Hide.rawValue)
+    assertEquals("canvas.setMode", ClawdisCanvasCommand.SetMode.rawValue)
+    assertEquals("canvas.navigate", ClawdisCanvasCommand.Navigate.rawValue)
+    assertEquals("canvas.eval", ClawdisCanvasCommand.Eval.rawValue)
+    assertEquals("canvas.snapshot", ClawdisCanvasCommand.Snapshot.rawValue)
   }
 
   @Test
