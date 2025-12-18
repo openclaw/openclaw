@@ -214,7 +214,7 @@ actor CameraController {
     nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
         let v = ms ?? 3000
         // Keep clips short by default; avoid huge base64 payloads on the bridge.
-        return min(60_000, max(250, v))
+        return min(60000, max(250, v))
     }
 
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {

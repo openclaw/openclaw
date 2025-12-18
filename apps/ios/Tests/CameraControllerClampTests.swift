@@ -18,7 +18,7 @@ import Testing
         #expect(CameraController.clampDurationMs(249) == 250)
         #expect(CameraController.clampDurationMs(250) == 250)
         #expect(CameraController.clampDurationMs(1000) == 1000)
-        #expect(CameraController.clampDurationMs(15000) == 15000)
-        #expect(CameraController.clampDurationMs(15001) == 15000)
+        #expect(CameraController.clampDurationMs(60000) == 60000)
+        #expect(CameraController.clampDurationMs(60001) == 60000)
     }
 }
