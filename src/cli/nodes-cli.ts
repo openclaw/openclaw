@@ -25,6 +25,7 @@ type NodesRpcOpts = {
   invokeTimeout?: string;
   idempotencyKey?: string;
   facing?: string;
+  format?: string;
   maxWidth?: string;
   quality?: string;
   duration?: string;
