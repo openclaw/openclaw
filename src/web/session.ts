@@ -20,6 +20,64 @@ import { CONFIG_DIR, ensureDir, jidToE164 } from "../utils.js";
 import { VERSION } from "../version.js";
 
 export const WA_WEB_AUTH_DIR = path.join(CONFIG_DIR, "credentials");
+const WA_CREDS_PATH = path.join(WA_WEB_AUTH_DIR, "creds.json");
+const WA_CREDS_BACKUP_PATH = path.join(WA_WEB_AUTH_DIR, "creds.json.bak");
+
+function readCredsJsonRaw(filePath: string): string | null {
+  try {
+    if (!fsSync.existsSync(filePath)) return null;
+    const stats = fsSync.statSync(filePath);
+    if (!stats.isFile() || stats.size <= 1) return null;
+    return fsSync.readFileSync(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+function maybeRestoreCredsFromBackup(
+  logger: ReturnType<typeof getChildLogger>,
+): void {
+  try {
+    const raw = readCredsJsonRaw(WA_CREDS_PATH);
+    if (raw) {
+      // Validate that creds.json is parseable.
+      JSON.parse(raw);
+      return;
+    }
+
+    const backupRaw = readCredsJsonRaw(WA_CREDS_BACKUP_PATH);
+    if (!backupRaw) return;
+
+    // Ensure backup is parseable before restoring.
+    JSON.parse(backupRaw);
+    fsSync.copyFileSync(WA_CREDS_BACKUP_PATH, WA_CREDS_PATH);
+    logger.warn(
+      { credsPath: WA_CREDS_PATH },
+      "restored corrupted WhatsApp creds.json from backup",
+    );
+  } catch {
+    // ignore
+  }
+}
+
+async function safeSaveCreds(
+  saveCreds: () => Promise<void> | void,
+  logger: ReturnType<typeof getChildLogger>,
+): Promise<void> {
+  try {
+    // Best-effort backup so we can recover after abrupt restarts.
+    if (fsSync.existsSync(WA_CREDS_PATH)) {
+      fsSync.copyFileSync(WA_CREDS_PATH, WA_CREDS_BACKUP_PATH);
+    }
+  } catch {
+    // ignore backup failures
+  }
+  try {
+    await Promise.resolve(saveCreds());
+  } catch (err) {
+    logger.warn({ error: String(err) }, "failed saving WhatsApp creds");
+  }
+}
 
 /**
  * Create a Baileys socket backed by the multi-file auth store we keep on disk.
@@ -34,6 +92,8 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   await ensureDir(WA_WEB_AUTH_DIR);
+  const sessionLogger = getChildLogger({ module: "web-session" });
+  maybeRestoreCredsFromBackup(sessionLogger);
   const { state, saveCreds } = await useMultiFileAuthState(WA_WEB_AUTH_DIR);
   const { version } = await fetchLatestBaileysVersion();
   const sock = makeWASocket({
@@ -49,9 +109,7 @@ export async function createWaSocket(printQr: boolean, verbose: boolean) {
     markOnlineOnConnect: false,
   });
 
-  const sessionLogger = getChildLogger({ module: "web-session" });
-
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", () => safeSaveCreds(saveCreds, sessionLogger));
   sock.ev.on(
     "connection.update",
     (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
@@ -139,10 +197,20 @@ export function formatError(err: unknown): string {
 }
 
 export async function webAuthExists() {
-  return fs
-    .access(WA_WEB_AUTH_DIR)
-    .then(() => true)
-    .catch(() => false);
+  try {
+    await fs.access(WA_WEB_AUTH_DIR);
+  } catch {
+    return false;
+  }
+  try {
+    const stats = await fs.stat(WA_CREDS_PATH);
+    if (!stats.isFile() || stats.size <= 1) return false;
+    const raw = await fs.readFile(WA_CREDS_PATH, "utf-8");
+    JSON.parse(raw);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function logoutWeb(runtime: RuntimeEnv = defaultRuntime) {
@@ -160,12 +228,11 @@ export async function logoutWeb(runtime: RuntimeEnv = defaultRuntime) {
 
 export function readWebSelfId() {
   // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
-  const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
   try {
-    if (!fsSync.existsSync(credsPath)) {
+    if (!fsSync.existsSync(WA_CREDS_PATH)) {
       return { e164: null, jid: null } as const;
     }
-    const raw = fsSync.readFileSync(credsPath, "utf-8");
+    const raw = fsSync.readFileSync(WA_CREDS_PATH, "utf-8");
     const parsed = JSON.parse(raw) as { me?: { id?: string } } | undefined;
     const jid = parsed?.me?.id ?? null;
     const e164 = jid ? jidToE164(jid) : null;
@@ -180,9 +247,8 @@ export function readWebSelfId() {
  * Helpful for heartbeats/observability to spot stale credentials.
  */
 export function getWebAuthAgeMs(): number | null {
-  const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
   try {
-    const stats = fsSync.statSync(credsPath);
+    const stats = fsSync.statSync(WA_CREDS_PATH);
     return Date.now() - stats.mtimeMs;
   } catch {
     return null;
