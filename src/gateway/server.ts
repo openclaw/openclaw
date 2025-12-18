@@ -3011,20 +3011,23 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
                 );
                 break;
               }
-              const p = params as {
-                nodeId: string;
-                command: string;
-                params?: unknown;
-                timeoutMs?: number;
-                idempotencyKey: string;
-              };
-              const nodeId = String(p.nodeId ?? "").trim();
-              const command = String(p.command ?? "").trim();
-              if (!nodeId || !command) {
-                respond(
-                  false,
-                  undefined,
-                  errorShape(
+	              const p = params as {
+	                nodeId: string;
+	                command: string;
+	                params?: unknown;
+	                timeoutMs?: number;
+	                idempotencyKey: string;
+	              };
+	              const nodeId = String(p.nodeId ?? "").trim();
+	              const rawCommand = String(p.command ?? "").trim();
+	              const command = rawCommand.startsWith("canvas.")
+	                ? `screen.${rawCommand.slice("canvas.".length)}`
+	                : rawCommand;
+	              if (!nodeId || !command) {
+	                respond(
+	                  false,
+	                  undefined,
+	                  errorShape(
                     ErrorCodes.INVALID_REQUEST,
                     "nodeId and command required",
                   ),

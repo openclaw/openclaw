@@ -574,6 +574,55 @@ describe("gateway server", () => {
     }
   });
 
+  test("maps node.invoke canvas.* to screen.*", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    try {
+      bridgeInvoke.mockResolvedValueOnce({
+        type: "invoke-res",
+        id: "inv-2",
+        ok: true,
+        payloadJSON: JSON.stringify({ result: "ok" }),
+        error: null,
+      });
+
+      const { server, ws } = await startServerWithClient();
+      try {
+        await connectOk(ws);
+
+        const res = await rpcReq(ws, "node.invoke", {
+          nodeId: "android-node",
+          command: "canvas.eval",
+          params: { javaScript: "1+1" },
+          timeoutMs: 123,
+          idempotencyKey: "idem-2",
+        });
+        expect(res.ok).toBe(true);
+
+        expect(bridgeInvoke).toHaveBeenCalledWith(
+          expect.objectContaining({
+            nodeId: "android-node",
+            command: "screen.eval",
+            paramsJSON: JSON.stringify({ javaScript: "1+1" }),
+            timeoutMs: 123,
+          }),
+        );
+      } finally {
+        ws.close();
+        await server.close();
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
+    }
+  });
+
   test("emits presence updates for bridge connect/disconnect", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
     const prevHome = process.env.HOME;
