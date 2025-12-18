@@ -28,6 +28,7 @@ struct StatusPill: View {
 
     var bridge: BridgeState
     var voiceWakeEnabled: Bool
+    var brighten: Bool = false
     var onTap: () -> Void
 
     @State private var pulse: Bool = false
@@ -63,7 +64,7 @@ struct StatusPill: View {
                     .fill(.ultraThinMaterial)
                     .overlay {
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                            .strokeBorder(.white.opacity(self.brighten ? 0.24 : 0.18), lineWidth: 0.5)
                     }
                     .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
             }

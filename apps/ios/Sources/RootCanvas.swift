@@ -4,6 +4,7 @@ import UIKit
 struct RootCanvas: View {
     @Environment(NodeAppModel.self) private var appModel
     @Environment(VoiceWakeManager.self) private var voiceWake
+    @Environment(\.colorScheme) private var systemColorScheme
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
@@ -24,38 +25,19 @@ struct RootCanvas: View {
     }
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
-            ScreenTab()
-
-            VStack(spacing: 10) {
-                OverlayButton(systemImage: "text.bubble.fill") {
-                    self.presentedSheet = .chat
-                }
-                .accessibilityLabel("Chat")
-
-                OverlayButton(systemImage: "gearshape.fill") {
-                    self.presentedSheet = .settings
-                }
-                .accessibilityLabel("Settings")
-            }
-            .padding(.top, 10)
-            .padding(.trailing, 10)
-        }
-        .overlay(alignment: .topLeading) {
-            StatusPill(
-                bridge: self.bridgeStatus,
+        ZStack {
+            CanvasContent(
+                systemColorScheme: self.systemColorScheme,
+                bridgeStatus: self.bridgeStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
-                onTap: { self.presentedSheet = .settings })
-                .padding(.leading, 10)
-                .safeAreaPadding(.top, 10)
-        }
-        .overlay(alignment: .topLeading) {
-            if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
-                VoiceWakeToast(command: voiceWakeToastText)
-                    .padding(.leading, 10)
-                    .safeAreaPadding(.top, 58)
-                    .transition(.move(edge: .top).combined(with: .opacity))
-            }
+                voiceWakeToastText: self.voiceWakeToastText,
+                openChat: {
+                    self.presentedSheet = .chat
+                },
+                openSettings: {
+                    self.presentedSheet = .settings
+                })
+                .preferredColorScheme(.dark)
         }
         .sheet(item: self.$presentedSheet) { sheet in
             switch sheet {
@@ -65,7 +47,6 @@ struct RootCanvas: View {
                 ChatSheet(bridge: self.appModel.bridgeSession)
             }
         }
-        .preferredColorScheme(.dark)
         .onAppear { self.updateIdleTimer() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
         .onChange(of: self.scenePhase) { _, _ in self.updateIdleTimer() }
@@ -117,8 +98,61 @@ struct RootCanvas: View {
     }
 }
 
+private struct CanvasContent: View {
+    var systemColorScheme: ColorScheme
+    var bridgeStatus: StatusPill.BridgeState
+    var voiceWakeEnabled: Bool
+    var voiceWakeToastText: String?
+    var openChat: () -> Void
+    var openSettings: () -> Void
+
+    private var brightenButtons: Bool { self.systemColorScheme == .light }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            ScreenTab()
+
+            VStack(spacing: 10) {
+                OverlayButton(systemImage: "text.bubble.fill", brighten: self.brightenButtons) {
+                    self.openChat()
+                }
+                .accessibilityLabel("Chat")
+
+                OverlayButton(systemImage: "gearshape.fill", brighten: self.brightenButtons) {
+                    self.openSettings()
+                }
+                .accessibilityLabel("Settings")
+            }
+            .padding(.top, 10)
+            .padding(.trailing, 10)
+        }
+        .overlay(alignment: .topLeading) {
+            StatusPill(
+                bridge: self.bridgeStatus,
+                voiceWakeEnabled: self.voiceWakeEnabled,
+                brighten: self.brightenButtons,
+                onTap: {
+                    self.openSettings()
+                })
+                .padding(.leading, 10)
+                .safeAreaPadding(.top, 10)
+        }
+        .overlay(alignment: .topLeading) {
+            if let voiceWakeToastText, !voiceWakeToastText.isEmpty {
+                VoiceWakeToast(
+                    command: voiceWakeToastText,
+                    brighten: self.brightenButtons)
+                    .padding(.leading, 10)
+                    .safeAreaPadding(.top, 58)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
+        }
+    }
+}
+
 private struct OverlayButton: View {
     let systemImage: String
+    let brighten: Bool
     let action: () -> Void
 
     var body: some View {
@@ -135,8 +169,8 @@ private struct OverlayButton: View {
                                 .fill(
                                     LinearGradient(
                                         colors: [
-                                            .white.opacity(0.18),
-                                            .white.opacity(0.04),
+                                            .white.opacity(self.brighten ? 0.26 : 0.18),
+                                            .white.opacity(self.brighten ? 0.08 : 0.04),
                                             .clear,
                                         ],
                                         startPoint: .topLeading,
@@ -145,7 +179,7 @@ private struct OverlayButton: View {
                         }
                         .overlay {
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                                .strokeBorder(.white.opacity(self.brighten ? 0.24 : 0.18), lineWidth: 0.5)
                         }
                         .shadow(color: .black.opacity(0.35), radius: 12, y: 6)
                 }

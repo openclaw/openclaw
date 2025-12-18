@@ -2,6 +2,7 @@ import SwiftUI
 
 struct VoiceWakeToast: View {
     var command: String
+    var brighten: Bool = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -22,7 +23,7 @@ struct VoiceWakeToast: View {
                 .fill(.ultraThinMaterial)
                 .overlay {
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(0.18), lineWidth: 0.5)
+                        .strokeBorder(.white.opacity(self.brighten ? 0.24 : 0.18), lineWidth: 0.5)
                 }
                 .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
         }
