@@ -111,6 +111,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
+    // Order parity: Node → Bridge → Voice → Camera → Screen.
     item { Text("Node", style = MaterialTheme.typography.titleSmall) }
     item {
       OutlinedTextField(
@@ -124,72 +125,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
     item { HorizontalDivider() }
 
-    item { Text("Wake Words", style = MaterialTheme.typography.titleSmall) }
-    item {
-      OutlinedTextField(
-        value = wakeWordsText,
-        onValueChange = setWakeWordsText,
-        label = { Text("Comma-separated (global)") },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-      )
-    }
-    item {
-      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        Button(
-          onClick = {
-            val parsed = com.steipete.clawdis.node.WakeWords.parseCommaSeparated(wakeWordsText)
-            viewModel.setWakeWords(parsed)
-          },
-          enabled = isConnected,
-        ) {
-          Text("Save + Sync")
-        }
-
-        Button(onClick = viewModel::resetWakeWordsDefaults) { Text("Reset defaults") }
-      }
-    }
-    item {
-      Text(
-        if (isConnected) {
-          "Any node can edit wake words. Changes sync via the gateway bridge."
-        } else {
-          "Connect to a gateway to sync wake words globally."
-        },
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-
-    item { HorizontalDivider() }
-
-    item { Text("Camera", style = MaterialTheme.typography.titleSmall) }
-    item {
-      ListItem(
-        headlineContent = { Text("Allow Camera") },
-        supportingContent = { Text("Allows the bridge to request photos or short video clips (foreground only).") },
-        trailingContent = { Switch(checked = cameraEnabled, onCheckedChange = ::setCameraEnabledChecked) },
-      )
-    }
-    item {
-      Text(
-        "Tip: grant Microphone permission for video clips with audio.",
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-      )
-    }
-
-    item { HorizontalDivider() }
-
-    item { Text("Screen", style = MaterialTheme.typography.titleSmall) }
-    item {
-      ListItem(
-        headlineContent = { Text("Prevent Sleep") },
-        supportingContent = { Text("Keeps the screen awake while Clawdis is open.") },
-        trailingContent = { Switch(checked = preventSleep, onCheckedChange = viewModel::setPreventSleep) },
-      )
-    }
-
-    item { HorizontalDivider() }
-
+    // Bridge
     item { Text("Bridge", style = MaterialTheme.typography.titleSmall) }
     item { ListItem(headlineContent = { Text("Status") }, supportingContent = { Text(statusText) }) }
     if (serverName != null) {
@@ -299,6 +235,75 @@ fun SettingsSheet(viewModel: MainViewModel) {
           }
         }
       }
+    }
+
+    item { HorizontalDivider() }
+
+    // Voice
+    item { Text("Voice", style = MaterialTheme.typography.titleSmall) }
+    item {
+      OutlinedTextField(
+        value = wakeWordsText,
+        onValueChange = setWakeWordsText,
+        label = { Text("Wake Words (comma-separated)") },
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+      )
+    }
+    item {
+      Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Button(
+          onClick = {
+            val parsed = com.steipete.clawdis.node.WakeWords.parseCommaSeparated(wakeWordsText)
+            viewModel.setWakeWords(parsed)
+          },
+          enabled = isConnected,
+        ) {
+          Text("Save + Sync")
+        }
+
+        Button(onClick = viewModel::resetWakeWordsDefaults) { Text("Reset defaults") }
+      }
+    }
+    item {
+      Text(
+        if (isConnected) {
+          "Any node can edit wake words. Changes sync via the gateway bridge."
+        } else {
+          "Connect to a gateway to sync wake words globally."
+        },
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+
+    item { HorizontalDivider() }
+
+    // Camera
+    item { Text("Camera", style = MaterialTheme.typography.titleSmall) }
+    item {
+      ListItem(
+        headlineContent = { Text("Allow Camera") },
+        supportingContent = { Text("Allows the bridge to request photos or short video clips (foreground only).") },
+        trailingContent = { Switch(checked = cameraEnabled, onCheckedChange = ::setCameraEnabledChecked) },
+      )
+    }
+    item {
+      Text(
+        "Tip: grant Microphone permission for video clips with audio.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+
+    item { HorizontalDivider() }
+
+    // Screen
+    item { Text("Screen", style = MaterialTheme.typography.titleSmall) }
+    item {
+      ListItem(
+        headlineContent = { Text("Prevent Sleep") },
+        supportingContent = { Text("Keeps the screen awake while Clawdis is open.") },
+        trailingContent = { Switch(checked = preventSleep, onCheckedChange = viewModel::setPreventSleep) },
+      )
     }
 
     item { Spacer(modifier = Modifier.height(20.dp)) }
