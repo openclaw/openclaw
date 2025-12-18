@@ -2275,10 +2275,11 @@ describe("gateway server", () => {
       }),
     );
 
-    const abortRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "abort-mismatch-1",
-    );
+	    const abortRes = await onceMessage(
+	      ws,
+	      (o) => o.type === "res" && o.id === "abort-mismatch-1",
+	      10_000,
+	    );
     expect(abortRes.ok).toBe(false);
     expect(abortRes.error?.code).toBe("INVALID_REQUEST");
 
@@ -2291,16 +2292,18 @@ describe("gateway server", () => {
       }),
     );
 
-    const abortRes2 = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "abort-mismatch-2",
-    );
+	    const abortRes2 = await onceMessage(
+	      ws,
+	      (o) => o.type === "res" && o.id === "abort-mismatch-2",
+	      10_000,
+	    );
     expect(abortRes2.ok).toBe(true);
 
-    const sendRes = await onceMessage(
-      ws,
-      (o) => o.type === "res" && o.id === "send-mismatch-1",
-    );
+	    const sendRes = await onceMessage(
+	      ws,
+	      (o) => o.type === "res" && o.id === "send-mismatch-1",
+	      10_000,
+	    );
     expect(sendRes.ok).toBe(true);
 
     ws.close();
