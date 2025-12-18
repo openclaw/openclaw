@@ -266,12 +266,7 @@ final class NodeAppModel {
 
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         // Alias for "canvas" capability: accept canvas.* commands and map them to screen.*.
-        let command =
-            if req.command.hasPrefix("canvas.") {
-                "screen." + req.command.dropFirst("canvas.".count)
-            } else {
-                req.command
-            }
+        let command = ClawdisInvokeCommandAliases.canonicalizeCanvasToScreen(req.command)
 
         if command.hasPrefix("screen.") || command.hasPrefix("camera."), self.isBackgrounded {
             return BridgeInvokeResponse(

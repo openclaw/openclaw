@@ -155,17 +155,17 @@ final class BridgeConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = ["canvas"]
+        var caps = [ClawdisCapability.canvas.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append("camera") }
+        if cameraEnabled { caps.append(ClawdisCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append("voiceWake") }
+        if voiceWakeEnabled { caps.append(ClawdisCapability.voiceWake.rawValue) }
 
         return caps
     }
