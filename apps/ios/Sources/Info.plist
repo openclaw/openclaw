@@ -26,6 +26,11 @@
 	<array>
 		<string>_clawdis-bridge._tcp</string>
 	</array>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Clawdis can capture photos or short video clips when requested via the bridge.</string>
 	<key>NSLocalNetworkUsageDescription</key>
