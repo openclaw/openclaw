@@ -122,6 +122,30 @@ Iris runs a WKWebView “Canvas” scaffold which exposes:
 - `window.__clawdis.ctx` (2D context)
 - `window.__clawdis.setStatus(title, subtitle)`
 
+### Gateway Canvas Host (recommended for web content)
+
+If you want Iris to show real HTML/CSS/JS that the agent can edit on disk, enable the Gateway canvas host and point Iris at it.
+
+1) On the gateway host, enable `canvasHost` in `~/.clawdis/clawdis.json`:
+
+```json5
+{
+  canvasHost: { enabled: true, root: "~/clawd/canvas", port: 18793, bind: "lan" }
+}
+```
+
+2) Create `~/clawd/canvas/index.html`.
+
+3) Navigate Iris to it (LAN):
+
+```bash
+clawdis nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/"}'
+```
+
+Notes:
+- The server injects a live-reload client into HTML and reloads on file changes.
+- iOS may require App Transport Security allowances to load plain `http://` URLs; if it fails to load, prefer HTTPS or adjust the iOS app’s ATS config.
+
 ### Draw with `canvas.eval`
 
 ```bash

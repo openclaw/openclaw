@@ -93,6 +93,7 @@ The Gateway advertises small non-secret hints to make UI flows convenient:
 - `sshPort=<port>` (defaults to 22 when not overridden)
 - `gatewayPort=<port>` (informational; the Gateway WS is typically loopback-only)
 - `bridgePort=<port>` (only when bridge is enabled)
+- `canvasPort=<port>` (only when the optional canvas host is enabled; default `18793`)
 - `tailnetDns=<magicdns>` (optional hint; may be absent)
 
 ## Debugging on macOS

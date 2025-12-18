@@ -35,6 +35,7 @@ WhatsApp / Telegram
   ┌──────────────────────────┐
   │          Gateway          │  ws://127.0.0.1:18789 (loopback-only)
   │     (single source)       │  tcp://0.0.0.0:18790 (optional Bridge)
+  │                          │  http://0.0.0.0:18793 (optional Canvas host)
   └───────────┬───────────────┘
               │
               ├─ Pi agent (RPC)
@@ -51,6 +52,7 @@ Most operations flow through the **Gateway** (`clawdis gateway`), a single long-
 - **One Gateway per host**: it is the only process allowed to own the WhatsApp Web session.
 - **Loopback-first**: Gateway WS is `ws://127.0.0.1:18789` (not exposed on the LAN).
 - **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
+- **Canvas host (optional)**: LAN/tailnet HTTP file server (default `18793`) for node WebViews; see `docs/configuration.md` (`canvasHost`).
 - **Remote use**: SSH tunnel or tailnet/VPN; see `docs/remote.md` and `docs/discovery.md`.
 
 ## Features (high level)

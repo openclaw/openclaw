@@ -101,6 +101,28 @@ The Android node’s Chat sheet uses the gateway’s **primary session key** (`m
 
 ## 7) Canvas + camera
 
+### Gateway Canvas Host (recommended for web content)
+
+If you want the node to show real HTML/CSS/JS that the agent can edit on disk, enable the Gateway canvas host and point the node at it.
+
+1) On the gateway host, enable `canvasHost` in `~/.clawdis/clawdis.json`:
+
+```json5
+{
+  canvasHost: { enabled: true, root: "~/clawd/canvas", port: 18793, bind: "lan" }
+}
+```
+
+2) Create `~/clawd/canvas/index.html`.
+
+3) Navigate the node to it (LAN):
+
+```bash
+clawdis nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/"}'
+```
+
+This server injects a live-reload client into HTML and reloads on file changes.
+
 Canvas commands (foreground only):
 - `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (switches to web mode), `canvas.setMode` (use `"canvas"` to return)
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias)

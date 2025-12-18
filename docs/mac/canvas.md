@@ -10,6 +10,8 @@ read_when:
 
 Status: draft spec · Date: 2025-12-12
 
+Note: for iOS/Android nodes that should render agent-edited HTML/CSS/JS over the network, prefer the Gateway `canvasHost` (serves `~/clawd/canvas` over LAN/tailnet with live reload). This doc focuses on the macOS in-app canvas panel. See `docs/configuration.md`.
+
 Clawdis can embed an agent-controlled “visual workspace” panel (“Canvas”) inside the macOS app using `WKWebView`, served via a **custom URL scheme** (no loopback HTTP port required).
 
 This is designed for:

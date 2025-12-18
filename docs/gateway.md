@@ -21,6 +21,7 @@ pnpm clawdis gateway --port 18789 --verbose
 pnpm clawdis gateway --force
 ```
 - Binds WebSocket control plane to `127.0.0.1:<port>` (default 18789).
+- Optionally starts a LAN/tailnet Canvas file server when `canvasHost.enabled` is `true` (default `http://0.0.0.0:18793`, serves `~/clawd/canvas`).
 - Logs to stdout; use launchd/systemd to keep it alive and rotate logs.
 - Pass `--verbose` to mirror debug logging (handshakes, req/res, events) from the log file into stdio when troubleshooting.
 - `--force` uses `lsof` to find listeners on the chosen port, sends SIGTERM, logs what it killed, then starts the gateway (fails fast if `lsof` is missing).

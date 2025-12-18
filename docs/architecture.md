@@ -11,6 +11,7 @@ Last updated: 2025-12-09
 - A single long-lived **Gateway** process owns all messaging surfaces (WhatsApp via Baileys, Telegram when enabled) and the control/event plane.
 - All clients (macOS app, CLI, web UI, automations) connect to the Gateway over one transport: **WebSocket on 127.0.0.1:18789** (tunnel or VPN for remote).
 - One Gateway per host; it is the only place that is allowed to open a WhatsApp session. All sends/agent runs go through it.
+- Optional: the Gateway can expose a LAN/tailnet HTTP canvas host (`canvasHost`) to serve `~/clawd/canvas` to node WebViews (live-reloads on file changes).
 
 ## Components and flows
 - **Gateway (daemon)**  
