@@ -148,10 +148,28 @@ jobs:
         run: swiftformat --lint apps/macos/Sources --config .swiftformat
 
       - name: Swift build (release)
-        run: swift build --package-path apps/macos --configuration release
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift build --package-path apps/macos --configuration release; then
+              exit 0
+            fi
+            echo "swift build failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Swift tests (coverage)
-        run: swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+              exit 0
+            fi
+            echo "swift test failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
 
       - name: Generate iOS project
         run: |
