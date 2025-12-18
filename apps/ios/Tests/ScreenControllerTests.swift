@@ -41,4 +41,21 @@ import WebKit
             }
         }
     }
+
+    @Test @MainActor func localNetworkCanvasURLsAreAllowed() {
+        let screen = ScreenController()
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://localhost:18793/")!) == true)
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://clawd.local:18793/")!) == true)
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://192.168.0.10:18793/")!) == true)
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://10.0.0.10:18793/")!) == true)
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://100.123.224.76:18793/")!) == true) // Tailscale CGNAT
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "https://example.com/")!) == false)
+        #expect(screen.isLocalNetworkCanvasURL(URL(string: "http://8.8.8.8/")!) == false)
+    }
+
+    @Test func parseA2UIActionBodyAcceptsJSONString() throws {
+        let body = ScreenController.parseA2UIActionBody("{\"userAction\":{\"name\":\"hello\"}}")
+        let userAction = try #require(body?["userAction"] as? [String: Any])
+        #expect(userAction["name"] as? String == "hello")
+    }
 }

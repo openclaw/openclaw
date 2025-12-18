@@ -196,7 +196,7 @@ final class ScreenController {
         forResource: "index",
         withExtension: "html")
 
-    fileprivate func isTrustedCanvasUIURL(_ url: URL) -> Bool {
+    func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }
         let std = url.standardizedFileURL
         if let expected = Self.canvasScaffoldURL,
@@ -210,6 +210,64 @@ final class ScreenController {
             return true
         }
         return false
+    }
+
+    func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
+        guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
+            return false
+        }
+        guard let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines), !host.isEmpty else {
+            return false
+        }
+        if host == "localhost" { return true }
+        if host.hasSuffix(".local") { return true }
+        if let ipv4 = Self.parseIPv4(host) {
+            return Self.isLocalNetworkIPv4(ipv4)
+        }
+        return false
+    }
+
+    private static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return nil }
+        let bytes: [UInt8] = parts.compactMap { UInt8($0) }
+        guard bytes.count == 4 else { return nil }
+        return (bytes[0], bytes[1], bytes[2], bytes[3])
+    }
+
+    private static func isLocalNetworkIPv4(_ ip: (UInt8, UInt8, UInt8, UInt8)) -> Bool {
+        let (a, b, _, _) = ip
+        // 10.0.0.0/8
+        if a == 10 { return true }
+        // 172.16.0.0/12
+        if a == 172, (16...31).contains(Int(b)) { return true }
+        // 192.168.0.0/16
+        if a == 192, b == 168 { return true }
+        // 127.0.0.0/8
+        if a == 127 { return true }
+        // 169.254.0.0/16 (link-local)
+        if a == 169, b == 254 { return true }
+        // Tailscale: 100.64.0.0/10
+        if a == 100, (64...127).contains(Int(b)) { return true }
+        return false
+    }
+
+    static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
+        if let dict = body as? [String: Any] { return dict.isEmpty ? nil : dict }
+        if let str = body as? String,
+           let data = str.data(using: .utf8),
+           let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        {
+            return json.isEmpty ? nil : json
+        }
+        if let dict = body as? [AnyHashable: Any] {
+            let mapped = dict.reduce(into: [String: Any]()) { acc, pair in
+                guard let key = pair.key as? String else { return }
+                acc[key] = pair.value
+            }
+            return mapped.isEmpty ? nil : mapped
+        }
+        return nil
     }
 }
 
@@ -259,20 +317,15 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
         guard message.name == Self.messageName else { return }
         guard let controller else { return }
 
-        // Only accept actions from local bundled canvas/A2UI content (not arbitrary web pages).
-        guard let url = message.webView?.url, controller.isTrustedCanvasUIURL(url) else { return }
+        guard let url = message.webView?.url else { return }
+        if url.isFileURL {
+            guard controller.isTrustedCanvasUIURL(url) else { return }
+        } else {
+            // For security, only accept actions from local-network pages (e.g. the canvas host).
+            guard controller.isLocalNetworkCanvasURL(url) else { return }
+        }
 
-        let body: [String: Any] = {
-            if let dict = message.body as? [String: Any] { return dict }
-            if let dict = message.body as? [AnyHashable: Any] {
-                return dict.reduce(into: [String: Any]()) { acc, pair in
-                    guard let key = pair.key as? String else { return }
-                    acc[key] = pair.value
-                }
-            }
-            return [:]
-        }()
-        guard !body.isEmpty else { return }
+        guard let body = ScreenController.parseA2UIActionBody(message.body) else { return }
 
         controller.onA2UIAction?(body)
     }
