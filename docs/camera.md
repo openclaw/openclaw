@@ -39,7 +39,7 @@ All camera access is gated behind **user-controlled settings**.
 - `camera.clip`
   - Params:
     - `facing`: `front|back` (default: `front`)
-    - `durationMs`: number (default `3000`, clamped to a max)
+    - `durationMs`: number (default `3000`, clamped to a max of `60000`)
     - `includeAudio`: boolean (default `true`)
     - `format`: currently `mp4`
   - Response payload:
@@ -83,7 +83,8 @@ Notes:
   - `CAMERA` for both `camera.snap` and `camera.clip`.
   - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`.
 
-If permissions are denied, `camera.*` requests fail with a `*_PERMISSION_REQUIRED` error.
+If permissions are missing, the app will prompt when possible; if denied, `camera.*` requests fail with a
+`*_PERMISSION_REQUIRED` error.
 
 ### Foreground requirement
 
@@ -118,4 +119,4 @@ Notes:
 ## Safety + practical limits
 
 - Camera and microphone access trigger the usual OS permission prompts (and require usage strings in Info.plist).
-- Video clips are intentionally short to avoid oversized bridge payloads (base64 overhead + WebSocket message limits).
+- Video clips are capped (currently `<= 60s`) to avoid oversized bridge payloads (base64 overhead + message limits).

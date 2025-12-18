@@ -154,7 +154,7 @@ JSON
 clawdis nodes invoke --node 192.168.0.88 --command canvas.snapshot --params '{"maxWidth":900}'
 ```
 
-The response includes `base64` PNG data (for debugging/verification).
+The response includes `{ format, base64 }` image data (default `format="jpeg"`; pass `{"format":"png"}` when you specifically need lossless PNG).
 
 ## Common gotchas
 

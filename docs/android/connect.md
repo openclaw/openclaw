@@ -118,7 +118,7 @@ Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tai
 This server injects a live-reload client into HTML and reloads on file changes.
 
 Canvas commands (foreground only):
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default canvas/A2UI scaffold)
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default canvas/A2UI scaffold). `canvas.snapshot` returns `{ format, base64 }` (default `format="jpeg"`).
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias)
 
 Camera commands (foreground only; permission-gated):
