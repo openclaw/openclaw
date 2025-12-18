@@ -154,7 +154,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { ListItem(headlineContent = { Text("Address") }, supportingContent = { Text(remoteAddress!!) }) }
     }
     item {
-      if (isConnected) {
+      // UI sanity: "Disconnect" only when we have an active remote.
+      if (isConnected && remoteAddress != null) {
         Button(
           onClick = {
             viewModel.disconnect()
