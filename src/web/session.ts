@@ -193,7 +193,14 @@ function safeStringify(value: unknown, limit = 800): string {
       value,
       (_key, v) => {
         if (typeof v === "bigint") return v.toString();
-        if (typeof v === "function") return `[Function ${(v as Function).name || "anonymous"}]`;
+        if (typeof v === "function") {
+          const maybeName = (v as { name?: unknown }).name;
+          const name =
+            typeof maybeName === "string" && maybeName.length > 0
+              ? maybeName
+              : "anonymous";
+          return `[Function ${name}]`;
+        }
         if (typeof v === "object" && v) {
           if (seen.has(v)) return "[Circular]";
           seen.add(v);
@@ -244,7 +251,9 @@ export function formatError(err: unknown): string {
   const boom =
     extractBoomDetails(err) ??
     extractBoomDetails((err as { error?: unknown })?.error) ??
-    extractBoomDetails((err as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error);
+    extractBoomDetails(
+      (err as { lastDisconnect?: { error?: unknown } })?.lastDisconnect?.error,
+    );
 
   const status = boom?.statusCode ?? getStatusCode(err);
   const code = (err as { code?: unknown })?.code;
@@ -254,7 +263,8 @@ export function formatError(err: unknown): string {
     typeof (err as { message?: unknown })?.message === "string"
       ? ((err as { message?: unknown }).message as string)
       : undefined,
-    typeof (err as { error?: { message?: unknown } })?.error?.message === "string"
+    typeof (err as { error?: { message?: unknown } })?.error?.message ===
+    "string"
       ? ((err as { error?: { message?: unknown } }).error?.message as string)
       : undefined,
   ].filter((v): v is string => Boolean(v && v.trim().length > 0));
