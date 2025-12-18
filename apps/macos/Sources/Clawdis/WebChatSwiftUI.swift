@@ -3,6 +3,7 @@ import ClawdisChatUI
 import ClawdisProtocol
 import Foundation
 import OSLog
+import QuartzCore
 import SwiftUI
 
 private let webChatSwiftLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChatSwiftUI")
@@ -175,10 +176,26 @@ final class WebChatSwiftUIWindowController {
 
     func presentAnchored(anchorProvider: () -> NSRect?) {
         guard case .panel = self.presentation, let window else { return }
-        self.reposition(using: anchorProvider)
         self.installDismissMonitor()
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        let target = self.reposition(using: anchorProvider)
+
+        if !self.isVisible {
+            let start = target.offsetBy(dx: 0, dy: 8)
+            window.setFrame(start, display: true)
+            window.alphaValue = 0
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                window.animator().setFrame(target, display: true)
+                window.animator().alphaValue = 1
+            }
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
+
         self.onVisibilityChanged?(true)
     }
 
@@ -189,38 +206,29 @@ final class WebChatSwiftUIWindowController {
         self.removeDismissMonitor()
     }
 
-    private func reposition(using anchorProvider: () -> NSRect?) {
-        guard let window else { return }
+    @discardableResult
+    private func reposition(using anchorProvider: () -> NSRect?) -> NSRect {
+        guard let window else { return .zero }
         guard let anchor = anchorProvider() else {
-            window.setFrame(
-                WindowPlacement.topRightFrame(
-                    size: WebChatSwiftUILayout.panelSize,
-                    padding: WebChatSwiftUILayout.anchorPadding),
-                display: false)
-            return
+            let frame = WindowPlacement.topRightFrame(
+                size: WebChatSwiftUILayout.panelSize,
+                padding: WebChatSwiftUILayout.anchorPadding)
+            window.setFrame(frame, display: false)
+            return frame
         }
         let screen = NSScreen.screens.first { screen in
             screen.frame.contains(anchor.origin) || screen.frame.contains(NSPoint(x: anchor.midX, y: anchor.midY))
         } ?? NSScreen.main
-        var frame = window.frame
-        if let screen {
-            let bounds = screen.visibleFrame.insetBy(
-                dx: WebChatSwiftUILayout.anchorPadding,
-                dy: WebChatSwiftUILayout.anchorPadding)
-
-            let desiredX = round(anchor.midX - frame.width / 2)
-            let desiredY = anchor.minY - frame.height - WebChatSwiftUILayout.anchorPadding
-
-            let maxX = bounds.maxX - frame.width
-            let maxY = bounds.maxY - frame.height
-
-            frame.origin.x = maxX >= bounds.minX ? min(max(desiredX, bounds.minX), maxX) : bounds.minX
-            frame.origin.y = maxY >= bounds.minY ? min(max(desiredY, bounds.minY), maxY) : bounds.minY
-        } else {
-            frame.origin.x = round(anchor.midX - frame.width / 2)
-            frame.origin.y = anchor.minY - frame.height
-        }
+        let bounds = (screen?.visibleFrame ?? .zero).insetBy(
+            dx: WebChatSwiftUILayout.anchorPadding,
+            dy: WebChatSwiftUILayout.anchorPadding)
+        let frame = WindowPlacement.anchoredBelowFrame(
+            size: WebChatSwiftUILayout.panelSize,
+            anchor: anchor,
+            padding: WebChatSwiftUILayout.anchorPadding,
+            in: bounds)
         window.setFrame(frame, display: false)
+        return frame
     }
 
     private func installDismissMonitor() {

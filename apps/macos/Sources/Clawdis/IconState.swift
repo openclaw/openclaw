@@ -29,12 +29,12 @@ enum IconState: Equatable {
 
     var badgeSymbolName: String {
         switch self.activity {
-        case .tool(.bash): "terminal.fill"
-        case .tool(.read): "doc.text.magnifyingglass"
+        case .tool(.bash): "chevron.left.slash.chevron.right"
+        case .tool(.read): "doc"
         case .tool(.write): "pencil"
-        case .tool(.edit): "square.and.pencil"
+        case .tool(.edit): "pencil.tip"
         case .tool(.attach): "paperclip"
-        case .tool(.other), .job: "wrench.and.screwdriver.fill"
+        case .tool(.other), .job: "gearshape.fill"
         }
     }
 
