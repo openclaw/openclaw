@@ -1,5 +1,6 @@
 import AppKit
 import ClawdisIPC
+import Combine
 import Observation
 import SwiftUI
 
@@ -59,6 +60,9 @@ struct OnboardingView: View {
     @State private var anthropicAuthBusy = false
     @State private var anthropicAuthConnected = false
     @State private var anthropicAuthDetectedStatus: PiOAuthStore.AnthropicOAuthStatus = .missingFile
+    @State private var anthropicAuthAutoDetectClipboard = true
+    @State private var anthropicAuthAutoConnectClipboard = true
+    @State private var anthropicAuthLastPasteboardChangeCount = NSPasteboard.general.changeCount
     @State private var monitoringAuth = false
     @State private var authMonitorTask: Task<Void, Never>?
     @State private var identityName: String = ""
@@ -78,6 +82,8 @@ struct OnboardingView: View {
     private let contentHeight: CGFloat = 520
     private let connectionPageIndex = 1
     private let anthropicAuthPageIndex = 2
+
+    private static let clipboardPoll = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
     private let permissionsPageIndex = 5
     private var pageOrder: [Int] {
         if self.state.connectionMode == .remote {
@@ -407,6 +413,16 @@ struct OnboardingView: View {
                         TextField("code#state", text: self.$anthropicAuthCode)
                             .textFieldStyle(.roundedBorder)
 
+                        Toggle("Auto-detect from clipboard", isOn: self.$anthropicAuthAutoDetectClipboard)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .disabled(self.anthropicAuthBusy)
+
+                        Toggle("Auto-connect when detected", isOn: self.$anthropicAuthAutoConnectClipboard)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .disabled(self.anthropicAuthBusy)
+
                         Button("Connect") {
                             Task { await self.finishAnthropicOAuth() }
                         }
@@ -414,6 +430,9 @@ struct OnboardingView: View {
                         .disabled(
                             self.anthropicAuthBusy ||
                                 self.anthropicAuthCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                    .onReceive(Self.clipboardPoll) { _ in
+                        self.pollAnthropicClipboardIfNeeded()
                     }
                 }
 
@@ -463,19 +482,44 @@ struct OnboardingView: View {
         self.anthropicAuthBusy = true
         defer { self.anthropicAuthBusy = false }
 
-        let trimmed = self.anthropicAuthCode.trimmingCharacters(in: .whitespacesAndNewlines)
-        let splits = trimmed.split(separator: "#", maxSplits: 1).map(String.init)
-        let code = splits.first ?? ""
-        let state = splits.count > 1 ? splits[1] : ""
+        guard let parsed = AnthropicOAuthCodeState.parse(from: self.anthropicAuthCode) else {
+            self.anthropicAuthStatus = "OAuth failed: missing or invalid code/state."
+            return
+        }
 
         do {
-            let creds = try await AnthropicOAuth.exchangeCode(code: code, state: state, verifier: pkce.verifier)
+            let creds = try await AnthropicOAuth.exchangeCode(code: parsed.code, state: parsed.state, verifier: pkce.verifier)
             try PiOAuthStore.saveAnthropicOAuth(creds)
             self.refreshAnthropicOAuthStatus()
             self.anthropicAuthStatus = "Connected. Pi can now use Claude."
         } catch {
             self.anthropicAuthStatus = "OAuth failed: \(error.localizedDescription)"
         }
+    }
+
+    private func pollAnthropicClipboardIfNeeded() {
+        guard self.currentPage == self.anthropicAuthPageIndex else { return }
+        guard self.anthropicAuthPKCE != nil else { return }
+        guard !self.anthropicAuthBusy else { return }
+        guard self.anthropicAuthAutoDetectClipboard else { return }
+
+        let pb = NSPasteboard.general
+        let changeCount = pb.changeCount
+        guard changeCount != self.anthropicAuthLastPasteboardChangeCount else { return }
+        self.anthropicAuthLastPasteboardChangeCount = changeCount
+
+        guard let raw = pb.string(forType: .string), !raw.isEmpty else { return }
+        guard let parsed = AnthropicOAuthCodeState.parse(from: raw) else { return }
+        guard let pkce = self.anthropicAuthPKCE, parsed.state == pkce.verifier else { return }
+
+        let next = "\(parsed.code)#\(parsed.state)"
+        if self.anthropicAuthCode != next {
+            self.anthropicAuthCode = next
+            self.anthropicAuthStatus = "Detected `code#state` from clipboard."
+        }
+
+        guard self.anthropicAuthAutoConnectClipboard else { return }
+        Task { await self.finishAnthropicOAuth() }
     }
 
     private func refreshAnthropicOAuthStatus() {

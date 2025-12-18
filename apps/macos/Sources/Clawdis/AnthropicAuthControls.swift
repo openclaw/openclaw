@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -10,6 +11,11 @@ struct AnthropicAuthControls: View {
     @State private var code: String = ""
     @State private var busy = false
     @State private var statusText: String?
+    @State private var autoDetectClipboard = true
+    @State private var autoConnectClipboard = true
+    @State private var lastPasteboardChangeCount = NSPasteboard.general.changeCount
+
+    private static let clipboardPoll = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -81,6 +87,16 @@ struct AnthropicAuthControls: View {
                         .textFieldStyle(.roundedBorder)
                         .disabled(self.busy)
 
+                    Toggle("Auto-detect from clipboard", isOn: self.$autoDetectClipboard)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .disabled(self.busy)
+
+                    Toggle("Auto-connect when detected", isOn: self.$autoConnectClipboard)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .disabled(self.busy)
+
                     Button("Connect") {
                         Task { await self.finishOAuth() }
                     }
@@ -100,6 +116,9 @@ struct AnthropicAuthControls: View {
         }
         .onAppear {
             self.refresh()
+        }
+        .onReceive(Self.clipboardPoll) { _ in
+            self.pollClipboardIfNeeded()
         }
     }
 
@@ -132,13 +151,13 @@ struct AnthropicAuthControls: View {
         self.busy = true
         defer { self.busy = false }
 
-        let trimmed = self.code.trimmingCharacters(in: .whitespacesAndNewlines)
-        let splits = trimmed.split(separator: "#", maxSplits: 1).map(String.init)
-        let code = splits.first ?? ""
-        let state = splits.count > 1 ? splits[1] : ""
+        guard let parsed = AnthropicOAuthCodeState.parse(from: self.code) else {
+            self.statusText = "OAuth failed: missing or invalid code/state."
+            return
+        }
 
         do {
-            let creds = try await AnthropicOAuth.exchangeCode(code: code, state: state, verifier: pkce.verifier)
+            let creds = try await AnthropicOAuth.exchangeCode(code: parsed.code, state: parsed.state, verifier: pkce.verifier)
             try PiOAuthStore.saveAnthropicOAuth(creds)
             self.refresh()
             self.pkce = nil
@@ -147,5 +166,30 @@ struct AnthropicAuthControls: View {
         } catch {
             self.statusText = "OAuth failed: \(error.localizedDescription)"
         }
+    }
+
+    private func pollClipboardIfNeeded() {
+        guard self.connectionMode == .local else { return }
+        guard self.pkce != nil else { return }
+        guard !self.busy else { return }
+        guard self.autoDetectClipboard else { return }
+
+        let pb = NSPasteboard.general
+        let changeCount = pb.changeCount
+        guard changeCount != self.lastPasteboardChangeCount else { return }
+        self.lastPasteboardChangeCount = changeCount
+
+        guard let raw = pb.string(forType: .string), !raw.isEmpty else { return }
+        guard let parsed = AnthropicOAuthCodeState.parse(from: raw) else { return }
+        guard let pkce = self.pkce, parsed.state == pkce.verifier else { return }
+
+        let next = "\(parsed.code)#\(parsed.state)"
+        if self.code != next {
+            self.code = next
+            self.statusText = "Detected `code#state` from clipboard."
+        }
+
+        guard self.autoConnectClipboard else { return }
+        Task { await self.finishOAuth() }
     }
 }
