@@ -64,15 +64,11 @@ struct InstancesSettings: View {
         let device = DeviceModelCatalog.presentation(
             deviceFamily: inst.deviceFamily,
             modelIdentifier: inst.modelIdentifier)
-        let leadingSymbol = self.leadingDeviceSymbol(inst, device: device)
 
         HStack(alignment: .top, spacing: 12) {
-            Image(systemName: leadingSymbol)
-                .font(.system(size: 26, weight: .regular))
-                .foregroundStyle(.secondary)
+            self.leadingDeviceIcon(inst, device: device)
                 .frame(width: 28, height: 28, alignment: .center)
                 .padding(.top, 1)
-                .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
@@ -80,38 +76,38 @@ struct InstancesSettings: View {
                     if let ip = inst.ip { Text("(") + Text(ip).monospaced() + Text(")") }
                 }
 
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    HStack(spacing: 8) {
-                        if let version = inst.version {
-                            self.label(icon: "shippingbox", text: version)
-                        }
+                HStack(spacing: 8) {
+                    if let version = inst.version {
+                        self.label(icon: "shippingbox", text: version)
+                    }
 
-                        if let device {
-                            // Avoid showing generic "Mac"/"iPhone"/etc; prefer the concrete model name.
-                            let family = (inst.deviceFamily ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                            let isGeneric = !family.isEmpty && device.title == family
-                            if !isGeneric {
-                                if let prettyPlatform {
-                                    self.label(icon: device.symbol, text: "\(device.title) · \(prettyPlatform)")
-                                } else {
-                                    self.label(icon: device.symbol, text: device.title)
-                                }
-                            } else if let prettyPlatform, let platform = inst.platform {
-                                self.label(icon: self.platformIcon(platform), text: prettyPlatform)
+                    if let device {
+                        // Avoid showing generic "Mac"/"iPhone"/etc; prefer the concrete model name.
+                        let family = (inst.deviceFamily ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        let isGeneric = !family.isEmpty && device.title == family
+                        if !isGeneric {
+                            if let prettyPlatform {
+                                self.label(icon: device.symbol, text: "\(device.title) · \(prettyPlatform)")
+                            } else {
+                                self.label(icon: device.symbol, text: device.title)
                             }
                         } else if let prettyPlatform, let platform = inst.platform {
                             self.label(icon: self.platformIcon(platform), text: prettyPlatform)
                         }
-
-                        if let mode = inst.mode { self.label(icon: "network", text: mode) }
+                    } else if let prettyPlatform, let platform = inst.platform {
+                        self.label(icon: self.platformIcon(platform), text: prettyPlatform)
                     }
-                    .layoutPriority(1)
 
-                    Spacer(minLength: 0)
+                    if let mode = inst.mode { self.label(icon: "network", text: mode) }
+                }
+                .layoutPriority(1)
 
+                if !isGateway, self.shouldShowUpdateRow(inst) {
                     HStack(spacing: 8) {
+                        Spacer(minLength: 0)
+
                         // Last local input is helpful for interactive nodes, but noisy/meaningless for the gateway.
-                        if !isGateway, let secs = inst.lastInputSeconds {
+                        if let secs = inst.lastInputSeconds {
                             self.label(icon: "clock", text: "\(secs)s ago")
                         }
 
@@ -136,18 +132,42 @@ struct InstancesSettings: View {
 
     private func label(icon: String?, text: String) -> some View {
         HStack(spacing: 4) {
-            if let icon, self.isSystemSymbolAvailable(icon) {
-                Image(systemName: icon).foregroundStyle(.secondary).font(.caption)
+            if let icon {
+                if icon == Self.androidSymbolToken {
+                    AndroidMark()
+                        .foregroundStyle(.secondary)
+                        .frame(width: 12, height: 12, alignment: .center)
+                } else if self.isSystemSymbolAvailable(icon) {
+                    Image(systemName: icon).foregroundStyle(.secondary).font(.caption)
+                }
             }
             Text(text)
         }
         .font(.footnote)
     }
 
+    @ViewBuilder
+    private func leadingDeviceIcon(_ inst: InstanceInfo, device: DevicePresentation?) -> some View {
+        let symbol = self.leadingDeviceSymbol(inst, device: device)
+        if symbol == Self.androidSymbolToken {
+            AndroidMark()
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 24, alignment: .center)
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: symbol)
+                .font(.system(size: 26, weight: .regular))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private static let androidSymbolToken = "android"
+
     private func leadingDeviceSymbol(_ inst: InstanceInfo, device: DevicePresentation?) -> String {
         let family = (inst.deviceFamily ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if family == "android" {
-            return self.safeSystemSymbol("logo.android", fallback: "cpu")
+            return Self.androidSymbolToken
         }
 
         if let title = device?.title.lowercased() {
@@ -176,6 +196,12 @@ struct InstancesSettings: View {
         return "cpu"
     }
 
+    private func shouldShowUpdateRow(_ inst: InstanceInfo) -> Bool {
+        if inst.lastInputSeconds != nil { return true }
+        if self.updateSummaryText(inst, isGateway: false) != nil { return true }
+        return false
+    }
+
     private func safeSystemSymbol(_ preferred: String, fallback: String) -> String {
         if self.isSystemSymbolAvailable(preferred) { return preferred }
         return fallback
@@ -183,6 +209,46 @@ struct InstancesSettings: View {
 
     private func isSystemSymbolAvailable(_ name: String) -> Bool {
         NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
+    }
+
+    private struct AndroidMark: View {
+        var body: some View {
+            GeometryReader { geo in
+                let w = geo.size.width
+                let h = geo.size.height
+                let headHeight = h * 0.68
+                let headWidth = w * 0.92
+                let headY = h * 0.18
+                let corner = headHeight * 0.28
+
+                ZStack {
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .frame(width: headWidth, height: headHeight)
+                        .position(x: w / 2, y: headY + headHeight / 2)
+
+                    Circle()
+                        .frame(width: max(1, w * 0.1), height: max(1, w * 0.1))
+                        .position(x: w * 0.38, y: headY + headHeight * 0.55)
+                        .blendMode(.destinationOut)
+
+                    Circle()
+                        .frame(width: max(1, w * 0.1), height: max(1, w * 0.1))
+                        .position(x: w * 0.62, y: headY + headHeight * 0.55)
+                        .blendMode(.destinationOut)
+
+                    Rectangle()
+                        .frame(width: max(1, w * 0.08), height: max(1, h * 0.18))
+                        .rotationEffect(.degrees(-25))
+                        .position(x: w * 0.34, y: h * 0.12)
+
+                    Rectangle()
+                        .frame(width: max(1, w * 0.08), height: max(1, h * 0.18))
+                        .rotationEffect(.degrees(25))
+                        .position(x: w * 0.66, y: h * 0.12)
+                }
+                .compositingGroup()
+            }
+        }
     }
 
     private func platformIcon(_ raw: String) -> String {

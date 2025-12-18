@@ -27,8 +27,7 @@ struct DeviceModelCatalogTests {
 
     @Test
     func symbolFallsBackToDeviceFamily() {
-        #expect(DeviceModelCatalog.symbol(deviceFamily: "Android", modelIdentifier: "", friendlyName: nil) == "logo.android")
+        #expect(DeviceModelCatalog.symbol(deviceFamily: "Android", modelIdentifier: "", friendlyName: nil) == "android")
         #expect(DeviceModelCatalog.symbol(deviceFamily: "Linux", modelIdentifier: "", friendlyName: nil) == "cpu")
     }
 }
-
