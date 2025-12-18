@@ -434,8 +434,8 @@ enum CritterIconRenderer {
 
         // Bigger, higher-contrast badge:
         // - Increase diameter so tool activity is noticeable.
-        // - Use a filled "puck" background with a fully-opaque SF Symbol on top.
-        //   (The menu bar image is rendered as a template, so "knocking out" the symbol makes it invisible.)
+        // - Draw a filled "puck", then knock out the symbol shape (transparent hole).
+        //   This reads better in template-rendered menu bar icons than tiny monochrome glyphs.
         let diameter = canvas.snapX(canvas.w * 0.52 * (0.92 + 0.08 * strength)) // ~9–10pt on an 18pt canvas
         let margin = canvas.snapX(max(0.45, canvas.w * 0.03))
         let rect = CGRect(
@@ -466,19 +466,22 @@ enum CritterIconRenderer {
         canvas.context.strokeEllipse(in: rect.insetBy(dx: 0.45, dy: 0.45))
 
         if let base = NSImage(systemSymbolName: badge.symbolName, accessibilityDescription: nil) {
-            let pointSize = max(6.0, diameter * 0.80)
-            let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .bold)
+            let pointSize = max(7.0, diameter * 0.82)
+            let config = NSImage.SymbolConfiguration(pointSize: pointSize, weight: .black)
             let symbol = base.withSymbolConfiguration(config) ?? base
             symbol.isTemplate = true
 
-            let symbolRect = rect.insetBy(dx: diameter * 0.19, dy: diameter * 0.19)
+            let symbolRect = rect.insetBy(dx: diameter * 0.17, dy: diameter * 0.17)
+            canvas.context.saveGState()
+            canvas.context.setBlendMode(.clear)
             symbol.draw(
                 in: symbolRect,
                 from: .zero,
                 operation: .sourceOver,
-                fraction: min(1.0, 0.96 + 0.04 * strength),
+                fraction: 1,
                 respectFlipped: true,
                 hints: nil)
+            canvas.context.restoreGState()
         }
 
         canvas.context.restoreGState()

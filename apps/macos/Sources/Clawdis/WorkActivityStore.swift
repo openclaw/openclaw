@@ -18,9 +18,13 @@ final class WorkActivityStore {
 
     private(set) var current: Activity?
     private(set) var iconState: IconState = .idle
+    private(set) var lastToolLabel: String?
+    private(set) var lastToolUpdatedAt: Date?
 
-    private var active: [String: Activity] = [:]
+    private var jobs: [String: Activity] = [:]
+    private var tools: [String: Activity] = [:]
     private var currentSessionKey: String?
+    private var toolSeqBySession: [String: Int] = [:]
 
     private let mainSessionKey = "main"
     private let toolResultGrace: TimeInterval = 2.0
@@ -35,9 +39,11 @@ final class WorkActivityStore {
                 label: "job",
                 startedAt: Date(),
                 lastUpdate: Date())
-            self.setActive(activity)
+            self.setJobActive(activity)
         } else {
-            self.markIdle(sessionKey: sessionKey)
+            // Job ended (done/error/aborted/etc). Clear everything for this session.
+            self.clearTool(sessionKey: sessionKey)
+            self.clearJob(sessionKey: sessionKey)
         }
     }
 
@@ -51,6 +57,9 @@ final class WorkActivityStore {
         let toolKind = Self.mapToolKind(name)
         let label = Self.buildLabel(kind: toolKind, meta: meta, args: args)
         if phase.lowercased() == "start" {
+            self.lastToolLabel = label
+            self.lastToolUpdatedAt = Date()
+            self.toolSeqBySession[sessionKey, default: 0] += 1
             let activity = Activity(
                 sessionKey: sessionKey,
                 role: self.role(for: sessionKey),
@@ -58,15 +67,19 @@ final class WorkActivityStore {
                 label: label,
                 startedAt: Date(),
                 lastUpdate: Date())
-            self.setActive(activity)
+            self.setToolActive(activity)
         } else {
             // Delay removal slightly to avoid flicker on rapid result/start bursts.
             let key = sessionKey
+            let seq = self.toolSeqBySession[key, default: 0]
             Task { [weak self] in
                 let nsDelay = UInt64((self?.toolResultGrace ?? 0) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nsDelay)
                 await MainActor.run {
-                    self?.markIdle(sessionKey: key)
+                    guard let self else { return }
+                    guard self.toolSeqBySession[key, default: 0] == seq else { return }
+                    self.lastToolUpdatedAt = Date()
+                    self.clearTool(sessionKey: key)
                 }
             }
         }
@@ -92,53 +105,91 @@ final class WorkActivityStore {
         }
     }
 
-    private func setActive(_ activity: Activity) {
-        self.active[activity.sessionKey] = activity
+    private func setJobActive(_ activity: Activity) {
+        self.jobs[activity.sessionKey] = activity
         // Main session preempts immediately.
         if activity.role == .main {
             self.currentSessionKey = activity.sessionKey
-        } else if self.currentSessionKey == nil || self.active[self.currentSessionKey!] == nil {
+        } else if self.currentSessionKey == nil || !self.isActive(sessionKey: self.currentSessionKey!) {
             self.currentSessionKey = activity.sessionKey
         }
-        self.current = self.active[self.currentSessionKey ?? ""]
-        self.iconState = self.deriveIconState()
+        self.refreshDerivedState()
     }
 
-    private func markIdle(sessionKey: String) {
-        guard let existing = self.active[sessionKey] else { return }
-        // Update timestamp so replacement prefers newer others.
-        var updated = existing
-        updated.lastUpdate = Date()
-        self.active[sessionKey] = updated
-        self.active.removeValue(forKey: sessionKey)
+    private func setToolActive(_ activity: Activity) {
+        self.tools[activity.sessionKey] = activity
+        // Main session preempts immediately.
+        if activity.role == .main {
+            self.currentSessionKey = activity.sessionKey
+        } else if self.currentSessionKey == nil || !self.isActive(sessionKey: self.currentSessionKey!) {
+            self.currentSessionKey = activity.sessionKey
+        }
+        self.refreshDerivedState()
+    }
 
-        if self.currentSessionKey == sessionKey {
+    private func clearJob(sessionKey: String) {
+        guard self.jobs[sessionKey] != nil else { return }
+        self.jobs.removeValue(forKey: sessionKey)
+
+        if self.currentSessionKey == sessionKey, !self.isActive(sessionKey: sessionKey) {
             self.pickNextSession()
         }
-        self.current = self.active[self.currentSessionKey ?? ""]
-        self.iconState = self.deriveIconState()
+        self.refreshDerivedState()
+    }
+
+    private func clearTool(sessionKey: String) {
+        guard self.tools[sessionKey] != nil else { return }
+        self.tools.removeValue(forKey: sessionKey)
+
+        if self.currentSessionKey == sessionKey, !self.isActive(sessionKey: sessionKey) {
+            self.pickNextSession()
+        }
+        self.refreshDerivedState()
     }
 
     private func pickNextSession() {
         // Prefer main if present.
-        if let main = self.active[self.mainSessionKey] {
-            self.currentSessionKey = main.sessionKey
+        if self.isActive(sessionKey: self.mainSessionKey) {
+            self.currentSessionKey = self.mainSessionKey
             return
         }
-        // Otherwise, pick most recent by lastUpdate.
-        if let next = self.active.values.max(by: { $0.lastUpdate < $1.lastUpdate }) {
-            self.currentSessionKey = next.sessionKey
-        } else {
-            self.currentSessionKey = nil
-        }
+
+        // Otherwise, pick most recent by lastUpdate across job/tool.
+        let keys = Set(self.jobs.keys).union(self.tools.keys)
+        let next = keys.max(by: { self.lastUpdate(for: $0) < self.lastUpdate(for: $1) })
+        self.currentSessionKey = next
     }
 
     private func role(for sessionKey: String) -> SessionRole {
         sessionKey == self.mainSessionKey ? .main : .other
     }
 
+    private func isActive(sessionKey: String) -> Bool {
+        self.jobs[sessionKey] != nil || self.tools[sessionKey] != nil
+    }
+
+    private func lastUpdate(for sessionKey: String) -> Date {
+        max(self.jobs[sessionKey]?.lastUpdate ?? .distantPast, self.tools[sessionKey]?.lastUpdate ?? .distantPast)
+    }
+
+    private func currentActivity(for sessionKey: String) -> Activity? {
+        // Prefer tool overlay if present, otherwise job.
+        self.tools[sessionKey] ?? self.jobs[sessionKey]
+    }
+
+    private func refreshDerivedState() {
+        if let key = self.currentSessionKey, !self.isActive(sessionKey: key) {
+            self.currentSessionKey = nil
+        }
+        self.current = self.currentSessionKey.flatMap { self.currentActivity(for: $0) }
+        self.iconState = self.deriveIconState()
+    }
+
     private func deriveIconState() -> IconState {
-        guard let activity = self.current else { return .idle }
+        guard let sessionKey = self.currentSessionKey,
+              let activity = self.currentActivity(for: sessionKey)
+        else { return .idle }
+
         switch activity.role {
         case .main: return .workingMain(activity.kind)
         case .other: return .workingOther(activity.kind)

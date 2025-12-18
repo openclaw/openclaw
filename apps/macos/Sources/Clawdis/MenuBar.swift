@@ -22,6 +22,11 @@ struct ClawdisApp: App {
         self.statusItem?.button?.highlight(self.isPanelVisible)
     }
 
+    @MainActor
+    private func updateHoverHUDSuppression() {
+        HoverHUDController.shared.setSuppressed(self.isMenuPresented || self.isPanelVisible)
+    }
+
     init() {
         _state = State(initialValue: AppStateStore.shared)
     }
@@ -44,6 +49,7 @@ struct ClawdisApp: App {
             self.applyStatusItemAppearance(paused: self.state.isPaused)
             self.installStatusItemMouseHandler(for: item)
             self.menuInjector.install(into: item)
+            self.updateHoverHUDSuppression()
         }
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused)
@@ -65,6 +71,7 @@ struct ClawdisApp: App {
         .windowResizability(.contentSize)
         .onChange(of: self.isMenuPresented) { _, _ in
             self.updateStatusHighlight()
+            self.updateHoverHUDSuppression()
         }
     }
 
@@ -80,6 +87,7 @@ struct ClawdisApp: App {
         WebChatManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.isPanelVisible = visible
             self.updateStatusHighlight()
+            self.updateHoverHUDSuppression()
         }
         CanvasManager.shared.onPanelVisibilityChanged = { [self] visible in
             self.state.canvasPanelVisible = visible
@@ -88,11 +96,20 @@ struct ClawdisApp: App {
 
         let handler = StatusItemMouseHandlerView()
         handler.translatesAutoresizingMaskIntoConstraints = false
-        handler.onLeftClick = { [self] in self.toggleWebChatPanel() }
+        handler.onLeftClick = { [self] in
+            HoverHUDController.shared.dismiss(reason: "statusItemClick")
+            self.toggleWebChatPanel()
+        }
         handler.onRightClick = { [self] in
+            HoverHUDController.shared.dismiss(reason: "statusItemRightClick")
             WebChatManager.shared.closePanel()
             self.isMenuPresented = true
             self.updateStatusHighlight()
+        }
+        handler.onHoverChanged = { [self] inside in
+            HoverHUDController.shared.statusItemHoverChanged(
+                inside: inside,
+                anchorProvider: { [self] in self.statusButtonScreenFrame() })
         }
 
         button.addSubview(handler)
@@ -106,6 +123,7 @@ struct ClawdisApp: App {
 
     @MainActor
     private func toggleWebChatPanel() {
+        HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
         WebChatManager.shared.togglePanel(
             sessionKey: WebChatManager.shared.preferredSessionKey(),
@@ -138,6 +156,8 @@ struct ClawdisApp: App {
 private final class StatusItemMouseHandlerView: NSView {
     var onLeftClick: (() -> Void)?
     var onRightClick: (() -> Void)?
+    var onHoverChanged: ((Bool) -> Void)?
+    private var tracking: NSTrackingArea?
 
     override func mouseDown(with event: NSEvent) {
         if let onLeftClick {
@@ -150,6 +170,29 @@ private final class StatusItemMouseHandlerView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         self.onRightClick?()
         // Do not call super; menu will be driven by isMenuPresented binding.
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking {
+            self.removeTrackingArea(tracking)
+        }
+        let options: NSTrackingArea.Options = [
+            .mouseEnteredAndExited,
+            .activeAlways,
+            .inVisibleRect,
+        ]
+        let area = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
+        self.addTrackingArea(area)
+        self.tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        self.onHoverChanged?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        self.onHoverChanged?(false)
     }
 }
 
