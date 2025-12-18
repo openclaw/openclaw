@@ -52,35 +52,6 @@ struct SettingsTab: View {
                         }
                 }
 
-                Section("Voice") {
-                    Toggle("Voice Wake", isOn: self.$voiceWakeEnabled)
-                        .onChange(of: self.voiceWakeEnabled) { _, newValue in
-                            self.appModel.setVoiceWakeEnabled(newValue)
-                        }
-
-                    NavigationLink {
-                        VoiceWakeWordsSettingsView()
-                    } label: {
-                        LabeledContent(
-                            "Wake Words",
-                            value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
-                    }
-                }
-
-                Section("Camera") {
-                    Toggle("Allow Camera", isOn: self.$cameraEnabled)
-                    Text("Allows the bridge to request photos or short video clips (foreground only).")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
-                Section("Screen") {
-                    Toggle("Prevent Sleep", isOn: self.$preventSleep)
-                    Text("Keeps the screen awake while Clawdis is open.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-
                 Section("Bridge") {
                     LabeledContent("Discovery", value: self.bridgeController.discoveryStatusText)
                     LabeledContent("Status", value: self.appModel.bridgeStatusText)
@@ -172,6 +143,35 @@ struct SettingsTab: View {
                             BridgeDiscoveryDebugLogView()
                         }
                     }
+                }
+
+                Section("Voice") {
+                    Toggle("Voice Wake", isOn: self.$voiceWakeEnabled)
+                        .onChange(of: self.voiceWakeEnabled) { _, newValue in
+                            self.appModel.setVoiceWakeEnabled(newValue)
+                        }
+
+                    NavigationLink {
+                        VoiceWakeWordsSettingsView()
+                    } label: {
+                        LabeledContent(
+                            "Wake Words",
+                            value: VoiceWakePreferences.displayString(for: self.voiceWake.triggerWords))
+                    }
+                }
+
+                Section("Camera") {
+                    Toggle("Allow Camera", isOn: self.$cameraEnabled)
+                    Text("Allows the bridge to request photos or short video clips (foreground only).")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section("Screen") {
+                    Toggle("Prevent Sleep", isOn: self.$preventSleep)
+                    Text("Keeps the screen awake while Clawdis is open.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
             }
             .navigationTitle("Settings")
