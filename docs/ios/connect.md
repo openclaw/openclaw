@@ -122,19 +122,19 @@ Iris runs a WKWebView “Canvas” scaffold which exposes:
 - `window.__clawdis.ctx` (2D context)
 - `window.__clawdis.setStatus(title, subtitle)`
 
-### Draw with `screen.eval`
+### Draw with `canvas.eval`
 
 ```bash
-clawdis nodes invoke --node "iOS Node" --command screen.eval --params "$(cat <<'JSON'
+clawdis nodes invoke --node "iOS Node" --command canvas.eval --params "$(cat <<'JSON'
 {"javaScript":"(() => { const {ctx,setStatus} = window.__clawdis; setStatus('Drawing','…'); ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle='#ff2d55'; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); setStatus(null,null); return 'ok'; })()"}
 JSON
 )"
 ```
 
-### Snapshot with `screen.snapshot`
+### Snapshot with `canvas.snapshot`
 
 ```bash
-clawdis nodes invoke --node 192.168.0.88 --command screen.snapshot --params '{"maxWidth":900}'
+clawdis nodes invoke --node 192.168.0.88 --command canvas.snapshot --params '{"maxWidth":900}'
 ```
 
 The response includes `base64` PNG data (for debugging/verification).

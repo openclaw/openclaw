@@ -31,7 +31,7 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 
 ### iOS node (Iris)
 - New iOS companion app that pairs to the Gateway bridge, reports presence as a node, and exposes a WKWebView “Canvas” for agent-driven UI.
-- `clawdis nodes invoke` supports `screen.eval` and `screen.snapshot` to drive and verify the iOS Canvas (fails fast when Iris is backgrounded).
+- `clawdis nodes invoke` supports `canvas.eval` and `canvas.snapshot` to drive and verify the iOS Canvas (fails fast when Iris is backgrounded).
 - Voice wake words are configurable in-app; Iris reconnects to the last bridge when credentials are still present in Keychain.
 
 ### WhatsApp & agent experience

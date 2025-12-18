@@ -123,7 +123,7 @@ Build/run the mac app with `./scripts/restart-mac.sh` (packages, installs, and l
 Iris is an internal/prototype iOS app that connects as a **remote node**:
 
 - **Voice trigger:** forwards transcripts into the Gateway (agent runs + wakeups).
-- **Canvas screen:** a WKWebView + `<canvas>` surface the agent can control (via `screen.eval` / `screen.snapshot` over `node.invoke`).
+- **Canvas screen:** a WKWebView + `<canvas>` surface the agent can control (via `canvas.eval` / `canvas.snapshot` over `node.invoke`).
 - **Discovery + pairing:** finds the bridge via Bonjour (`_clawdis-bridge._tcp`) and uses Gateway-owned pairing (`clawdis nodes pending|approve`); `clawdis nodes status` shows paired nodes + capabilities.
 
 Runbook: `docs/ios/connect.md`

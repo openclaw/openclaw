@@ -117,14 +117,11 @@ Add to `src/gateway/protocol/schema.ts` (and regenerate Swift models):
 
 ### Node command set (screen-focused)
 These are values for `node.invoke.command`:
-- `screen.show` / `screen.hide`
-- `screen.navigate` with `{ url }` (Canvas URL or https URL)
-- `screen.eval` with `{ javaScript }`
-- `screen.snapshot` with `{ maxWidth?, quality?, format? }`
-- `screen.setMode` with `{ mode: "canvas" | "web" }`
-
-Alias:
-- `canvas.*` is accepted as a synonym for `screen.*` (e.g. `canvas.eval` → `screen.eval`).
+- `canvas.show` / `canvas.hide`
+- `canvas.navigate` with `{ url }` (Canvas URL or https URL)
+- `canvas.eval` with `{ javaScript }`
+- `canvas.snapshot` with `{ maxWidth?, quality?, format? }`
+- `canvas.setMode` with `{ mode: "canvas" | "web" }`
 
 Result pattern:
 - Request is a standard `req/res` with `ok` / `error`.
@@ -135,13 +132,13 @@ As of 2025-12-13, the Gateway supports `node.invoke` for bridge-connected nodes.
 
 Example: draw a diagonal line on the iOS Canvas:
 ```bash
-clawdis nodes invoke --node ios-node --command screen.eval --params '{"javaScript":"(() => { const {ctx} = window.__clawdis; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
+clawdis nodes invoke --node ios-node --command canvas.eval --params '{"javaScript":"(() => { const {ctx} = window.__clawdis; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
 ```
 
 ### Background behavior requirement
 When iOS is backgrounded:
 - Voice may still be active (subject to iOS suspension).
-- **All `screen.*` commands must fail** with a stable error code, e.g.:
+- **All `canvas.*` commands must fail** with a stable error code, e.g.:
   - `NODE_BACKGROUND_UNAVAILABLE`
   - Include `retryable: true` and `retryAfterMs` if we want the agent to wait.
 
@@ -222,8 +219,8 @@ open Clawdis.xcodeproj
    - Implement bridge routing + ACLs
 4) **iOS screen/canvas**
    - WKWebView screen surface
-   - `screen.navigate/eval/snapshot`
-   - Background fast-fail for `screen.*`
+   - `canvas.navigate/eval/snapshot`
+   - Background fast-fail for `canvas.*`
 5) **Unify mac Canvas under the same node.invoke**
    - Keep existing implementation, but expose it through the unified protocol path so the agent uses one API.
 
