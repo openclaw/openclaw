@@ -9,9 +9,8 @@ import {
   resetLoadConfigMock,
 } from "./test-helpers.js";
 
-const { createWaSocket, logWebSelfId, waitForWaConnection } = await import(
-  "./session.js"
-);
+const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
+  await import("./session.js");
 
 describe("web session", () => {
   beforeEach(() => {
@@ -88,5 +87,24 @@ describe("web session", () => {
     );
     existsSpy.mockRestore();
     readSpy.mockRestore();
+  });
+
+  it("formatError prints Boom-like payload message", () => {
+    const err = {
+      error: {
+        isBoom: true,
+        output: {
+          statusCode: 408,
+          payload: {
+            statusCode: 408,
+            error: "Request Time-out",
+            message: "QR refs attempts ended",
+          },
+        },
+      },
+    };
+    expect(formatError(err)).toContain("status=408");
+    expect(formatError(err)).toContain("Request Time-out");
+    expect(formatError(err)).toContain("QR refs attempts ended");
   });
 });
