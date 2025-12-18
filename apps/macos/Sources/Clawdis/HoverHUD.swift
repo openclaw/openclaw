@@ -22,15 +22,19 @@ final class HoverHUDController {
     private var hostingView: NSHostingView<HoverHUDView>?
     private var dismissMonitor: Any?
     private var dismissTask: Task<Void, Never>?
+    private var showTask: Task<Void, Never>?
     private var anchorProvider: (() -> NSRect?)?
 
     private let width: CGFloat = 360
     private let height: CGFloat = 74
     private let padding: CGFloat = 8
+    private let hoverShowDelay: TimeInterval = 0.18
 
     func setSuppressed(_ suppressed: Bool) {
         self.model.isSuppressed = suppressed
         if suppressed {
+            self.showTask?.cancel()
+            self.showTask = nil
             self.dismiss(reason: "suppressed")
         }
     }
@@ -44,8 +48,21 @@ final class HoverHUDController {
         if inside {
             self.dismissTask?.cancel()
             self.dismissTask = nil
-            self.present()
+            self.showTask?.cancel()
+            self.showTask = Task { [weak self] in
+                guard let self else { return }
+                try? await Task.sleep(nanoseconds: UInt64(self.hoverShowDelay * 1_000_000_000))
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    guard !Task.isCancelled else { return }
+                    guard self.model.hoveringStatusItem else { return }
+                    guard !self.model.isSuppressed else { return }
+                    self.present()
+                }
+            }
         } else {
+            self.showTask?.cancel()
+            self.showTask = nil
             self.scheduleDismiss()
         }
     }
@@ -282,4 +299,3 @@ private struct HoverHUDView: View {
         }
     }
 }
-
