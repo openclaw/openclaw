@@ -158,9 +158,9 @@ private val canvasHtml =
           position: fixed;
           inset: -20%;
           background:
-            repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) 1px,
+            repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px,
                                      transparent 1px, transparent 48px),
-            repeating-linear-gradient(90deg, rgba(255,255,255,0.02) 0, rgba(255,255,255,0.02) 1px,
+            repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px,
                                      transparent 1px, transparent 48px);
           transform: translate3d(0,0,0) rotate(-7deg);
           will-change: transform, opacity;
@@ -180,13 +180,18 @@ private val canvasHtml =
             radial-gradient(900px 800px at 55% 75%, rgba(0,209,255,0.10), rgba(0,0,0,0) 62%);
           filter: blur(28px);
           opacity: 0.52;
-          mix-blend-mode: screen;
           will-change: transform, opacity;
           -webkit-backface-visibility: hidden;
           backface-visibility: hidden;
           transform: translate3d(0,0,0);
           pointer-events: none;
           animation: clawdis-glow-drift 110s ease-in-out infinite alternate;
+        }
+        @supports (mix-blend-mode: screen) {
+          body::after { mix-blend-mode: screen; }
+        }
+        @supports not (mix-blend-mode: screen) {
+          body::after { opacity: 0.70; }
         }
         @keyframes clawdis-grid-drift {
           0%   { transform: translate3d(-12px, 8px, 0) rotate(-7deg); opacity: 0.40; }
