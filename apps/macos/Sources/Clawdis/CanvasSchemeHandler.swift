@@ -1,5 +1,5 @@
-import Foundation
 import ClawdisKit
+import Foundation
 import OSLog
 import WebKit
 
@@ -250,7 +250,8 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
         let ext = url.pathExtension
         let name = url.deletingPathExtension().lastPathComponent
         guard !name.isEmpty, !ext.isEmpty else { return nil }
-        guard let resourceURL = ClawdisKitResources.bundle.url(forResource: name, withExtension: ext) else { return nil }
+        guard let resourceURL = ClawdisKitResources.bundle.url(forResource: name, withExtension: ext)
+        else { return nil }
         return try? Data(contentsOf: resourceURL)
     }
 

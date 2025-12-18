@@ -226,7 +226,9 @@ final class CanvasManager {
     }
 
     private static func hasBundledA2UIShell() -> Bool {
-        guard let base = ClawdisKitResources.bundle.resourceURL?.appendingPathComponent("CanvasA2UI", isDirectory: true) else {
+        guard let base = ClawdisKitResources.bundle.resourceURL?
+            .appendingPathComponent("CanvasA2UI", isDirectory: true)
+        else {
             return false
         }
         let index = base.appendingPathComponent("index.html", isDirectory: false)

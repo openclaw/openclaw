@@ -677,7 +677,10 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
 
             await MainActor.run {
                 guard let webView else { return }
-                let js = ClawdisCanvasA2UIAction.jsDispatchA2UIActionStatus(actionId: actionId, ok: result.ok, error: result.error)
+                let js = ClawdisCanvasA2UIAction.jsDispatchA2UIActionStatus(
+                    actionId: actionId,
+                    ok: result.ok,
+                    error: result.error)
                 webView.evaluateJavaScript(js) { _, _ in }
             }
             if !result.ok {
