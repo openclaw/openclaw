@@ -2975,7 +2975,7 @@ export async function startGatewayServer(port = 18789): Promise<GatewayServer> {
 	                    deviceFamily: live?.deviceFamily ?? n.deviceFamily,
 	                    modelIdentifier: live?.modelIdentifier ?? n.modelIdentifier,
 	                    remoteIp: live?.remoteIp ?? n.remoteIp,
-	                    caps: live?.caps,
+	                    caps: live?.caps ?? n.caps,
 	                    connected: Boolean(live),
 	                  };
 	                });

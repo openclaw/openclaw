@@ -164,6 +164,9 @@ final class BridgeConnectionController {
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
         if cameraEnabled { caps.append("camera") }
 
+        let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
+        if voiceWakeEnabled { caps.append("voiceWake") }
+
         return caps
     }
 

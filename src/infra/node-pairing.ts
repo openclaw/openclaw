@@ -11,6 +11,7 @@ export type NodePairingPendingRequest = {
   version?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  caps?: string[];
   remoteIp?: string;
   isRepair?: boolean;
   ts: number;
@@ -24,6 +25,7 @@ export type NodePairingPairedNode = {
   version?: string;
   deviceFamily?: string;
   modelIdentifier?: string;
+  caps?: string[];
   remoteIp?: string;
   createdAtMs: number;
   approvedAtMs: number;
@@ -178,6 +180,7 @@ export async function requestNodePairing(
       version: req.version,
       deviceFamily: req.deviceFamily,
       modelIdentifier: req.modelIdentifier,
+      caps: req.caps,
       remoteIp: req.remoteIp,
       isRepair,
       ts: Date.now(),
@@ -207,6 +210,7 @@ export async function approveNodePairing(
       version: pending.version,
       deviceFamily: pending.deviceFamily,
       modelIdentifier: pending.modelIdentifier,
+      caps: pending.caps,
       remoteIp: pending.remoteIp,
       createdAtMs: existing?.createdAtMs ?? now,
       approvedAtMs: now,
@@ -243,4 +247,31 @@ export async function verifyNodeToken(
   const node = state.pairedByNodeId[normalized];
   if (!node) return { ok: false };
   return node.token === token ? { ok: true, node } : { ok: false };
+}
+
+export async function updatePairedNodeMetadata(
+  nodeId: string,
+  patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
+  baseDir?: string,
+) {
+  await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    const existing = state.pairedByNodeId[normalized];
+    if (!existing) return;
+
+    const next: NodePairingPairedNode = {
+      ...existing,
+      displayName: patch.displayName ?? existing.displayName,
+      platform: patch.platform ?? existing.platform,
+      version: patch.version ?? existing.version,
+      deviceFamily: patch.deviceFamily ?? existing.deviceFamily,
+      modelIdentifier: patch.modelIdentifier ?? existing.modelIdentifier,
+      remoteIp: patch.remoteIp ?? existing.remoteIp,
+      caps: patch.caps ?? existing.caps,
+    };
+
+    state.pairedByNodeId[normalized] = next;
+    await persistState(state, baseDir);
+  });
 }

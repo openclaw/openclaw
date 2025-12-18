@@ -459,6 +459,10 @@ describe("node bridge server", () => {
     expect(node?.modelIdentifier).toBe("iPad14,5");
     expect(node?.caps).toEqual(["canvas", "camera"]);
 
+    const after = await listNodePairing(baseDir);
+    const paired = after.paired.find((p) => p.nodeId === "n-caps");
+    expect(paired?.caps).toEqual(["canvas", "camera"]);
+
     socket.destroy();
     await server.close();
   });

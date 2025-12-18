@@ -7,6 +7,7 @@ import {
   listNodePairing,
   type NodePairingPendingRequest,
   requestNodePairing,
+  updatePairedNodeMetadata,
   verifyNodeToken,
 } from "../node-pairing.js";
 
@@ -258,6 +259,34 @@ export async function startNodeBridgeServer(
         return;
       }
 
+      const inferCaps = (frame: {
+        platform?: string;
+        deviceFamily?: string;
+      }): string[] | undefined => {
+        const platform = String(frame.platform ?? "").trim().toLowerCase();
+        const family = String(frame.deviceFamily ?? "").trim().toLowerCase();
+        if (platform.includes("ios") || platform.includes("ipados")) {
+          return ["canvas", "camera"];
+        }
+        if (platform.includes("android")) {
+          return ["canvas", "camera"];
+        }
+        if (family === "ipad" || family === "iphone" || family === "ios") {
+          return ["canvas", "camera"];
+        }
+        if (family === "android") {
+          return ["canvas", "camera"];
+        }
+        return undefined;
+      };
+
+      const caps =
+        (Array.isArray(hello.caps)
+          ? hello.caps.map((c) => String(c)).filter(Boolean)
+          : undefined) ??
+        verified.node.caps ??
+        inferCaps(hello);
+
       isAuthenticated = true;
       const existing = connections.get(nodeId);
       if (existing?.socket && existing.socket !== socket) {
@@ -274,11 +303,22 @@ export async function startNodeBridgeServer(
         version: verified.node.version ?? hello.version,
         deviceFamily: verified.node.deviceFamily ?? hello.deviceFamily,
         modelIdentifier: verified.node.modelIdentifier ?? hello.modelIdentifier,
-        caps: Array.isArray(hello.caps)
-          ? hello.caps.map((c) => String(c)).filter(Boolean)
-          : undefined,
+        caps,
         remoteIp: remoteAddress,
       };
+      await updatePairedNodeMetadata(
+        nodeId,
+        {
+          displayName: nodeInfo.displayName,
+          platform: nodeInfo.platform,
+          version: nodeInfo.version,
+          deviceFamily: nodeInfo.deviceFamily,
+          modelIdentifier: nodeInfo.modelIdentifier,
+          remoteIp: nodeInfo.remoteIp,
+          caps: nodeInfo.caps,
+        },
+        opts.pairingBaseDir,
+      );
       connections.set(nodeId, { socket, nodeInfo, invokeWaiters });
       send({ type: "hello-ok", serverName } satisfies BridgeHelloOkFrame);
       await opts.onAuthenticated?.(nodeInfo);
@@ -335,6 +375,9 @@ export async function startNodeBridgeServer(
           version: req.version,
           deviceFamily: req.deviceFamily,
           modelIdentifier: req.modelIdentifier,
+          caps: Array.isArray(req.caps)
+            ? req.caps.map((c) => String(c)).filter(Boolean)
+            : undefined,
           remoteIp: remoteAddress,
         },
         opts.pairingBaseDir,
