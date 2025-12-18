@@ -79,10 +79,7 @@ import {
   writeWideAreaBridgeZone,
 } from "../infra/widearea-dns.js";
 import { logError, logInfo, logWarn } from "../logger.js";
-import {
-  getChildLogger,
-  getResolvedLoggerSettings,
-} from "../logging.js";
+import { getChildLogger, getResolvedLoggerSettings } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
@@ -532,7 +529,9 @@ function logWs(
   }
 
   const trailing: string[] = [];
-  if (connId) trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
+  if (connId) {
+    trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
+  }
   if (id) trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
 
   const tokens = [
