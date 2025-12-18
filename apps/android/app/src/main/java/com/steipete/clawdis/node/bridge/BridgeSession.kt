@@ -43,6 +43,7 @@ class BridgeSession(
     val deviceFamily: String?,
     val modelIdentifier: String?,
     val caps: List<String>?,
+    val commands: List<String>?,
   )
 
   data class InvokeRequest(val id: String, val command: String, val paramsJson: String?)
@@ -198,6 +199,7 @@ class BridgeSession(
             hello.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
             hello.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
             hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
+            hello.commands?.let { put("commands", JsonArray(it.map(::JsonPrimitive))) }
           },
         )
 

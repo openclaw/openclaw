@@ -9,7 +9,7 @@ final class ScreenController {
     let webView: WKWebView
     private let navigationDelegate: ScreenNavigationDelegate
 
-    var mode: ClawdisScreenMode = .canvas
+    var mode: ClawdisCanvasMode = .canvas
     var urlString: String = ""
     var errorText: String?
 
@@ -36,7 +36,7 @@ final class ScreenController {
         self.reload()
     }
 
-    func setMode(_ mode: ClawdisScreenMode) {
+    func setMode(_ mode: ClawdisCanvasMode) {
         self.mode = mode
         self.reload()
     }

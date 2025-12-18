@@ -262,6 +262,60 @@ struct SettingsTab: View {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 
+    private func deviceFamily() -> String {
+        switch UIDevice.current.userInterfaceIdiom {
+        case .pad:
+            "iPad"
+        case .phone:
+            "iPhone"
+        default:
+            "iOS"
+        }
+    }
+
+    private func modelIdentifier() -> String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
+            String(decoding: ptr.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        return machine.isEmpty ? "unknown" : machine
+    }
+
+    private func currentCaps() -> [String] {
+        var caps = [ClawdisCapability.canvas.rawValue]
+
+        let cameraEnabled =
+            UserDefaults.standard.object(forKey: "camera.enabled") == nil
+                ? true
+                : UserDefaults.standard.bool(forKey: "camera.enabled")
+        if cameraEnabled { caps.append(ClawdisCapability.camera.rawValue) }
+
+        let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
+        if voiceWakeEnabled { caps.append(ClawdisCapability.voiceWake.rawValue) }
+
+        return caps
+    }
+
+    private func currentCommands() -> [String] {
+        var commands: [String] = [
+            ClawdisCanvasCommand.show.rawValue,
+            ClawdisCanvasCommand.hide.rawValue,
+            ClawdisCanvasCommand.setMode.rawValue,
+            ClawdisCanvasCommand.navigate.rawValue,
+            ClawdisCanvasCommand.evalJS.rawValue,
+            ClawdisCanvasCommand.snapshot.rawValue,
+        ]
+
+        let caps = Set(self.currentCaps())
+        if caps.contains(ClawdisCapability.camera.rawValue) {
+            commands.append(ClawdisCameraCommand.snap.rawValue)
+            commands.append(ClawdisCameraCommand.clip.rawValue)
+        }
+
+        return commands
+    }
+
     private func connect(_ bridge: BridgeDiscoveryModel.DiscoveredBridge) async {
         self.connectingBridgeID = bridge.id
         self.manualBridgeEnabled = false
@@ -285,7 +339,11 @@ struct SettingsTab: View {
                 displayName: self.displayName,
                 token: existingToken,
                 platform: self.platformString(),
-                version: self.appVersion())
+                version: self.appVersion(),
+                deviceFamily: self.deviceFamily(),
+                modelIdentifier: self.modelIdentifier(),
+                caps: self.currentCaps(),
+                commands: self.currentCommands())
             let token = try await BridgeClient().pairAndHello(
                 endpoint: bridge.endpoint,
                 hello: hello,
@@ -309,7 +367,11 @@ struct SettingsTab: View {
                     displayName: self.displayName,
                     token: token,
                     platform: self.platformString(),
-                    version: self.appVersion()))
+                    version: self.appVersion(),
+                    deviceFamily: self.deviceFamily(),
+                    modelIdentifier: self.modelIdentifier(),
+                    caps: self.currentCaps(),
+                    commands: self.currentCommands()))
 
         } catch {
             self.connectStatus.text = "Failed: \(error.localizedDescription)"
@@ -351,7 +413,11 @@ struct SettingsTab: View {
                 displayName: self.displayName,
                 token: existingToken,
                 platform: self.platformString(),
-                version: self.appVersion())
+                version: self.appVersion(),
+                deviceFamily: self.deviceFamily(),
+                modelIdentifier: self.modelIdentifier(),
+                caps: self.currentCaps(),
+                commands: self.currentCommands())
             let token = try await BridgeClient().pairAndHello(
                 endpoint: endpoint,
                 hello: hello,
@@ -375,7 +441,11 @@ struct SettingsTab: View {
                     displayName: self.displayName,
                     token: token,
                     platform: self.platformString(),
-                    version: self.appVersion()))
+                    version: self.appVersion(),
+                    deviceFamily: self.deviceFamily(),
+                    modelIdentifier: self.modelIdentifier(),
+                    caps: self.currentCaps(),
+                    commands: self.currentCommands()))
 
         } catch {
             self.connectStatus.text = "Failed: \(error.localizedDescription)"

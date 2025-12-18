@@ -72,6 +72,7 @@ class BridgeSessionTest {
           deviceFamily = null,
           modelIdentifier = null,
           caps = null,
+          commands = null,
         ),
     )
 
@@ -137,6 +138,7 @@ class BridgeSessionTest {
           deviceFamily = null,
           modelIdentifier = null,
           caps = null,
+          commands = null,
         ),
     )
     connected.await()
@@ -207,6 +209,7 @@ class BridgeSessionTest {
           deviceFamily = null,
           modelIdentifier = null,
           caps = null,
+          commands = null,
         ),
     )
     connected.await()
@@ -279,6 +282,7 @@ class BridgeSessionTest {
           deviceFamily = null,
           modelIdentifier = null,
           caps = null,
+          commands = null,
         ),
     )
 

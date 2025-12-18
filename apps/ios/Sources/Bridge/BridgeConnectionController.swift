@@ -136,7 +136,8 @@ final class BridgeConnectionController {
             version: self.appVersion(),
             deviceFamily: self.deviceFamily(),
             modelIdentifier: self.modelIdentifier(),
-            caps: self.currentCaps())
+            caps: self.currentCaps(),
+            commands: self.currentCommands())
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -168,6 +169,25 @@ final class BridgeConnectionController {
         if voiceWakeEnabled { caps.append(ClawdisCapability.voiceWake.rawValue) }
 
         return caps
+    }
+
+    private func currentCommands() -> [String] {
+        var commands: [String] = [
+            ClawdisCanvasCommand.show.rawValue,
+            ClawdisCanvasCommand.hide.rawValue,
+            ClawdisCanvasCommand.setMode.rawValue,
+            ClawdisCanvasCommand.navigate.rawValue,
+            ClawdisCanvasCommand.evalJS.rawValue,
+            ClawdisCanvasCommand.snapshot.rawValue,
+        ]
+
+        let caps = Set(self.currentCaps())
+        if caps.contains(ClawdisCapability.camera.rawValue) {
+            commands.append(ClawdisCameraCommand.snap.rawValue)
+            commands.append(ClawdisCameraCommand.clip.rawValue)
+        }
+
+        return commands
     }
 
     private func platformString() -> String {

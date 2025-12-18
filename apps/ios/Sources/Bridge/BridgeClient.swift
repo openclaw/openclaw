@@ -46,16 +46,17 @@ actor BridgeClient {
             }
 
             onStatus?("Requesting approval…")
-            try await self.send(
-                BridgePairRequest(
-                    nodeId: hello.nodeId,
-                    displayName: hello.displayName,
-                    platform: hello.platform,
-                    version: hello.version,
-                    deviceFamily: hello.deviceFamily,
-                    modelIdentifier: hello.modelIdentifier,
-                    caps: hello.caps),
-                over: connection)
+                try await self.send(
+                    BridgePairRequest(
+                        nodeId: hello.nodeId,
+                        displayName: hello.displayName,
+                        platform: hello.platform,
+                        version: hello.version,
+                        deviceFamily: hello.deviceFamily,
+                        modelIdentifier: hello.modelIdentifier,
+                        caps: hello.caps,
+                        commands: hello.commands),
+                    over: connection)
 
             onStatus?("Waiting for approval…")
             let ok = try await self.withTimeout(seconds: 60, purpose: "pairing approval") {

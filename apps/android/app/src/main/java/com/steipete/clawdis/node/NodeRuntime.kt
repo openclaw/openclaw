@@ -266,6 +266,20 @@ class NodeRuntime(context: Context) {
         .joinToString(" ")
         .trim()
         .ifEmpty { null }
+
+      val invokeCommands =
+        buildList {
+          add("canvas.show")
+          add("canvas.hide")
+          add("canvas.setMode")
+          add("canvas.navigate")
+          add("canvas.eval")
+          add("canvas.snapshot")
+          if (cameraEnabled.value) {
+            add("camera.snap")
+            add("camera.clip")
+          }
+        }
       val resolved =
         if (storedToken.isNullOrBlank()) {
 	          _statusText.value = "Pairing…"
@@ -288,6 +302,7 @@ class NodeRuntime(context: Context) {
                 deviceFamily = "Android",
                 modelIdentifier = modelIdentifier,
                 caps = caps,
+                commands = invokeCommands,
               ),
           )
         } else {
@@ -311,19 +326,20 @@ class NodeRuntime(context: Context) {
             platform = "Android",
             version = "dev",
             deviceFamily = "Android",
-	            modelIdentifier = modelIdentifier,
-	            caps =
-	              buildList {
-	                add(ClawdisCapability.Canvas.rawValue)
-	                if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
-	                if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
-	                  add(ClawdisCapability.VoiceWake.rawValue)
-	                }
-	              },
-	          ),
-	      )
-	    }
-	  }
+            modelIdentifier = modelIdentifier,
+            caps =
+              buildList {
+                add(ClawdisCapability.Canvas.rawValue)
+                if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
+                if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
+                  add(ClawdisCapability.VoiceWake.rawValue)
+                }
+              },
+            commands = invokeCommands,
+          ),
+      )
+    }
+  }
 
   private fun hasRecordAudioPermission(): Boolean {
     return (

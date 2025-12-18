@@ -28,6 +28,7 @@ class BridgePairingClient {
     val deviceFamily: String?,
     val modelIdentifier: String?,
     val caps: List<String>?,
+    val commands: List<String>?,
   )
 
   data class PairResult(val ok: Boolean, val token: String?, val error: String? = null)
@@ -62,6 +63,7 @@ class BridgePairingClient {
             hello.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
             hello.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
             hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
+            hello.commands?.let { put("commands", JsonArray(it.map(::JsonPrimitive))) }
           },
         )
 
@@ -86,6 +88,7 @@ class BridgePairingClient {
                 hello.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
                 hello.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
                 hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
+                hello.commands?.let { put("commands", JsonArray(it.map(::JsonPrimitive))) }
               },
             )
 

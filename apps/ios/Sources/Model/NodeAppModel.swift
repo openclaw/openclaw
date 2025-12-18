@@ -287,30 +287,30 @@ final class NodeAppModel {
 
         do {
             switch command {
-            case ClawdisScreenCommand.show.rawValue:
+            case ClawdisCanvasCommand.show.rawValue:
                 return BridgeInvokeResponse(id: req.id, ok: true)
 
-            case ClawdisScreenCommand.hide.rawValue:
+            case ClawdisCanvasCommand.hide.rawValue:
                 return BridgeInvokeResponse(id: req.id, ok: true)
 
-            case ClawdisScreenCommand.setMode.rawValue:
-                let params = try Self.decodeParams(ClawdisScreenSetModeParams.self, from: req.paramsJSON)
+            case ClawdisCanvasCommand.setMode.rawValue:
+                let params = try Self.decodeParams(ClawdisCanvasSetModeParams.self, from: req.paramsJSON)
                 self.screen.setMode(params.mode)
                 return BridgeInvokeResponse(id: req.id, ok: true)
 
-            case ClawdisScreenCommand.navigate.rawValue:
-                let params = try Self.decodeParams(ClawdisScreenNavigateParams.self, from: req.paramsJSON)
+            case ClawdisCanvasCommand.navigate.rawValue:
+                let params = try Self.decodeParams(ClawdisCanvasNavigateParams.self, from: req.paramsJSON)
                 self.screen.navigate(to: params.url)
                 return BridgeInvokeResponse(id: req.id, ok: true)
 
-            case ClawdisScreenCommand.evalJS.rawValue:
-                let params = try Self.decodeParams(ClawdisScreenEvalParams.self, from: req.paramsJSON)
+            case ClawdisCanvasCommand.evalJS.rawValue:
+                let params = try Self.decodeParams(ClawdisCanvasEvalParams.self, from: req.paramsJSON)
                 let result = try await self.screen.eval(javaScript: params.javaScript)
                 let payload = try Self.encodePayload(["result": result])
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
-            case ClawdisScreenCommand.snapshot.rawValue:
-                let params = try? Self.decodeParams(ClawdisScreenSnapshotParams.self, from: req.paramsJSON)
+            case ClawdisCanvasCommand.snapshot.rawValue:
+                let params = try? Self.decodeParams(ClawdisCanvasSnapshotParams.self, from: req.paramsJSON)
                 let maxWidth = params?.maxWidth.map { CGFloat($0) }
                 let base64 = try await self.screen.snapshotPNGBase64(maxWidth: maxWidth)
                 let payload = try Self.encodePayload(["format": "png", "base64": base64])
