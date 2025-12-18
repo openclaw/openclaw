@@ -18,6 +18,7 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.core.content.ContextCompat.checkSelfPermission
+import com.steipete.clawdis.node.PermissionRequester
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
@@ -32,24 +33,43 @@ class CameraCaptureManager(private val context: Context) {
   data class Payload(val payloadJson: String)
 
   @Volatile private var lifecycleOwner: LifecycleOwner? = null
+  @Volatile private var permissionRequester: PermissionRequester? = null
 
   fun attachLifecycleOwner(owner: LifecycleOwner) {
     lifecycleOwner = owner
   }
 
-  private fun requireCameraPermission() {
-    val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-    if (!granted) throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
+  fun attachPermissionRequester(requester: PermissionRequester) {
+    permissionRequester = requester
   }
 
-  private fun requireMicPermission() {
+  private suspend fun ensureCameraPermission() {
+    val granted = checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+    if (granted) return
+
+    val requester = permissionRequester
+      ?: throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
+    val results = requester.requestIfMissing(listOf(Manifest.permission.CAMERA))
+    if (results[Manifest.permission.CAMERA] != true) {
+      throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
+    }
+  }
+
+  private suspend fun ensureMicPermission() {
     val granted = checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    if (!granted) throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+    if (granted) return
+
+    val requester = permissionRequester
+      ?: throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+    val results = requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))
+    if (results[Manifest.permission.RECORD_AUDIO] != true) {
+      throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
+    }
   }
 
   suspend fun snap(paramsJson: String?): Payload =
     withContext(Dispatchers.Main) {
-      requireCameraPermission()
+      ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val facing = parseFacing(paramsJson) ?: "front"
       val quality = (parseQuality(paramsJson) ?: 0.9).coerceIn(0.1, 1.0)
@@ -90,12 +110,12 @@ class CameraCaptureManager(private val context: Context) {
 
   suspend fun clip(paramsJson: String?): Payload =
     withContext(Dispatchers.Main) {
-      requireCameraPermission()
+      ensureCameraPermission()
       val owner = lifecycleOwner ?: throw IllegalStateException("UNAVAILABLE: camera not ready")
       val facing = parseFacing(paramsJson) ?: "front"
-      val durationMs = (parseDurationMs(paramsJson) ?: 3_000).coerceIn(200, 45_000)
+      val durationMs = (parseDurationMs(paramsJson) ?: 3_000).coerceIn(200, 60_000)
       val includeAudio = parseIncludeAudio(paramsJson) ?: true
-      if (includeAudio) requireMicPermission()
+      if (includeAudio) ensureMicPermission()
 
       val provider = context.cameraProvider()
       val recorder = Recorder.Builder().build()

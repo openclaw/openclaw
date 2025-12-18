@@ -5,19 +5,32 @@ import android.os.Build
 import android.graphics.Canvas
 import android.os.Looper
 import android.webkit.WebView
-import org.json.JSONObject
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import android.util.Base64
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlin.coroutines.resume
 
 class CanvasController {
+  enum class SnapshotFormat(val rawValue: String) {
+    Png("png"),
+    Jpeg("jpeg"),
+  }
+
   @Volatile private var webView: WebView? = null
   @Volatile private var url: String? = null
 
   private val scaffoldAssetUrl = "file:///android_asset/CanvasScaffold/scaffold.html"
+
+  private fun clampJpegQuality(quality: Double?): Int {
+    val q = (quality ?: 0.82).coerceIn(0.1, 1.0)
+    return (q * 100.0).toInt().coerceIn(1, 100)
+  }
 
   fun attach(webView: WebView) {
     this.webView = webView
@@ -77,6 +90,28 @@ class CanvasController {
       Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
+  suspend fun snapshotBase64(format: SnapshotFormat, quality: Double?, maxWidth: Int?): String =
+    withContext(Dispatchers.Main) {
+      val wv = webView ?: throw IllegalStateException("no webview")
+      val bmp = wv.captureBitmap()
+      val scaled =
+        if (maxWidth != null && maxWidth > 0 && bmp.width > maxWidth) {
+          val h = (bmp.height.toDouble() * (maxWidth.toDouble() / bmp.width.toDouble())).toInt().coerceAtLeast(1)
+          Bitmap.createScaledBitmap(bmp, maxWidth, h, true)
+        } else {
+          bmp
+        }
+
+      val out = ByteArrayOutputStream()
+      val (compressFormat, compressQuality) =
+        when (format) {
+          SnapshotFormat.Png -> Bitmap.CompressFormat.PNG to 100
+          SnapshotFormat.Jpeg -> Bitmap.CompressFormat.JPEG to clampJpegQuality(quality)
+        }
+      scaled.compress(compressFormat, compressQuality, out)
+      Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
+    }
+
   private suspend fun WebView.captureBitmap(): Bitmap =
     suspendCancellableCoroutine { cont ->
       val width = width.coerceAtLeast(1)
@@ -90,32 +125,81 @@ class CanvasController {
     }
 
   companion object {
+    data class SnapshotParams(val format: SnapshotFormat, val quality: Double?, val maxWidth: Int?)
+
     fun parseNavigateUrl(paramsJson: String?): String {
-      val obj = parseParamsObject(paramsJson)
-      return obj?.optString("url", "")?.trim().orEmpty()
+      val obj = parseParamsObject(paramsJson) ?: return ""
+      return obj.string("url").trim()
     }
 
     fun parseEvalJs(paramsJson: String?): String? {
       val obj = parseParamsObject(paramsJson) ?: return null
-      val js = obj.optString("javaScript", "")
+      val js = obj.string("javaScript").trim()
       return js.takeIf { it.isNotBlank() }
     }
 
     fun parseSnapshotMaxWidth(paramsJson: String?): Int? {
       val obj = parseParamsObject(paramsJson) ?: return null
-      if (!obj.has("maxWidth")) return null
-      val width = obj.optInt("maxWidth", 0)
+      if (!obj.containsKey("maxWidth")) return null
+      val width = obj.int("maxWidth") ?: 0
       return width.takeIf { it > 0 }
     }
 
-    private fun parseParamsObject(paramsJson: String?): JSONObject? {
-      val raw = paramsJson?.trim() ?: return null
-      if (raw.isBlank()) return null
+    fun parseSnapshotFormat(paramsJson: String?): SnapshotFormat {
+      val obj = parseParamsObject(paramsJson) ?: return SnapshotFormat.Jpeg
+      val raw = obj.string("format").trim().lowercase()
+      return when (raw) {
+        "png" -> SnapshotFormat.Png
+        "jpeg", "jpg" -> SnapshotFormat.Jpeg
+        "" -> SnapshotFormat.Jpeg
+        else -> SnapshotFormat.Jpeg
+      }
+    }
+
+    fun parseSnapshotQuality(paramsJson: String?): Double? {
+      val obj = parseParamsObject(paramsJson) ?: return null
+      if (!obj.containsKey("quality")) return null
+      val q = obj.double("quality") ?: Double.NaN
+      if (!q.isFinite()) return null
+      return q.coerceIn(0.1, 1.0)
+    }
+
+    fun parseSnapshotParams(paramsJson: String?): SnapshotParams {
+      return SnapshotParams(
+        format = parseSnapshotFormat(paramsJson),
+        quality = parseSnapshotQuality(paramsJson),
+        maxWidth = parseSnapshotMaxWidth(paramsJson),
+      )
+    }
+
+    private val json = Json { ignoreUnknownKeys = true }
+
+    private fun parseParamsObject(paramsJson: String?): JsonObject? {
+      val raw = paramsJson?.trim().orEmpty()
+      if (raw.isEmpty()) return null
       return try {
-        JSONObject(raw)
+        json.parseToJsonElement(raw).asObjectOrNull()
       } catch (_: Throwable) {
         null
       }
+    }
+
+    private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
+
+    private fun JsonObject.string(key: String): String {
+      val prim = this[key] as? JsonPrimitive ?: return ""
+      val raw = prim.content
+      return raw.takeIf { it != "null" }.orEmpty()
+    }
+
+    private fun JsonObject.int(key: String): Int? {
+      val prim = this[key] as? JsonPrimitive ?: return null
+      return prim.content.toIntOrNull()
+    }
+
+    private fun JsonObject.double(key: String): Double? {
+      val prim = this[key] as? JsonPrimitive ?: return null
+      return prim.content.toDoubleOrNull()
     }
   }
 }

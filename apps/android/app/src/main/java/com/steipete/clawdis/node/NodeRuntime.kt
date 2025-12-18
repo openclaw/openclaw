@@ -576,17 +576,21 @@ class NodeRuntime(context: Context) {
         BridgeSession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
       }
       ClawdisCanvasCommand.Snapshot.rawValue -> {
-        val maxWidth = CanvasController.parseSnapshotMaxWidth(paramsJson)
+        val snapshotParams = CanvasController.parseSnapshotParams(paramsJson)
         val base64 =
           try {
-            canvas.snapshotPngBase64(maxWidth = maxWidth)
+            canvas.snapshotBase64(
+              format = snapshotParams.format,
+              quality = snapshotParams.quality,
+              maxWidth = snapshotParams.maxWidth,
+            )
           } catch (err: Throwable) {
             return BridgeSession.InvokeResult.error(
               code = "NODE_BACKGROUND_UNAVAILABLE",
               message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
             )
           }
-        BridgeSession.InvokeResult.ok("""{"format":"png","base64":"$base64"}""")
+        BridgeSession.InvokeResult.ok("""{"format":"${snapshotParams.format.rawValue}","base64":"$base64"}""")
       }
       ClawdisCanvasA2UICommand.Reset.rawValue -> {
         val ready = ensureA2uiReady()
