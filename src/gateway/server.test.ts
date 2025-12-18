@@ -636,6 +636,66 @@ describe("gateway server", () => {
     }
   });
 
+  test("node.describe works for connected unpaired nodes (caps + commands)", async () => {
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const prevHome = process.env.HOME;
+    process.env.HOME = homeDir;
+
+    try {
+      const { server, ws } = await startServerWithClient();
+      try {
+        await connectOk(ws);
+
+        bridgeListConnected.mockReturnValueOnce([
+          {
+            nodeId: "u1",
+            displayName: "Unpaired Live",
+            platform: "Android",
+            version: "dev-live",
+            remoteIp: "10.0.0.12",
+            deviceFamily: "Android",
+            modelIdentifier: "samsung SM-X926B",
+            caps: ["canvas", "camera", "canvas"],
+            commands: ["canvas.eval", "camera.snap", "canvas.eval"],
+          },
+        ]);
+
+        const describeRes = await rpcReq<{
+          paired?: boolean;
+          connected?: boolean;
+          caps?: string[];
+          commands?: string[];
+          deviceFamily?: string;
+          modelIdentifier?: string;
+          remoteIp?: string;
+        }>(ws, "node.describe", { nodeId: "u1" });
+        expect(describeRes.ok).toBe(true);
+        expect(describeRes.payload).toMatchObject({
+          paired: false,
+          connected: true,
+          deviceFamily: "Android",
+          modelIdentifier: "samsung SM-X926B",
+          remoteIp: "10.0.0.12",
+        });
+        expect(describeRes.payload?.caps).toEqual(["camera", "canvas"]);
+        expect(describeRes.payload?.commands).toEqual([
+          "camera.snap",
+          "canvas.eval",
+        ]);
+      } finally {
+        ws.close();
+        await server.close();
+      }
+    } finally {
+      await fs.rm(homeDir, { recursive: true, force: true });
+      if (prevHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = prevHome;
+      }
+    }
+  });
+
   test("node.list includes connected unpaired nodes with capabilities + commands", async () => {
     const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
     const prevHome = process.env.HOME;
