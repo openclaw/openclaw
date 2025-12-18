@@ -51,6 +51,10 @@ pnpm clawdis gateway --force
 - `system-event` — post a presence/system note (structured).
 - `send` — send a message via the active provider(s).
 - `agent` — run an agent turn (streams events back on same connection).
+- `node.list` — list paired + currently-connected bridge nodes (includes `caps`, `deviceFamily`, `modelIdentifier`, `paired`, `connected`, and advertised `commands`).
+- `node.describe` — describe a node (capabilities + supported `node.invoke` commands; works for paired nodes and for currently-connected unpaired nodes).
+- `node.invoke` — invoke a command on a node (e.g. `canvas.*`, `camera.*`).
+- `node.pair.*` — pairing lifecycle (`request`, `list`, `approve`, `reject`, `verify`).
 
 See also: `docs/presence.md` for how presence is produced/deduped and why `instanceId` matters.
 

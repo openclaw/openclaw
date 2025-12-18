@@ -1,11 +1,11 @@
 ---
-summary: "Plan for an iOS voice + screen (Canvas) node that connects via a secure Bonjour-discovered macOS bridge"
+summary: "Plan for an iOS voice + canvas node that connects via a secure Bonjour-discovered macOS bridge"
 read_when:
   - Designing iOS node + gateway integration
-  - Extending the Gateway protocol for node/screen commands
+  - Extending the Gateway protocol for node/canvas commands
   - Implementing Bonjour pairing or transport security
 ---
-# iOS Node (internal) — Voice Trigger + Screen/Canvas
+# iOS Node (internal) — Voice Trigger + Canvas
 
 Status: prototype implemented (internal) · Date: 2025-12-13
 
@@ -14,13 +14,13 @@ Runbook (how to connect/pair + drive Canvas): `docs/ios/connect.md`
 ## Goals
 - Build an **iOS app** that acts as a **remote node** for Clawdis:
   - **Voice trigger** (wake-word / always-listening intent) that forwards transcripts to the Gateway `agent` method.
-  - **Screen/Canvas** surface that the agent can control: navigate, draw/render, evaluate JS, snapshot.
+  - **Canvas** surface that the agent can control: navigate, draw/render, evaluate JS, snapshot.
 - **Dead-simple setup**:
   - Auto-discover the host on the local network via **Bonjour**.
   - One-tap pairing with an approval prompt on the Mac.
   - iOS is **never** a local gateway; it is always a remote node.
 - Operational clarity:
-  - When iOS is backgrounded, voice may still run; **screen/canvas commands must fail fast** with a structured error.
+  - When iOS is backgrounded, voice may still run; **canvas commands must fail fast** with a structured error.
   - Provide **settings**: node display name, enable/disable voice wake, pairing status.
 
 Non-goals (v1):
@@ -41,7 +41,7 @@ Keep the Node gateway loopback-only; expose a dedicated **gateway-owned bridge**
 Why:
 - Preserves current threat model: Gateway remains local-only.
 - Centralizes auth, rate limiting, and allowlisting in the bridge.
-- Lets us unify “screen node” semantics across mac + iOS without exposing raw gateway methods.
+- Lets us unify “canvas node” semantics across mac + iOS without exposing raw gateway methods.
 
 ## Security plan (internal, but still robust)
 ### Transport
@@ -84,7 +84,7 @@ The bridge must not be a raw proxy to every gateway method.
 - Allow by default:
   - `agent` (with guardrails; idempotency required)
   - minimal `system-event` beacons (presence updates for the node)
-  - node/screen methods defined below (new protocol surface)
+  - node/canvas methods defined below (new protocol surface)
 - Deny by default:
   - anything that widens control without explicit intent (future “shell”, “files”, etc.)
 - Rate limit:
@@ -92,7 +92,7 @@ The bridge must not be a raw proxy to every gateway method.
   - voice forwards per minute
   - snapshot frequency / payload size
 
-## Protocol unification: add “node/screen” to Gateway protocol
+## Protocol unification: add “node/canvas” to Gateway protocol
 ### Principle
 Unify mac Canvas + iOS Canvas under a single conceptual surface:
 - The agent talks to the Gateway using a stable method set (typed protocol).
@@ -108,14 +108,15 @@ Add to `src/gateway/protocol/schema.ts` (and regenerate Swift models):
 
 **Methods**
 - `node.list` → list paired/connected nodes + capabilities
+- `node.describe` → describe a node (capabilities + supported `node.invoke` commands)
 - `node.invoke` → send a command to a specific node
   - Params: `{ nodeId, command, params?, timeoutMs? }`
 
 **Events**
 - `node.event` → async node status/errors
-  - e.g. background/foreground transitions, voice availability, screen availability
+  - e.g. background/foreground transitions, voice availability, canvas availability
 
-### Node command set (screen-focused)
+### Node command set (canvas)
 These are values for `node.invoke.command`:
 - `canvas.show` / `canvas.hide`
 - `canvas.navigate` with `{ url }` (Canvas URL or https URL)
@@ -153,8 +154,8 @@ When iOS is backgrounded:
 - `BridgeConnection`: TCP session + pairing handshake + reconnect (TLS planned)
 - `NodeRuntime`:
   - Voice pipeline (wake-word + capture + forward)
-  - Screen pipeline (WKWebView controller + snapshot + eval)
-  - Background state tracking; enforces “screen unavailable in background”
+  - Canvas pipeline (WKWebView controller + snapshot + eval)
+  - Background state tracking; enforces “canvas unavailable in background”
 
 ### Voice in background (internal)
 - Enable background audio mode (and required session configuration) so the mic pipeline can keep running when the user switches apps.
@@ -164,7 +165,7 @@ When iOS is backgrounded:
 Create/expand SwiftPM targets so both apps share:
 - `ClawdisProtocol` (generated models; platform-neutral)
 - `ClawdisGatewayClient` (shared WS framing + connect/req/res + seq-gap handling)
-- `ClawdisKit` (node/screen command types + deep links + shared utilities)
+- `ClawdisKit` (node/canvas command types + deep links + shared utilities)
 
 macOS continues to own:
 - local Canvas implementation details (custom scheme handler serving on-disk HTML, window/panel presentation)
@@ -217,8 +218,8 @@ open Clawdis.xcodeproj
 3) **Protocol additions for nodes**
    - Add `node.list` / `node.invoke` / `node.event` to Gateway
    - Implement bridge routing + ACLs
-4) **iOS screen/canvas**
-   - WKWebView screen surface
+4) **iOS canvas**
+   - WKWebView canvas surface
    - `canvas.navigate/eval/snapshot`
    - Background fast-fail for `canvas.*`
 5) **Unify mac Canvas under the same node.invoke**
@@ -226,5 +227,5 @@ open Clawdis.xcodeproj
 
 ## Open questions
 - Should `connect.params.client.mode` be `"node"` with `platform="ios ..."` or a distinct mode `"ios-node"`? (Presence filtering currently excludes `"cli"` only.)
-- Do we want a “permissions” model per node (voice only vs voice+screen) at pairing time?
+- Do we want a “permissions” model per node (voice only vs voice+canvas) at pairing time?
 - Should “website mode” allow arbitrary https, or enforce an allowlist to reduce risk?

@@ -73,6 +73,7 @@ describe("cli program", () => {
           deviceFamily: "iPad",
           modelIdentifier: "iPad16,6",
           caps: ["canvas", "camera"],
+          paired: true,
           connected: true,
         },
       ],
@@ -85,12 +86,62 @@ describe("cli program", () => {
       expect.objectContaining({ method: "node.list", params: {} }),
     );
 
-    const output = runtime.log.mock.calls.map((c) => String(c[0] ?? "")).join("\n");
-    expect(output).toContain("Paired: 1 · Connected: 1");
+    const output = runtime.log.mock.calls
+      .map((c) => String(c[0] ?? ""))
+      .join("\n");
+    expect(output).toContain("Known: 1 · Paired: 1 · Connected: 1");
     expect(output).toContain("iOS Node");
     expect(output).toContain("device: iPad");
     expect(output).toContain("hw: iPad16,6");
+    expect(output).toContain("paired");
     expect(output).toContain("caps: [camera,canvas]");
+  });
+
+  it("runs nodes describe and calls node.describe", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "ios-node",
+            displayName: "iOS Node",
+            remoteIp: "192.168.0.88",
+            connected: true,
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodeId: "ios-node",
+        displayName: "iOS Node",
+        caps: ["canvas", "camera"],
+        commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
+        connected: true,
+      });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(["nodes", "describe", "--node", "ios-node"], {
+      from: "user",
+    });
+
+    expect(callGateway).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ method: "node.list", params: {} }),
+    );
+    expect(callGateway).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        method: "node.describe",
+        params: { nodeId: "ios-node" },
+      }),
+    );
+
+    const out = runtime.log.mock.calls
+      .map((c) => String(c[0] ?? ""))
+      .join("\n");
+    expect(out).toContain("Commands:");
+    expect(out).toContain("canvas.eval");
   });
 
   it("runs nodes approve and calls node.pair.approve", async () => {

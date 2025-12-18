@@ -35,6 +35,8 @@ type NodeListNode = {
   deviceFamily?: string;
   modelIdentifier?: string;
   caps?: string[];
+  commands?: string[];
+  paired?: boolean;
   connected?: boolean;
 };
 
@@ -183,18 +185,25 @@ export function registerNodesCli(program: Command) {
   nodesCallOpts(
     nodes
       .command("status")
-      .description("List paired nodes with connection status and capabilities")
+      .description("List known nodes with connection status and capabilities")
       .action(async (opts: NodesRpcOpts) => {
         try {
-          const result = (await callGatewayCli("node.list", opts, {})) as unknown;
+          const result = (await callGatewayCli(
+            "node.list",
+            opts,
+            {},
+          )) as unknown;
           if (opts.json) {
             defaultRuntime.log(JSON.stringify(result, null, 2));
             return;
           }
           const nodes = parseNodeList(result);
-          const connectedCount = nodes.filter((n) => Boolean(n.connected)).length;
+          const pairedCount = nodes.filter((n) => Boolean(n.paired)).length;
+          const connectedCount = nodes.filter((n) =>
+            Boolean(n.connected),
+          ).length;
           defaultRuntime.log(
-            `Paired: ${nodes.length} · Connected: ${connectedCount}`,
+            `Known: ${nodes.length} · Paired: ${pairedCount} · Connected: ${connectedCount}`,
           );
           for (const n of nodes) {
             const name = n.displayName || n.nodeId;
@@ -207,12 +216,70 @@ export function registerNodesCli(program: Command) {
                 : Array.isArray(n.caps)
                   ? "[]"
                   : "?";
+            const pairing = n.paired ? "paired" : "unpaired";
             defaultRuntime.log(
-              `- ${name} · ${n.nodeId}${ip}${device}${hw} · ${n.connected ? "connected" : "disconnected"} · caps: ${caps}`,
+              `- ${name} · ${n.nodeId}${ip}${device}${hw} · ${pairing} · ${n.connected ? "connected" : "disconnected"} · caps: ${caps}`,
             );
           }
         } catch (err) {
           defaultRuntime.error(`nodes status failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  nodesCallOpts(
+    nodes
+      .command("describe")
+      .description("Describe a node (capabilities + supported invoke commands)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: NodesRpcOpts) => {
+        try {
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const result = (await callGatewayCli("node.describe", opts, {
+            nodeId,
+          })) as unknown;
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+
+          const obj =
+            typeof result === "object" && result !== null
+              ? (result as Record<string, unknown>)
+              : {};
+          const displayName =
+            typeof obj.displayName === "string" ? obj.displayName : nodeId;
+          const connected = Boolean(obj.connected);
+          const caps = Array.isArray(obj.caps)
+            ? obj.caps.map(String).filter(Boolean).sort()
+            : null;
+          const commands = Array.isArray(obj.commands)
+            ? obj.commands.map(String).filter(Boolean).sort()
+            : [];
+          const family =
+            typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
+          const model =
+            typeof obj.modelIdentifier === "string"
+              ? obj.modelIdentifier
+              : null;
+          const ip = typeof obj.remoteIp === "string" ? obj.remoteIp : null;
+
+          const parts: string[] = ["Node:", displayName, nodeId];
+          if (ip) parts.push(ip);
+          if (family) parts.push(`device: ${family}`);
+          if (model) parts.push(`hw: ${model}`);
+          parts.push(connected ? "connected" : "disconnected");
+          parts.push(`caps: ${caps ? `[${caps.join(",")}]` : "?"}`);
+          defaultRuntime.log(parts.join(" · "));
+          defaultRuntime.log("Commands:");
+          if (commands.length === 0) {
+            defaultRuntime.log("- (none reported)");
+            return;
+          }
+          for (const c of commands) defaultRuntime.log(`- ${c}`);
+        } catch (err) {
+          defaultRuntime.error(`nodes describe failed: ${String(err)}`);
           defaultRuntime.exit(1);
         }
       }),
@@ -345,10 +412,7 @@ export function registerNodesCli(program: Command) {
       .command("invoke")
       .description("Invoke a command on a paired node")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .requiredOption(
-        "--command <command>",
-        "Command (e.g. canvas.eval)",
-      )
+      .requiredOption("--command <command>", "Command (e.g. canvas.eval)")
       .option("--params <json>", "JSON object string for params", "{}")
       .option(
         "--invoke-timeout <ms>",
