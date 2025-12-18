@@ -10,7 +10,6 @@ final class ScreenController {
     private let navigationDelegate: ScreenNavigationDelegate
     private let a2uiActionHandler: CanvasA2UIActionMessageHandler
 
-    var mode: ClawdisCanvasMode = .canvas
     var urlString: String = ""
     var errorText: String?
 
@@ -47,45 +46,30 @@ final class ScreenController {
         self.reload()
     }
 
-    func setMode(_ mode: ClawdisCanvasMode) {
-        self.mode = mode
-        self.reload()
-    }
-
     func navigate(to urlString: String) {
-        self.urlString = urlString
-        if !urlString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // `canvas.navigate` is expected to show web content; default to WEB mode.
-            self.mode = .web
-        }
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.urlString = (trimmed == "/" ? "" : trimmed)
         self.reload()
     }
 
     func reload() {
-        switch self.mode {
-        case .web:
-            let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            guard let url = Self.canvasScaffoldURL else { return }
+            self.webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            return
+        } else {
             guard let url = URL(string: trimmed) else { return }
             if url.isFileURL {
                 self.webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
             } else {
                 self.webView.load(URLRequest(url: url))
             }
-        case .canvas:
-            guard let url = Self.canvasScaffoldURL else { return }
-            self.webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
         }
     }
 
-    func showA2UI() throws {
-        guard let url = Self.a2uiIndexURL
-        else {
-            throw NSError(domain: "Canvas", code: 10, userInfo: [
-                NSLocalizedDescriptionKey: "A2UI resources missing (index.html)",
-            ])
-        }
-        self.mode = .web
-        self.urlString = url.absoluteString
+    func showDefaultCanvas() {
+        self.urlString = ""
         self.reload()
     }
 
@@ -160,10 +144,20 @@ final class ScreenController {
         withExtension: "html")
     private static let a2uiIndexURL: URL? = ClawdisKitResources.bundle.url(forResource: "index", withExtension: "html")
 
-    fileprivate func isBundledA2UIURL(_ url: URL) -> Bool {
+    fileprivate func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }
-        guard let expected = Self.a2uiIndexURL else { return false }
-        return url.standardizedFileURL == expected.standardizedFileURL
+        let std = url.standardizedFileURL
+        if let expected = Self.canvasScaffoldURL,
+           std == expected.standardizedFileURL
+        {
+            return true
+        }
+        if let expected = Self.a2uiIndexURL,
+           std == expected.standardizedFileURL
+        {
+            return true
+        }
+        return false
     }
 }
 
@@ -205,8 +199,8 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
         guard message.name == Self.messageName else { return }
         guard let controller else { return }
 
-        // Only accept actions from local bundled CanvasA2UI content (not arbitrary web pages).
-        guard let url = message.webView?.url, controller.isBundledA2UIURL(url) else { return }
+        // Only accept actions from local bundled canvas/A2UI content (not arbitrary web pages).
+        guard let url = message.webView?.url, controller.isTrustedCanvasUIURL(url) else { return }
 
         let body: [String: Any] = {
             if let dict = message.body as? [String: Any] { return dict }

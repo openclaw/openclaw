@@ -14,11 +14,8 @@ import android.util.Base64
 import kotlin.coroutines.resume
 
 class CanvasController {
-  enum class Mode { CANVAS, WEB }
-
   @Volatile private var webView: WebView? = null
-  @Volatile private var mode: Mode = Mode.CANVAS
-  @Volatile private var url: String = ""
+  @Volatile private var url: String? = null
 
   private val scaffoldAssetUrl = "file:///android_asset/CanvasScaffold/scaffold.html"
 
@@ -27,17 +24,9 @@ class CanvasController {
     reload()
   }
 
-  fun setMode(mode: Mode) {
-    this.mode = mode
-    reload()
-  }
-
   fun navigate(url: String) {
-    this.url = url
-    if (url.trim().isNotBlank()) {
-      // `canvas.navigate` is expected to show web content; default to WEB mode to match iOS.
-      this.mode = Mode.WEB
-    }
+    val trimmed = url.trim()
+    this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
     reload()
   }
 
@@ -51,17 +40,12 @@ class CanvasController {
   }
 
   private fun reload() {
-    val currentMode = mode
     val currentUrl = url
     withWebViewOnMain { wv ->
-      when (currentMode) {
-        Mode.WEB -> {
-          // Match iOS behavior: if URL is missing/invalid, keep the current page (canvas scaffold).
-          val trimmed = currentUrl.trim()
-          if (trimmed.isBlank()) return@withWebViewOnMain
-          wv.loadUrl(trimmed)
-        }
-        Mode.CANVAS -> wv.loadUrl(scaffoldAssetUrl)
+      if (currentUrl == null) {
+        wv.loadUrl(scaffoldAssetUrl)
+      } else {
+        wv.loadUrl(currentUrl)
       }
     }
   }
@@ -106,19 +90,9 @@ class CanvasController {
     }
 
   companion object {
-    fun parseMode(paramsJson: String?): Mode {
-      val obj = parseParamsObject(paramsJson) ?: return Mode.CANVAS
-      return if (obj.optString("mode", "").equals("web", ignoreCase = true)) {
-        Mode.WEB
-      } else {
-        Mode.CANVAS
-      }
-    }
-
-    fun parseNavigateUrl(paramsJson: String?): String? {
-      val obj = parseParamsObject(paramsJson) ?: return null
-      val url = obj.optString("url", "").trim()
-      return url.takeIf { it.isNotBlank() }
+    fun parseNavigateUrl(paramsJson: String?): String {
+      val obj = parseParamsObject(paramsJson)
+      return obj?.optString("url", "")?.trim().orEmpty()
     }
 
     fun parseEvalJs(paramsJson: String?): String? {

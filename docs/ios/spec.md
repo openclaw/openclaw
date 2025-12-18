@@ -120,10 +120,9 @@ Add to `src/gateway/protocol/schema.ts` (and regenerate Swift models):
 ### Node command set (canvas)
 These are values for `node.invoke.command`:
 - `canvas.show` / `canvas.hide`
-- `canvas.navigate` with `{ url }` (Canvas URL or https URL; switches mode to `"web"`)
+- `canvas.navigate` with `{ url }` (loads a URL; use `""` or `"/"` to return to the default canvas/A2UI scaffold)
 - `canvas.eval` with `{ javaScript }`
 - `canvas.snapshot` with `{ maxWidth?, quality?, format? }`
-- `canvas.setMode` with `{ mode: "canvas" | "web" }` (use `"canvas"` to return to the scaffold)
 - A2UI (mobile + macOS canvas):
   - `canvas.a2ui.push` with `{ messages: [...] }` (A2UI v0.8 server→client messages)
   - `canvas.a2ui.pushJSONL` with `{ jsonl: "..." }` (legacy alias)

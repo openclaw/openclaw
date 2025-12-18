@@ -9,7 +9,6 @@ enum class ClawdisCapability(val rawValue: String) {
 enum class ClawdisCanvasCommand(val rawValue: String) {
   Show("canvas.show"),
   Hide("canvas.hide"),
-  SetMode("canvas.setMode"),
   Navigate("canvas.navigate"),
   Eval("canvas.eval"),
   Snapshot("canvas.snapshot"),

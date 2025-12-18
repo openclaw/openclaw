@@ -272,7 +272,6 @@ class NodeRuntime(context: Context) {
         buildList {
           add(ClawdisCanvasCommand.Show.rawValue)
           add(ClawdisCanvasCommand.Hide.rawValue)
-          add(ClawdisCanvasCommand.SetMode.rawValue)
           add(ClawdisCanvasCommand.Navigate.rawValue)
           add(ClawdisCanvasCommand.Eval.rawValue)
           add(ClawdisCanvasCommand.Snapshot.rawValue)
@@ -544,14 +543,9 @@ class NodeRuntime(context: Context) {
     return when (command) {
       ClawdisCanvasCommand.Show.rawValue -> BridgeSession.InvokeResult.ok(null)
       ClawdisCanvasCommand.Hide.rawValue -> BridgeSession.InvokeResult.ok(null)
-      ClawdisCanvasCommand.SetMode.rawValue -> {
-        val mode = CanvasController.parseMode(paramsJson)
-        canvas.setMode(mode)
-        BridgeSession.InvokeResult.ok(null)
-      }
       ClawdisCanvasCommand.Navigate.rawValue -> {
         val url = CanvasController.parseNavigateUrl(paramsJson)
-        if (url != null) canvas.navigate(url)
+        canvas.navigate(url)
         BridgeSession.InvokeResult.ok(null)
       }
       ClawdisCanvasCommand.Eval.rawValue -> {
@@ -638,7 +632,8 @@ class NodeRuntime(context: Context) {
       // ignore
     }
 
-    canvas.navigate(a2uiIndexUrl)
+    // Ensure the default canvas scaffold is loaded; A2UI is now hosted there.
+    canvas.navigate("")
     repeat(50) {
       try {
         val ready = canvas.eval(a2uiReadyCheckJS)
@@ -712,8 +707,6 @@ class NodeRuntime(context: Context) {
 }
 
 private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
-
-private const val a2uiIndexUrl: String = "file:///android_asset/CanvasA2UI/index.html"
 
 private const val a2uiReadyCheckJS: String =
   """

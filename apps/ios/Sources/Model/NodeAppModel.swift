@@ -378,11 +378,6 @@ final class NodeAppModel {
             case ClawdisCanvasCommand.hide.rawValue:
                 return BridgeInvokeResponse(id: req.id, ok: true)
 
-            case ClawdisCanvasCommand.setMode.rawValue:
-                let params = try Self.decodeParams(ClawdisCanvasSetModeParams.self, from: req.paramsJSON)
-                self.screen.setMode(params.mode)
-                return BridgeInvokeResponse(id: req.id, ok: true)
-
             case ClawdisCanvasCommand.navigate.rawValue:
                 let params = try Self.decodeParams(ClawdisCanvasNavigateParams.self, from: req.paramsJSON)
                 self.screen.navigate(to: params.url)
@@ -402,7 +397,7 @@ final class NodeAppModel {
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
             case ClawdisCanvasA2UICommand.reset.rawValue:
-                try self.screen.showA2UI()
+                self.screen.showDefaultCanvas()
                 if await !self.screen.waitForA2UIReady(timeoutMs: 5000) {
                     return BridgeInvokeResponse(
                         id: req.id,
@@ -434,7 +429,7 @@ final class NodeAppModel {
                     }
                 }
 
-                try self.screen.showA2UI()
+                self.screen.showDefaultCanvas()
                 if await !self.screen.waitForA2UIReady(timeoutMs: 5000) {
                     return BridgeInvokeResponse(
                         id: req.id,

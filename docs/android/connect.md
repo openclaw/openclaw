@@ -30,7 +30,7 @@ pnpm clawdis gateway --port 18789 --verbose
 ```
 
 Confirm in logs you see something like:
-- `bridge listening on tcp://0.0.0.0:18790 (Iris)`
+- `bridge listening on tcp://0.0.0.0:18790 (node)`
 
 For tailnet-only setups (recommended for Vienna ⇄ London), bind the bridge to the gateway machine’s Tailscale IP instead:
 
@@ -103,28 +103,22 @@ The Android node’s Chat sheet uses the gateway’s **primary session key** (`m
 
 ### Gateway Canvas Host (recommended for web content)
 
-If you want the node to show real HTML/CSS/JS that the agent can edit on disk, enable the Gateway canvas host and point the node at it.
+If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
-1) On the gateway host, enable `canvasHost` in `~/.clawdis/clawdis.json`:
+1) Create `~/clawd/canvas/index.html` on the gateway host.
 
-```json5
-{
-  canvasHost: { enabled: true, root: "~/clawd/canvas", port: 18793, bind: "lan" }
-}
-```
-
-2) Create `~/clawd/canvas/index.html`.
-
-3) Navigate the node to it (LAN):
+2) Navigate the node to it (LAN):
 
 ```bash
 clawdis nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/"}'
 ```
 
+Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18793/`.
+
 This server injects a live-reload client into HTML and reloads on file changes.
 
 Canvas commands (foreground only):
-- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (switches to web mode), `canvas.setMode` (use `"canvas"` to return)
+- `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default canvas/A2UI scaffold)
 - A2UI: `canvas.a2ui.push`, `canvas.a2ui.reset` (`canvas.a2ui.pushJSONL` legacy alias)
 
 Camera commands (foreground only; permission-gated):

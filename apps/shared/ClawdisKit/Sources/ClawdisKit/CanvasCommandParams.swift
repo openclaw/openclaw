@@ -1,23 +1,10 @@
 import Foundation
 
-public enum ClawdisCanvasMode: String, Codable, Sendable {
-    case canvas
-    case web
-}
-
 public struct ClawdisCanvasNavigateParams: Codable, Sendable, Equatable {
     public var url: String
 
     public init(url: String) {
         self.url = url
-    }
-}
-
-public struct ClawdisCanvasSetModeParams: Codable, Sendable, Equatable {
-    public var mode: ClawdisCanvasMode
-
-    public init(mode: ClawdisCanvasMode) {
-        self.mode = mode
     }
 }
 

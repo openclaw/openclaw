@@ -69,10 +69,13 @@
         100% { transform: translate3d(-10px,  8px, 0) scale(1.03); opacity: 0.43; }
       }
       canvas {
+        position: fixed;
+        inset: 0;
         display:block;
         width:100vw;
         height:100vh;
         touch-action: none;
+        z-index: 1;
       }
       #clawdis-status {
         position: fixed;
@@ -80,6 +83,17 @@
         display: grid;
         place-items: center;
         pointer-events: none;
+        z-index: 3;
+      }
+      #clawdis-a2ui-wrap {
+        position: fixed;
+        inset: 0;
+        display: none;
+        z-index: 2;
+      }
+      #clawdis-a2ui-wrap clawdis-a2ui-host {
+        display: block;
+        height: 100%;
       }
       #clawdis-status .card {
         text-align: center;
@@ -111,6 +125,9 @@
         <div class="title" id="clawdis-status-title">Ready</div>
         <div class="subtitle" id="clawdis-status-subtitle">Waiting for agent</div>
       </div>
+    </div>
+    <div id="clawdis-a2ui-wrap">
+      <clawdis-a2ui-host></clawdis-a2ui-host>
     </div>
     <script>
       (() => {
@@ -152,7 +169,93 @@
           }
         };
       })();
+
+      (() => {
+        const wrap = document.getElementById('clawdis-a2ui-wrap');
+        if (!wrap) return;
+
+        const candidates = [
+          // iOS (SwiftPM resources flattened)
+          "a2ui.bundle.js",
+          // Android (assets keep directory structure)
+          "../CanvasA2UI/a2ui.bundle.js",
+          "CanvasA2UI/a2ui.bundle.js",
+        ];
+
+        const loadScript = (src) =>
+          new Promise((resolve, reject) => {
+            const el = document.createElement("script");
+            el.src = src;
+            el.async = true;
+            el.onload = () => resolve();
+            el.onerror = () => reject(new Error(`failed to load ${src}`));
+            document.head.appendChild(el);
+          });
+
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        const installVisibilityHooks = () => {
+          const api = globalThis.clawdisA2UI;
+          if (!api || typeof api.applyMessages !== "function") return false;
+          if (globalThis.__clawdisA2UIVisibilityHooksInstalled) return true;
+          globalThis.__clawdisA2UIVisibilityHooksInstalled = true;
+
+          const show = () => { wrap.style.display = "block"; };
+          const hide = () => { wrap.style.display = "none"; };
+
+          const sync = () => {
+            try {
+              const surfaces =
+                typeof api.getSurfaces === "function" ? api.getSurfaces() : [];
+              if (Array.isArray(surfaces) && surfaces.length > 0) show();
+              else hide();
+            } catch {
+              hide();
+            }
+          };
+
+          const origApply = api.applyMessages.bind(api);
+          api.applyMessages = (messages) => {
+            const res = origApply(messages);
+            sync();
+            return res;
+          };
+          const origReset = api.reset.bind(api);
+          api.reset = () => {
+            const res = origReset();
+            hide();
+            return res;
+          };
+
+          hide();
+          return true;
+        };
+
+        (async () => {
+          if (globalThis.clawdisA2UI) {
+            installVisibilityHooks();
+            return;
+          }
+
+          let loaded = false;
+          for (const src of candidates) {
+            try {
+              await loadScript(src);
+              loaded = true;
+              break;
+            } catch {
+              // try next
+            }
+          }
+          if (!loaded) return;
+
+          // Wait for custom element upgrade + connectedCallback to publish globalThis.clawdisA2UI.
+          for (let i = 0; i < 60; i += 1) {
+            if (installVisibilityHooks()) return;
+            await sleep(50);
+          }
+        })().catch(() => {});
+      })();
     </script>
   </body>
 </html>
-

@@ -8,7 +8,6 @@ class ClawdisProtocolConstantsTest {
   fun canvasCommandsUseStableStrings() {
     assertEquals("canvas.show", ClawdisCanvasCommand.Show.rawValue)
     assertEquals("canvas.hide", ClawdisCanvasCommand.Hide.rawValue)
-    assertEquals("canvas.setMode", ClawdisCanvasCommand.SetMode.rawValue)
     assertEquals("canvas.navigate", ClawdisCanvasCommand.Navigate.rawValue)
     assertEquals("canvas.eval", ClawdisCanvasCommand.Eval.rawValue)
     assertEquals("canvas.snapshot", ClawdisCanvasCommand.Snapshot.rawValue)
