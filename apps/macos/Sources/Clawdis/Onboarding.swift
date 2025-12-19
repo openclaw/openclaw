@@ -15,6 +15,7 @@ final class OnboardingController {
 
     func show() {
         if let window {
+            DockIconManager.shared.temporarilyShowDock()
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
@@ -28,6 +29,7 @@ final class OnboardingController {
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
         window.center()
+        DockIconManager.shared.temporarilyShowDock()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.window = window
@@ -630,7 +632,7 @@ struct OnboardingView: View {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "The Gateway is the WebSocket service that keeps Clawdis connected. " +
-                    "We’ll install/update the `clawdis` npm package and verify Node is available.")
+                    "Clawdis bundles it and runs it via launchd so it stays running.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -674,7 +676,7 @@ struct OnboardingView: View {
                             if self.gatewayInstalling {
                                 ProgressView()
                             } else {
-                                Text("Install or update gateway")
+                                Text("Enable Gateway daemon")
                             }
                         }
                         .buttonStyle(.borderedProminent)
@@ -692,7 +694,7 @@ struct OnboardingView: View {
                             .lineLimit(2)
                     } else {
                         Text(
-                            "Runs `npm install -g clawdis@<version>` on your PATH. " +
+                            "Installs a per-user LaunchAgent (\(gatewayLaunchdLabel)). " +
                                 "The gateway listens on port 18789.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -1248,10 +1250,10 @@ struct OnboardingView: View {
         self.gatewayInstalling = true
         defer { self.gatewayInstalling = false }
         self.gatewayInstallMessage = nil
-        let expected = GatewayEnvironment.expectedGatewayVersion()
-        await GatewayEnvironment.installGlobal(version: expected) { message in
-            Task { @MainActor in self.gatewayInstallMessage = message }
-        }
+        let port = GatewayEnvironment.gatewayPort()
+        let bundlePath = Bundle.main.bundleURL.path
+        let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
+        self.gatewayInstallMessage = err ?? "Gateway enabled and started on port \(port)"
         self.refreshGatewayStatus()
     }
 

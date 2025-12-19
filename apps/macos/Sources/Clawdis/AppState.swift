@@ -390,6 +390,7 @@ enum AppStateStore {
 @MainActor
 enum AppActivationPolicy {
     static func apply(showDockIcon: Bool) {
-        NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+        _ = showDockIcon
+        DockIconManager.shared.updateDockVisibility()
     }
 }
