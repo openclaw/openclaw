@@ -1271,14 +1271,22 @@ struct OnboardingView: View {
     }
 
     private func loadIdentityDefaults() {
-        guard self.identityName.isEmpty, self.identityTheme.isEmpty, self.identityEmoji.isEmpty else { return }
         if let identity = ClawdisConfigFile.loadIdentity() {
             self.identityName = identity.name
             self.identityTheme = identity.theme
             self.identityEmoji = identity.emoji
             return
         }
-        self.identityEmoji = AgentIdentityEmoji.suggest(theme: "")
+
+        if self.identityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.identityName = "Samantha"
+        }
+        if self.identityTheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.identityTheme = "helpful lobster"
+        }
+        if self.identityEmoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.identityEmoji = AgentIdentityEmoji.suggest(theme: self.identityTheme)
+        }
     }
 
     private var workspaceBootstrapCommand: String {
