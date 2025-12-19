@@ -10,12 +10,12 @@ final class ScreenRecordService {
 
         var errorDescription: String? {
             switch self {
-        case let .invalidScreenIndex(idx):
-            return "Invalid screen index \(idx)"
+            case let .invalidScreenIndex(idx):
+                "Invalid screen index \(idx)"
             case let .captureFailed(msg):
-                return msg
+                msg
             case let .writeFailed(msg):
-                return msg
+                msg
             }
         }
     }
@@ -111,7 +111,8 @@ final class ScreenRecordService {
                             }
 
                             guard w.startWriting() else {
-                                throw ScreenRecordError.writeFailed(w.error?.localizedDescription ?? "Failed to start writer")
+                                throw ScreenRecordError
+                                    .writeFailed(w.error?.localizedDescription ?? "Failed to start writer")
                             }
                             w.startSession(atSourceTime: pts)
                             writer = w
@@ -180,8 +181,8 @@ final class ScreenRecordService {
     }
 
     private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 10_000
-        return min(60_000, max(250, v))
+        let v = ms ?? 10000
+        return min(60000, max(250, v))
     }
 
     private nonisolated static func clampFps(_ fps: Double?) -> Double {
@@ -189,5 +190,4 @@ final class ScreenRecordService {
         if !v.isFinite { return 10 }
         return min(30, max(1, v))
     }
-
 }

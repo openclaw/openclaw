@@ -365,7 +365,7 @@ final class NodeAppModel {
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
 
-        if (command.hasPrefix("canvas.") || command.hasPrefix("camera.") || command.hasPrefix("screen.")),
+        if command.hasPrefix("canvas.") || command.hasPrefix("camera.") || command.hasPrefix("screen."),
            self.isBackgrounded
         {
             return BridgeInvokeResponse(

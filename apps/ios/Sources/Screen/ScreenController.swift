@@ -195,11 +195,11 @@ final class ScreenController {
             ?? bundle.url(forResource: name, withExtension: ext)
     }
 
-    private static let canvasScaffoldURL: URL? = Self.bundledResourceURL(
+    private static let canvasScaffoldURL: URL? = ScreenController.bundledResourceURL(
         name: "scaffold",
         ext: "html",
         subdirectory: "CanvasScaffold")
-    private static let a2uiIndexURL: URL? = Self.bundledResourceURL(
+    private static let a2uiIndexURL: URL? = ScreenController.bundledResourceURL(
         name: "index",
         ext: "html",
         subdirectory: "CanvasA2UI")
