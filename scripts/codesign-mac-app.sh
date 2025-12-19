@@ -125,6 +125,9 @@ if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   find "$APP_BUNDLE/Contents/Resources/Relay" -type f \( -name "*.node" -o -name "*.dylib" \) -print0 | while IFS= read -r -d '' f; do
     echo "Signing gateway payload: $f"; sign_item "$f" "$ENT_TMP_BASE"
   done
+  if [ -f "$APP_BUNDLE/Contents/Resources/Relay/clawdis-gateway" ]; then
+    echo "Signing embedded gateway"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/clawdis-gateway" "$ENT_TMP_BASE"
+  fi
 fi
 
 # Sign Sparkle deeply if present
