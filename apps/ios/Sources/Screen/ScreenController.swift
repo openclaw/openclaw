@@ -184,13 +184,25 @@ final class ScreenController {
         return data.base64EncodedString()
     }
 
-    // SwiftPM flattens resource directories; ensure resource filenames are unique.
-    private static let canvasScaffoldURL: URL? = ClawdisKitResources.bundle.url(
-        forResource: "scaffold",
-        withExtension: "html")
-    private static let a2uiIndexURL: URL? = ClawdisKitResources.bundle.url(
-        forResource: "index",
-        withExtension: "html")
+    private static func bundledResourceURL(
+        name: String,
+        ext: String,
+        subdirectory: String)
+        -> URL?
+    {
+        let bundle = ClawdisKitResources.bundle
+        return bundle.url(forResource: name, withExtension: ext, subdirectory: subdirectory)
+            ?? bundle.url(forResource: name, withExtension: ext)
+    }
+
+    private static let canvasScaffoldURL: URL? = Self.bundledResourceURL(
+        name: "scaffold",
+        ext: "html",
+        subdirectory: "CanvasScaffold")
+    private static let a2uiIndexURL: URL? = Self.bundledResourceURL(
+        name: "index",
+        ext: "html",
+        subdirectory: "CanvasA2UI")
 
     func isTrustedCanvasUIURL(_ url: URL) -> Bool {
         guard url.isFileURL else { return false }

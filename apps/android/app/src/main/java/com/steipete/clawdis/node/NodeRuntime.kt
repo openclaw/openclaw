@@ -285,6 +285,7 @@ class NodeRuntime(context: Context) {
           add(ClawdisCanvasCommand.Eval.rawValue)
           add(ClawdisCanvasCommand.Snapshot.rawValue)
           add(ClawdisCanvasA2UICommand.Push.rawValue)
+          add(ClawdisCanvasA2UICommand.PushJSONL.rawValue)
           add(ClawdisCanvasA2UICommand.Reset.rawValue)
           if (cameraEnabled.value) {
             add(ClawdisCameraCommand.Snap.rawValue)

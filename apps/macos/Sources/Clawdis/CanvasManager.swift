@@ -226,12 +226,10 @@ final class CanvasManager {
     }
 
     private static func hasBundledA2UIShell() -> Bool {
-        guard let base = ClawdisKitResources.bundle.resourceURL?
-            .appendingPathComponent("CanvasA2UI", isDirectory: true)
-        else {
-            return false
+        let bundle = ClawdisKitResources.bundle
+        if bundle.url(forResource: "index", withExtension: "html", subdirectory: "CanvasA2UI") != nil {
+            return true
         }
-        let index = base.appendingPathComponent("index.html", isDirectory: false)
-        return FileManager.default.fileExists(atPath: index.path)
+        return bundle.url(forResource: "index", withExtension: "html") != nil
     }
 }

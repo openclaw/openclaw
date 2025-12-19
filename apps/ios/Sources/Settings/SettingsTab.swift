@@ -305,6 +305,7 @@ struct SettingsTab: View {
             ClawdisCanvasCommand.evalJS.rawValue,
             ClawdisCanvasCommand.snapshot.rawValue,
             ClawdisCanvasA2UICommand.push.rawValue,
+            ClawdisCanvasA2UICommand.pushJSONL.rawValue,
             ClawdisCanvasA2UICommand.reset.rawValue,
         ]
 

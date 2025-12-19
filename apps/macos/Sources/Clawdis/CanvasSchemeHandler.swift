@@ -206,7 +206,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
     private func a2uiShellPage(sessionRoot: URL) -> CanvasResponse {
         // Default Canvas UX: when no index exists, show the built-in scaffold page.
-        if let data = self.loadBundledResourceData(relativePath: "scaffold.html") {
+        if let data = self.loadBundledResourceData(relativePath: "CanvasScaffold/scaffold.html") {
             return CanvasResponse(mime: "text/html", data: data)
         }
 
@@ -234,7 +234,7 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
             return self.html("Forbidden", title: "Canvas: 403")
         }
 
-        guard let data = self.loadBundledResourceData(relativePath: relative) else {
+        guard let data = self.loadBundledResourceData(relativePath: "CanvasA2UI/\(relative)") else {
             return self.html("Not Found", title: "Canvas: 404")
         }
 
@@ -244,14 +244,24 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
     }
 
     private func loadBundledResourceData(relativePath: String) -> Data? {
-        // SwiftPM flattens resource directories; treat bundled canvas resources as uniquely-named files.
-        if relativePath.contains("/") { return nil }
-        let url = URL(fileURLWithPath: relativePath)
-        let ext = url.pathExtension
-        let name = url.deletingPathExtension().lastPathComponent
+        let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.contains("..") || trimmed.contains("\\") { return nil }
+
+        let parts = trimmed.split(separator: "/")
+        guard let filename = parts.last else { return nil }
+        let subdirectory =
+            parts.count > 1 ? parts.dropLast().joined(separator: "/") : nil
+        let fileURL = URL(fileURLWithPath: String(filename))
+        let ext = fileURL.pathExtension
+        let name = fileURL.deletingPathExtension().lastPathComponent
         guard !name.isEmpty, !ext.isEmpty else { return nil }
-        guard let resourceURL = ClawdisKitResources.bundle.url(forResource: name, withExtension: ext)
-        else { return nil }
+
+        let bundle = ClawdisKitResources.bundle
+        let resourceURL =
+            bundle.url(forResource: name, withExtension: ext, subdirectory: subdirectory)
+            ?? bundle.url(forResource: name, withExtension: ext)
+        guard let resourceURL else { return nil }
         return try? Data(contentsOf: resourceURL)
     }
 
