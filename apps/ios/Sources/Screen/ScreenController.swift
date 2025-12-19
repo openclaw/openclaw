@@ -264,7 +264,7 @@ final class ScreenController {
         return false
     }
 
-    static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
+    nonisolated static func parseA2UIActionBody(_ body: Any) -> [String: Any]? {
         if let dict = body as? [String: Any] { return dict.isEmpty ? nil : dict }
         if let str = body as? String,
            let data = str.data(using: .utf8),
