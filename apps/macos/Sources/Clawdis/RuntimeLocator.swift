@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 enum RuntimeKind: String {
     case node
@@ -50,6 +51,7 @@ enum RuntimeResolutionError: Error {
 }
 
 enum RuntimeLocator {
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "runtime")
     private static let minNode = RuntimeVersion(major: 22, minor: 0, patch: 0)
 
     static func resolve(
@@ -120,6 +122,7 @@ enum RuntimeLocator {
     }
 
     private static func readVersion(of binary: String, pathEnv: String) -> String? {
+        let start = Date()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["--version"]
@@ -132,9 +135,20 @@ enum RuntimeLocator {
         do {
             try process.run()
             process.waitUntilExit()
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            if elapsedMs > 500 {
+                self.logger.warning(
+                    "runtime --version slow (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+            } else {
+                self.logger.debug(
+                    "runtime --version ok (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+            }
             let data = pipe.fileHandleForReading.readToEndSafely()
             return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            self.logger.error(
+                "runtime --version failed (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
             return nil
         }
     }

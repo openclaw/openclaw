@@ -1,5 +1,6 @@
 import ClawdisIPC
 import Foundation
+import OSLog
 
 // Lightweight SemVer helper (major.minor.patch only) for gateway compatibility checks.
 struct Semver: Comparable, CustomStringConvertible, Sendable {
@@ -61,6 +62,8 @@ struct GatewayCommandResolution {
 }
 
 enum GatewayEnvironment {
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.env")
+
     static func gatewayPort() -> Int {
         let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
         return stored > 0 ? stored : 18789
@@ -77,6 +80,15 @@ enum GatewayEnvironment {
     }
 
     static func check() -> GatewayEnvironmentStatus {
+        let start = Date()
+        defer {
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            if elapsedMs > 500 {
+                self.logger.warning("gateway env check slow (\(elapsedMs, privacy: .public)ms)")
+            } else {
+                self.logger.debug("gateway env check ok (\(elapsedMs, privacy: .public)ms)")
+            }
+        }
         let expected = self.expectedGatewayVersion()
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
@@ -135,6 +147,15 @@ enum GatewayEnvironment {
     }
 
     static func resolveGatewayCommand() -> GatewayCommandResolution {
+        let start = Date()
+        defer {
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            if elapsedMs > 500 {
+                self.logger.warning("gateway command resolve slow (\(elapsedMs, privacy: .public)ms)")
+            } else {
+                self.logger.debug("gateway command resolve ok (\(elapsedMs, privacy: .public)ms)")
+            }
+        }
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
         let status = self.check()
@@ -191,6 +212,7 @@ enum GatewayEnvironment {
     // MARK: - Internals
 
     private static func readGatewayVersion(binary: String) -> Semver? {
+        let start = Date()
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binary)
         process.arguments = ["--version"]
@@ -202,10 +224,21 @@ enum GatewayEnvironment {
         do {
             try process.run()
             process.waitUntilExit()
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            if elapsedMs > 500 {
+                self.logger.warning(
+                    "gateway --version slow (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+            } else {
+                self.logger.debug(
+                    "gateway --version ok (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+            }
             let data = pipe.fileHandleForReading.readToEndSafely()
             let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
             return Semver.parse(raw)
         } catch {
+            let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
+            self.logger.error(
+                "gateway --version failed (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
