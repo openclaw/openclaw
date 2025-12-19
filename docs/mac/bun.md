@@ -126,3 +126,11 @@ pnpm -s clawdis gateway call health --url ws://127.0.0.1:18999 --timeout 3000
 Bun may leave dotfiles like `*.bun-build` in the repo root or subfolders.
 - These are ignored via `.gitignore` (`*.bun-build`).
 
+## DMG styling (human installer)
+
+`scripts/create-dmg.sh` styles the DMG via Finder AppleScript.
+
+Rules of thumb:
+- Use a **72dpi** background image that matches the Finder window size in points.
+- Preferred asset: `assets/dmg-background-small.png` (**500×320**).
+- Default icon positions: app `{125,160}`, Applications `{375,160}`.
