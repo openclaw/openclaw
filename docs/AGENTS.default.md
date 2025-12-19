@@ -16,13 +16,21 @@ Clawdis uses a dedicated workspace directory for the agent. Default: `~/.clawdis
 mkdir -p ~/.clawdis/workspace
 ```
 
-2) Copy this template into the workspace as `AGENTS.md` (overwrites any existing file):
+2) Copy the default workspace templates into the workspace:
+
+```bash
+cp docs/templates/AGENTS.md ~/.clawdis/workspace/AGENTS.md
+cp docs/templates/SOUL.md ~/.clawdis/workspace/SOUL.md
+cp docs/templates/TOOLS.md ~/.clawdis/workspace/TOOLS.md
+```
+
+3) Optional: if you want the personal assistant tool roster, replace AGENTS.md with this file:
 
 ```bash
 cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
 ```
 
-3) Optional: choose a different workspace by setting `inbound.workspace` (supports `~`):
+4) Optional: choose a different workspace by setting `inbound.workspace` (supports `~`):
 
 ```json5
 {
@@ -36,6 +44,11 @@ cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
 - Don’t dump directories or secrets into chat.
 - Don’t run destructive commands unless explicitly asked.
 - Don’t send partial/streaming replies to external messaging surfaces (only final replies).
+
+## Daily memory (recommended)
+- Keep a short daily log at `memory/YYYY-MM-DD.md` (create `memory/` if needed).
+- On session start, read today + yesterday if present.
+- Capture durable facts, preferences, and decisions; avoid secrets.
 
 ## Backup tip (recommended)
 If you treat this workspace as Clawd’s “memory”, make it a git repo (ideally private) so `AGENTS.md` and your memory files are backed up.

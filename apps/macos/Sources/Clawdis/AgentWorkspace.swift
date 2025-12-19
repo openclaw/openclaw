@@ -4,6 +4,8 @@ import OSLog
 enum AgentWorkspace {
     private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "workspace")
     static let agentsFilename = "AGENTS.md"
+    static let soulFilename = "SOUL.md"
+    private static let templateDirname = "templates"
     static let identityStartMarker = "<!-- clawdis:identity:start -->"
     static let identityEndMarker = "<!-- clawdis:identity:end -->"
 
@@ -35,6 +37,11 @@ enum AgentWorkspace {
             try self.defaultTemplate().write(to: agentsURL, atomically: true, encoding: .utf8)
             self.logger.info("Created AGENTS.md at \(agentsURL.path, privacy: .public)")
         }
+        let soulURL = workspaceURL.appendingPathComponent(self.soulFilename)
+        if !FileManager.default.fileExists(atPath: soulURL.path) {
+            try self.defaultSoulTemplate().write(to: soulURL, atomically: true, encoding: .utf8)
+            self.logger.info("Created SOUL.md at \(soulURL.path, privacy: .public)")
+        }
         return agentsURL
     }
 
@@ -64,13 +71,13 @@ enum AgentWorkspace {
     }
 
     static func defaultTemplate() -> String {
-        """
-        # AGENTS.md — Clawdis Workspace
+        let fallback = """
+        # AGENTS.md - Clawdis Workspace
 
-        This folder is the assistant’s working directory.
+        This folder is the assistant's working directory.
 
         ## Backup tip (recommended)
-        If you treat this workspace as the agent’s “memory”, make it a git repo (ideally private) so your identity
+        If you treat this workspace as the agent's "memory", make it a git repo (ideally private) so identity
         and notes are backed up.
 
         ```bash
@@ -80,13 +87,94 @@ enum AgentWorkspace {
         ```
 
         ## Safety defaults
-        - Don’t exfiltrate secrets or private data.
-        - Don’t run destructive commands unless explicitly asked.
+        - Don't exfiltrate secrets or private data.
+        - Don't run destructive commands unless explicitly asked.
         - Be concise in chat; write longer output to files in this workspace.
 
+        ## Daily memory (recommended)
+        - Keep a short daily log at memory/YYYY-MM-DD.md (create memory/ if needed).
+        - On session start, read today + yesterday if present.
+        - Capture durable facts, preferences, and decisions; avoid secrets.
+
         ## Customize
-        - Add your preferred style, rules, and “memory” here.
+        - Add your preferred style, rules, and "memory" here.
         """
+        return self.loadTemplate(named: self.agentsFilename, fallback: fallback)
+    }
+
+    static func defaultSoulTemplate() -> String {
+        let fallback = """
+        # SOUL.md - Persona & Boundaries
+
+        Describe who the assistant is, tone, and boundaries.
+
+        - Keep replies concise and direct.
+        - Ask clarifying questions when needed.
+        - Never send streaming/partial replies to external messaging surfaces.
+        """
+        return self.loadTemplate(named: self.soulFilename, fallback: fallback)
+    }
+
+    private static func loadTemplate(named: String, fallback: String) -> String {
+        for url in self.templateURLs(named: named) {
+            if let content = try? String(contentsOf: url, encoding: .utf8) {
+                let stripped = self.stripFrontMatter(content)
+                if !stripped.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return stripped
+                }
+            }
+        }
+        return fallback
+    }
+
+    private static func templateURLs(named: String) -> [URL] {
+        var urls: [URL] = []
+        if let resource = Bundle.main.url(
+            forResource: named.replacingOccurrences(of: ".md", with: ""),
+            withExtension: "md",
+            subdirectory: self.templateDirname)
+        {
+            urls.append(resource)
+        }
+        if let resource = Bundle.main.url(
+            forResource: named,
+            withExtension: nil,
+            subdirectory: self.templateDirname)
+        {
+            urls.append(resource)
+        }
+        if let dev = self.devTemplateURL(named: named) {
+            urls.append(dev)
+        }
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        urls.append(cwd.appendingPathComponent("docs")
+            .appendingPathComponent(self.templateDirname)
+            .appendingPathComponent(named))
+        return urls
+    }
+
+    private static func devTemplateURL(named: String) -> URL? {
+        let sourceURL = URL(fileURLWithPath: #filePath)
+        let repoRoot = sourceURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        return repoRoot.appendingPathComponent("docs")
+            .appendingPathComponent(self.templateDirname)
+            .appendingPathComponent(named)
+    }
+
+    private static func stripFrontMatter(_ content: String) -> String {
+        guard content.hasPrefix("---") else { return content }
+        let start = content.index(content.startIndex, offsetBy: 3)
+        guard let range = content.range(of: "\n---", range: start..<content.endIndex) else {
+            return content
+        }
+        let remainder = content[range.upperBound...]
+        let trimmed = remainder.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed + "\n"
     }
 
     private static func identityBlock(identity: AgentIdentity) -> String {

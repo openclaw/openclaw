@@ -116,7 +116,7 @@ Example:
 - Start here:
   - [Configuration](./configuration.md)
   - [Clawd personal assistant setup](./clawd.md)
-  - [AGENTS.md template (default)](./AGENTS.default.md)
+  - [Workspace templates](./templates/AGENTS.md)
   - [Gateway runbook](./gateway.md)
   - [Nodes (iOS/Android)](./nodes.md)
   - [Web surfaces (Control UI)](./web.md)

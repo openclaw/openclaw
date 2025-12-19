@@ -106,6 +106,11 @@ git add AGENTS.md
 git commit -m "Add agent workspace"
 ```
 
+Daily memory lives under `memory/` in the workspace:
+- one file per day: `memory/YYYY-MM-DD.md`
+- read today + yesterday on session start
+- keep it short (durable facts, preferences, decisions; avoid secrets)
+
 ## Remote mode note (why OAuth is hidden)
 
 If the Gateway runs on another machine, the Anthropic OAuth credentials must be created/stored on that host (where Pi runs).
