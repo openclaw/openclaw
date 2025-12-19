@@ -223,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         TerminationSignalWatcher.shared.start()
         NodePairingApprovalPrompter.shared.start()
+        MacNodeModeCoordinator.shared.start()
         VoiceWakeGlobalSettingsSync.shared.start()
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
@@ -242,6 +243,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         GatewayProcessManager.shared.stop()
         PresenceReporter.shared.stop()
         NodePairingApprovalPrompter.shared.stop()
+        MacNodeModeCoordinator.shared.stop()
         TerminationSignalWatcher.shared.stop()
         VoiceWakeGlobalSettingsSync.shared.stop()
         WebChatManager.shared.close()

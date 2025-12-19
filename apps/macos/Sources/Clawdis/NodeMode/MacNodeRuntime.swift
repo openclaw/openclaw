@@ -1,0 +1,265 @@
+import AppKit
+import ClawdisIPC
+import ClawdisKit
+import Foundation
+
+actor MacNodeRuntime {
+    private let cameraCapture = CameraCaptureService()
+
+    func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
+        let command = req.command
+        do {
+            switch command {
+            case ClawdisCanvasCommand.show.rawValue:
+                try await MainActor.run {
+                    _ = try CanvasManager.shared.show(sessionKey: "main", path: nil)
+                }
+                return BridgeInvokeResponse(id: req.id, ok: true)
+
+            case ClawdisCanvasCommand.hide.rawValue:
+                await MainActor.run {
+                    CanvasManager.shared.hide(sessionKey: "main")
+                }
+                return BridgeInvokeResponse(id: req.id, ok: true)
+
+            case ClawdisCanvasCommand.navigate.rawValue:
+                let params = try Self.decodeParams(ClawdisCanvasNavigateParams.self, from: req.paramsJSON)
+                try await MainActor.run {
+                    _ = try CanvasManager.shared.show(sessionKey: "main", path: params.url)
+                }
+                return BridgeInvokeResponse(id: req.id, ok: true)
+
+            case ClawdisCanvasCommand.evalJS.rawValue:
+                let params = try Self.decodeParams(ClawdisCanvasEvalParams.self, from: req.paramsJSON)
+                let result = try await CanvasManager.shared.eval(
+                    sessionKey: "main",
+                    javaScript: params.javaScript)
+                let payload = try Self.encodePayload(["result": result] as [String: String])
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisCanvasCommand.snapshot.rawValue:
+                let params = try? Self.decodeParams(ClawdisCanvasSnapshotParams.self, from: req.paramsJSON)
+                let format = params?.format ?? .jpeg
+                let maxWidth: Int? = {
+                    if let raw = params?.maxWidth, raw > 0 { return raw }
+                    return switch format {
+                    case .png: 900
+                    case .jpeg: 1600
+                    }
+                }()
+                let quality = params?.quality ?? 0.9
+
+                let path = try await CanvasManager.shared.snapshot(sessionKey: "main", outPath: nil)
+                defer { try? FileManager.default.removeItem(atPath: path) }
+                let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                guard let image = NSImage(data: data) else {
+                    return Self.errorResponse(req, code: .unavailable, message: "canvas snapshot decode failed")
+                }
+                let encoded = try Self.encodeCanvasSnapshot(
+                    image: image,
+                    format: format,
+                    maxWidth: maxWidth,
+                    quality: quality)
+                let payload = try Self.encodePayload([
+                    "format": format == .jpeg ? "jpeg" : "png",
+                    "base64": encoded.base64EncodedString(),
+                ])
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisCanvasA2UICommand.reset.rawValue:
+                return try await self.handleA2UIReset(req)
+
+            case ClawdisCanvasA2UICommand.push.rawValue, ClawdisCanvasA2UICommand.pushJSONL.rawValue:
+                return try await self.handleA2UIPush(req)
+
+            case ClawdisCameraCommand.snap.rawValue:
+                let params = (try? Self.decodeParams(ClawdisCameraSnapParams.self, from: req.paramsJSON)) ??
+                    ClawdisCameraSnapParams()
+                let res = try await self.cameraCapture.snap(
+                    facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                    maxWidth: params.maxWidth,
+                    quality: params.quality)
+                struct SnapPayload: Encodable {
+                    var format: String
+                    var base64: String
+                    var width: Int
+                    var height: Int
+                }
+                let payload = try Self.encodePayload(SnapPayload(
+                    format: (params.format ?? .jpg).rawValue,
+                    base64: res.data.base64EncodedString(),
+                    width: Int(res.size.width),
+                    height: Int(res.size.height)))
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisCameraCommand.clip.rawValue:
+                let params = (try? Self.decodeParams(ClawdisCameraClipParams.self, from: req.paramsJSON)) ??
+                    ClawdisCameraClipParams()
+                let res = try await self.cameraCapture.clip(
+                    facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                    durationMs: params.durationMs,
+                    includeAudio: params.includeAudio ?? true,
+                    outPath: nil)
+                defer { try? FileManager.default.removeItem(atPath: res.path) }
+                let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+                struct ClipPayload: Encodable {
+                    var format: String
+                    var base64: String
+                    var durationMs: Int
+                    var hasAudio: Bool
+                }
+                let payload = try Self.encodePayload(ClipPayload(
+                    format: (params.format ?? .mp4).rawValue,
+                    base64: data.base64EncodedString(),
+                    durationMs: res.durationMs,
+                    hasAudio: res.hasAudio))
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            default:
+                return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
+            }
+        } catch {
+            return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
+        }
+    }
+
+    private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        _ = try await MainActor.run {
+            try CanvasManager.shared.show(sessionKey: "main", path: nil)
+        }
+        let ready = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: """
+        (() => Boolean(globalThis.clawdisA2UI))
+        """)
+        if ready != "true" && ready != "true\n" {
+            return Self.errorResponse(req, code: .unavailable, message: "A2UI not ready")
+        }
+
+        let json = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: """
+        (() => {
+          if (!globalThis.clawdisA2UI) return JSON.stringify({ ok: false, error: "missing clawdisA2UI" });
+          return JSON.stringify(globalThis.clawdisA2UI.reset());
+        })()
+        """)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+    }
+
+    private func handleA2UIPush(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let command = req.command
+        let messages: [ClawdisKit.AnyCodable]
+        if command == ClawdisCanvasA2UICommand.pushJSONL.rawValue {
+            let params = try Self.decodeParams(ClawdisCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
+            messages = try ClawdisCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
+        } else {
+            do {
+                let params = try Self.decodeParams(ClawdisCanvasA2UIPushParams.self, from: req.paramsJSON)
+                messages = params.messages
+            } catch {
+                let params = try Self.decodeParams(ClawdisCanvasA2UIPushJSONLParams.self, from: req.paramsJSON)
+                messages = try ClawdisCanvasA2UIJSONL.decodeMessagesFromJSONL(params.jsonl)
+            }
+        }
+
+        _ = try await MainActor.run {
+            try CanvasManager.shared.show(sessionKey: "main", path: nil)
+        }
+
+        let messagesJSON = try ClawdisCanvasA2UIJSONL.encodeMessagesJSONArray(messages)
+        let js = """
+        (() => {
+          try {
+            if (!globalThis.clawdisA2UI) return JSON.stringify({ ok: false, error: "missing clawdisA2UI" });
+            const messages = \(messagesJSON);
+            return JSON.stringify(globalThis.clawdisA2UI.applyMessages(messages));
+          } catch (e) {
+            return JSON.stringify({ ok: false, error: String(e?.message ?? e) });
+          }
+        })()
+        """
+        let resultJSON = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: js)
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
+    }
+
+    private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {
+        guard let json, let data = json.data(using: .utf8) else {
+            throw NSError(domain: "Bridge", code: 20, userInfo: [
+                NSLocalizedDescriptionKey: "INVALID_REQUEST: paramsJSON required",
+            ])
+        }
+        return try JSONDecoder().decode(type, from: data)
+    }
+
+    private static func encodePayload(_ obj: some Encodable) throws -> String {
+        let data = try JSONEncoder().encode(obj)
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw NSError(domain: "Node", code: 21, userInfo: [
+                NSLocalizedDescriptionKey: "Failed to encode payload as UTF-8",
+            ])
+        }
+        return json
+    }
+
+    private static func errorResponse(
+        _ req: BridgeInvokeRequest,
+        code: ClawdisNodeErrorCode,
+        message: String) -> BridgeInvokeResponse
+    {
+        BridgeInvokeResponse(
+            id: req.id,
+            ok: false,
+            error: ClawdisNodeError(code: code, message: message))
+    }
+
+    private static func encodeCanvasSnapshot(
+        image: NSImage,
+        format: ClawdisCanvasSnapshotFormat,
+        maxWidth: Int?,
+        quality: Double) throws -> Data
+    {
+        let source = Self.scaleImage(image, maxWidth: maxWidth) ?? image
+        guard let tiff = source.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff)
+        else {
+            throw NSError(domain: "Canvas", code: 22, userInfo: [
+                NSLocalizedDescriptionKey: "snapshot encode failed",
+            ])
+        }
+
+        switch format {
+        case .png:
+            guard let data = rep.representation(using: .png, properties: [:]) else {
+                throw NSError(domain: "Canvas", code: 23, userInfo: [
+                    NSLocalizedDescriptionKey: "png encode failed",
+                ])
+            }
+            return data
+        case .jpeg:
+            let clamped = min(1.0, max(0.05, quality))
+            guard let data = rep.representation(
+                using: .jpeg,
+                properties: [.compressionFactor: clamped])
+            else {
+                throw NSError(domain: "Canvas", code: 24, userInfo: [
+                    NSLocalizedDescriptionKey: "jpeg encode failed",
+                ])
+            }
+            return data
+        }
+    }
+
+    private static func scaleImage(_ image: NSImage, maxWidth: Int?) -> NSImage? {
+        guard let maxWidth, maxWidth > 0 else { return image }
+        let size = image.size
+        guard size.width > 0, size.width > CGFloat(maxWidth) else { return image }
+        let scale = CGFloat(maxWidth) / size.width
+        let target = NSSize(width: CGFloat(maxWidth), height: size.height * scale)
+
+        let out = NSImage(size: target)
+        out.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: target),
+                   from: NSRect(origin: .zero, size: size),
+                   operation: .copy,
+                   fraction: 1.0)
+        out.unlockFocus()
+        return out
+    }
+}

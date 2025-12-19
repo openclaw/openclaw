@@ -10,6 +10,8 @@ read_when:
 
 A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a small command surface (e.g. `canvas.*`, `camera.*`) via `node.invoke`.
 
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdis nodes …` works against this Mac).
+
 ## Pairing + status
 
 Pairing is gateway-owned and approval-based. See `docs/gateway/pairing.md` for the full flow.
@@ -73,4 +75,3 @@ Notes:
 - Duration parsing for CLI: `src/cli/parse-duration.ts`
 - iOS node commands: `apps/ios/Sources/Model/NodeAppModel.swift`
 - Android node commands: `apps/android/app/src/main/java/com/steipete/clawdis/node/node/*`
-
