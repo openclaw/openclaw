@@ -382,7 +382,12 @@ struct GeneralSettings: View {
     }
 
     private func refreshGatewayStatus() {
-        self.gatewayStatus = GatewayEnvironment.check()
+        Task {
+            let status = await Task.detached(priority: .utility) {
+                GatewayEnvironment.check()
+            }.value
+            self.gatewayStatus = status
+        }
     }
 
     private func installGateway() async {

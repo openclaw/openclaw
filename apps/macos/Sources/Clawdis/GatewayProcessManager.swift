@@ -142,7 +142,12 @@ final class GatewayProcessManager {
     }
 
     func refreshEnvironmentStatus() {
-        self.environmentStatus = GatewayEnvironment.check()
+        Task {
+            let status = await Task.detached(priority: .utility) {
+                GatewayEnvironment.check()
+            }.value
+            self.environmentStatus = status
+        }
     }
 
     // MARK: - Internals
@@ -189,7 +194,9 @@ final class GatewayProcessManager {
             self.status = .starting
         }
         self.existingGatewayDetails = nil
-        let resolution = GatewayEnvironment.resolveGatewayCommand()
+        let resolution = await Task.detached(priority: .utility) {
+            GatewayEnvironment.resolveGatewayCommand()
+        }.value
         await MainActor.run { self.environmentStatus = resolution.status }
         guard let command = resolution.command else {
             await MainActor.run {
