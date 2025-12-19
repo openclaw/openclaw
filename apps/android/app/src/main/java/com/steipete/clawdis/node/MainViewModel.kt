@@ -6,6 +6,7 @@ import com.steipete.clawdis.node.bridge.BridgeEndpoint
 import com.steipete.clawdis.node.chat.OutgoingAttachment
 import com.steipete.clawdis.node.node.CameraCaptureManager
 import com.steipete.clawdis.node.node.CanvasController
+import com.steipete.clawdis.node.node.ScreenRecordManager
 import kotlinx.coroutines.flow.StateFlow
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -13,6 +14,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   val canvas: CanvasController = runtime.canvas
   val camera: CameraCaptureManager = runtime.camera
+  val screenRecorder: ScreenRecordManager = runtime.screenRecorder
 
   val bridges: StateFlow<List<BridgeEndpoint>> = runtime.bridges
   val discoveryStatusText: StateFlow<String> = runtime.discoveryStatusText

@@ -98,7 +98,7 @@ final class MacNodeModeCoordinator {
     }
 
     private func currentCaps() -> [String] {
-        var caps: [String] = [ClawdisCapability.canvas.rawValue]
+        var caps: [String] = [ClawdisCapability.canvas.rawValue, ClawdisCapability.screen.rawValue]
         if UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false {
             caps.append(ClawdisCapability.camera.rawValue)
         }

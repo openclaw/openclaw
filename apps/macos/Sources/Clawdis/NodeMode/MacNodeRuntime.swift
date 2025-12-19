@@ -74,6 +74,14 @@ actor MacNodeRuntime {
                 return try await self.handleA2UIPush(req)
 
             case ClawdisCameraCommand.snap.rawValue:
+                guard Self.cameraEnabled() else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "CAMERA_DISABLED: enable Camera in Settings"))
+                }
                 let params = (try? Self.decodeParams(ClawdisCameraSnapParams.self, from: req.paramsJSON)) ??
                     ClawdisCameraSnapParams()
                 let res = try await self.cameraCapture.snap(
@@ -94,6 +102,14 @@ actor MacNodeRuntime {
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
             case ClawdisCameraCommand.clip.rawValue:
+                guard Self.cameraEnabled() else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "CAMERA_DISABLED: enable Camera in Settings"))
+                }
                 let params = (try? Self.decodeParams(ClawdisCameraClipParams.self, from: req.paramsJSON)) ??
                     ClawdisCameraClipParams()
                 let res = try await self.cameraCapture.clip(
@@ -119,6 +135,12 @@ actor MacNodeRuntime {
             case MacNodeScreenCommand.record.rawValue:
                 let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
                     MacNodeScreenRecordParams()
+                if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
+                    return Self.errorResponse(
+                        req,
+                        code: .invalidRequest,
+                        message: "INVALID_REQUEST: screen format must be mp4")
+                }
                 let path = try await self.screenRecorder.record(
                     screenIndex: params.screenIndex,
                     durationMs: params.durationMs,
@@ -134,7 +156,7 @@ actor MacNodeRuntime {
                     var screenIndex: Int?
                 }
                 let payload = try Self.encodePayload(ScreenPayload(
-                    format: params.format ?? "mp4",
+                    format: "mp4",
                     base64: data.base64EncodedString(),
                     durationMs: params.durationMs,
                     fps: params.fps,
@@ -222,6 +244,10 @@ actor MacNodeRuntime {
             ])
         }
         return json
+    }
+
+    private nonisolated static func cameraEnabled() -> Bool {
+        UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
     }
 
     private static func errorResponse(

@@ -47,6 +47,13 @@ clawdis nodes canvas snapshot --node <idOrNameOrIp> --format png
 clawdis nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
+Simple shortcut (auto-picks a single connected node if possible):
+
+```bash
+clawdis canvas snapshot --format png
+clawdis canvas snapshot --format jpg --max-width 1200 --quality 0.9
+```
+
 ## Photos + videos (node camera)
 
 Photos (`jpg`):
@@ -68,13 +75,18 @@ Notes:
 - Clip duration is clamped (currently `<= 60s`) to avoid oversized base64 payloads.
 - Android will prompt for `CAMERA`/`RECORD_AUDIO` permissions when possible; denied permissions fail with `*_PERMISSION_REQUIRED`.
 
-## Screen recordings (mac node)
+## Screen recordings (nodes)
 
-Mac node mode exposes `screen.record` (mp4). Example:
+Nodes expose `screen.record` (mp4). Example:
 
 ```bash
 clawdis nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
 ```
+
+Notes:
+- `screen.record` requires the node app to be foregrounded.
+- Android will show the system screen-capture prompt before recording.
+- Screen recordings are clamped to `<= 60s`.
 
 ## Mac node mode
 

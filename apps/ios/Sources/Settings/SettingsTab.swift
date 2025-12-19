@@ -283,7 +283,7 @@ struct SettingsTab: View {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [ClawdisCapability.canvas.rawValue]
+        var caps = [ClawdisCapability.canvas.rawValue, ClawdisCapability.screen.rawValue]
 
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
@@ -307,6 +307,7 @@ struct SettingsTab: View {
             ClawdisCanvasA2UICommand.push.rawValue,
             ClawdisCanvasA2UICommand.pushJSONL.rawValue,
             ClawdisCanvasA2UICommand.reset.rawValue,
+            ClawdisScreenCommand.record.rawValue,
         ]
 
         let caps = Set(self.currentCaps())

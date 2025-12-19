@@ -2,6 +2,7 @@ package com.steipete.clawdis.node
 
 import android.content.pm.PackageManager
 import android.content.Intent
+import android.Manifest
 import android.net.Uri
 import android.provider.Settings
 import androidx.appcompat.app.AlertDialog

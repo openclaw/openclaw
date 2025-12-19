@@ -156,7 +156,7 @@ final class BridgeConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [ClawdisCapability.canvas.rawValue]
+        var caps = [ClawdisCapability.canvas.rawValue, ClawdisCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
@@ -181,6 +181,7 @@ final class BridgeConnectionController {
             ClawdisCanvasA2UICommand.push.rawValue,
             ClawdisCanvasA2UICommand.pushJSONL.rawValue,
             ClawdisCanvasA2UICommand.reset.rawValue,
+            ClawdisScreenCommand.record.rawValue,
         ]
 
         let caps = Set(self.currentCaps())

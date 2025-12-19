@@ -26,6 +26,7 @@ import { danger, info, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
 import { createDefaultDeps } from "./deps.js";
 import { registerDnsCli } from "./dns-cli.js";
@@ -245,6 +246,7 @@ Examples:
       }
     });
 
+  registerCanvasCli(program);
   registerGatewayCli(program);
   registerNodesCli(program);
   registerCronCli(program);

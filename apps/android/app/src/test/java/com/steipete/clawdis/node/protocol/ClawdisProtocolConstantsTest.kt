@@ -24,6 +24,12 @@ class ClawdisProtocolConstantsTest {
   fun capabilitiesUseStableStrings() {
     assertEquals("canvas", ClawdisCapability.Canvas.rawValue)
     assertEquals("camera", ClawdisCapability.Camera.rawValue)
+    assertEquals("screen", ClawdisCapability.Screen.rawValue)
     assertEquals("voiceWake", ClawdisCapability.VoiceWake.rawValue)
+  }
+
+  @Test
+  fun screenCommandsUseStableStrings() {
+    assertEquals("screen.record", ClawdisScreenCommand.Record.rawValue)
   }
 }

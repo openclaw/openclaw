@@ -3,6 +3,7 @@ package com.steipete.clawdis.node.protocol
 enum class ClawdisCapability(val rawValue: String) {
   Canvas("canvas"),
   Camera("camera"),
+  Screen("screen"),
   VoiceWake("voiceWake"),
 }
 
@@ -37,5 +38,14 @@ enum class ClawdisCameraCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "camera."
+  }
+}
+
+enum class ClawdisScreenCommand(val rawValue: String) {
+  Record("screen.record"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "screen."
   }
 }

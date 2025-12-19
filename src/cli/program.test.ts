@@ -607,6 +607,44 @@ describe("cli program", () => {
     }
   });
 
+  it("runs canvas snapshot and prints MEDIA path", async () => {
+    callGateway
+      .mockResolvedValueOnce({
+        ts: Date.now(),
+        nodes: [
+          {
+            nodeId: "mac-1",
+            displayName: "Mac Node",
+            platform: "macos",
+            connected: true,
+            caps: ["canvas"],
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        nodeId: "mac-1",
+        command: "canvas.snapshot",
+        payload: { format: "png", base64: "aGk=" },
+      });
+
+    const program = buildProgram();
+    runtime.log.mockClear();
+    await program.parseAsync(["canvas", "snapshot", "--format", "png"], {
+      from: "user",
+    });
+
+    const out = String(runtime.log.mock.calls[0]?.[0] ?? "");
+    const mediaPath = out.replace(/^MEDIA:/, "").trim();
+    expect(mediaPath).toMatch(/clawdis-canvas-snapshot-.*\.png$/);
+
+    try {
+      await expect(fs.readFile(mediaPath, "utf8")).resolves.toBe("hi");
+    } finally {
+      await fs.unlink(mediaPath).catch(() => {});
+    }
+  });
+
   it("fails nodes camera snap on invalid facing", async () => {
     callGateway.mockResolvedValueOnce({
       ts: Date.now(),

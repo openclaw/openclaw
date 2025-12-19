@@ -17,11 +17,13 @@ import com.steipete.clawdis.node.bridge.BridgePairingClient
 import com.steipete.clawdis.node.bridge.BridgeSession
 import com.steipete.clawdis.node.node.CameraCaptureManager
 import com.steipete.clawdis.node.node.CanvasController
+import com.steipete.clawdis.node.node.ScreenRecordManager
 import com.steipete.clawdis.node.protocol.ClawdisCapability
 import com.steipete.clawdis.node.protocol.ClawdisCameraCommand
 import com.steipete.clawdis.node.protocol.ClawdisCanvasA2UIAction
 import com.steipete.clawdis.node.protocol.ClawdisCanvasA2UICommand
 import com.steipete.clawdis.node.protocol.ClawdisCanvasCommand
+import com.steipete.clawdis.node.protocol.ClawdisScreenCommand
 import com.steipete.clawdis.node.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -51,6 +53,7 @@ class NodeRuntime(context: Context) {
   val prefs = SecurePrefs(appContext)
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
+  val screenRecorder = ScreenRecordManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
   private val externalAudioCaptureActive = MutableStateFlow(false)
@@ -287,6 +290,7 @@ class NodeRuntime(context: Context) {
           add(ClawdisCanvasA2UICommand.Push.rawValue)
           add(ClawdisCanvasA2UICommand.PushJSONL.rawValue)
           add(ClawdisCanvasA2UICommand.Reset.rawValue)
+          add(ClawdisScreenCommand.Record.rawValue)
           if (cameraEnabled.value) {
             add(ClawdisCameraCommand.Snap.rawValue)
             add(ClawdisCameraCommand.Clip.rawValue)
@@ -294,17 +298,18 @@ class NodeRuntime(context: Context) {
         }
       val resolved =
         if (storedToken.isNullOrBlank()) {
-	          _statusText.value = "Pairing…"
-	          val caps = buildList {
-	            add(ClawdisCapability.Canvas.rawValue)
-	            if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
-	            if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
-	              add(ClawdisCapability.VoiceWake.rawValue)
-	            }
-	          }
-	          BridgePairingClient().pairAndHello(
-	            endpoint = endpoint,
-	            hello =
+          _statusText.value = "Pairing…"
+          val caps = buildList {
+            add(ClawdisCapability.Canvas.rawValue)
+            add(ClawdisCapability.Screen.rawValue)
+            if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
+            if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
+              add(ClawdisCapability.VoiceWake.rawValue)
+            }
+          }
+          BridgePairingClient().pairAndHello(
+            endpoint = endpoint,
+            hello =
               BridgePairingClient.Hello(
                 nodeId = instanceId.value,
                 displayName = displayName.value,
@@ -342,6 +347,7 @@ class NodeRuntime(context: Context) {
             caps =
               buildList {
                 add(ClawdisCapability.Canvas.rawValue)
+                add(ClawdisCapability.Screen.rawValue)
                 if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
                 if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
                   add(ClawdisCapability.VoiceWake.rawValue)
@@ -534,12 +540,13 @@ class NodeRuntime(context: Context) {
     if (
       command.startsWith(ClawdisCanvasCommand.NamespacePrefix) ||
         command.startsWith(ClawdisCanvasA2UICommand.NamespacePrefix) ||
-        command.startsWith(ClawdisCameraCommand.NamespacePrefix)
+        command.startsWith(ClawdisCameraCommand.NamespacePrefix) ||
+        command.startsWith(ClawdisScreenCommand.NamespacePrefix)
       ) {
       if (!isForeground.value) {
         return BridgeSession.InvokeResult.error(
           code = "NODE_BACKGROUND_UNAVAILABLE",
-          message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera commands require foreground",
+          message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
         )
       }
     }
@@ -648,6 +655,16 @@ class NodeRuntime(context: Context) {
         } finally {
           if (includeAudio) externalAudioCaptureActive.value = false
         }
+      }
+      ClawdisScreenCommand.Record.rawValue -> {
+        val res =
+          try {
+            screenRecorder.record(paramsJson)
+          } catch (err: Throwable) {
+            val (code, message) = invokeErrorFromThrowable(err)
+            return BridgeSession.InvokeResult.error(code = code, message = message)
+          }
+        BridgeSession.InvokeResult.ok(res.payloadJson)
       }
       else ->
         BridgeSession.InvokeResult.error(

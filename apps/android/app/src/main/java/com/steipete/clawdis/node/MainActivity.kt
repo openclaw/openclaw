@@ -25,6 +25,7 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
+  private lateinit var screenCaptureRequester: ScreenCaptureRequester
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
@@ -35,8 +36,10 @@ class MainActivity : ComponentActivity() {
     requestNotificationPermissionIfNeeded()
     NodeForegroundService.start(this)
     permissionRequester = PermissionRequester(this)
+    screenCaptureRequester = ScreenCaptureRequester(this)
     viewModel.camera.attachLifecycleOwner(this)
     viewModel.camera.attachPermissionRequester(permissionRequester)
+    viewModel.screenRecorder.attachScreenCaptureRequester(screenCaptureRequester)
 
     lifecycleScope.launch {
       repeatOnLifecycle(Lifecycle.State.STARTED) {

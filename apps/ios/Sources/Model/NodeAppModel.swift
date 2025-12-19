@@ -17,6 +17,7 @@ final class NodeAppModel {
     var isBackgrounded: Bool = false
     let screen = ScreenController()
     let camera = CameraController()
+    private let screenRecorder = ScreenRecordService()
     var bridgeStatusText: String = "Offline"
     var bridgeServerName: String?
     var bridgeRemoteAddress: String?
@@ -364,13 +365,15 @@ final class NodeAppModel {
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
 
-        if command.hasPrefix("canvas.") || command.hasPrefix("camera."), self.isBackgrounded {
+        if (command.hasPrefix("canvas.") || command.hasPrefix("camera.") || command.hasPrefix("screen.")),
+           self.isBackgrounded
+        {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
                 error: ClawdisNodeError(
                     code: .backgroundUnavailable,
-                    message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera commands require foreground"))
+                    message: "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground"))
         }
 
         if command.hasPrefix("camera."), !self.isCameraEnabled() {
@@ -522,6 +525,36 @@ final class NodeAppModel {
                     durationMs: res.durationMs,
                     hasAudio: res.hasAudio))
                 self.showCameraHUD(text: "Clip captured", kind: .success, autoHideSeconds: 1.8)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisScreenCommand.record.rawValue:
+                let params = (try? Self.decodeParams(ClawdisScreenRecordParams.self, from: req.paramsJSON)) ??
+                    ClawdisScreenRecordParams()
+                if let format = params.format, format.lowercased() != "mp4" {
+                    throw NSError(domain: "Screen", code: 30, userInfo: [
+                        NSLocalizedDescriptionKey: "INVALID_REQUEST: screen format must be mp4",
+                    ])
+                }
+                let path = try await self.screenRecorder.record(
+                    screenIndex: params.screenIndex,
+                    durationMs: params.durationMs,
+                    fps: params.fps,
+                    outPath: nil)
+                defer { try? FileManager.default.removeItem(atPath: path) }
+                let data = try Data(contentsOf: URL(fileURLWithPath: path))
+                struct Payload: Codable {
+                    var format: String
+                    var base64: String
+                    var durationMs: Int?
+                    var fps: Double?
+                    var screenIndex: Int?
+                }
+                let payload = try Self.encodePayload(Payload(
+                    format: "mp4",
+                    base64: data.base64EncodedString(),
+                    durationMs: params.durationMs,
+                    fps: params.fps,
+                    screenIndex: params.screenIndex))
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
             default:
