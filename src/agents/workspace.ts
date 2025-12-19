@@ -79,10 +79,7 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
-async function loadTemplate(
-  name: string,
-  fallback: string,
-): Promise<string> {
+async function loadTemplate(name: string, fallback: string): Promise<string> {
   const templatePath = path.join(TEMPLATE_DIR, name);
   try {
     const content = await fs.readFile(templatePath, "utf-8");

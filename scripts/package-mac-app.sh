@@ -135,15 +135,16 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
 
   echo "🧰 Building bundled gateway (bun --compile)"
   mkdir -p "$RELAY_DIR"
-  BUN_OUT="$RELAY_DIR/clawdis-gateway"
-  bun build "$ROOT_DIR/dist/macos/gateway-daemon.js" \
-    --compile \
-    --outfile "$BUN_OUT" \
-    -e playwright-core \
-    -e electron \
-    -e "chromium-bidi*" \
-    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
-  chmod +x "$BUN_OUT"
+	  BUN_OUT="$RELAY_DIR/clawdis-gateway"
+	  bun build "$ROOT_DIR/dist/macos/gateway-daemon.js" \
+	    --compile \
+	    --bytecode \
+	    --outfile "$BUN_OUT" \
+	    -e playwright-core \
+	    -e electron \
+	    -e "chromium-bidi*" \
+	    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
+	  chmod +x "$BUN_OUT"
 
   echo "📄 Writing embedded runtime package.json (Pi compatibility)"
   cat > "$RELAY_DIR/package.json" <<JSON
