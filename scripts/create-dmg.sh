@@ -9,10 +9,11 @@ set -euo pipefail
 # Env:
 #   DMG_VOLUME_NAME        default: CFBundleName (or "Clawdis")
 #   DMG_BACKGROUND_PATH    default: assets/dmg-background.png
-#   DMG_WINDOW_BOUNDS      default: "400 100 980 470"
+#   DMG_BACKGROUND_SMALL   default: assets/dmg-background-small.png (recommended)
+#   DMG_WINDOW_BOUNDS      default: "400 100 900 420" (500x320)
 #   DMG_ICON_SIZE          default: 128
-#   DMG_APP_POS            default: "170 190"
-#   DMG_APPS_POS           default: "470 190"
+#   DMG_APP_POS            default: "125 160"
+#   DMG_APPS_POS           default: "375 160"
 #   SKIP_DMG_STYLE=1       skip Finder styling
 
 APP_PATH="${1:-}"
@@ -36,12 +37,13 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP_PA
 
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 DMG_VOLUME_NAME="${DMG_VOLUME_NAME:-$APP_NAME}"
+DMG_BACKGROUND_SMALL="${DMG_BACKGROUND_SMALL:-$ROOT_DIR/assets/dmg-background-small.png}"
 DMG_BACKGROUND_PATH="${DMG_BACKGROUND_PATH:-$ROOT_DIR/assets/dmg-background.png}"
 
-DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 980 470}"
+DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 900 420}"
 DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"
-DMG_APP_POS="${DMG_APP_POS:-170 190}"
-DMG_APPS_POS="${DMG_APPS_POS:-470 190}"
+DMG_APP_POS="${DMG_APP_POS:-125 160}"
+DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
 
 to_applescript_list4() {
   local raw="$1"
@@ -96,10 +98,12 @@ hdiutil attach "$DMG_RW_PATH" -mountpoint "$MOUNT_POINT" -nobrowse
 
 if [[ "${SKIP_DMG_STYLE:-0}" != "1" ]]; then
   mkdir -p "$MOUNT_POINT/.background"
-  if [[ -f "$DMG_BACKGROUND_PATH" ]]; then
+  if [[ -f "$DMG_BACKGROUND_SMALL" ]]; then
+    cp "$DMG_BACKGROUND_SMALL" "$MOUNT_POINT/.background/background.png"
+  elif [[ -f "$DMG_BACKGROUND_PATH" ]]; then
     cp "$DMG_BACKGROUND_PATH" "$MOUNT_POINT/.background/background.png"
   else
-    echo "WARN: DMG background missing: $DMG_BACKGROUND_PATH" >&2
+    echo "WARN: DMG background missing: $DMG_BACKGROUND_SMALL / $DMG_BACKGROUND_PATH" >&2
   fi
 
   # Volume icon: reuse the app icon if available.
