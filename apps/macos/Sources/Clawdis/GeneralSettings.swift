@@ -339,12 +339,6 @@ struct GeneralSettings: View {
                     .foregroundStyle(.red)
             }
 
-            if let exitCode = self.gatewayManager.lastExitCode {
-                Text("Last exit code: \(exitCode)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-            }
-
             HStack(spacing: 10) {
                 Button {
                     Task { await self.installGateway() }
@@ -352,7 +346,7 @@ struct GeneralSettings: View {
                     if self.gatewayInstalling {
                         ProgressView().controlSize(.small)
                     } else {
-                        Text("Install/Update gateway")
+                        Text("Enable Gateway daemon")
                     }
                 }
                 .buttonStyle(.borderedProminent)
@@ -365,7 +359,7 @@ struct GeneralSettings: View {
 
             Text(self
                 .gatewayInstallMessage ??
-                "Installs the global \"clawdis\" package and expects the gateway on port 18789.")
+                "Enables the bundled Gateway via launchd (\(gatewayLaunchdLabel)). No Node install required.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
@@ -407,10 +401,10 @@ struct GeneralSettings: View {
         self.gatewayInstalling = true
         defer { self.gatewayInstalling = false }
         self.gatewayInstallMessage = nil
-        let expected = GatewayEnvironment.expectedGatewayVersion()
-        await GatewayEnvironment.installGlobal(version: expected) { message in
-            Task { @MainActor in self.gatewayInstallMessage = message }
-        }
+        let port = GatewayEnvironment.gatewayPort()
+        let bundlePath = Bundle.main.bundleURL.path
+        let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
+        self.gatewayInstallMessage = err ?? "Gateway enabled and started on port \(port)"
         self.refreshGatewayStatus()
     }
 

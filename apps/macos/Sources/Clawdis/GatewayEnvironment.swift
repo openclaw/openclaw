@@ -64,6 +64,12 @@ struct GatewayCommandResolution {
 enum GatewayEnvironment {
     private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.env")
 
+    static func bundledGatewayExecutable() -> String? {
+        guard let res = Bundle.main.resourceURL else { return nil }
+        let path = res.appendingPathComponent("Relay/clawdis-gateway").path
+        return FileManager.default.isExecutableFile(atPath: path) ? path : nil
+    }
+
     static func gatewayPort() -> Int {
         let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
         return stored > 0 ? stored : 18789
@@ -90,6 +96,26 @@ enum GatewayEnvironment {
             }
         }
         let expected = self.expectedGatewayVersion()
+
+        if let bundled = self.bundledGatewayExecutable() {
+            let installed = self.readGatewayVersion(binary: bundled)
+            if let expected, let installed, !installed.compatible(with: expected) {
+                return GatewayEnvironmentStatus(
+                    kind: .incompatible(found: installed.description, required: expected.description),
+                    nodeVersion: nil,
+                    gatewayVersion: installed.description,
+                    requiredGateway: expected.description,
+                    message: "Bundled gateway \(installed.description) is incompatible with app \(expected.description); rebuild the app bundle.")
+            }
+            let gatewayVersionText = installed?.description ?? "unknown"
+            return GatewayEnvironmentStatus(
+                kind: .ok,
+                nodeVersion: nil,
+                gatewayVersion: gatewayVersionText,
+                requiredGateway: expected?.description,
+                message: "Bundled gateway \(gatewayVersionText) (bun)")
+        }
+
         let projectRoot = CommandResolver.projectRoot()
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
 
@@ -160,6 +186,7 @@ enum GatewayEnvironment {
         let projectEntrypoint = CommandResolver.gatewayEntrypoint(in: projectRoot)
         let status = self.check()
         let gatewayBin = CommandResolver.clawdisExecutable()
+        let bundled = self.bundledGatewayExecutable()
         let runtime = RuntimeLocator.resolve(searchPaths: CommandResolver.preferredPaths())
 
         guard case .ok = status.kind else {
@@ -167,6 +194,10 @@ enum GatewayEnvironment {
         }
 
         let port = self.gatewayPort()
+        if let bundled {
+            let cmd = [bundled, "--port", "\(port)", "--bind", "loopback"]
+            return GatewayCommandResolution(status: status, command: cmd)
+        }
         if let gatewayBin {
             let cmd = [gatewayBin, "gateway", "--port", "\(port)"]
             return GatewayCommandResolution(status: status, command: cmd)

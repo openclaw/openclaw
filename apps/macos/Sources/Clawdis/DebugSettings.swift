@@ -133,9 +133,6 @@ struct DebugSettings: View {
                         self.gridLabel("Status")
                         HStack(spacing: 8) {
                             Text(self.gatewayManager.status.label)
-                            Text("Restarts: \(self.gatewayManager.restartCount)")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
