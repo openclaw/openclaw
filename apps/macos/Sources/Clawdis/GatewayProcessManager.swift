@@ -241,7 +241,7 @@ final class GatewayProcessManager {
         CommandResolver.projectRootPath()
     }
 
-    private static func readGatewayLog(path: String, limit: Int) -> String {
+    private nonisolated static func readGatewayLog(path: String, limit: Int) -> String {
         guard FileManager.default.fileExists(atPath: path) else { return "" }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return "" }
         let text = String(data: data, encoding: .utf8) ?? ""
