@@ -43,6 +43,7 @@ import {
   createClawdisCodingTools,
   sanitizeContentBlocksImages,
 } from "./pi-tools.js";
+import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
@@ -257,13 +258,15 @@ export async function runEmbeddedPiAgent(params: {
         })),
         defaultThinkLevel: params.thinkLevel,
       });
+      const systemPromptWithSkills =
+        systemPrompt + buildWorkspaceSkillsPrompt(resolvedWorkspace);
 
       const sessionManager = new SessionManager(false, params.sessionFile);
       const settingsManager = new SettingsManager();
 
       const agent = new Agent({
         initialState: {
-          systemPrompt,
+          systemPrompt: systemPromptWithSkills,
           model,
           thinkingLevel,
           // TODO(steipete): Once pi-mono publishes file-magic MIME detection in `read` image payloads,

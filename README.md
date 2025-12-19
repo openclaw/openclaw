@@ -103,6 +103,13 @@ pnpm clawdis agent --message "Ship checklist" --thinking high
 pnpm clawdis gateway --force
 ```
 
+### Agent workspace + skills
+
+Clawdis runs the embedded agent with its working directory set to the agent workspace (default: `~/clawd`, configurable via `inbound.workspace`).
+
+- Workspace files injected into the system prompt: `AGENTS.md`, `SOUL.md`, `TOOLS.md`
+- Custom skills: `<workspace>/skills/<skill-name>/SKILL.md` (default: `~/clawd/skills/<skill-name>/SKILL.md`; only this location is scanned)
+
 ## Companion Apps
 
 ### macOS Companion (Clawdis.app)
