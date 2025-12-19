@@ -186,7 +186,7 @@ actor MacNodeBridgePairingClient {
         }
         defer { timeout.cancel() }
         return try await withTaskCancellationHandler(operation: {
-            return try await task.value
+            try await task.value
         }, onCancel: {
             timeout.cancel()
         })

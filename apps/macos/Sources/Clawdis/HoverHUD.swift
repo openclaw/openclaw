@@ -182,7 +182,9 @@ final class HoverHUDController {
 
     private func targetFrame() -> NSRect {
         guard let anchor = self.anchorProvider?() else {
-            return WindowPlacement.topRightFrame(size: NSSize(width: self.width, height: self.height), padding: self.padding)
+            return WindowPlacement.topRightFrame(
+                size: NSSize(width: self.width, height: self.height),
+                padding: self.padding)
         }
 
         let screen = NSScreen.screens.first { screen in
@@ -213,7 +215,11 @@ final class HoverHUDController {
 
     private func installDismissMonitor() {
         guard self.dismissMonitor == nil, let window else { return }
-        self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { [weak self] _ in
+        self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [
+            .leftMouseDown,
+            .rightMouseDown,
+            .otherMouseDown,
+        ]) { [weak self] _ in
             guard let self, self.model.isVisible else { return }
             let pt = NSEvent.mouseLocation
             if !window.frame.contains(pt) {

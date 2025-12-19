@@ -9,7 +9,7 @@ actor MacNodeRuntime {
 
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if (command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")) && !Self.canvasEnabled() {
+        if command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui."), !Self.canvasEnabled() {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -199,7 +199,7 @@ actor MacNodeRuntime {
         let ready = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: """
         (() => Boolean(globalThis.clawdisA2UI))
         """)
-        if ready != "true" && ready != "true\n" {
+        if ready != "true", ready != "true\n" {
             return Self.errorResponse(req, code: .unavailable, message: "A2UI not ready")
         }
 
@@ -332,10 +332,11 @@ actor MacNodeRuntime {
 
         let out = NSImage(size: target)
         out.lockFocus()
-        image.draw(in: NSRect(origin: .zero, size: target),
-                   from: NSRect(origin: .zero, size: size),
-                   operation: .copy,
-                   fraction: 1.0)
+        image.draw(
+            in: NSRect(origin: .zero, size: target),
+            from: NSRect(origin: .zero, size: size),
+            operation: .copy,
+            fraction: 1.0)
         out.unlockFocus()
         return out
     }

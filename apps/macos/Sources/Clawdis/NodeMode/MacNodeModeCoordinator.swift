@@ -185,15 +185,15 @@ final class MacNodeModeCoordinator {
             var continuation: CheckedContinuation<NWEndpoint?, Never>?
 
             func finish(_ endpoint: NWEndpoint?) {
-                lock.lock()
+                self.lock.lock()
                 defer { lock.unlock() }
-                if resolved { return }
-                resolved = true
-                for browser in browsers {
+                if self.resolved { return }
+                self.resolved = true
+                for browser in self.browsers {
                     browser.cancel()
                 }
-                continuation?.resume(returning: endpoint)
-                continuation = nil
+                self.continuation?.resume(returning: endpoint)
+                self.continuation = nil
             }
         }
 
@@ -239,11 +239,11 @@ enum MacNodeTokenStore {
     }
 
     static func loadToken() -> String? {
-        let raw = defaults.string(forKey: tokenKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let raw = self.defaults.string(forKey: self.tokenKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
     }
 
     static func saveToken(_ token: String) {
-        defaults.set(token, forKey: tokenKey)
+        self.defaults.set(token, forKey: self.tokenKey)
     }
 }

@@ -157,7 +157,10 @@ struct AnthropicAuthControls: View {
         }
 
         do {
-            let creds = try await AnthropicOAuth.exchangeCode(code: parsed.code, state: parsed.state, verifier: pkce.verifier)
+            let creds = try await AnthropicOAuth.exchangeCode(
+                code: parsed.code,
+                state: parsed.state,
+                verifier: pkce.verifier)
             try PiOAuthStore.saveAnthropicOAuth(creds)
             self.refresh()
             self.pkce = nil

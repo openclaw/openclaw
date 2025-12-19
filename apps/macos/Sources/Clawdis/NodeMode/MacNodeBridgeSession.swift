@@ -271,8 +271,8 @@ actor MacNodeBridgeSession {
     }
 
     private static func makeStateStream(
-        for connection: NWConnection,
-    ) -> AsyncStream<NWConnection.State> {
+        for connection: NWConnection) -> AsyncStream<NWConnection.State>
+    {
         AsyncStream { continuation in
             connection.stateUpdateHandler = { state in
                 continuation.yield(state)
@@ -288,9 +288,9 @@ actor MacNodeBridgeSession {
 
     private static func waitForReady(
         _ stream: AsyncStream<NWConnection.State>,
-        timeoutSeconds: Double,
-    ) async throws {
-        try await withTimeout(seconds: timeoutSeconds) {
+        timeoutSeconds: Double) async throws
+    {
+        try await self.withTimeout(seconds: timeoutSeconds) {
             for await state in stream {
                 switch state {
                 case .ready:
@@ -313,8 +313,8 @@ actor MacNodeBridgeSession {
 
     private static func withTimeout<T: Sendable>(
         seconds: Double,
-        operation: @escaping @Sendable () async throws -> T,
-    ) async throws -> T {
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+    {
         let task = Task { try await operation() }
         let timeout = Task {
             try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
@@ -322,7 +322,7 @@ actor MacNodeBridgeSession {
         }
         defer { timeout.cancel() }
         return try await withTaskCancellationHandler(operation: {
-            return try await task.value
+            try await task.value
         }, onCancel: {
             timeout.cancel()
         })

@@ -5,8 +5,8 @@ import Foundation
 import OSLog
 import UserNotifications
 
-struct NodePairingReconcilePolicy {
-    static let activeIntervalMs: UInt64 = 15_000
+enum NodePairingReconcilePolicy {
+    static let activeIntervalMs: UInt64 = 15000
     static let resyncDelayMs: UInt64 = 250
 
     static func shouldPoll(pendingCount: Int, isPresenting: Bool) -> Bool {
@@ -522,7 +522,7 @@ final class NodePairingApprovalPrompter {
         defer { model.stop() }
 
         let deadline = Date().addingTimeInterval(5.0)
-        while model.masters.isEmpty && Date() < deadline {
+        while model.masters.isEmpty, Date() < deadline {
             try? await Task.sleep(nanoseconds: 200_000_000)
         }
 

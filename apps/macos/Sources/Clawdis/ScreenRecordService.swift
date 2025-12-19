@@ -98,8 +98,8 @@ final class ScreenRecordService {
     }
 
     private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
-        let v = ms ?? 10_000
-        return min(60_000, max(250, v))
+        let v = ms ?? 10000
+        return min(60000, max(250, v))
     }
 
     private nonisolated static func clampFps(_ fps: Double?) -> Double {
@@ -144,8 +144,8 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
             let audioSettings: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVNumberOfChannelsKey: 1,
-                AVSampleRateKey: 44_100,
-                AVEncoderBitRateKey: 96_000,
+                AVSampleRateKey: 44100,
+                AVEncoderBitRateKey: 96000,
             ]
             let audioInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
             audioInput.expectsMediaDataInRealTime = true
@@ -247,9 +247,13 @@ private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, 
                 self.audioInput?.markAsFinished()
                 self.writer.finishWriting {
                     if let err = self.writer.error {
-                        cont.resume(throwing: ScreenRecordService.ScreenRecordError.writeFailed(err.localizedDescription))
+                        cont
+                            .resume(throwing: ScreenRecordService.ScreenRecordError
+                                .writeFailed(err.localizedDescription))
                     } else if self.writer.status != .completed {
-                        cont.resume(throwing: ScreenRecordService.ScreenRecordError.writeFailed("Failed to finalize video"))
+                        cont
+                            .resume(throwing: ScreenRecordService.ScreenRecordError
+                                .writeFailed("Failed to finalize video"))
                     } else {
                         cont.resume()
                     }

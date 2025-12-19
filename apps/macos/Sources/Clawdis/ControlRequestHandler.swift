@@ -4,7 +4,6 @@ import Foundation
 import OSLog
 
 enum ControlRequestHandler {
-
     struct NodeListNode: Codable {
         var nodeId: String
         var displayName: String?
@@ -559,7 +558,7 @@ enum ControlRequestHandler {
             let payload = try await self.invokeLocalNode(
                 command: "screen.record",
                 params: params,
-                timeoutMs: 120000)
+                timeoutMs: 120_000)
             guard let dict = payload as? [String: Any],
                   let base64 = dict["base64"] as? String,
                   let data = Data(base64Encoded: base64)

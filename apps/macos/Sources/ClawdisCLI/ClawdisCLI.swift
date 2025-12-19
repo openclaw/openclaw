@@ -139,7 +139,7 @@ struct ClawdisCLI {
         let multiplier: Double = switch unit {
         case "ms": 1
         case "s": 1000
-        case "m": 60_000
+        case "m": 60000
         default: 1
         }
 
@@ -1009,7 +1009,7 @@ struct ClawdisCLI {
             let ms = durationMs ?? 3000
             return min(180, max(10, TimeInterval(ms) / 1000.0 + 10))
         case let .screenRecord(_, durationMs, _, _, _):
-            let ms = durationMs ?? 10_000
+            let ms = durationMs ?? 10000
             return min(180, max(10, TimeInterval(ms) / 1000.0 + 10))
         default:
             // Fail-fast so callers (incl. SSH tool calls) don't hang forever.
