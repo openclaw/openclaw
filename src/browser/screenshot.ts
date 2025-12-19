@@ -1,4 +1,4 @@
-import sharp from "sharp";
+import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
@@ -19,9 +19,9 @@ export async function normalizeBrowserScreenshot(
     Math.round(opts?.maxBytes ?? DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES),
   );
 
-  const meta = await sharp(buffer, { failOnError: false }).metadata();
-  const width = Number(meta.width ?? 0);
-  const height = Number(meta.height ?? 0);
+  const meta = await getImageMetadata(buffer);
+  const width = Number(meta?.width ?? 0);
+  const height = Number(meta?.height ?? 0);
   const maxDim = Math.max(width, height);
 
   if (
@@ -42,15 +42,12 @@ export async function normalizeBrowserScreenshot(
 
   for (const side of sideGrid) {
     for (const quality of qualities) {
-      const out = await sharp(buffer, { failOnError: false })
-        .resize({
-          width: side,
-          height: side,
-          fit: "inside",
-          withoutEnlargement: true,
-        })
-        .jpeg({ quality, mozjpeg: true })
-        .toBuffer();
+      const out = await resizeToJpeg({
+        buffer,
+        maxSide: side,
+        quality,
+        withoutEnlargement: true,
+      });
 
       if (!smallest || out.byteLength < smallest.size) {
         smallest = { buffer: out, size: out.byteLength };

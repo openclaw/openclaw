@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const UI_PREFIX = "/ui/";
+const _UI_PREFIX = "/ui/";
 const ROOT_PREFIX = "/";
 
 function resolveControlUiRoot(): string | null {

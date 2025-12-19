@@ -1,8 +1,8 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-ai";
 import { bashTool, codingTools, readTool } from "@mariozechner/pi-coding-agent";
 import type { TSchema } from "@sinclair/typebox";
-import sharp from "sharp";
 
+import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 import { detectMime } from "../media/mime.js";
 
 // TODO(steipete): Remove this wrapper once pi-mono ships file-magic MIME detection
@@ -125,11 +125,9 @@ async function resizeImageBase64IfNeeded(params: {
   maxDimensionPx: number;
 }): Promise<{ base64: string; mimeType: string; resized: boolean }> {
   const buf = Buffer.from(params.base64, "base64");
-  const img = sharp(buf, { failOnError: false });
-  const meta = await img.metadata();
-
-  const width = meta.width;
-  const height = meta.height;
+  const meta = await getImageMetadata(buf);
+  const width = meta?.width;
+  const height = meta?.height;
   if (
     typeof width !== "number" ||
     typeof height !== "number" ||
@@ -138,23 +136,36 @@ async function resizeImageBase64IfNeeded(params: {
     return { base64: params.base64, mimeType: params.mimeType, resized: false };
   }
 
-  const resized = img.resize({
-    width: params.maxDimensionPx,
-    height: params.maxDimensionPx,
-    fit: "inside",
-    withoutEnlargement: true,
-  });
-
   const mime = params.mimeType.toLowerCase();
   let out: Buffer;
-  if (mime === "image/jpeg" || mime === "image/jpg") {
-    out = await resized.jpeg({ quality: 85 }).toBuffer();
-  } else if (mime === "image/webp") {
-    out = await resized.webp({ quality: 85 }).toBuffer();
-  } else if (mime === "image/png") {
-    out = await resized.png().toBuffer();
-  } else {
-    out = await resized.png().toBuffer();
+  try {
+    const mod = (await import("sharp")) as unknown as {
+      default?: typeof import("sharp");
+    };
+    const sharp = mod.default ?? (mod as unknown as typeof import("sharp"));
+    const img = sharp(buf, { failOnError: false }).resize({
+      width: params.maxDimensionPx,
+      height: params.maxDimensionPx,
+      fit: "inside",
+      withoutEnlargement: true,
+    });
+    if (mime === "image/jpeg" || mime === "image/jpg") {
+      out = await img.jpeg({ quality: 85 }).toBuffer();
+    } else if (mime === "image/webp") {
+      out = await img.webp({ quality: 85 }).toBuffer();
+    } else if (mime === "image/png") {
+      out = await img.png().toBuffer();
+    } else {
+      out = await img.png().toBuffer();
+    }
+  } catch {
+    // Bun can't load sharp native addons. Fall back to a JPEG conversion.
+    out = await resizeToJpeg({
+      buffer: buf,
+      maxSide: params.maxDimensionPx,
+      quality: 85,
+      withoutEnlargement: true,
+    });
   }
 
   const sniffed = detectMime({ buffer: out.slice(0, 256) });
