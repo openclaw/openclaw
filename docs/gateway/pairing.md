@@ -82,6 +82,8 @@ Implementation pointers:
 - Gateway handlers + events: `src/gateway/server.ts`
 - Pairing store: `src/infra/node-pairing.ts` (under `~/.clawdis/nodes/`)
 - Optional macOS UI prompt (frontend only): `apps/macos/Sources/Clawdis/NodePairingApprovalPrompter.swift`
+  - Push-first: listens to `node.pair.requested`/`node.pair.resolved`, does a `node.pair.list` on startup/reconnect,
+    and only runs a slow safety poll while a request is pending/visible.
 
 ## Storage (private, local)
 Gateway stores the authoritative state under `~/.clawdis/`:
