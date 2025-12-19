@@ -19,6 +19,7 @@ final class NodePairingApprovalPrompter {
     private var activeRequestId: String?
     private var alertHostWindow: NSWindow?
     private var remoteResolutionsByRequestId: [String: PairingResolution] = [:]
+    private var autoApproveAttempts: Set<String> = []
 
     private final class AlertHostWindow: NSWindow {
         override var canBecomeKey: Bool { true }
@@ -47,6 +48,7 @@ final class NodePairingApprovalPrompter {
         let version: String?
         let remoteIp: String?
         let isRepair: Bool?
+        let silent: Bool?
         let ts: Double
 
         var id: String { self.requestId }
@@ -90,6 +92,7 @@ final class NodePairingApprovalPrompter {
         self.alertHostWindow?.close()
         self.alertHostWindow = nil
         self.remoteResolutionsByRequestId.removeAll(keepingCapacity: false)
+        self.autoApproveAttempts.removeAll(keepingCapacity: false)
     }
 
     private func loadPendingRequestsFromGateway() async {
@@ -258,7 +261,13 @@ final class NodePairingApprovalPrompter {
         guard !self.isPresenting else { return }
         guard let next = self.queue.first else { return }
         self.isPresenting = true
-        self.presentAlert(for: next)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if await self.trySilentApproveIfPossible(next) {
+                return
+            }
+            self.presentAlert(for: next)
+        }
     }
 
     private func presentAlert(for req: PendingRequest) {
@@ -330,7 +339,7 @@ final class NodePairingApprovalPrompter {
             // Later: leave as pending (CLI can approve/reject). Request will expire on the gateway TTL.
             return
         case .alertSecondButtonReturn:
-            await self.approve(requestId: request.requestId)
+            _ = await self.approve(requestId: request.requestId)
             await self.notify(resolution: .approved, request: request, via: "local")
         case .alertThirdButtonReturn:
             await self.reject(requestId: request.requestId)
@@ -340,13 +349,15 @@ final class NodePairingApprovalPrompter {
         }
     }
 
-    private func approve(requestId: String) async {
+    private func approve(requestId: String) async -> Bool {
         do {
             try await GatewayConnection.shared.nodePairApprove(requestId: requestId)
             self.logger.info("approved node pairing requestId=\(requestId, privacy: .public)")
+            return true
         } catch {
             self.logger.error("approve failed requestId=\(requestId, privacy: .public)")
             self.logger.error("approve failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 
@@ -409,5 +420,118 @@ final class NodePairingApprovalPrompter {
             body: body,
             sound: nil,
             priority: .active)
+    }
+
+    private struct SSHTarget {
+        let host: String
+        let port: Int
+    }
+
+    private func trySilentApproveIfPossible(_ req: PendingRequest) async -> Bool {
+        guard req.silent == true else { return false }
+        if self.autoApproveAttempts.contains(req.requestId) { return false }
+        self.autoApproveAttempts.insert(req.requestId)
+
+        guard let target = await self.resolveSSHTarget() else {
+            self.logger.info("silent pairing skipped (no ssh target) requestId=\(req.requestId, privacy: .public)")
+            return false
+        }
+
+        let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !user.isEmpty else {
+            self.logger.info("silent pairing skipped (missing local user) requestId=\(req.requestId, privacy: .public)")
+            return false
+        }
+
+        let ok = await Self.probeSSH(user: user, host: target.host, port: target.port)
+        if !ok {
+            self.logger.info("silent pairing probe failed requestId=\(req.requestId, privacy: .public)")
+            return false
+        }
+
+        guard await self.approve(requestId: req.requestId) else {
+            self.logger.info("silent pairing approve failed requestId=\(req.requestId, privacy: .public)")
+            return false
+        }
+
+        await self.notify(resolution: .approved, request: req, via: "silent-ssh")
+        if self.queue.first == req {
+            self.queue.removeFirst()
+        } else {
+            self.queue.removeAll { $0 == req }
+        }
+        self.isPresenting = false
+        self.presentNextIfNeeded()
+        return true
+    }
+
+    private func resolveSSHTarget() async -> SSHTarget? {
+        let settings = CommandResolver.connectionSettings()
+        if !settings.target.isEmpty, let parsed = CommandResolver.parseSSHTarget(settings.target) {
+            let user = NSUserName().trimmingCharacters(in: .whitespacesAndNewlines)
+            if let targetUser = parsed.user,
+               !targetUser.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+               targetUser != user
+            {
+                self.logger.info("silent pairing skipped (ssh user mismatch)")
+                return nil
+            }
+            let host = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty else { return nil }
+            let port = parsed.port > 0 ? parsed.port : 22
+            return SSHTarget(host: host, port: port)
+        }
+
+        let model = MasterDiscoveryModel()
+        model.start()
+        defer { model.stop() }
+
+        let deadline = Date().addingTimeInterval(5.0)
+        while model.masters.isEmpty && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+        }
+
+        guard let master = model.masters.first else { return nil }
+        let host = (master.tailnetDns?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ??
+            master.lanHost?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty)
+        guard let host, !host.isEmpty else { return nil }
+        let port = master.sshPort > 0 ? master.sshPort : 22
+        return SSHTarget(host: host, port: port)
+    }
+
+    private static func probeSSH(user: String, host: String, port: Int) async -> Bool {
+        await Task.detached(priority: .utility) {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+
+            var args = [
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                "-o",
+                "NumberOfPasswordPrompts=0",
+                "-o",
+                "PreferredAuthentications=publickey",
+                "-o",
+                "StrictHostKeyChecking=accept-new",
+            ]
+            if port > 0, port != 22 {
+                args.append(contentsOf: ["-p", String(port)])
+            }
+            args.append(contentsOf: ["-l", user, host, "/usr/bin/true"])
+            process.arguments = args
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = pipe
+
+            do {
+                try process.run()
+            } catch {
+                return false
+            }
+            process.waitUntilExit()
+            return process.terminationStatus == 0
+        }.value
     }
 }

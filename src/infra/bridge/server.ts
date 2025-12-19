@@ -35,6 +35,7 @@ type BridgePairRequestFrame = {
   caps?: string[];
   commands?: string[];
   remoteAddress?: string;
+  silent?: boolean;
 };
 
 type BridgeEventFrame = {
@@ -396,6 +397,7 @@ export async function startNodeBridgeServer(
             ? req.commands.map((c) => String(c)).filter(Boolean)
             : undefined,
           remoteIp: remoteAddress,
+          silent: req.silent === true ? true : undefined,
         },
         opts.pairingBaseDir,
       );

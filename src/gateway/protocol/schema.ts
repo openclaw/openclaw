@@ -227,6 +227,7 @@ export const NodePairRequestParamsSchema = Type.Object(
     caps: Type.Optional(Type.Array(NonEmptyString)),
     commands: Type.Optional(Type.Array(NonEmptyString)),
     remoteIp: Type.Optional(NonEmptyString),
+    silent: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

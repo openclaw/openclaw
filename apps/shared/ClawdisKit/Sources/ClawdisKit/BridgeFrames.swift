@@ -114,6 +114,7 @@ public struct BridgePairRequest: Codable, Sendable {
     public let caps: [String]?
     public let commands: [String]?
     public let remoteAddress: String?
+    public let silent: Bool?
 
     public init(
         type: String = "pair-request",
@@ -125,7 +126,8 @@ public struct BridgePairRequest: Codable, Sendable {
         modelIdentifier: String? = nil,
         caps: [String]? = nil,
         commands: [String]? = nil,
-        remoteAddress: String? = nil)
+        remoteAddress: String? = nil,
+        silent: Bool? = nil)
     {
         self.type = type
         self.nodeId = nodeId
@@ -137,6 +139,7 @@ public struct BridgePairRequest: Codable, Sendable {
         self.caps = caps
         self.commands = commands
         self.remoteAddress = remoteAddress
+        self.silent = silent
     }
 }
 

@@ -32,6 +32,7 @@ These are conceptual method names; wire them into `src/gateway/protocol/schema.t
     - `platform?` (string)
     - `version?` (string)
     - `remoteIp?` (string)
+    - `silent?` (boolean) — hint that the UI may attempt auto-approval
     - `ts` (ms since epoch)
 - `node.pair.resolved`
   - Emitted when a pending request is approved/rejected.
@@ -45,6 +46,7 @@ These are conceptual method names; wire them into `src/gateway/protocol/schema.t
 - `node.pair.request`
   - Creates (or returns) a pending request.
   - Params: node metadata (same shape as `node.pair.requested` payload, minus `requestId`/`ts`).
+  - Optional `silent` flag hints that the UI can attempt an SSH auto-approve before showing an alert.
   - Result:
     - `status` ("pending")
     - `created` (boolean) — whether this call created the pending request
@@ -98,6 +100,7 @@ Target direction:
 The macOS UI (Swift) can:
 - Subscribe to `node.pair.requested`, show an alert (including `remoteIp`), and call `node.pair.approve` or `node.pair.reject`.
 - Or ignore/dismiss (“Later”) and let CLI handle it.
+- When `silent` is set, it can try a short SSH probe (same user) and auto-approve if reachable; otherwise fall back to the normal alert.
 
 ## Implementation note
 If the bridge is only provided by the macOS app, then “no Swift app running” cannot work end-to-end.

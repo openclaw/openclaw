@@ -14,6 +14,7 @@ export type NodePairingPendingRequest = {
   caps?: string[];
   commands?: string[];
   remoteIp?: string;
+  silent?: boolean;
   isRepair?: boolean;
   ts: number;
 };
@@ -185,6 +186,7 @@ export async function requestNodePairing(
       caps: req.caps,
       commands: req.commands,
       remoteIp: req.remoteIp,
+      silent: req.silent,
       isRepair,
       ts: Date.now(),
     };

@@ -171,8 +171,12 @@ actor BridgeConnectionHandler {
                 displayName: req.displayName,
                 platform: req.platform,
                 version: req.version,
+                deviceFamily: req.deviceFamily,
+                modelIdentifier: req.modelIdentifier,
                 caps: req.caps,
-                remoteAddress: self.remoteAddressString())
+                commands: req.commands,
+                remoteAddress: self.remoteAddressString(),
+                silent: req.silent)
             let result = await context.handlePair(enriched)
             await self.handlePairResult(result, serverName: context.serverName)
             if case .ok = result {

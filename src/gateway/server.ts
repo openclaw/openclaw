@@ -3276,6 +3276,7 @@ export async function startGatewayServer(
                 caps?: string[];
                 commands?: string[];
                 remoteIp?: string;
+                silent?: boolean;
               };
               try {
                 const result = await requestNodePairing({
@@ -3288,6 +3289,7 @@ export async function startGatewayServer(
                   caps: p.caps,
                   commands: p.commands,
                   remoteIp: p.remoteIp,
+                  silent: p.silent,
                 });
                 if (result.status === "pending" && result.created) {
                   broadcast("node.pair.requested", result.request, {
