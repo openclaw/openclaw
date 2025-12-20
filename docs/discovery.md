@@ -55,7 +55,8 @@ Troubleshooting and beacon details: `docs/bonjour.md`.
   - `gatewayPort=18789` (loopback WS port; informational)
   - `bridgePort=18790` (when bridge is enabled)
   - `canvasPort=18793` (when the canvas host is running; enabled by default)
-- `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
+  - `cliPath=<path>` (optional; absolute path to a runnable `clawdis` entrypoint or binary)
+  - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
 Disable/override:
 - `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.

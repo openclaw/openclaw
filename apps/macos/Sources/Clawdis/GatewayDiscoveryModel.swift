@@ -17,6 +17,7 @@ final class GatewayDiscoveryModel {
         var lanHost: String?
         var tailnetDns: String?
         var sshPort: Int
+        var cliPath: String?
         var stableID: String
         var debugID: String
         var isLocal: Bool
@@ -66,6 +67,7 @@ final class GatewayDiscoveryModel {
                         var lanHost: String?
                         var tailnetDns: String?
                         var sshPort = 22
+                        var cliPath: String?
 
                         if let value = txt["lanHost"] {
                             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -81,6 +83,10 @@ final class GatewayDiscoveryModel {
                         {
                             sshPort = parsed
                         }
+                        if let value = txt["cliPath"] {
+                            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                            cliPath = trimmed.isEmpty ? nil : trimmed
+                        }
 
                         let isLocal = Self.isLocalGateway(
                             lanHost: lanHost,
@@ -93,6 +99,7 @@ final class GatewayDiscoveryModel {
                             lanHost: lanHost,
                             tailnetDns: tailnetDns,
                             sshPort: sshPort,
+                            cliPath: cliPath,
                             stableID: BridgeEndpointID.stableID(result.endpoint),
                             debugID: BridgeEndpointID.prettyDescription(result.endpoint),
                             isLocal: isLocal)

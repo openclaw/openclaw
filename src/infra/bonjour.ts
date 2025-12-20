@@ -14,6 +14,7 @@ export type GatewayBonjourAdvertiseOpts = {
   bridgePort?: number;
   canvasPort?: number;
   tailnetDns?: string;
+  cliPath?: string;
 };
 
 function isDisabledByEnv() {
@@ -114,6 +115,9 @@ export async function startGatewayBonjourAdvertiser(
   }
   if (typeof opts.tailnetDns === "string" && opts.tailnetDns.trim()) {
     txtBase.tailnetDns = opts.tailnetDns.trim();
+  }
+  if (typeof opts.cliPath === "string" && opts.cliPath.trim()) {
+    txtBase.cliPath = opts.cliPath.trim();
   }
 
   const services: Array<{ label: string; svc: BonjourService }> = [];

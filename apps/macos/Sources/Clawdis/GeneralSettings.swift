@@ -181,6 +181,11 @@ struct GeneralSettings: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(width: 280)
                     }
+                    LabeledContent("CLI path") {
+                        TextField("/Applications/Clawdis.app/.../clawdis", text: self.$state.remoteCliPath)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 280)
+                    }
                 }
                 .padding(.top, 4)
             } label: {
@@ -612,6 +617,7 @@ extension GeneralSettings {
             target += ":\(gateway.sshPort)"
         }
         self.state.remoteTarget = target
+        self.state.remoteCliPath = gateway.cliPath ?? ""
     }
 }
 

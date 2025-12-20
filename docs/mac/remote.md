@@ -25,6 +25,7 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
      - If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
    - **Identity file** (advanced): path to your key.
    - **Project root** (advanced): remote checkout path used for commands.
+   - **CLI path** (advanced): optional path to a runnable `clawdis` entrypoint/binary (auto-filled when advertised).
 3) Hit **Test remote**. Success indicates the remote `clawdis status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn’t found remotely.
 4) Health checks and Web Chat will now run through this SSH tunnel automatically.
 

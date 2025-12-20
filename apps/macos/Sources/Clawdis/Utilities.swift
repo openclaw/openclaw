@@ -490,6 +490,7 @@ enum CommandResolver {
         ].joined(separator: ":")
         let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
         let userPRJ = settings.projectRoot.trimmingCharacters(in: .whitespacesAndNewlines)
+        let userCLI = settings.cliPath.trimmingCharacters(in: .whitespacesAndNewlines)
 
         let projectSection = if userPRJ.isEmpty {
             """
@@ -506,9 +507,31 @@ enum CommandResolver {
             """
         }
 
+        let cliSection = if userCLI.isEmpty {
+            ""
+        } else {
+            """
+            CLI_HINT=\(self.shellQuote(userCLI))
+            if [ -n "$CLI_HINT" ]; then
+              if [ -x "$CLI_HINT" ]; then
+                CLI="$CLI_HINT"
+                "$CLI_HINT" \(quotedArgs);
+                exit $?;
+              elif [ -f "$CLI_HINT" ]; then
+                if command -v node >/dev/null 2>&1; then
+                  CLI="node $CLI_HINT"
+                  node "$CLI_HINT" \(quotedArgs);
+                  exit $?;
+                fi
+              fi
+            fi
+            """
+        }
+
         let scriptBody = """
         PATH=\(exportedPath);
         CLI="";
+        \(cliSection)
         \(projectSection)
         if command -v clawdis >/dev/null 2>&1; then
           CLI="$(command -v clawdis)"
@@ -543,6 +566,7 @@ enum CommandResolver {
         let target: String
         let identity: String
         let projectRoot: String
+        let cliPath: String
     }
 
     static func connectionSettings(defaults: UserDefaults = .standard) -> RemoteSettings {
@@ -557,11 +581,13 @@ enum CommandResolver {
         let target = defaults.string(forKey: remoteTargetKey) ?? ""
         let identity = defaults.string(forKey: remoteIdentityKey) ?? ""
         let projectRoot = defaults.string(forKey: remoteProjectRootKey) ?? ""
+        let cliPath = defaults.string(forKey: remoteCliPathKey) ?? ""
         return RemoteSettings(
             mode: mode,
             target: self.sanitizedTarget(target),
             identity: identity,
-            projectRoot: projectRoot)
+            projectRoot: projectRoot,
+            cliPath: cliPath)
     }
 
     static var attachExistingGatewayOnly: Bool {

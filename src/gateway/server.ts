@@ -22,6 +22,7 @@ import {
   type CanvasHostServer,
   startCanvasHost,
 } from "../canvas-host/server.js";
+import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
@@ -104,6 +105,37 @@ import { buildMessageWithAttachments } from "./chat-attachments.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 
 ensureClawdisCliOnPath();
+
+function resolveBonjourCliPath(): string | undefined {
+  const envPath = process.env.CLAWDIS_CLI_PATH?.trim();
+  if (envPath) return envPath;
+
+  const isFile = (candidate: string) => {
+    try {
+      return fs.statSync(candidate).isFile();
+    } catch {
+      return false;
+    }
+  };
+
+  const execDir = path.dirname(process.execPath);
+  const siblingCli = path.join(execDir, "clawdis");
+  if (isFile(siblingCli)) return siblingCli;
+
+  const argvPath = process.argv[1];
+  if (argvPath && isFile(argvPath)) {
+    const base = path.basename(argvPath);
+    if (!base.includes("gateway-daemon")) return argvPath;
+  }
+
+  const cwd = process.cwd();
+  const distCli = path.join(cwd, "dist", "index.js");
+  if (isFile(distCli)) return distCli;
+  const binCli = path.join(cwd, "bin", "clawdis.js");
+  if (isFile(binCli)) return binCli;
+
+  return undefined;
+}
 
 let stopBrowserControlServerIfStarted: (() => Promise<void>) | null = null;
 
@@ -976,6 +1008,9 @@ export async function startGatewayServer(
       "gateway bind is tailnet, but no tailnet interface was found; refusing to start gateway",
     );
   }
+  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const tailnetIPv6 = pickPrimaryTailnetIPv6();
+  const hasTailnet = Boolean(tailnetIPv4 || tailnetIPv6);
   const controlUiEnabled =
     opts.controlUiEnabled ?? cfgForServer.gateway?.controlUi?.enabled ?? true;
   if (!isLoopbackHost(bindHost) && !getGatewayToken()) {
@@ -988,13 +1023,20 @@ export async function startGatewayServer(
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
 
-    if (controlUiEnabled) {
-      if (handleControlUiHttpRequest(req, res)) return;
-    }
+    void (async () => {
+      if (await handleA2uiHttpRequest(req, res)) return;
+      if (controlUiEnabled) {
+        if (handleControlUiHttpRequest(req, res)) return;
+      }
 
-    res.statusCode = 404;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Not Found");
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+    })().catch((err) => {
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end(String(err));
+    });
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: Awaited<ReturnType<typeof startNodeBridgeServer>> | null = null;
@@ -1057,6 +1099,7 @@ export async function startGatewayServer(
   const canvasHostEnabled =
     process.env.CLAWDIS_SKIP_CANVAS_HOST !== "1" &&
     cfgAtStart.canvasHost?.enabled !== false;
+  const preferGatewayA2uiHost = hasTailnet && !isLoopbackHost(bindHost);
 
   if (canvasHostEnabled) {
     try {
@@ -2029,7 +2072,7 @@ export async function startGatewayServer(
         host: bridgeHost,
         port: bridgePort,
         serverName: machineDisplayName,
-        canvasHostPort: canvasHost?.port,
+        canvasHostPort: preferGatewayA2uiHost ? port : canvasHost?.port,
         onRequest: (nodeId, req) => handleBridgeRequest(nodeId, req),
         onAuthenticated: async (node) => {
           const host = node.displayName?.trim() || node.nodeId;
@@ -2148,6 +2191,7 @@ export async function startGatewayServer(
       canvasPort: canvasHost?.port,
       sshPort,
       tailnetDns,
+      cliPath: resolveBonjourCliPath(),
     });
     bonjourStop = bonjour.stop;
   } catch (err) {
@@ -2318,7 +2362,10 @@ export async function startGatewayServer(
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
-    const canvasHostUrl = deriveCanvasHostUrl(req, canvasHost?.port);
+    const canvasHostUrl = deriveCanvasHostUrl(
+      req,
+      preferGatewayA2uiHost ? port : canvasHost?.port,
+    );
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
       params?.client?.mode === "webchat" ||

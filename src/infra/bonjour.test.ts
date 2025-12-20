@@ -97,6 +97,7 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
       bridgePort: 18790,
       tailnetDns: "host.tailnet.ts.net",
+      cliPath: "/opt/homebrew/bin/clawdis",
     });
 
     expect(createService).toHaveBeenCalledTimes(1);
@@ -115,6 +116,9 @@ describe("gateway bonjour advertiser", () => {
     );
     expect((bridgeCall?.[0]?.txt as Record<string, string>)?.sshPort).toBe(
       "2222",
+    );
+    expect((bridgeCall?.[0]?.txt as Record<string, string>)?.cliPath).toBe(
+      "/opt/homebrew/bin/clawdis",
     );
     expect((bridgeCall?.[0]?.txt as Record<string, string>)?.transport).toBe(
       "bridge",

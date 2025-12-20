@@ -94,6 +94,7 @@ The Gateway advertises small non-secret hints to make UI flows convenient:
 - `gatewayPort=<port>` (informational; the Gateway WS is typically loopback-only)
 - `bridgePort=<port>` (only when bridge is enabled)
 - `canvasPort=<port>` (only when the canvas host is running; enabled by default; default `18793`)
+- `cliPath=<path>` (optional; absolute path to a runnable `clawdis` entrypoint or binary)
 - `tailnetDns=<magicdns>` (optional hint; auto-detected from Tailscale when available; may be absent)
 
 ## Debugging on macOS

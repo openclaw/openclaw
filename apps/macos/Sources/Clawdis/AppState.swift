@@ -179,6 +179,10 @@ final class AppState {
         didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteProjectRoot, forKey: remoteProjectRootKey) } }
     }
 
+    var remoteCliPath: String {
+        didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteCliPath, forKey: remoteCliPathKey) } }
+    }
+
     private var earBoostTask: Task<Void, Never>?
 
     init(preview: Bool = false) {
@@ -235,6 +239,7 @@ final class AppState {
         self.remoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
+        self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
@@ -368,6 +373,7 @@ extension AppState {
         state.remoteTarget = "[redacted-email]"
         state.remoteIdentity = "~/.ssh/id_ed25519"
         state.remoteProjectRoot = "~/Projects/clawdis"
+        state.remoteCliPath = ""
         state.attachExistingGatewayOnly = false
         return state
     }

@@ -396,6 +396,14 @@ struct OnboardingView: View {
                                         .textFieldStyle(.roundedBorder)
                                         .frame(width: fieldWidth)
                                 }
+                                GridRow {
+                                    Text("CLI path")
+                                        .font(.callout.weight(.semibold))
+                                        .frame(width: labelWidth, alignment: .leading)
+                                    TextField("/Applications/Clawdis.app/.../clawdis", text: self.$state.remoteCliPath)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: fieldWidth)
+                                }
                             }
 
                             Text("Tip: keep Tailscale enabled so your gateway stays reachable.")
@@ -436,6 +444,7 @@ struct OnboardingView: View {
             }
             self.state.remoteTarget = target
         }
+        self.state.remoteCliPath = gateway.cliPath ?? ""
 
         self.state.connectionMode = .remote
         MacNodeModeCoordinator.shared.setPreferredBridgeStableID(gateway.stableID)
