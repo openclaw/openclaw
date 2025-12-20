@@ -70,7 +70,7 @@ public struct ClawdisChatView: View {
             ScrollView {
                 LazyVStack(spacing: Layout.messageSpacing) {
                     ForEach(self.visibleMessages) { msg in
-                        ChatMessageBubble(message: msg)
+                        ChatMessageBubble(message: msg, style: self.style)
                             .frame(
                                 maxWidth: .infinity,
                                 alignment: msg.role.lowercased() == "user" ? .trailing : .leading)

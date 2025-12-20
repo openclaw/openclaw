@@ -9,9 +9,10 @@ private enum ChatUIConstants {
 @MainActor
 struct ChatMessageBubble: View {
     let message: ClawdisChatMessage
+    let style: ClawdisChatView.Style
 
     var body: some View {
-        ChatMessageBody(message: self.message, isUser: self.isUser)
+        ChatMessageBody(message: self.message, isUser: self.isUser, style: self.style)
             .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: self.isUser ? .trailing : .leading)
             .frame(maxWidth: .infinity, alignment: self.isUser ? .trailing : .leading)
             .padding(.horizontal, 2)
@@ -24,6 +25,7 @@ struct ChatMessageBubble: View {
 private struct ChatMessageBody: View {
     let message: ClawdisChatMessage
     let isUser: Bool
+    let style: ClawdisChatView.Style
 
     var body: some View {
         let text = self.primaryText
@@ -87,7 +89,14 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBackground: AnyShapeStyle {
-        let fill = self.isUser ? ClawdisChatTheme.userBubble : ClawdisChatTheme.assistantBubble
+        let fill: Color
+        if self.isUser {
+            fill = ClawdisChatTheme.userBubble
+        } else if self.style == .onboarding {
+            fill = ClawdisChatTheme.card
+        } else {
+            fill = ClawdisChatTheme.assistantBubble
+        }
         return AnyShapeStyle(fill)
     }
 
