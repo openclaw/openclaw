@@ -9,8 +9,6 @@ export const browserCoreExamples = [
   "clawdis browser screenshot",
   "clawdis browser screenshot --full-page",
   "clawdis browser screenshot --ref 12",
-  'clawdis browser query "a" --limit 5',
-  "clawdis browser dom --format text --max-chars 5000",
   "clawdis browser snapshot --format aria --limit 200",
   "clawdis browser snapshot --format ai",
 ];
@@ -31,8 +29,4 @@ export const browserActionExamples = [
   "clawdis browser evaluate --fn '(el) => el.textContent' --ref 7",
   "clawdis browser console --level error",
   "clawdis browser pdf",
-  'clawdis browser verify-element --role button --name "Submit"',
-  'clawdis browser verify-text "Welcome"',
-  "clawdis browser verify-list 3 ItemA ItemB",
-  "clawdis browser verify-value --ref 4 --type textbox --value hello",
 ];

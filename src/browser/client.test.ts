@@ -1,15 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  browserClickRef,
-  browserDom,
   browserOpenTab,
-  browserQuery,
-  browserScreenshot,
   browserSnapshot,
   browserStatus,
   browserTabs,
 } from "./client.js";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserConsoleMessages,
+  browserNavigate,
+  browserPdfSave,
+  browserScreenshotAction,
+} from "./client-actions.js";
 
 describe("browser client", () => {
   afterEach(() => {
@@ -49,7 +54,7 @@ describe("browser client", () => {
     );
 
     await expect(
-      browserDom("http://127.0.0.1:18791", { format: "text", maxChars: 1 }),
+      browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
     ).rejects.toThrow(/409: conflict/i);
   });
 
@@ -79,7 +84,61 @@ describe("browser client", () => {
             }),
           } as unknown as Response;
         }
-        if (url.includes("/screenshot")) {
+        if (url.endsWith("/navigate")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              targetId: "t1",
+              url: "https://y",
+            }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/act")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              targetId: "t1",
+              url: "https://x",
+              result: 1,
+            }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/hooks/file-chooser")) {
+          return {
+            ok: true,
+            json: async () => ({ ok: true }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/hooks/dialog")) {
+          return {
+            ok: true,
+            json: async () => ({ ok: true }),
+          } as unknown as Response;
+        }
+        if (url.includes("/console?")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              targetId: "t1",
+              messages: [],
+            }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/pdf")) {
+          return {
+            ok: true,
+            json: async () => ({
+              ok: true,
+              path: "/tmp/a.pdf",
+              targetId: "t1",
+              url: "https://x",
+            }),
+          } as unknown as Response;
+        }
+        if (url.endsWith("/screenshot")) {
           return {
             ok: true,
             json: async () => ({
@@ -87,29 +146,6 @@ describe("browser client", () => {
               path: "/tmp/a.png",
               targetId: "t1",
               url: "https://x",
-            }),
-          } as unknown as Response;
-        }
-        if (url.includes("/query?")) {
-          return {
-            ok: true,
-            json: async () => ({
-              ok: true,
-              targetId: "t1",
-              url: "https://x",
-              matches: [{ index: 0, tag: "a" }],
-            }),
-          } as unknown as Response;
-        }
-        if (url.includes("/dom?")) {
-          return {
-            ok: true,
-            json: async () => ({
-              ok: true,
-              targetId: "t1",
-              url: "https://x",
-              format: "text",
-              text: "hi",
             }),
           } as unknown as Response;
         }
@@ -123,12 +159,6 @@ describe("browser client", () => {
               url: "https://x",
               nodes: [],
             }),
-          } as unknown as Response;
-        }
-        if (url.endsWith("/click")) {
-          return {
-            ok: true,
-            json: async () => ({ ok: true, targetId: "t1", url: "https://x" }),
           } as unknown as Response;
         }
         return {
@@ -164,23 +194,38 @@ describe("browser client", () => {
     ).resolves.toMatchObject({ targetId: "t2" });
 
     await expect(
-      browserScreenshot("http://127.0.0.1:18791", { fullPage: true }),
-    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
-    await expect(
-      browserQuery("http://127.0.0.1:18791", { selector: "a", limit: 1 }),
-    ).resolves.toMatchObject({ ok: true });
-    await expect(
-      browserDom("http://127.0.0.1:18791", { format: "text", maxChars: 10 }),
-    ).resolves.toMatchObject({ ok: true });
-    await expect(
       browserSnapshot("http://127.0.0.1:18791", { format: "aria", limit: 1 }),
     ).resolves.toMatchObject({ ok: true, format: "aria" });
+
     await expect(
-      browserClickRef("http://127.0.0.1:18791", { ref: "1" }),
+      browserNavigate("http://127.0.0.1:18791", { url: "https://example.com" }),
+    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
+    await expect(
+      browserAct("http://127.0.0.1:18791", { kind: "click", ref: "1" }),
+    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
+    await expect(
+      browserArmFileChooser("http://127.0.0.1:18791", {
+        paths: ["/tmp/a.txt"],
+      }),
     ).resolves.toMatchObject({ ok: true });
+    await expect(
+      browserArmDialog("http://127.0.0.1:18791", { accept: true }),
+    ).resolves.toMatchObject({ ok: true });
+    await expect(
+      browserConsoleMessages("http://127.0.0.1:18791", { level: "error" }),
+    ).resolves.toMatchObject({ ok: true, targetId: "t1" });
+    await expect(
+      browserPdfSave("http://127.0.0.1:18791"),
+    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.pdf" });
+    await expect(
+      browserScreenshotAction("http://127.0.0.1:18791", { fullPage: true }),
+    ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
 
     expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
     const open = calls.find((c) => c.url.endsWith("/tabs/open"));
     expect(open?.init?.method).toBe("POST");
+
+    const screenshot = calls.find((c) => c.url.endsWith("/screenshot"));
+    expect(screenshot?.init?.method).toBe("POST");
   });
 });

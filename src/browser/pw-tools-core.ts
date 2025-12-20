@@ -1,4 +1,5 @@
 import {
+  type BrowserConsoleMessage,
   ensurePageState,
   getPageForTargetId,
   refLocator,
@@ -34,15 +35,6 @@ export async function snapshotAiViaPlaywright(opts: {
     track: "response",
   });
   return { snapshot: String(result?.full ?? "") };
-}
-
-export async function clickRefViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  ref: string;
-  timeoutMs?: number;
-}): Promise<void> {
-  await clickViaPlaywright(opts);
 }
 
 export async function clickViaPlaywright(opts: {
@@ -300,15 +292,15 @@ export async function navigateViaPlaywright(opts: {
 export async function waitForViaPlaywright(opts: {
   cdpPort: number;
   targetId?: string;
-  time?: number;
+  timeMs?: number;
   text?: string;
   textGone?: string;
   timeoutMs?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  if (typeof opts.time === "number" && Number.isFinite(opts.time)) {
-    await page.waitForTimeout(Math.max(0, opts.time) * 1000);
+  if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
+    await page.waitForTimeout(Math.max(0, opts.timeMs));
   }
   if (opts.text) {
     await page
@@ -345,6 +337,13 @@ export async function takeScreenshotViaPlaywright(opts: {
     if (opts.fullPage)
       throw new Error("fullPage is not supported for element screenshots");
     const locator = refLocator(page, opts.ref);
+    const buffer = await locator.screenshot({ type });
+    return { buffer };
+  }
+  if (opts.element) {
+    if (opts.fullPage)
+      throw new Error("fullPage is not supported for element screenshots");
+    const locator = page.locator(opts.element).first();
     const buffer = await locator.screenshot({ type });
     return { buffer };
   }
@@ -386,4 +385,32 @@ export async function pdfViaPlaywright(opts: {
   ensurePageState(page);
   const buffer = await page.pdf({ printBackground: true });
   return { buffer };
+}
+
+function consolePriority(level: string) {
+  switch (level) {
+    case "error":
+      return 3;
+    case "warning":
+      return 2;
+    case "info":
+    case "log":
+      return 1;
+    case "debug":
+      return 0;
+    default:
+      return 1;
+  }
+}
+
+export async function getConsoleMessagesViaPlaywright(opts: {
+  cdpPort: number;
+  targetId?: string;
+  level?: string;
+}): Promise<BrowserConsoleMessage[]> {
+  const page = await getPageForTargetId(opts);
+  const state = ensurePageState(page);
+  if (!opts.level) return [...state.console];
+  const min = consolePriority(opts.level);
+  return state.console.filter((msg) => consolePriority(msg.type) >= min);
 }

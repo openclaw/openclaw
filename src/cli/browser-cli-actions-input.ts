@@ -1,19 +1,10 @@
 import type { Command } from "commander";
 import { resolveBrowserControlUrl } from "../browser/client.js";
 import {
-  browserClick,
-  browserDrag,
-  browserEvaluate,
-  browserFillForm,
-  browserHandleDialog,
-  browserHover,
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
   browserNavigate,
-  browserPressKey,
-  browserResize,
-  browserSelectOption,
-  browserType,
-  browserUpload,
-  browserWaitFor,
 } from "../browser/client-actions.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
@@ -80,7 +71,8 @@ export function registerBrowserActionInputCommands(
         return;
       }
       try {
-        const result = await browserResize(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "resize",
           width,
           height,
           targetId: opts.targetId?.trim() || undefined,
@@ -114,7 +106,8 @@ export function registerBrowserActionInputCommands(
             .filter(Boolean)
         : undefined;
       try {
-        const result = await browserClick(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "click",
           ref,
           targetId: opts.targetId?.trim() || undefined,
           doubleClick: Boolean(opts.double),
@@ -145,7 +138,8 @@ export function registerBrowserActionInputCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserType(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "type",
           ref,
           text,
           submit: Boolean(opts.submit),
@@ -172,7 +166,8 @@ export function registerBrowserActionInputCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserPressKey(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "press",
           key,
           targetId: opts.targetId?.trim() || undefined,
         });
@@ -196,7 +191,8 @@ export function registerBrowserActionInputCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserHover(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "hover",
           ref,
           targetId: opts.targetId?.trim() || undefined,
         });
@@ -221,7 +217,8 @@ export function registerBrowserActionInputCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserDrag(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "drag",
           startRef,
           endRef,
           targetId: opts.targetId?.trim() || undefined,
@@ -247,7 +244,8 @@ export function registerBrowserActionInputCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserSelectOption(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "select",
           ref,
           values,
           targetId: opts.targetId?.trim() || undefined,
@@ -268,13 +266,21 @@ export function registerBrowserActionInputCommands(
     .description("Arm file upload for the next file chooser")
     .argument("<paths...>", "File paths to upload")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the next file chooser (default: 10000)",
+      (v: string) => Number(v),
+    )
     .action(async (paths: string[], opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserUpload(baseUrl, {
+        const result = await browserArmFileChooser(baseUrl, {
           paths,
           targetId: opts.targetId?.trim() || undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs)
+            ? opts.timeoutMs
+            : undefined,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -301,7 +307,8 @@ export function registerBrowserActionInputCommands(
           fields: opts.fields,
           fieldsFile: opts.fieldsFile,
         });
-        const result = await browserFillForm(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "fill",
           fields,
           targetId: opts.targetId?.trim() || undefined,
         });
@@ -323,6 +330,11 @@ export function registerBrowserActionInputCommands(
     .option("--dismiss", "Dismiss the dialog", false)
     .option("--prompt <text>", "Prompt response text")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the next dialog (default: 10000)",
+      (v: string) => Number(v),
+    )
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
@@ -333,10 +345,13 @@ export function registerBrowserActionInputCommands(
         return;
       }
       try {
-        const result = await browserHandleDialog(baseUrl, {
+        const result = await browserArmDialog(baseUrl, {
           accept,
           promptText: opts.prompt?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs)
+            ? opts.timeoutMs
+            : undefined,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -360,8 +375,9 @@ export function registerBrowserActionInputCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const result = await browserWaitFor(baseUrl, {
-          time: Number.isFinite(opts.time) ? opts.time : undefined,
+        const result = await browserAct(baseUrl, {
+          kind: "wait",
+          timeMs: Number.isFinite(opts.time) ? opts.time : undefined,
           text: opts.text?.trim() || undefined,
           textGone: opts.textGone?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
@@ -392,7 +408,8 @@ export function registerBrowserActionInputCommands(
         return;
       }
       try {
-        const result = await browserEvaluate(baseUrl, {
+        const result = await browserAct(baseUrl, {
+          kind: "evaluate",
           fn: opts.fn,
           ref: opts.ref?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
@@ -401,7 +418,7 @@ export function registerBrowserActionInputCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(JSON.stringify(result.result, null, 2));
+        defaultRuntime.log(JSON.stringify(result.result ?? null, null, 2));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

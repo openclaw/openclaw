@@ -10,12 +10,12 @@ export {
 export {
   armDialogViaPlaywright,
   armFileUploadViaPlaywright,
-  clickRefViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   dragViaPlaywright,
   evaluateViaPlaywright,
   fillFormViaPlaywright,
+  getConsoleMessagesViaPlaywright,
   hoverViaPlaywright,
   navigateViaPlaywright,
   pdfViaPlaywright,
@@ -27,11 +27,3 @@ export {
   typeViaPlaywright,
   waitForViaPlaywright,
 } from "./pw-tools-core.js";
-
-export {
-  getConsoleMessagesViaPlaywright,
-  verifyElementVisibleViaPlaywright,
-  verifyListVisibleViaPlaywright,
-  verifyTextVisibleViaPlaywright,
-  verifyValueViaPlaywright,
-} from "./pw-tools-observe.js";

@@ -100,7 +100,7 @@ describe("pw-ai", () => {
     ).mockResolvedValue(browser);
 
     const mod = await importModule();
-    await mod.clickRefViaPlaywright({
+    await mod.clickViaPlaywright({
       cdpPort: 18792,
       targetId: "T1",
       ref: "76",
@@ -135,7 +135,7 @@ describe("pw-ai", () => {
 
     const mod = await importModule();
     await mod.snapshotAiViaPlaywright({ cdpPort: 18792, targetId: "T1" });
-    await mod.clickRefViaPlaywright({
+    await mod.clickViaPlaywright({
       cdpPort: 18792,
       targetId: "T1",
       ref: "1",

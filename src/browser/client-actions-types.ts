@@ -11,5 +11,4 @@ export type BrowserActionPathResult = {
   path: string;
   targetId: string;
   url?: string;
-  filename?: string;
 };

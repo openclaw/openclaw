@@ -7,7 +7,6 @@ let testPort = 0;
 let reachable = false;
 let cfgAttachOnly = false;
 let createTargetId: string | null = null;
-let screenshotThrowsOnce = false;
 
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
@@ -67,28 +66,14 @@ vi.mock("./cdp.js", () => ({
     if (createTargetId) return { targetId: createTargetId };
     throw new Error("cdp disabled");
   }),
-  getDomText: vi.fn(async () => ({ text: "<html/>" })),
-  querySelector: vi.fn(async () => ({ matches: [{ index: 0, tag: "a" }] })),
   snapshotAria: vi.fn(async () => ({
     nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
   })),
-  snapshotDom: vi.fn(async () => ({
-    nodes: [{ ref: "1", parentRef: null, depth: 0, tag: "html" }],
-  })),
-  captureScreenshot: vi.fn(async () => {
-    if (screenshotThrowsOnce) {
-      screenshotThrowsOnce = false;
-      throw new Error("jpeg failed");
-    }
-    return Buffer.from("jpg");
-  }),
-  captureScreenshotPng: vi.fn(async () => Buffer.from("png")),
 }));
 
 vi.mock("./pw-ai.js", () => ({
   armDialogViaPlaywright: vi.fn(async () => {}),
   armFileUploadViaPlaywright: vi.fn(async () => {}),
-  clickRefViaPlaywright: vi.fn(async () => {}),
   clickViaPlaywright: vi.fn(async () => {}),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
@@ -106,10 +91,6 @@ vi.mock("./pw-ai.js", () => ({
     buffer: Buffer.from("png"),
   })),
   typeViaPlaywright: vi.fn(async () => {}),
-  verifyElementVisibleViaPlaywright: vi.fn(async () => {}),
-  verifyListVisibleViaPlaywright: vi.fn(async () => {}),
-  verifyTextVisibleViaPlaywright: vi.fn(async () => {}),
-  verifyValueViaPlaywright: vi.fn(async () => {}),
   waitForViaPlaywright: vi.fn(async () => {}),
   dragViaPlaywright: vi.fn(async () => {}),
 }));
@@ -159,7 +140,6 @@ describe("browser control server", () => {
     reachable = false;
     cfgAttachOnly = false;
     createTargetId = null;
-    screenshotThrowsOnce = false;
 
     testPort = await getFreePort();
 
@@ -270,23 +250,11 @@ describe("browser control server", () => {
     expect(focus.status).toBe(409);
   });
 
-  it("supports query/dom/snapshot/click/screenshot and stop", async () => {
+  it("supports the agent contract and stop", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
     await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-
-    const query = (await realFetch(`${base}/query?selector=a&limit=1`).then(
-      (r) => r.json(),
-    )) as { ok: boolean; matches?: unknown[] };
-    expect(query.ok).toBe(true);
-    expect(Array.isArray(query.matches)).toBe(true);
-
-    const dom = (await realFetch(`${base}/dom?format=text&maxChars=10`).then(
-      (r) => r.json(),
-    )) as { ok: boolean; text?: string };
-    expect(dom.ok).toBe(true);
-    expect(typeof dom.text).toBe("string");
 
     const snapAria = (await realFetch(
       `${base}/snapshot?format=aria&limit=1`,
@@ -304,16 +272,61 @@ describe("browser control server", () => {
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
 
-    const click = (await realFetch(`${base}/click`, {
+    const nav = (await realFetch(`${base}/navigate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: "1" }),
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { ok: boolean; targetId?: string };
+    expect(nav.ok).toBe(true);
+    expect(typeof nav.targetId).toBe("string");
+
+    const click = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "click", ref: "1" }),
     }).then((r) => r.json())) as { ok: boolean };
     expect(click.ok).toBe(true);
 
-    const shot = (await realFetch(`${base}/screenshot?fullPage=true`).then(
-      (r) => r.json(),
-    )) as { ok: boolean; path?: string };
+    const evalRes = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "evaluate", fn: "() => 1" }),
+    }).then((r) => r.json())) as { ok: boolean; result?: unknown };
+    expect(evalRes.ok).toBe(true);
+
+    const upload = await realFetch(`${base}/hooks/file-chooser`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: ["/tmp/a.txt"] }),
+    }).then((r) => r.json());
+    expect(upload).toMatchObject({ ok: true });
+
+    const dialog = await realFetch(`${base}/hooks/dialog`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accept: true }),
+    }).then((r) => r.json());
+    expect(dialog).toMatchObject({ ok: true });
+
+    const consoleRes = (await realFetch(`${base}/console`).then((r) =>
+      r.json(),
+    )) as { ok: boolean; messages?: unknown[] };
+    expect(consoleRes.ok).toBe(true);
+    expect(Array.isArray(consoleRes.messages)).toBe(true);
+
+    const pdf = (await realFetch(`${base}/pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).then((r) => r.json())) as { ok: boolean; path?: string };
+    expect(pdf.ok).toBe(true);
+    expect(typeof pdf.path).toBe("string");
+
+    const shot = (await realFetch(`${base}/screenshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fullPage: true }),
+    }).then((r) => r.json())) as { ok: boolean; path?: string };
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
 
@@ -344,7 +357,7 @@ describe("browser control server", () => {
     expect(started.error ?? "").toMatch(/attachOnly/i);
   });
 
-  it("opens tabs via CDP createTarget path and falls back to PNG screenshots", async () => {
+  it("opens tabs via CDP createTarget path", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
     const base = `http://127.0.0.1:${testPort}`;
@@ -357,13 +370,6 @@ describe("browser control server", () => {
       body: JSON.stringify({ url: "https://example.com" }),
     }).then((r) => r.json())) as { targetId?: string };
     expect(opened.targetId).toBe("abcd1234");
-
-    screenshotThrowsOnce = true;
-    const shot = (await realFetch(`${base}/screenshot`).then((r) =>
-      r.json(),
-    )) as { ok: boolean; path?: string };
-    expect(shot.ok).toBe(true);
-    expect(typeof shot.path).toBe("string");
   });
 
   it("covers additional endpoint branches", async () => {
@@ -398,16 +404,9 @@ describe("browser control server", () => {
     });
     expect(delAmbiguous.status).toBe(409);
 
-    const shotAmbiguous = await realFetch(`${base}/screenshot?targetId=abc`);
-    expect(shotAmbiguous.status).toBe(409);
-
-    const queryMissing = await realFetch(`${base}/query`);
-    expect(queryMissing.status).toBe(400);
-
-    const snapDom = (await realFetch(
-      `${base}/snapshot?format=domSnapshot&limit=1`,
-    ).then((r) => r.json())) as { ok: boolean; format?: string };
-    expect(snapDom.ok).toBe(true);
-    expect(snapDom.format).toBe("domSnapshot");
+    const snapAmbiguous = await realFetch(
+      `${base}/snapshot?format=aria&targetId=abc`,
+    );
+    expect(snapAmbiguous.status).toBe(409);
   });
 });

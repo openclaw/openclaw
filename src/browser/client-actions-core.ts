@@ -1,9 +1,53 @@
-import type { ScreenshotResult } from "./client.js";
 import type {
   BrowserActionOk,
+  BrowserActionPathResult,
   BrowserActionTabResult,
 } from "./client-actions-types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
+
+export type BrowserActRequest =
+  | {
+      kind: "click";
+      ref: string;
+      targetId?: string;
+      doubleClick?: boolean;
+      button?: string;
+      modifiers?: string[];
+    }
+  | {
+      kind: "type";
+      ref: string;
+      text: string;
+      targetId?: string;
+      submit?: boolean;
+      slowly?: boolean;
+    }
+  | { kind: "press"; key: string; targetId?: string }
+  | { kind: "hover"; ref: string; targetId?: string }
+  | { kind: "drag"; startRef: string; endRef: string; targetId?: string }
+  | { kind: "select"; ref: string; values: string[]; targetId?: string }
+  | {
+      kind: "fill";
+      fields: Array<Record<string, unknown>>;
+      targetId?: string;
+    }
+  | { kind: "resize"; width: number; height: number; targetId?: string }
+  | {
+      kind: "wait";
+      timeMs?: number;
+      text?: string;
+      textGone?: string;
+      targetId?: string;
+    }
+  | { kind: "evaluate"; fn: string; ref?: string; targetId?: string }
+  | { kind: "close"; targetId?: string };
+
+export type BrowserActResponse = {
+  ok: true;
+  targetId: string;
+  url?: string;
+  result?: unknown;
+};
 
 export async function browserNavigate(
   baseUrl: string,
@@ -17,217 +61,61 @@ export async function browserNavigate(
   });
 }
 
-export async function browserResize(
-  baseUrl: string,
-  opts: { width: number; height: number; targetId?: string },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/resize`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      width: opts.width,
-      height: opts.height,
-      targetId: opts.targetId,
-    }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserClosePage(
-  baseUrl: string,
-  opts: { targetId?: string } = {},
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/close`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserClick(
+export async function browserArmDialog(
   baseUrl: string,
   opts: {
-    ref: string;
+    accept: boolean;
+    promptText?: string;
     targetId?: string;
-    doubleClick?: boolean;
-    button?: string;
-    modifiers?: string[];
+    timeoutMs?: number;
   },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/click`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ref: opts.ref,
-      targetId: opts.targetId,
-      doubleClick: opts.doubleClick,
-      button: opts.button,
-      modifiers: opts.modifiers,
-    }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserType(
-  baseUrl: string,
-  opts: {
-    ref: string;
-    text: string;
-    targetId?: string;
-    submit?: boolean;
-    slowly?: boolean;
-  },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/type`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ref: opts.ref,
-      text: opts.text,
-      targetId: opts.targetId,
-      submit: opts.submit,
-      slowly: opts.slowly,
-    }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserPressKey(
-  baseUrl: string,
-  opts: { key: string; targetId?: string },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/press`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ key: opts.key, targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserHover(
-  baseUrl: string,
-  opts: { ref: string; targetId?: string },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/hover`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ref: opts.ref, targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserDrag(
-  baseUrl: string,
-  opts: { startRef: string; endRef: string; targetId?: string },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/drag`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      startRef: opts.startRef,
-      endRef: opts.endRef,
-      targetId: opts.targetId,
-    }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserSelectOption(
-  baseUrl: string,
-  opts: { ref: string; values: string[]; targetId?: string },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/select`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ref: opts.ref,
-      values: opts.values,
-      targetId: opts.targetId,
-    }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserUpload(
-  baseUrl: string,
-  opts: { paths?: string[]; targetId?: string } = {},
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/upload`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ paths: opts.paths, targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserFillForm(
-  baseUrl: string,
-  opts: { fields: Array<Record<string, unknown>>; targetId?: string },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/fill`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ fields: opts.fields, targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserHandleDialog(
-  baseUrl: string,
-  opts: { accept: boolean; promptText?: string; targetId?: string },
 ): Promise<BrowserActionOk> {
-  return await fetchBrowserJson<BrowserActionOk>(`${baseUrl}/dialog`, {
+  return await fetchBrowserJson<BrowserActionOk>(`${baseUrl}/hooks/dialog`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       accept: opts.accept,
       promptText: opts.promptText,
       targetId: opts.targetId,
+      timeoutMs: opts.timeoutMs,
     }),
     timeoutMs: 20000,
   });
 }
 
-export async function browserWaitFor(
+export async function browserArmFileChooser(
   baseUrl: string,
   opts: {
-    time?: number;
-    text?: string;
-    textGone?: string;
+    paths: string[];
     targetId?: string;
+    timeoutMs?: number;
   },
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/wait`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      time: opts.time,
-      text: opts.text,
-      textGone: opts.textGone,
-      targetId: opts.targetId,
-    }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserEvaluate(
-  baseUrl: string,
-  opts: { fn: string; ref?: string; targetId?: string },
-): Promise<{ ok: true; result: unknown }> {
-  return await fetchBrowserJson<{ ok: true; result: unknown }>(
-    `${baseUrl}/evaluate`,
+): Promise<BrowserActionOk> {
+  return await fetchBrowserJson<BrowserActionOk>(
+    `${baseUrl}/hooks/file-chooser`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        function: opts.fn,
-        ref: opts.ref,
+        paths: opts.paths,
         targetId: opts.targetId,
+        timeoutMs: opts.timeoutMs,
       }),
       timeoutMs: 20000,
     },
   );
+}
+
+export async function browserAct(
+  baseUrl: string,
+  req: BrowserActRequest,
+): Promise<BrowserActResponse> {
+  return await fetchBrowserJson<BrowserActResponse>(`${baseUrl}/act`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserScreenshotAction(
@@ -238,10 +126,9 @@ export async function browserScreenshotAction(
     ref?: string;
     element?: string;
     type?: "png" | "jpeg";
-    filename?: string;
   },
-): Promise<ScreenshotResult & { filename?: string }> {
-  return await fetchBrowserJson<ScreenshotResult & { filename?: string }>(
+): Promise<BrowserActionPathResult> {
+  return await fetchBrowserJson<BrowserActionPathResult>(
     `${baseUrl}/screenshot`,
     {
       method: "POST",
@@ -252,7 +139,6 @@ export async function browserScreenshotAction(
         ref: opts.ref,
         element: opts.element,
         type: opts.type,
-        filename: opts.filename,
       }),
       timeoutMs: 20000,
     },

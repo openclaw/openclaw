@@ -10,7 +10,7 @@ import {
   browserTabs,
   resolveBrowserControlUrl,
 } from "../browser/client.js";
-import { browserClosePage } from "../browser/client-actions.js";
+import { browserAct } from "../browser/client-actions.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
@@ -168,7 +168,7 @@ export function registerBrowserManageCommands(
         if (targetId?.trim()) {
           await browserCloseTab(baseUrl, targetId.trim());
         } else {
-          await browserClosePage(baseUrl);
+          await browserAct(baseUrl, { kind: "close" });
         }
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify({ ok: true }, null, 2));

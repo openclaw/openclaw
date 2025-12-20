@@ -22,37 +22,6 @@ export type BrowserTab = {
   type?: string;
 };
 
-export type ScreenshotResult = {
-  ok: true;
-  path: string;
-  targetId: string;
-  url: string;
-};
-
-export type QueryResult = {
-  ok: true;
-  targetId: string;
-  url: string;
-  matches: Array<{
-    index: number;
-    tag: string;
-    id?: string;
-    className?: string;
-    text?: string;
-    value?: string;
-    href?: string;
-    outerHTML?: string;
-  }>;
-};
-
-export type DomResult = {
-  ok: true;
-  targetId: string;
-  url: string;
-  format: "html" | "text";
-  text: string;
-};
-
 export type SnapshotAriaNode = {
   ref: string;
   role: string;
@@ -70,26 +39,6 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       nodes: SnapshotAriaNode[];
-    }
-  | {
-      ok: true;
-      format: "domSnapshot";
-      targetId: string;
-      url: string;
-      nodes: Array<{
-        ref: string;
-        parentRef: string | null;
-        depth: number;
-        tag: string;
-        id?: string;
-        className?: string;
-        role?: string;
-        name?: string;
-        text?: string;
-        href?: string;
-        type?: string;
-        value?: string;
-      }>;
     }
   | {
       ok: true;
@@ -168,69 +117,10 @@ export async function browserCloseTab(
   });
 }
 
-export async function browserScreenshot(
-  baseUrl: string,
-  opts: {
-    targetId?: string;
-    fullPage?: boolean;
-  },
-): Promise<ScreenshotResult> {
-  const q = new URLSearchParams();
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (opts.fullPage) q.set("fullPage", "true");
-  const suffix = q.toString() ? `?${q.toString()}` : "";
-  return await fetchBrowserJson<ScreenshotResult>(
-    `${baseUrl}/screenshot${suffix}`,
-    {
-      timeoutMs: 20000,
-    },
-  );
-}
-
-export async function browserQuery(
-  baseUrl: string,
-  opts: {
-    selector: string;
-    targetId?: string;
-    limit?: number;
-  },
-): Promise<QueryResult> {
-  const q = new URLSearchParams();
-  q.set("selector", opts.selector);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.limit === "number") q.set("limit", String(opts.limit));
-  return await fetchBrowserJson<QueryResult>(
-    `${baseUrl}/query?${q.toString()}`,
-    {
-      timeoutMs: 15000,
-    },
-  );
-}
-
-export async function browserDom(
-  baseUrl: string,
-  opts: {
-    format: "html" | "text";
-    targetId?: string;
-    maxChars?: number;
-    selector?: string;
-  },
-): Promise<DomResult> {
-  const q = new URLSearchParams();
-  q.set("format", opts.format);
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  if (typeof opts.maxChars === "number")
-    q.set("maxChars", String(opts.maxChars));
-  if (opts.selector) q.set("selector", opts.selector);
-  return await fetchBrowserJson<DomResult>(`${baseUrl}/dom?${q.toString()}`, {
-    timeoutMs: 20000,
-  });
-}
-
 export async function browserSnapshot(
   baseUrl: string,
   opts: {
-    format: "aria" | "domSnapshot" | "ai";
+    format: "aria" | "ai";
     targetId?: string;
     limit?: number;
   },
@@ -242,27 +132,6 @@ export async function browserSnapshot(
   return await fetchBrowserJson<SnapshotResult>(
     `${baseUrl}/snapshot?${q.toString()}`,
     {
-      timeoutMs: 20000,
-    },
-  );
-}
-
-export async function browserClickRef(
-  baseUrl: string,
-  opts: {
-    ref: string;
-    targetId?: string;
-  },
-): Promise<{ ok: true; targetId: string; url: string }> {
-  return await fetchBrowserJson<{ ok: true; targetId: string; url: string }>(
-    `${baseUrl}/click`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ref: opts.ref,
-        targetId: opts.targetId,
-      }),
       timeoutMs: 20000,
     },
   );
