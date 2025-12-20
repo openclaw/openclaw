@@ -9,17 +9,12 @@ struct SkillsSettings: View {
     @State private var filter: SkillsFilter = .all
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                self.header
-                self.filterBar
-                self.statusBanner
-                self.skillsList
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+        VStack(alignment: .leading, spacing: 12) {
+            self.header
+            self.filterBar
+            self.statusBanner
+            self.skillsList
+            Spacer(minLength: 0)
         }
         .task { await self.model.refresh() }
         .sheet(item: self.$envEditor) { editor in
@@ -36,17 +31,26 @@ struct SkillsSettings: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
-            VStack(alignment: .leading, spacing: 6) {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
                 Text("Skills")
-                    .font(.title3.weight(.semibold))
+                    .font(.headline)
                 Text("Skills are enabled when requirements are met (binaries, env, config).")
-                    .font(.callout)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Button("Refresh") { Task { await self.model.refresh() } }
-                .disabled(self.model.isLoading)
+            if self.model.isLoading {
+                ProgressView()
+            } else {
+                Button {
+                    Task { await self.model.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .help("Refresh")
+            }
         }
     }
 
@@ -63,49 +67,59 @@ struct SkillsSettings: View {
         }
     }
 
+    @ViewBuilder
     private var skillsList: some View {
-        VStack(spacing: 10) {
-            ForEach(self.filteredSkills) { skill in
-                SkillRow(
-                    skill: skill,
-                    isBusy: self.model.isBusy(skill: skill),
-                    onToggleEnabled: { enabled in
-                        Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
-                    },
-                    onInstall: { option in
-                        Task { await self.model.install(skill: skill, option: option) }
-                    },
-                    onSetEnv: { envKey, isPrimary in
-                        self.envEditor = EnvEditorState(
-                            skillKey: skill.skillKey,
-                            skillName: skill.name,
-                            envKey: envKey,
-                            isPrimary: isPrimary)
-                    })
+        if self.model.skills.isEmpty {
+            Text("No skills reported yet.")
+                .foregroundStyle(.secondary)
+        } else {
+            List {
+                ForEach(self.filteredSkills) { skill in
+                    SkillRow(
+                        skill: skill,
+                        isBusy: self.model.isBusy(skill: skill),
+                        onToggleEnabled: { enabled in
+                            Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
+                        },
+                        onInstall: { option in
+                            Task { await self.model.install(skill: skill, option: option) }
+                        },
+                        onSetEnv: { envKey, isPrimary in
+                            self.envEditor = EnvEditorState(
+                                skillKey: skill.skillKey,
+                                skillName: skill.name,
+                                envKey: envKey,
+                                isPrimary: isPrimary)
+                        })
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                }
+                if !self.model.skills.isEmpty, self.filteredSkills.isEmpty {
+                    Text("No skills match this filter.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+                }
             }
-            if !self.model.skills.isEmpty, self.filteredSkills.isEmpty {
-                Text("No skills match this filter.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.top, 4)
-            }
+            .listStyle(.inset)
+            .searchable(text: self.$searchQuery, placement: .automatic, prompt: "Search skills")
         }
     }
 
     private var filterBar: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            TextField("Search skills", text: self.$searchQuery)
-                .textFieldStyle(.roundedBorder)
-                .frame(maxWidth: 320)
-            Picker("Filter", selection: self.$filter) {
+        HStack(spacing: 10) {
+            Text("Filter")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Picker("", selection: self.$filter) {
                 ForEach(SkillsFilter.allCases) { filter in
                     Text(filter.title)
                         .tag(filter)
                 }
             }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 420)
+            .labelsHidden()
+            .pickerStyle(.menu)
+            .frame(width: 160, alignment: .leading)
+            Spacer(minLength: 0)
         }
     }
 
@@ -166,45 +180,44 @@ private struct SkillRow: View {
     private var missingConfig: [String] { self.skill.missing.config }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                Text(self.skill.emoji ?? "✨")
-                    .font(.title2)
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Text(self.skill.name)
-                            .font(.headline)
-                        self.statusBadge
-                    }
-                    Text(self.skill.description)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    self.metaRow
+        HStack(alignment: .top, spacing: 12) {
+            Text(self.skill.emoji ?? "✨")
+                .font(.title2)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(self.skill.name)
+                        .font(.headline)
+                    self.statusBadge
                 }
-                Spacer()
-            }
-
-            if self.skill.disabled {
-                Text("Disabled in config")
-                    .font(.caption)
+                Text(self.skill.description)
+                    .font(.subheadline)
                     .foregroundStyle(.secondary)
-            } else if !self.skill.eligible {
-                self.missingSummary
+                    .fixedSize(horizontal: false, vertical: true)
+                self.metaRow
+
+                if self.skill.disabled {
+                    Text("Disabled in config")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else if !self.skill.eligible {
+                    self.missingSummary
+                }
+
+                if !self.skill.configChecks.isEmpty {
+                    self.configChecksView
+                }
+
+                if !self.missingEnv.isEmpty {
+                    self.envActionRow
+                }
             }
 
-            if !self.skill.configChecks.isEmpty {
-                self.configChecksView
-            }
+            Spacer(minLength: 0)
 
-            self.actionRow
+            self.trailingActions
         }
-        .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1))
+        .padding(.vertical, 6)
     }
 
     private var sourceLabel: String {
@@ -248,21 +261,8 @@ private struct SkillRow: View {
                 }
                 .buttonStyle(.link)
             }
-            HStack(spacing: 6) {
-                Text(self.enabledLabel)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Toggle("", isOn: self.enabledBinding)
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .disabled(self.isBusy)
-            }
             Spacer(minLength: 0)
         }
-    }
-
-    private var enabledLabel: String {
-        self.skill.disabled ? "Disabled" : "Enabled"
     }
 
     private var homepageUrl: URL? {
@@ -317,14 +317,8 @@ private struct SkillRow: View {
         }
     }
 
-    private var actionRow: some View {
+    private var envActionRow: some View {
         HStack(spacing: 8) {
-            ForEach(self.installOptions) { option in
-                Button(option.label) { self.onInstall(option) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.isBusy)
-            }
-
             ForEach(self.missingEnv, id: \.self) { envKey in
                 let isPrimary = envKey == self.skill.primaryEnv
                 Button(isPrimary ? "Set API Key" : "Set \(envKey)") {
@@ -333,8 +327,30 @@ private struct SkillRow: View {
                 .buttonStyle(.bordered)
                 .disabled(self.isBusy)
             }
-
             Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var trailingActions: some View {
+        VStack(alignment: .trailing, spacing: 8) {
+            if !self.installOptions.isEmpty {
+                ForEach(self.installOptions) { option in
+                    Button(option.label) { self.onInstall(option) }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(self.isBusy)
+                }
+            } else {
+                Toggle("", isOn: self.enabledBinding)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
+                    .disabled(self.isBusy)
+            }
+
+            if self.isBusy {
+                ProgressView()
+                    .controlSize(.small)
+            }
         }
     }
 
