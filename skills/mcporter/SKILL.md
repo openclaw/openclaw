@@ -1,7 +1,7 @@
 ---
 name: mcporter
 description: Manage and call MCP servers (list, call, auth, daemon).
-metadata: {"clawdis":{"requires":{"bins":["mcporter"]}}}
+metadata: {"clawdis":{"requires":{"bins":["mcporter"]},"install":[{"id":"node","kind":"node","package":"mcporter","bins":["mcporter"],"label":"Install mcporter (node)"}]}}
 ---
 
 # mcporter

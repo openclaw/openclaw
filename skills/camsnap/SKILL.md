@@ -1,7 +1,7 @@
 ---
 name: camsnap
 description: Capture frames or clips from RTSP/ONVIF cameras.
-metadata: {"clawdis":{"requires":{"bins":["camsnap"]}}}
+metadata: {"clawdis":{"requires":{"bins":["camsnap"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/camsnap","bins":["camsnap"],"label":"Install camsnap (brew)"}]}}
 ---
 
 # camsnap

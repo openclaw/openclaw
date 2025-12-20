@@ -1,7 +1,7 @@
 ---
 name: sonoscli
 description: Control Sonos speakers (discover/status/play/volume/group).
-metadata: {"clawdis":{"requires":{"bins":["sonos"]}}}
+metadata: {"clawdis":{"requires":{"bins":["sonos"]},"install":[{"id":"go","kind":"go","module":"github.com/steipete/sonoscli/cmd/sonos@latest","bins":["sonos"],"label":"Install sonoscli (go)"}]}}
 ---
 
 # Sonos CLI

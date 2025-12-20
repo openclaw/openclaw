@@ -1,7 +1,7 @@
 ---
 name: gemini
 description: Gemini CLI for one-shot Q&A, summaries, and generation.
-metadata: {"clawdis":{"requires":{"bins":["gemini"]}}}
+metadata: {"clawdis":{"requires":{"bins":["gemini"]},"install":[{"id":"brew","kind":"brew","formula":"gemini-cli","bins":["gemini"],"label":"Install Gemini CLI (brew)"}]}}
 ---
 
 # Gemini CLI

@@ -1,7 +1,7 @@
 ---
 name: gog
 description: Google Workspace CLI for Gmail, Calendar, Drive, and Contacts.
-metadata: {"clawdis":{"requires":{"bins":["gog"]}}}
+metadata: {"clawdis":{"requires":{"bins":["gog"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/gogcli","bins":["gog"],"label":"Install gog (brew)"}]}}
 ---
 
 # gog

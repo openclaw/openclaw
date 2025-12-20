@@ -1,7 +1,7 @@
 ---
 name: spotify-player
 description: Terminal Spotify client (TUI + CLI commands) for playback and search.
-metadata: {"clawdis":{"requires":{"bins":["spotify_player"]}}}
+metadata: {"clawdis":{"requires":{"bins":["spotify_player"]},"install":[{"id":"brew","kind":"brew","formula":"spotify_player","bins":["spotify_player"],"label":"Install spotify-player (brew)"}]}}
 ---
 
 # spotify_player

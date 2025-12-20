@@ -1,7 +1,7 @@
 ---
 name: oracle
 description: Run a second-model review or debug session with the oracle CLI.
-metadata: {"clawdis":{"requires":{"bins":["oracle"]}}}
+metadata: {"clawdis":{"requires":{"bins":["oracle"]},"install":[{"id":"node","kind":"node","package":"@steipete/oracle","bins":["oracle"],"label":"Install oracle (node)"}]}}
 ---
 
 # oracle
