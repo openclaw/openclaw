@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: vi.fn(),
+  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
 }));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
