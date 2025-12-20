@@ -546,8 +546,7 @@ extension GeneralSettings {
             timeout: 8)
 
         guard sshResult.ok else {
-            let msg = sshResult.message ?? "SSH check failed"
-            self.remoteStatus = .failed(msg)
+            self.remoteStatus = .failed(self.formatSSHFailure(sshResult))
             return
         }
 
@@ -586,6 +585,24 @@ extension GeneralSettings {
         args.append(target)
         args.append("echo ok")
         return args
+    }
+
+    private func formatSSHFailure(_ response: Response) -> String {
+        let payload = response.payload.flatMap { String(data: $0, encoding: .utf8) }
+        let trimmed = payload?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline)
+            .joined(separator: " ")
+        if let trimmed, !trimmed.isEmpty {
+            if let message = response.message, message.hasPrefix("exit ") {
+                return "SSH check failed: \(trimmed) (\(message))"
+            }
+            return "SSH check failed: \(trimmed)"
+        }
+        if let message = response.message {
+            return "SSH check failed (\(message))"
+        }
+        return "SSH check failed"
     }
 
     private func revealLogs() {
