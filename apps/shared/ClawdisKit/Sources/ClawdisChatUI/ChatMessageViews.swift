@@ -6,70 +6,55 @@ private enum ChatUIConstants {
     static let bubbleCorner: CGFloat = 18
 }
 
-private enum ChatBubbleTailSide {
-    case left
-    case right
-    case none
-}
+private struct BubbleTail: Shape {
+    enum TailDirection: CaseIterable, Identifiable {
+        case topRight
+        case topLeft
+        case bottomLeft
+        case bottomRight
 
-private struct ChatBubbleShape: Shape {
-    let cornerRadius: CGFloat
-    let tailSide: ChatBubbleTailSide
+        var id: Self { self }
+    }
 
-    private let tailWidth: CGFloat = 10
-    private let tailHeight: CGFloat = 16
+    let direction: TailDirection
 
     func path(in rect: CGRect) -> Path {
-        let hasTail = self.tailSide != .none
-        let bubbleRect: CGRect = {
-            guard hasTail else { return rect }
-            switch self.tailSide {
-            case .left:
-                return CGRect(
-                    x: rect.minX + tailWidth,
-                    y: rect.minY,
-                    width: rect.width - tailWidth,
-                    height: rect.height)
-            case .right:
-                return CGRect(
-                    x: rect.minX,
-                    y: rect.minY,
-                    width: rect.width - tailWidth,
-                    height: rect.height)
-            case .none:
-                return rect
+        Path { path in
+            switch direction {
+            case .topRight:
+                let startPoint = CGPoint(x: rect.minX, y: rect.maxY)
+                path.move(to: startPoint)
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+                let control1 = CGPoint(x: rect.maxX - rect.maxX / 20, y: rect.minY - rect.maxY / 3)
+                let control2 = CGPoint(x: rect.maxX * 5 / 6, y: rect.maxY * 5 / 6)
+                path.addCurve(to: startPoint, control1: control1, control2: control2)
+            case .topLeft:
+                let startPoint = CGPoint(x: rect.maxX, y: rect.maxY)
+                path.move(to: startPoint)
+                path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+                path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+                let control1 = CGPoint(x: rect.maxX / 20, y: rect.minY - rect.maxY / 3)
+                let control2 = CGPoint(x: rect.maxX * 1 / 6, y: rect.maxY * 5 / 6)
+                path.addCurve(to: startPoint, control1: control1, control2: control2)
+            case .bottomLeft:
+                let startPoint = CGPoint(x: rect.minX, y: rect.maxY)
+                path.move(to: startPoint)
+                path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+                let control1 = CGPoint(x: rect.maxX / 6, y: rect.maxY / 6)
+                let control2 = CGPoint(x: rect.minX + rect.maxX / 20, y: rect.maxY + rect.maxY / 3)
+                path.addCurve(to: startPoint, control1: control1, control2: control2)
+            case .bottomRight:
+                let startPoint = CGPoint(x: rect.minX, y: rect.minY)
+                path.move(to: startPoint)
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+                let control1 = CGPoint(x: rect.maxX - rect.maxX / 20, y: rect.maxY + rect.maxY / 3)
+                let control2 = CGPoint(x: rect.maxX * 5 / 6, y: rect.maxY * 1 / 6)
+                path.addCurve(to: startPoint, control1: control1, control2: control2)
             }
-        }()
-
-        var path = Path(roundedRect: bubbleRect, cornerRadius: cornerRadius)
-
-        guard hasTail else { return path }
-
-        let tailBaseY = bubbleRect.maxY - tailHeight - 4
-        let tailTipY = bubbleRect.maxY - 6
-
-        switch self.tailSide {
-        case .left:
-            let start = CGPoint(x: bubbleRect.minX, y: tailBaseY)
-            let tip = CGPoint(x: rect.minX + 2, y: tailTipY)
-            let end = CGPoint(x: bubbleRect.minX + 2, y: tailTipY + 6)
-            path.move(to: start)
-            path.addQuadCurve(to: tip, control: CGPoint(x: bubbleRect.minX - 4, y: tailBaseY + 6))
-            path.addQuadCurve(to: end, control: CGPoint(x: bubbleRect.minX - 2, y: tailTipY + 8))
-            path.closeSubpath()
-        case .right:
-            let start = CGPoint(x: bubbleRect.maxX, y: tailBaseY)
-            let tip = CGPoint(x: rect.maxX - 2, y: tailTipY)
-            let end = CGPoint(x: bubbleRect.maxX - 2, y: tailTipY + 6)
-            path.move(to: start)
-            path.addQuadCurve(to: tip, control: CGPoint(x: bubbleRect.maxX + 4, y: tailBaseY + 6))
-            path.addQuadCurve(to: end, control: CGPoint(x: bubbleRect.maxX + 2, y: tailTipY + 8))
-            path.closeSubpath()
-        case .none:
-            break
         }
-
-        return path
     }
 }
 
@@ -144,7 +129,25 @@ private struct ChatMessageBody: View {
         .background(self.bubbleBackground)
         .overlay(self.bubbleBorder)
         .clipShape(self.bubbleShape)
+        .overlay(alignment: self.tailAlignment) {
+            if let tailDirection = self.tailDirection {
+                BubbleTail(direction: tailDirection)
+                    .fill(self.bubbleFillColor)
+                    .frame(width: self.tailSize.width, height: self.tailSize.height)
+                    .offset(x: self.tailOffsetX, y: self.tailOffsetY)
+            }
+        }
+        .overlay(alignment: self.tailAlignment) {
+            if let tailDirection = self.tailDirection {
+                BubbleTail(direction: tailDirection)
+                    .stroke(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
+                    .frame(width: self.tailSize.width, height: self.tailSize.height)
+                    .offset(x: self.tailOffsetX, y: self.tailOffsetY)
+            }
+        }
         .shadow(color: self.bubbleShadowColor, radius: self.bubbleShadowRadius, y: self.bubbleShadowYOffset)
+        .padding(.leading, self.tailPaddingLeading)
+        .padding(.trailing, self.tailPaddingTrailing)
     }
 
     private var primaryText: String {
@@ -156,45 +159,73 @@ private struct ChatMessageBody: View {
         self.message.content.filter { ($0.type ?? "text") != "text" }
     }
 
-    private var bubbleBackground: AnyShapeStyle {
-        let fill: Color
+    private var bubbleFillColor: Color {
         if self.isUser {
-            fill = ClawdisChatTheme.userBubble
-        } else if self.style == .onboarding {
-            fill = ClawdisChatTheme.onboardingAssistantBubble
-        } else {
-            fill = ClawdisChatTheme.assistantBubble
+            return ClawdisChatTheme.userBubble
         }
-        return AnyShapeStyle(fill)
+        if self.style == .onboarding {
+            return ClawdisChatTheme.onboardingAssistantBubble
+        }
+        return ClawdisChatTheme.assistantBubble
+    }
+
+    private var bubbleBackground: AnyShapeStyle {
+        AnyShapeStyle(self.bubbleFillColor)
+    }
+
+    private var bubbleBorderColor: Color {
+        if self.isUser {
+            return Color.white.opacity(0.12)
+        }
+        if self.style == .onboarding {
+            return ClawdisChatTheme.onboardingAssistantBorder
+        }
+        return Color.black.opacity(0.08)
+    }
+
+    private var bubbleBorderWidth: CGFloat {
+        if self.isUser { return 0.5 }
+        if self.style == .onboarding { return 0.8 }
+        return 1
     }
 
     private var bubbleBorder: some View {
-        let borderColor: Color
-        let lineWidth: CGFloat
-        if self.isUser {
-            borderColor = Color.white.opacity(0.12)
-            lineWidth = 0.5
-        } else if self.style == .onboarding {
-            borderColor = ClawdisChatTheme.onboardingAssistantBorder
-            lineWidth = 0.8
-        } else {
-            borderColor = Color.black.opacity(0.08)
-            lineWidth = 1
-        }
-
-        return RoundedRectangle(cornerRadius: ChatUIConstants.bubbleCorner, style: .continuous)
-            .strokeBorder(borderColor, lineWidth: lineWidth)
+        RoundedRectangle(cornerRadius: ChatUIConstants.bubbleCorner, style: .continuous)
+            .strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
             .clipShape(self.bubbleShape)
     }
 
-    private var bubbleShape: ChatBubbleShape {
-        let tailSide: ChatBubbleTailSide
-        if self.style == .onboarding {
-            tailSide = self.isUser ? .right : .left
-        } else {
-            tailSide = .none
-        }
-        return ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tailSide: tailSide)
+    private var bubbleShape: RoundedRectangle {
+        RoundedRectangle(cornerRadius: ChatUIConstants.bubbleCorner, style: .continuous)
+    }
+
+    private var tailDirection: BubbleTail.TailDirection? {
+        guard self.style == .onboarding else { return nil }
+        return self.isUser ? .bottomRight : .bottomLeft
+    }
+
+    private var tailAlignment: Alignment {
+        self.isUser ? .bottomTrailing : .bottomLeading
+    }
+
+    private var tailSize: CGSize {
+        CGSize(width: 16, height: 22)
+    }
+
+    private var tailOffsetX: CGFloat {
+        self.isUser ? 6 : -6
+    }
+
+    private var tailOffsetY: CGFloat {
+        4
+    }
+
+    private var tailPaddingLeading: CGFloat {
+        self.style == .onboarding && !self.isUser ? 6 : 0
+    }
+
+    private var tailPaddingTrailing: CGFloat {
+        self.style == .onboarding && self.isUser ? 6 : 0
     }
 
     private var bubbleShadowColor: Color {
