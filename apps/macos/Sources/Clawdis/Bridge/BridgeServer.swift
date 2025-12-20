@@ -179,7 +179,7 @@ actor BridgeServer {
             guard !text.isEmpty else { return }
 
             let sessionKey = payload.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
-                ?? "node-\(nodeId)"
+                ?? "main"
 
             _ = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
                 message: text,

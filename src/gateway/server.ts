@@ -1800,8 +1800,10 @@ export async function startGatewayServer(
         if (text.length > 20_000) return;
         const sessionKeyRaw =
           typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+        const mainKey =
+          (loadConfig().inbound?.session?.mainKey ?? "main").trim() || "main";
         const sessionKey =
-          sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+          sessionKeyRaw.length > 0 ? sessionKeyRaw : mainKey;
         const { storePath, store, entry } = loadSessionEntry(sessionKey);
         const now = Date.now();
         const sessionId = entry?.sessionId ?? randomUUID();

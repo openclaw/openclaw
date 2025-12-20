@@ -2793,6 +2793,54 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("bridge voice transcript defaults to main session", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "+1555",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const bridgeCall = bridgeStartCalls.at(-1);
+    expect(bridgeCall?.onEvent).toBeDefined();
+
+    const spy = vi.mocked(agentCommand);
+    const beforeCalls = spy.mock.calls.length;
+
+    await bridgeCall?.onEvent?.("ios-node", {
+      event: "voice.transcript",
+      payloadJSON: JSON.stringify({ text: "hello" }),
+    });
+
+    expect(spy.mock.calls.length).toBe(beforeCalls + 1);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.sessionId).toBe("sess-main");
+    expect(call.deliver).toBe(false);
+    expect(call.surface).toBe("Node");
+
+    const stored = JSON.parse(
+      await fs.readFile(testSessionStorePath, "utf-8"),
+    ) as Record<string, { sessionId?: string } | undefined>;
+    expect(stored.main?.sessionId).toBe("sess-main");
+    expect(stored["node-ios-node"]).toBeUndefined();
+
+    await server.close();
+  });
+
   test("bridge chat.abort cancels while saving the session store", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");

@@ -38,8 +38,7 @@ final class NodeAppModel {
     init() {
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
-            let nodeId = UserDefaults.standard.string(forKey: "node.instanceId") ?? "ios-node"
-            let sessionKey = "node-\(nodeId)"
+            let sessionKey = "main"
             do {
                 try await self.sendVoiceTranscript(text: cmd, sessionKey: sessionKey)
             } catch {
