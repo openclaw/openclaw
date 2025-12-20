@@ -4,10 +4,7 @@ import SwiftUI
 @MainActor
 struct SessionsSettings: View {
     private let isPreview: Bool
-    private let state = AppStateStore.shared
     @State private var rows: [SessionRow]
-    @State private var storePath: String = SessionLoader.defaultStorePath
-    @State private var lastLoaded: Date?
     @State private var errorMessage: String?
     @State private var loading = false
     @State private var hasLoaded = false
@@ -16,7 +13,6 @@ struct SessionsSettings: View {
         self._rows = State(initialValue: rows ?? [])
         self.isPreview = isPreview
         if isPreview {
-            self._lastLoaded = State(initialValue: Date())
             self._hasLoaded = State(initialValue: true)
         }
     }
@@ -24,8 +20,6 @@ struct SessionsSettings: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             self.header
-            self.storeMetadata
-            Divider().padding(.vertical, 4)
             self.content
             Spacer()
         }
@@ -40,67 +34,26 @@ struct SessionsSettings: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Sessions")
-                .font(.title3.weight(.semibold))
-            Text("Peek at the stored conversation buckets the CLI reuses for context and rate limits.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
-    private var storeMetadata: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .top, spacing: 10) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Session store")
-                        .font(.callout.weight(.semibold))
-                    if let lastLoaded {
-                        Text("Updated \(relativeAge(from: lastLoaded))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-                if self.state.connectionMode == .local {
-                    Text(self.storePath)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                }
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Sessions")
+                    .font(.headline)
+                Text("Peek at the stored conversation buckets the CLI reuses for context and rate limits.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-
-            HStack(spacing: 10) {
+            Spacer()
+            if self.loading {
+                ProgressView()
+            } else {
                 Button {
                     Task { await self.refresh() }
                 } label: {
-                    Label(self.loading ? "Refreshing..." : "Refresh", systemImage: "arrow.clockwise")
-                        .labelStyle(.titleAndIcon)
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
-                .disabled(self.loading)
                 .buttonStyle(.bordered)
-                .help("Refresh session store")
-
-                if self.state.connectionMode == .local {
-                    Button {
-                        self.revealStore()
-                    } label: {
-                        Label("Reveal", systemImage: "folder")
-                            .labelStyle(.titleAndIcon)
-                    }
-                    .disabled(!FileManager.default.fileExists(atPath: self.storePath))
-                }
-
-                if self.loading {
-                    ProgressView().controlSize(.small)
-                }
-            }
-
-            if let errorMessage {
-                Text(errorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
+                .help("Refresh")
             }
         }
     }
@@ -117,6 +70,15 @@ struct SessionsSettings: View {
                     self.sessionRow(row)
                 }
                 .listStyle(.inset)
+                .overlay(alignment: .topLeading) {
+                    if let errorMessage {
+                        Text(errorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                            .padding(.leading, 4)
+                            .padding(.top, 4)
+                    }
+                }
                 // The view already applies horizontal padding; keep the list aligned with the text above.
                 .padding(.horizontal, -12)
             }
@@ -204,8 +166,6 @@ struct SessionsSettings: View {
         do {
             let snapshot = try await SessionLoader.loadSnapshot()
             self.rows = snapshot.rows
-            self.storePath = snapshot.storePath
-            self.lastLoaded = Date()
         } catch {
             self.rows = []
             self.errorMessage = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -214,14 +174,6 @@ struct SessionsSettings: View {
         self.loading = false
     }
 
-    private func revealStore() {
-        let url = URL(fileURLWithPath: storePath)
-        if FileManager.default.fileExists(atPath: self.storePath) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
-            NSWorkspace.shared.open(url.deletingLastPathComponent())
-        }
-    }
 }
 
 private struct SessionKindBadge: View {
