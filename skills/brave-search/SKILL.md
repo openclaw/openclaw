@@ -1,21 +1,35 @@
 ---
 name: brave-search
-description: Headless web search and content extraction via Brave Search scripts.
-metadata: {"clawdis":{"requires":{"bins":["search.js","content.js"]}}}
+description: Web search and content extraction via Brave Search API.
+metadata: {"clawdis":{"requires":{"bins":["node","npm"],"env":["BRAVE_API_KEY"]},"primaryEnv":"BRAVE_API_KEY","install":[{"id":"node-brew","kind":"brew","formula":"node","bins":["node","npm"],"label":"Install Node.js (brew)"}]}}
 ---
 
-# brave-search
+# Brave Search
 
-Use `search.js` and `content.js` from `~/agent-tools/brave-search` (PATH).
+Headless web search and content extraction using Brave Search. No browser required.
 
-Search
-- `search.js "query"`
-- `search.js "query" -n 10`
-- `search.js "query" --content`
+## Setup (run once)
 
-Extract content
-- `content.js https://example.com/article`
+```bash
+cd ~/Projects/agent-scripts/skills/brave-search
+npm ci
+```
 
-Notes
-- No browser required; results come from Brave Search HTML.
-- If commands are missing, add `~/agent-tools/brave-search` to PATH and install deps.
+Needs env: `BRAVE_API_KEY`.
+
+## Search
+
+```bash
+./search.js "query"                    # Basic search (5 results)
+./search.js "query" -n 10              # More results
+./search.js "query" --content          # Include page content as markdown
+./search.js "query" -n 3 --content     # Combined
+```
+
+## Extract Page Content
+
+```bash
+./content.js https://example.com/article
+```
+
+Fetches a URL and extracts readable content as markdown.
