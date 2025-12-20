@@ -172,6 +172,102 @@ final class MacNodeModeCoordinator {
         "mac-\(InstanceIdentity.instanceId)"
     }
 
+    private func resolveLoopbackBridgeEndpoint(timeoutSeconds: Double) async -> NWEndpoint? {
+        guard let port = Self.loopbackBridgePort(),
+              let endpointPort = NWEndpoint.Port(rawValue: port)
+        else {
+            return nil
+        }
+        let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: endpointPort)
+        let reachable = await Self.probeEndpoint(endpoint, timeoutSeconds: timeoutSeconds)
+        return reachable ? endpoint : nil
+    }
+
+    static func loopbackBridgePort() -> UInt16? {
+        if let raw = ProcessInfo.processInfo.environment["CLAWDIS_BRIDGE_PORT"],
+           let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0,
+           parsed <= Int(UInt16.max)
+        {
+            return UInt16(parsed)
+        }
+        return 18790
+    }
+
+    static func probeEndpoint(_ endpoint: NWEndpoint, timeoutSeconds: Double) async -> Bool {
+        let connection = NWConnection(to: endpoint, using: .tcp)
+        let stream = Self.makeStateStream(for: connection)
+        connection.start(queue: DispatchQueue(label: "com.steipete.clawdis.macos.bridge-loopback-probe"))
+        do {
+            try await Self.waitForReady(stream, timeoutSeconds: timeoutSeconds)
+            connection.cancel()
+            return true
+        } catch {
+            connection.cancel()
+            return false
+        }
+    }
+
+    private static func makeStateStream(
+        for connection: NWConnection) -> AsyncStream<NWConnection.State>
+    {
+        AsyncStream { continuation in
+            connection.stateUpdateHandler = { state in
+                continuation.yield(state)
+                switch state {
+                case .ready, .failed, .cancelled:
+                    continuation.finish()
+                default:
+                    break
+                }
+            }
+        }
+    }
+
+    private static func waitForReady(
+        _ stream: AsyncStream<NWConnection.State>,
+        timeoutSeconds: Double) async throws
+    {
+        try await self.withTimeout(seconds: timeoutSeconds) {
+            for await state in stream {
+                switch state {
+                case .ready:
+                    return
+                case let .failed(err):
+                    throw err
+                case .cancelled:
+                    throw NSError(domain: "Bridge", code: 20, userInfo: [
+                        NSLocalizedDescriptionKey: "Connection cancelled",
+                    ])
+                default:
+                    continue
+                }
+            }
+            throw NSError(domain: "Bridge", code: 21, userInfo: [
+                NSLocalizedDescriptionKey: "Connection closed",
+            ])
+        }
+    }
+
+    private static func withTimeout<T: Sendable>(
+        seconds: Double,
+        operation: @escaping @Sendable () async throws -> T) async throws -> T
+    {
+        let task = Task { try await operation() }
+        let timeout = Task {
+            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+            throw NSError(domain: "Bridge", code: 22, userInfo: [
+                NSLocalizedDescriptionKey: "operation timed out",
+            ])
+        }
+        defer { timeout.cancel() }
+        return try await withTaskCancellationHandler(operation: {
+            try await task.value
+        }, onCancel: {
+            timeout.cancel()
+        })
+    }
+
     private func resolveBridgeEndpoint(timeoutSeconds: Double) async -> NWEndpoint? {
         let mode = await MainActor.run(body: { AppStateStore.shared.connectionMode })
         if mode == .remote {
@@ -192,6 +288,9 @@ final class MacNodeModeCoordinator {
         } else if let tunnel = self.tunnel {
             tunnel.terminate()
             self.tunnel = nil
+        }
+        if mode == .local, let endpoint = await self.resolveLoopbackBridgeEndpoint(timeoutSeconds: 0.4) {
+            return endpoint
         }
         return await Self.discoverBridgeEndpoint(timeoutSeconds: timeoutSeconds)
     }
