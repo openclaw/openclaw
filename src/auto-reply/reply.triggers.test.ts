@@ -98,8 +98,16 @@ describe("trigger handling", () => {
     });
   });
 
-  it("acknowledges a bare /new without treating it as empty", async () => {
+  it("runs a greeting prompt for a bare /new", async () => {
     await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
       const res = await getReplyFromConfig(
         {
           Body: "/new",
@@ -119,8 +127,11 @@ describe("trigger handling", () => {
         },
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toMatch(/fresh session/i);
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(text).toBe("hello");
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain("A new session was started via /new");
     });
   });
 

@@ -47,6 +47,9 @@ const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
 
+const BARE_SESSION_RESET_PROMPT =
+  "A new session was started via /new. Say hi briefly and ask what the user wants to do next.";
+
 export function extractThinkDirective(body?: string): {
   cleaned: string;
   thinkLevel?: ThinkLevel;
@@ -580,20 +583,18 @@ export async function getReplyFromConfig(
         })()
       : "";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const baseBodyTrimmed = baseBody.trim();
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
+  const baseBodyTrimmedRaw = baseBody.trim();
   const isBareSessionReset =
-    isNewSession && baseBodyTrimmed.length === 0 && rawBodyTrimmed.length > 0;
+    isNewSession &&
+    baseBodyTrimmedRaw.length === 0 &&
+    rawBodyTrimmed.length > 0;
+  const baseBodyFinal = isBareSessionReset ? BARE_SESSION_RESET_PROMPT : baseBody;
+  const baseBodyTrimmed = baseBodyFinal.trim();
   // Bail early if the cleaned body is empty to avoid sending blank prompts to the agent.
   // This can happen if an inbound platform delivers an empty text message or we strip everything out.
   if (!baseBodyTrimmed) {
     await onReplyStart();
-    if (isBareSessionReset) {
-      cleanupTyping();
-      return {
-        text: "Started a fresh session. Send a new message to continue.",
-      };
-    }
     logVerbose("Inbound body empty after normalization; skipping agent run");
     cleanupTyping();
     return {
@@ -603,7 +604,7 @@ export async function getReplyFromConfig(
   const abortedHint = abortedLastRun
     ? "Note: The previous agent run was aborted by the user. Resume carefully or ask for clarification."
     : "";
-  let prefixedBodyBase = baseBody;
+  let prefixedBodyBase = baseBodyFinal;
   if (groupIntro) {
     prefixedBodyBase = `${groupIntro}\n\n${prefixedBodyBase}`;
   }

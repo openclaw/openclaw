@@ -26,7 +26,7 @@ All session state is **owned by the gateway** (the “master” Clawdis). UI cli
 
 ## Lifecyle
 - Idle expiry: `inbound.session.idleMinutes` (default 60). After the timeout a new `sessionId` is minted on the next message.
-- Reset triggers: exact `/new` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through.
+- Reset triggers: exact `/new` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. If `/new` is sent alone, Clawdis runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: delete specific keys from the store or remove the JSONL transcript; the next message recreates them.
 
 ## Configuration (optional rename example)

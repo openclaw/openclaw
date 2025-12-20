@@ -145,7 +145,7 @@ Example:
 
 - Session files: `~/.clawdis/sessions/{{SessionId}}.jsonl`
 - Session metadata (token usage, last route, etc): `~/.clawdis/sessions/sessions.json` (legacy: `~/.clawdis/sessions.json`)
-- `/new` starts a fresh session for that chat (configurable via `resetTriggers`)
+- `/new` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, the agent replies with a short hello to confirm the reset.
 
 ## Heartbeats (proactive mode)
 
