@@ -1145,7 +1145,7 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 28)
-        .padding(.bottom, 0)
+        .padding(.bottom, 8)
         .frame(minHeight: 60, alignment: .bottom)
     }
 
