@@ -221,9 +221,10 @@ final class BridgeConnectionController {
         var systemInfo = utsname()
         uname(&systemInfo)
         let machine = withUnsafeBytes(of: &systemInfo.machine) { ptr in
-            String(decoding: ptr.prefix { $0 != 0 }, as: UTF8.self)
+            String(bytes: ptr.prefix { $0 != 0 }, encoding: .utf8)
         }
-        return machine.isEmpty ? "unknown" : machine
+        let trimmed = machine?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? "unknown" : trimmed
     }
 
     private func appVersion() -> String {
