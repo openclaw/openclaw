@@ -19,6 +19,9 @@ const a2uiThemeContext = path.resolve(a2uiLitDist, "0.8/ui/context/theme.js");
 
 export default defineConfig({
   input: fromHere("bootstrap.js"),
+  experimental: {
+    attachDebugInfo: "none",
+  },
   treeshake: false,
   resolve: {
     alias: {
