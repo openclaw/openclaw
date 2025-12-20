@@ -8,6 +8,39 @@ let reachable = false;
 let cfgAttachOnly = false;
 let createTargetId: string | null = null;
 
+const cdpMocks = vi.hoisted(() => ({
+  createTargetViaCdp: vi.fn(async () => {
+    throw new Error("cdp disabled");
+  }),
+  snapshotAria: vi.fn(async () => ({
+    nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
+  })),
+}));
+
+const pwMocks = vi.hoisted(() => ({
+  armDialogViaPlaywright: vi.fn(async () => {}),
+  armFileUploadViaPlaywright: vi.fn(async () => {}),
+  clickViaPlaywright: vi.fn(async () => {}),
+  closePageViaPlaywright: vi.fn(async () => {}),
+  closePlaywrightBrowserConnection: vi.fn(async () => {}),
+  dragViaPlaywright: vi.fn(async () => {}),
+  evaluateViaPlaywright: vi.fn(async () => "ok"),
+  fillFormViaPlaywright: vi.fn(async () => {}),
+  getConsoleMessagesViaPlaywright: vi.fn(async () => []),
+  hoverViaPlaywright: vi.fn(async () => {}),
+  navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
+  pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
+  pressKeyViaPlaywright: vi.fn(async () => {}),
+  resizeViewportViaPlaywright: vi.fn(async () => {}),
+  selectOptionViaPlaywright: vi.fn(async () => {}),
+  snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
+  takeScreenshotViaPlaywright: vi.fn(async () => ({
+    buffer: Buffer.from("png"),
+  })),
+  typeViaPlaywright: vi.fn(async () => {}),
+  waitForViaPlaywright: vi.fn(async () => {}),
+}));
+
 function makeProc(pid = 123) {
   const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
   return {
@@ -62,38 +95,11 @@ vi.mock("./chrome.js", () => ({
 }));
 
 vi.mock("./cdp.js", () => ({
-  createTargetViaCdp: vi.fn(async () => {
-    if (createTargetId) return { targetId: createTargetId };
-    throw new Error("cdp disabled");
-  }),
-  snapshotAria: vi.fn(async () => ({
-    nodes: [{ ref: "1", role: "link", name: "x", depth: 0 }],
-  })),
+  createTargetViaCdp: cdpMocks.createTargetViaCdp,
+  snapshotAria: cdpMocks.snapshotAria,
 }));
 
-vi.mock("./pw-ai.js", () => ({
-  armDialogViaPlaywright: vi.fn(async () => {}),
-  armFileUploadViaPlaywright: vi.fn(async () => {}),
-  clickViaPlaywright: vi.fn(async () => {}),
-  closePageViaPlaywright: vi.fn(async () => {}),
-  closePlaywrightBrowserConnection: vi.fn(async () => {}),
-  evaluateViaPlaywright: vi.fn(async () => "ok"),
-  fillFormViaPlaywright: vi.fn(async () => {}),
-  getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  hoverViaPlaywright: vi.fn(async () => {}),
-  navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
-  pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
-  pressKeyViaPlaywright: vi.fn(async () => {}),
-  resizeViewportViaPlaywright: vi.fn(async () => {}),
-  selectOptionViaPlaywright: vi.fn(async () => {}),
-  snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
-  takeScreenshotViaPlaywright: vi.fn(async () => ({
-    buffer: Buffer.from("png"),
-  })),
-  typeViaPlaywright: vi.fn(async () => {}),
-  waitForViaPlaywright: vi.fn(async () => {}),
-  dragViaPlaywright: vi.fn(async () => {}),
-}));
+vi.mock("./pw-ai.js", () => pwMocks);
 
 vi.mock("../media/store.js", () => ({
   ensureMediaDir: vi.fn(async () => {}),
@@ -140,6 +146,14 @@ describe("browser control server", () => {
     reachable = false;
     cfgAttachOnly = false;
     createTargetId = null;
+
+    cdpMocks.createTargetViaCdp.mockImplementation(async () => {
+      if (createTargetId) return { targetId: createTargetId };
+      throw new Error("cdp disabled");
+    });
+
+    for (const fn of Object.values(pwMocks)) fn.mockClear();
+    for (const fn of Object.values(cdpMocks)) fn.mockClear();
 
     testPort = await getFreePort();
 
@@ -265,12 +279,20 @@ describe("browser control server", () => {
     };
     expect(snapAria.ok).toBe(true);
     expect(snapAria.format).toBe("aria");
+    expect(cdpMocks.snapshotAria).toHaveBeenCalledWith({
+      wsUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+      limit: 1,
+    });
 
     const snapAi = (await realFetch(`${base}/snapshot?format=ai`).then((r) =>
       r.json(),
     )) as { ok: boolean; format?: string; snapshot?: string };
     expect(snapAi.ok).toBe(true);
     expect(snapAi.format).toBe("ai");
+    expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+    });
 
     const nav = (await realFetch(`${base}/navigate`, {
       method: "POST",
@@ -279,13 +301,138 @@ describe("browser control server", () => {
     }).then((r) => r.json())) as { ok: boolean; targetId?: string };
     expect(nav.ok).toBe(true);
     expect(typeof nav.targetId).toBe("string");
+    expect(pwMocks.navigateViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      url: "https://example.com",
+    });
 
     const click = (await realFetch(`${base}/act`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kind: "click", ref: "1" }),
+      body: JSON.stringify({
+        kind: "click",
+        ref: "1",
+        button: "left",
+        modifiers: ["Shift"],
+      }),
     }).then((r) => r.json())) as { ok: boolean };
     expect(click.ok).toBe(true);
+    expect(pwMocks.clickViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      ref: "1",
+      doubleClick: false,
+      button: "left",
+      modifiers: ["Shift"],
+    });
+
+    const type = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "type", ref: "1", text: "" }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(type.ok).toBe(true);
+    expect(pwMocks.typeViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      ref: "1",
+      text: "",
+      submit: false,
+      slowly: false,
+    });
+
+    const press = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "press", key: "Enter" }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(press.ok).toBe(true);
+    expect(pwMocks.pressKeyViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      key: "Enter",
+    });
+
+    const hover = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "hover", ref: "2" }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(hover.ok).toBe(true);
+    expect(pwMocks.hoverViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      ref: "2",
+    });
+
+    const drag = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "drag", startRef: "3", endRef: "4" }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(drag.ok).toBe(true);
+    expect(pwMocks.dragViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      startRef: "3",
+      endRef: "4",
+    });
+
+    const select = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "select", ref: "5", values: ["a", "b"] }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(select.ok).toBe(true);
+    expect(pwMocks.selectOptionViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      ref: "5",
+      values: ["a", "b"],
+    });
+
+    const fill = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "fill",
+        fields: [{ ref: "6", type: "textbox", value: "hello" }],
+      }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(fill.ok).toBe(true);
+    expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      fields: [{ ref: "6", type: "textbox", value: "hello" }],
+    });
+
+    const resize = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "resize", width: 800, height: 600 }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(resize.ok).toBe(true);
+    expect(pwMocks.resizeViewportViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      width: 800,
+      height: 600,
+    });
+
+    const wait = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "wait", timeMs: 5 }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(wait.ok).toBe(true);
+    expect(pwMocks.waitForViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      timeMs: 5,
+      text: undefined,
+      textGone: undefined,
+    });
 
     const evalRes = (await realFetch(`${base}/act`, {
       method: "POST",
@@ -293,26 +440,51 @@ describe("browser control server", () => {
       body: JSON.stringify({ kind: "evaluate", fn: "() => 1" }),
     }).then((r) => r.json())) as { ok: boolean; result?: unknown };
     expect(evalRes.ok).toBe(true);
+    expect(evalRes.result).toBe("ok");
+    expect(pwMocks.evaluateViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      fn: "() => 1",
+      ref: undefined,
+    });
 
     const upload = await realFetch(`${base}/hooks/file-chooser`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ paths: ["/tmp/a.txt"] }),
+      body: JSON.stringify({ paths: ["/tmp/a.txt"], timeoutMs: 1234 }),
     }).then((r) => r.json());
     expect(upload).toMatchObject({ ok: true });
+    expect(pwMocks.armFileUploadViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      paths: ["/tmp/a.txt"],
+      timeoutMs: 1234,
+    });
 
     const dialog = await realFetch(`${base}/hooks/dialog`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accept: true }),
+      body: JSON.stringify({ accept: true, timeoutMs: 5678 }),
     }).then((r) => r.json());
     expect(dialog).toMatchObject({ ok: true });
+    expect(pwMocks.armDialogViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      accept: true,
+      promptText: undefined,
+      timeoutMs: 5678,
+    });
 
-    const consoleRes = (await realFetch(`${base}/console`).then((r) =>
-      r.json(),
+    const consoleRes = (await realFetch(`${base}/console?level=error`).then(
+      (r) => r.json(),
     )) as { ok: boolean; messages?: unknown[] };
     expect(consoleRes.ok).toBe(true);
     expect(Array.isArray(consoleRes.messages)).toBe(true);
+    expect(pwMocks.getConsoleMessagesViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      level: "error",
+    });
 
     const pdf = (await realFetch(`${base}/pdf`, {
       method: "POST",
@@ -325,16 +497,111 @@ describe("browser control server", () => {
     const shot = (await realFetch(`${base}/screenshot`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fullPage: true }),
+      body: JSON.stringify({ element: "body", type: "jpeg" }),
     }).then((r) => r.json())) as { ok: boolean; path?: string };
     expect(shot.ok).toBe(true);
     expect(typeof shot.path).toBe("string");
+    expect(pwMocks.takeScreenshotViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+      ref: undefined,
+      element: "body",
+      fullPage: false,
+      type: "jpeg",
+    });
+
+    const close = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "close" }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(close.ok).toBe(true);
+    expect(pwMocks.closePageViaPlaywright).toHaveBeenCalledWith({
+      cdpPort: testPort + 1,
+      targetId: "abcd1234",
+    });
 
     const stopped = (await realFetch(`${base}/stop`, {
       method: "POST",
     }).then((r) => r.json())) as { ok: boolean; stopped?: boolean };
     expect(stopped.ok).toBe(true);
     expect(stopped.stopped).toBe(true);
+  });
+
+  it("validates agent inputs (agent routes)", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
+
+    const navMissing = await realFetch(`${base}/navigate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(navMissing.status).toBe(400);
+
+    const actMissing = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(actMissing.status).toBe(400);
+
+    const clickMissingRef = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "click" }),
+    });
+    expect(clickMissingRef.status).toBe(400);
+
+    const clickBadButton = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "click", ref: "1", button: "nope" }),
+    });
+    expect(clickBadButton.status).toBe(400);
+
+    const clickBadModifiers = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "click", ref: "1", modifiers: ["Nope"] }),
+    });
+    expect(clickBadModifiers.status).toBe(400);
+
+    const typeBadText = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "type", ref: "1", text: 123 }),
+    });
+    expect(typeBadText.status).toBe(400);
+
+    const uploadMissingPaths = await realFetch(`${base}/hooks/file-chooser`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(uploadMissingPaths.status).toBe(400);
+
+    const dialogMissingAccept = await realFetch(`${base}/hooks/dialog`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(dialogMissingAccept.status).toBe(400);
+
+    const snapDefault = (await realFetch(`${base}/snapshot?format=wat`).then(
+      (r) => r.json(),
+    )) as { ok: boolean; format?: string };
+    expect(snapDefault.ok).toBe(true);
+    expect(snapDefault.format).toBe("ai");
+
+    const screenshotBadCombo = await realFetch(`${base}/screenshot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fullPage: true, element: "body" }),
+    });
+    expect(screenshotBadCombo.status).toBe(400);
   });
 
   it("covers common error branches", async () => {

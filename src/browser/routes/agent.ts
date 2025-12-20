@@ -382,6 +382,14 @@ export function registerBrowserAgentRoutes(
     const element = toStringOrEmpty(body.element) || undefined;
     const type = body.type === "jpeg" ? "jpeg" : "png";
 
+    if (fullPage && (ref || element)) {
+      return jsonError(
+        res,
+        400,
+        "fullPage is not supported for element screenshots",
+      );
+    }
+
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
       const snap = await takeScreenshotViaPlaywright({
