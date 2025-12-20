@@ -6,7 +6,6 @@ import android.net.DnsResolver
 import android.net.NetworkCapabilities
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
-import android.os.Build
 import android.os.CancellationSignal
 import android.util.Log
 import java.io.IOException
@@ -181,7 +180,6 @@ class BridgeDiscovery(
   }
 
   private fun txt(info: NsdServiceInfo, key: String): String? {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) return null
     val bytes = info.attributes[key] ?: return null
     return try {
       String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
@@ -401,7 +399,7 @@ class BridgeDiscovery(
       dns.rawQuery(
         network,
         wireQuery,
-        0,
+        DnsResolver.FLAG_EMPTY,
         dnsExecutor,
         signal,
         object : DnsResolver.Callback<ByteArray> {

@@ -1,10 +1,11 @@
 package com.steipete.clawdis.node.node
 
 import android.graphics.Bitmap
-import android.os.Build
 import android.graphics.Canvas
 import android.os.Looper
 import android.webkit.WebView
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -80,7 +81,7 @@ class CanvasController {
       val scaled =
         if (maxWidth != null && maxWidth > 0 && bmp.width > maxWidth) {
           val h = (bmp.height.toDouble() * (maxWidth.toDouble() / bmp.width.toDouble())).toInt().coerceAtLeast(1)
-          Bitmap.createScaledBitmap(bmp, maxWidth, h, true)
+          bmp.scale(maxWidth, h)
         } else {
           bmp
         }
@@ -97,7 +98,7 @@ class CanvasController {
       val scaled =
         if (maxWidth != null && maxWidth > 0 && bmp.width > maxWidth) {
           val h = (bmp.height.toDouble() * (maxWidth.toDouble() / bmp.width.toDouble())).toInt().coerceAtLeast(1)
-          Bitmap.createScaledBitmap(bmp, maxWidth, h, true)
+          bmp.scale(maxWidth, h)
         } else {
           bmp
         }
@@ -116,7 +117,7 @@ class CanvasController {
     suspendCancellableCoroutine { cont ->
       val width = width.coerceAtLeast(1)
       val height = height.coerceAtLeast(1)
-      val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+      val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
 
       // WebView isn't supported by PixelCopy.request(...) directly; draw() is the most reliable
       // cross-version snapshot for this lightweight "canvas" use-case.

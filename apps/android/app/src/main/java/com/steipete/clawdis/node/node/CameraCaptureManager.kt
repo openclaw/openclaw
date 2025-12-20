@@ -2,6 +2,7 @@ package com.steipete.clawdis.node.node
 
 import android.Manifest
 import android.content.Context
+import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
@@ -18,6 +19,7 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.core.content.ContextCompat.checkSelfPermission
+import androidx.core.graphics.scale
 import com.steipete.clawdis.node.PermissionRequester
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -92,7 +94,7 @@ class CameraCaptureManager(private val context: Context) {
             (decoded.height.toDouble() * (maxWidth.toDouble() / decoded.width.toDouble()))
               .toInt()
               .coerceAtLeast(1)
-          Bitmap.createScaledBitmap(decoded, maxWidth, h, true)
+          decoded.scale(maxWidth, h)
         } else {
           decoded
         }
@@ -108,6 +110,7 @@ class CameraCaptureManager(private val context: Context) {
       )
     }
 
+  @SuppressLint("MissingPermission")
   suspend fun clip(paramsJson: String?): Payload =
     withContext(Dispatchers.Main) {
       ensureCameraPermission()

@@ -10,7 +10,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -85,7 +84,6 @@ class NodeForegroundService : Service() {
   override fun onBind(intent: Intent?) = null
 
   private fun ensureChannel() {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
     val mgr = getSystemService(NotificationManager::class.java)
     val channel =
       NotificationChannel(
@@ -101,12 +99,7 @@ class NodeForegroundService : Service() {
 
   private fun buildNotification(title: String, text: String): Notification {
     val stopIntent = Intent(this, NodeForegroundService::class.java).setAction(ACTION_STOP)
-    val flags =
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-      } else {
-        PendingIntent.FLAG_UPDATE_CURRENT
-      }
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
     val stopPending = PendingIntent.getService(this, 2, stopIntent, flags)
 
     return NotificationCompat.Builder(this, CHANNEL_ID)
@@ -126,11 +119,6 @@ class NodeForegroundService : Service() {
   }
 
   private fun startForegroundWithTypes(notification: Notification, requiresMic: Boolean) {
-    if (Build.VERSION.SDK_INT < 29) {
-      startForeground(NOTIFICATION_ID, notification)
-      return
-    }
-
     if (didStartForeground && requiresMic == lastRequiresMic) {
       updateNotification(notification)
       return
@@ -162,11 +150,7 @@ class NodeForegroundService : Service() {
 
     fun start(context: Context) {
       val intent = Intent(context, NodeForegroundService::class.java)
-      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-        context.startForegroundService(intent)
-      } else {
-        context.startService(intent)
-      }
+      context.startForegroundService(intent)
     }
 
     fun stop(context: Context) {

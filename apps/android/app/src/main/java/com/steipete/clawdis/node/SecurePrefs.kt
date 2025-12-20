@@ -3,6 +3,7 @@
 package com.steipete.clawdis.node
 
 import android.content.Context
+import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -70,39 +71,39 @@ class SecurePrefs(context: Context) {
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
-    prefs.edit().putString("bridge.lastDiscoveredStableId", trimmed).apply()
+    prefs.edit { putString("bridge.lastDiscoveredStableId", trimmed) }
     _lastDiscoveredStableId.value = trimmed
   }
 
   fun setDisplayName(value: String) {
     val trimmed = value.trim()
-    prefs.edit().putString(displayNameKey, trimmed).apply()
+    prefs.edit { putString(displayNameKey, trimmed) }
     _displayName.value = trimmed
   }
 
   fun setCameraEnabled(value: Boolean) {
-    prefs.edit().putBoolean("camera.enabled", value).apply()
+    prefs.edit { putBoolean("camera.enabled", value) }
     _cameraEnabled.value = value
   }
 
   fun setPreventSleep(value: Boolean) {
-    prefs.edit().putBoolean("screen.preventSleep", value).apply()
+    prefs.edit { putBoolean("screen.preventSleep", value) }
     _preventSleep.value = value
   }
 
   fun setManualEnabled(value: Boolean) {
-    prefs.edit().putBoolean("bridge.manual.enabled", value).apply()
+    prefs.edit { putBoolean("bridge.manual.enabled", value) }
     _manualEnabled.value = value
   }
 
   fun setManualHost(value: String) {
     val trimmed = value.trim()
-    prefs.edit().putString("bridge.manual.host", trimmed).apply()
+    prefs.edit { putString("bridge.manual.host", trimmed) }
     _manualHost.value = trimmed
   }
 
   fun setManualPort(value: Int) {
-    prefs.edit().putInt("bridge.manual.port", value).apply()
+    prefs.edit { putInt("bridge.manual.port", value) }
     _manualPort.value = value
   }
 
@@ -113,14 +114,14 @@ class SecurePrefs(context: Context) {
 
   fun saveBridgeToken(token: String) {
     val key = "bridge.token.${_instanceId.value}"
-    prefs.edit().putString(key, token.trim()).apply()
+    prefs.edit { putString(key, token.trim()) }
   }
 
   private fun loadOrCreateInstanceId(): String {
     val existing = prefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing
     val fresh = UUID.randomUUID().toString()
-    prefs.edit().putString("node.instanceId", fresh).apply()
+    prefs.edit { putString("node.instanceId", fresh) }
     return fresh
   }
 
@@ -131,7 +132,7 @@ class SecurePrefs(context: Context) {
     val candidate = DeviceNames.bestDefaultNodeName(context).trim()
     val resolved = candidate.ifEmpty { "Android Node" }
 
-    prefs.edit().putString(displayNameKey, resolved).apply()
+    prefs.edit { putString(displayNameKey, resolved) }
     return resolved
   }
 
@@ -139,12 +140,12 @@ class SecurePrefs(context: Context) {
     val sanitized = WakeWords.sanitize(words, defaultWakeWords)
     val encoded =
       JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    prefs.edit().putString("voiceWake.triggerWords", encoded).apply()
+    prefs.edit { putString("voiceWake.triggerWords", encoded) }
     _wakeWords.value = sanitized
   }
 
   fun setVoiceWakeMode(mode: VoiceWakeMode) {
-    prefs.edit().putString(voiceWakeModeKey, mode.rawValue).apply()
+    prefs.edit { putString(voiceWakeModeKey, mode.rawValue) }
     _voiceWakeMode.value = mode
   }
 
@@ -154,7 +155,7 @@ class SecurePrefs(context: Context) {
 
     // Default ON (foreground) when unset.
     if (raw.isNullOrBlank()) {
-      prefs.edit().putString(voiceWakeModeKey, resolved.rawValue).apply()
+      prefs.edit { putString(voiceWakeModeKey, resolved.rawValue) }
     }
 
     return resolved
