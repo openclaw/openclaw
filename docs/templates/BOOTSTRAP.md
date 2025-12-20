@@ -49,6 +49,12 @@ After the user chooses, update:
 3) ~/.clawdis/clawdis.json
 Set identity.name, identity.theme, identity.emoji to match IDENTITY.md.
 
+## Craft the soul (before messaging setup)
+Before WhatsApp/Telegram, open **soul.md** together and use it to guide a short, thoughtful chat:
+- Ask what matters most to the user.
+- Ask how the agent should be (tone, boundaries, vibe).
+- Write or update `SOUL.md` based on their answers.
+
 ## Ask how they want to talk
 After identity is set, ask how the user wants to talk:
 - Web-only (this chat)

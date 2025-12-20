@@ -82,6 +82,7 @@ The onboarding flow now embeds the SwiftUI chat view directly. It uses a **speci
 
 This onboarding chat is where the agent:
 - does the BOOTSTRAP.md identity ritual (one question at a time)
+- visits **soul.md** with the user and writes `SOUL.md` (values, tone, boundaries)
 - asks how the user wants to talk (web-only / WhatsApp / Telegram)
 - guides linking steps (including showing a QR inline for WhatsApp via the `whatsapp_login` tool)
 
@@ -103,6 +104,7 @@ We no longer collect identity in the onboarding wizard. Instead, the **first age
 - The agent writes results to:
   - `IDENTITY.md` (agent name, vibe/creature, emoji)
   - `USER.md` (who the user is + how they want to be addressed)
+  - `SOUL.md` (identity, tone, boundaries — crafted from the soul.md prompt)
   - `~/.clawdis/clawdis.json` (structured identity defaults)
 - After the ritual, the agent **deletes `BOOTSTRAP.md`** so it only runs once.
 
