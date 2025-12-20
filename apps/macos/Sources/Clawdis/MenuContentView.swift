@@ -111,11 +111,11 @@ struct MenuContent: View {
     private var connectionLabel: String {
         switch self.state.connectionMode {
         case .unconfigured:
-            return "Clawdis Not Configured"
+            "Clawdis Not Configured"
         case .remote:
-            return "Remote Clawdis Active"
+            "Remote Clawdis Active"
         case .local:
-            return "Clawdis Active"
+            "Clawdis Active"
         }
     }
 

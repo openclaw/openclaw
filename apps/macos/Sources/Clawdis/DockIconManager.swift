@@ -9,7 +9,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     private var windowsObservation: NSKeyValueObservation?
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "DockIconManager")
 
-    private override init() {
+    override private init() {
         super.init()
         self.setupObservers()
         Task { @MainActor in

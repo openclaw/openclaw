@@ -63,11 +63,10 @@ final class DeepLinkHandler {
             let explicitSessionKey = link.sessionKey?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .nonEmpty
-            let resolvedSessionKey: String
-            if let explicitSessionKey {
-                resolvedSessionKey = explicitSessionKey
+            let resolvedSessionKey: String = if let explicitSessionKey {
+                explicitSessionKey
             } else {
-                resolvedSessionKey = await GatewayConnection.shared.mainSessionKey()
+                await GatewayConnection.shared.mainSessionKey()
             }
             let invocation = GatewayAgentInvocation(
                 message: messagePreview,

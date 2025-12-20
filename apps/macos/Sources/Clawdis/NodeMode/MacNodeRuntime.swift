@@ -323,7 +323,7 @@ actor MacNodeRuntime {
         let params = try Self.decodeParams(ClawdisSystemNotifyParams.self, from: req.paramsJSON)
         let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
         let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
-        if title.isEmpty && body.isEmpty {
+        if title.isEmpty, body.isEmpty {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: empty notification")
         }
 

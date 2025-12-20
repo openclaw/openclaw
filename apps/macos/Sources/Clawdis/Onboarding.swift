@@ -93,11 +93,11 @@ struct OnboardingView: View {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            return [0, 1, 5, 9]
+            [0, 1, 5, 9]
         case .unconfigured:
-            return [0, 1, 9]
+            [0, 1, 9]
         case .local:
-            return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         }
     }
 

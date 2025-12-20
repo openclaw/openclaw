@@ -111,4 +111,3 @@ enum GatewayLaunchAgentManager {
         }.value
     }
 }
-
