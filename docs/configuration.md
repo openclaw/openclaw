@@ -255,7 +255,6 @@ The server:
 ```
 
 Notes:
-- `canvasHost.port` is deprecated/ignored (the Gateway port is always used).
 - The bind host follows `gateway.bind` (loopback/lan/tailnet).
 
 Disable with:

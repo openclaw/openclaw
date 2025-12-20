@@ -97,8 +97,6 @@ export type CanvasHostConfig = {
   enabled?: boolean;
   /** Directory to serve (default: ~/clawd/canvas). */
   root?: string;
-  /** HTTP port to listen on (deprecated; Gateway port is used). */
-  port?: number;
 };
 
 export type GatewayControlUiConfig = {
@@ -351,7 +349,6 @@ const ClawdisSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       root: z.string().optional(),
-      port: z.number().int().positive().optional(),
     })
     .optional(),
   gateway: z
