@@ -21,7 +21,7 @@ Wake words are stored on the gateway machine at:
 Shape:
 
 ```json
-{ "triggers": ["clawd", "claude"], "updatedAtMs": 1730000000000 }
+{ "triggers": ["clawd", "claude", "computer"], "updatedAtMs": 1730000000000 }
 ```
 
 ## Protocol

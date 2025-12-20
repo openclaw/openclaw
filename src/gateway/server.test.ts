@@ -303,7 +303,7 @@ describe("gateway server", () => {
 
     const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
     expect(initial.ok).toBe(true);
-    expect(initial.payload?.triggers).toEqual(["clawd", "claude"]);
+    expect(initial.payload?.triggers).toEqual(["clawd", "claude", "computer"]);
 
     const changedP = onceMessage<{
       type: "event";
@@ -369,7 +369,7 @@ describe("gateway server", () => {
     const firstPayload = JSON.parse(String(first?.payloadJSON)) as {
       triggers?: unknown;
     };
-    expect(firstPayload.triggers).toEqual(["clawd", "claude"]);
+    expect(firstPayload.triggers).toEqual(["clawd", "claude", "computer"]);
 
     bridgeSendEvent.mockClear();
 
