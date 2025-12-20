@@ -4,7 +4,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { defaultRuntime } from "../runtime.js";
-import { injectCanvasLiveReload, startCanvasHost } from "./server.js";
+import { startCanvasHost } from "./server.js";
+import { injectCanvasLiveReload } from "./a2ui.js";
 
 describe("canvas host", () => {
   it("injects live reload script", () => {

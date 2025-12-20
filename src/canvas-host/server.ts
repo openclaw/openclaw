@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import http, { type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
 import chokidar from "chokidar";
 import express from "express";
@@ -10,6 +9,7 @@ import { type WebSocket, WebSocketServer } from "ws";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
+import { handleA2uiHttpRequest, injectCanvasLiveReload } from "./a2ui.js";
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -26,93 +26,6 @@ export type CanvasHostServer = {
 };
 
 const WS_PATH = "/__clawdis/ws";
-const A2UI_PATH = "/__clawdis__/a2ui";
-
-async function resolveA2uiRoot(): Promise<string | null> {
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    // Running from source (tsx) or dist (tsc + copied assets).
-    path.resolve(here, "a2ui"),
-    // Running from dist without copied assets (fallback to source).
-    path.resolve(here, "../../src/canvas-host/a2ui"),
-    // Running from repo root.
-    path.resolve(process.cwd(), "src/canvas-host/a2ui"),
-    path.resolve(process.cwd(), "dist/canvas-host/a2ui"),
-  ];
-  if (process.execPath) {
-    candidates.unshift(path.resolve(path.dirname(process.execPath), "a2ui"));
-  }
-
-  for (const dir of candidates) {
-    try {
-      const indexPath = path.join(dir, "index.html");
-      const bundlePath = path.join(dir, "a2ui.bundle.js");
-      await fs.stat(indexPath);
-      await fs.stat(bundlePath);
-      return dir;
-    } catch {
-      // try next
-    }
-  }
-  return null;
-}
-
-export function injectCanvasLiveReload(html: string): string {
-  const snippet = `
-<script>
-(() => {
-  // Cross-platform action bridge helper.
-  // Works on:
-  // - iOS: window.webkit.messageHandlers.clawdisCanvasA2UIAction.postMessage(...)
-  // - Android: window.clawdisCanvasA2UIAction.postMessage(...)
-  const actionHandlerName = "clawdisCanvasA2UIAction";
-  function postToNode(payload) {
-    try {
-      const raw = typeof payload === "string" ? payload : JSON.stringify(payload);
-      const iosHandler = globalThis.webkit?.messageHandlers?.[actionHandlerName];
-      if (iosHandler && typeof iosHandler.postMessage === "function") {
-        iosHandler.postMessage(raw);
-        return true;
-      }
-      const androidHandler = globalThis[actionHandlerName];
-      if (androidHandler && typeof androidHandler.postMessage === "function") {
-        // Important: call as a method on the interface object (binding matters on Android WebView).
-        androidHandler.postMessage(raw);
-        return true;
-      }
-    } catch {}
-    return false;
-  }
-  function sendUserAction(userAction) {
-    const id =
-      (userAction && typeof userAction.id === "string" && userAction.id.trim()) ||
-      (globalThis.crypto?.randomUUID?.() ?? String(Date.now()));
-    const action = { ...userAction, id };
-    return postToNode({ userAction: action });
-  }
-  globalThis.Clawdis = globalThis.Clawdis ?? {};
-  globalThis.Clawdis.postMessage = postToNode;
-  globalThis.Clawdis.sendUserAction = sendUserAction;
-  globalThis.clawdisPostMessage = postToNode;
-  globalThis.clawdisSendUserAction = sendUserAction;
-
-  try {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(WS_PATH)});
-    ws.onmessage = (ev) => {
-      if (String(ev.data || "") === "reload") location.reload();
-    };
-  } catch {}
-})();
-</script>
-`.trim();
-
-  const idx = html.toLowerCase().lastIndexOf("</body>");
-  if (idx >= 0) {
-    return `${html.slice(0, idx)}\n${snippet}\n${html.slice(idx)}`;
-  }
-  return `${html}\n${snippet}\n`;
-}
 
 function defaultIndexHTML() {
   return `<!doctype html>
@@ -268,9 +181,6 @@ export async function startCanvasHost(
   }
 
   const bindHost = opts.listenHost?.trim() || "0.0.0.0";
-  const a2uiRoot = await resolveA2uiRoot();
-  const a2uiRootReal = a2uiRoot ? await fs.realpath(a2uiRoot) : null;
-
   const app = express();
   app.disable("x-powered-by");
 
@@ -282,39 +192,7 @@ export async function startCanvasHost(
         return;
       }
 
-      if (
-        url.pathname === A2UI_PATH ||
-        url.pathname.startsWith(`${A2UI_PATH}/`)
-      ) {
-        if (!a2uiRootReal) {
-          res
-            .status(503)
-            .type("text/plain; charset=utf-8")
-            .send("A2UI assets not found");
-          return;
-        }
-        const rel = url.pathname.slice(A2UI_PATH.length);
-        const filePath = await resolveFilePath(a2uiRootReal, rel || "/");
-        if (!filePath) {
-          res.status(404).send("not found");
-          return;
-        }
-        const lower = filePath.toLowerCase();
-        const mime =
-          lower.endsWith(".html") || lower.endsWith(".htm")
-            ? "text/html"
-            : (detectMime({ filePath }) ?? "application/octet-stream");
-        res.setHeader("Cache-Control", "no-store");
-        if (mime === "text/html") {
-          const html = await fs.readFile(filePath, "utf8");
-          res
-            .type("text/html; charset=utf-8")
-            .send(injectCanvasLiveReload(html));
-          return;
-        }
-        res.type(mime).send(await fs.readFile(filePath));
-        return;
-      }
+      if (await handleA2uiHttpRequest(req, res)) return;
 
       const filePath = await resolveFilePath(rootReal, url.pathname);
       if (!filePath) {
