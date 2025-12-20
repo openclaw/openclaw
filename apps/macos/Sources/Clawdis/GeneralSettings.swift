@@ -261,11 +261,16 @@ struct GeneralSettings: View {
                 Button {
                     Task { await self.installCLI() }
                 } label: {
-                    if self.isInstallingCLI {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text(self.cliInstalled ? "Reinstall CLI helper" : "Install CLI helper")
+                    let title = self.cliInstalled ? "Reinstall CLI helper" : "Install CLI helper"
+                    ZStack {
+                        Text(title)
+                            .opacity(self.isInstallingCLI ? 0 : 1)
+                        if self.isInstallingCLI {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
                     }
+                    .frame(minWidth: 150, minHeight: 24)
                 }
                 .disabled(self.isInstallingCLI)
 

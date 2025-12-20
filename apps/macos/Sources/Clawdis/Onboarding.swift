@@ -86,8 +86,8 @@ struct OnboardingView: View {
 
     private static let clipboardPoll = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
     private let permissionsPageIndex = 5
-    private var pageOrder: [Int] {
-        switch self.state.connectionMode {
+    static func pageOrder(for mode: AppState.ConnectionMode) -> [Int] {
+        switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
@@ -95,8 +95,12 @@ struct OnboardingView: View {
         case .unconfigured:
             [0, 1, 9]
         case .local:
-            [0, 1, 2, 3, 5, 6, 7, 8, 9]
+            [0, 1, 2, 3, 5, 6, 8, 9]
         }
+    }
+
+    private var pageOrder: [Int] {
+        Self.pageOrder(for: self.state.connectionMode)
     }
 
     private var pageCount: Int { self.pageOrder.count }
@@ -175,6 +179,7 @@ struct OnboardingView: View {
             await self.refreshPerms()
             self.refreshCLIStatus()
             self.loadWorkspaceDefaults()
+            self.ensureDefaultWorkspace()
             self.refreshAnthropicOAuthStatus()
             self.loadIdentityDefaults()
             self.preferredGatewayID = BridgeDiscoveryPreferences.preferredStableID()
@@ -214,8 +219,6 @@ struct OnboardingView: View {
             self.permissionsPage()
         case 6:
             self.cliPage()
-        case 7:
-            self.workspacePage()
         case 8:
             self.whatsappPage()
         case 9:
@@ -849,11 +852,16 @@ struct OnboardingView: View {
                     Button {
                         Task { await self.installCLI() }
                     } label: {
-                        if self.installingCLI {
-                            ProgressView()
-                        } else {
-                            Text(self.cliInstalled ? "Reinstall CLI" : "Install CLI")
+                        let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
+                        ZStack {
+                            Text(title)
+                                .opacity(self.installingCLI ? 0 : 1)
+                            if self.installingCLI {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
                         }
+                        .frame(minWidth: 120, minHeight: 28)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(self.installingCLI)
@@ -1362,6 +1370,20 @@ struct OnboardingView: View {
         let configured = ClawdisConfigFile.inboundWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
         self.workspacePath = AgentWorkspace.displayPath(for: url)
+    }
+
+    private func ensureDefaultWorkspace() {
+        guard self.state.connectionMode == .local else { return }
+        let configured = ClawdisConfigFile.inboundWorkspace()
+        let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
+        do {
+            _ = try AgentWorkspace.bootstrap(workspaceURL: url)
+            if (configured ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: url))
+            }
+        } catch {
+            self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
+        }
     }
 
     private func loadIdentityDefaults() {

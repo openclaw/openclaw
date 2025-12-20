@@ -13,4 +13,9 @@ struct OnboardingViewSmokeTests {
             discoveryModel: GatewayDiscoveryModel())
         _ = view.body
     }
+
+    @Test func pageOrderOmitsWorkspaceStep() {
+        let order = OnboardingView.pageOrder(for: .local)
+        #expect(!order.contains(7))
+    }
 }
