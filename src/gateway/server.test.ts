@@ -55,9 +55,9 @@ const bridgeListConnected = vi.hoisted(() =>
   vi.fn(() => [] as BridgeClientInfo[]),
 );
 const bridgeSendEvent = vi.hoisted(() => vi.fn());
-const testTailnetIPv4 = vi.hoisted(
-  () => ({ value: undefined as string | undefined }),
-);
+const testTailnetIPv4 = vi.hoisted(() => ({
+  value: undefined as string | undefined,
+}));
 vi.mock("../infra/bridge/server.js", () => ({
   startNodeBridgeServer: vi.fn(async (opts: BridgeStartOpts) => {
     bridgeStartCalls.push(opts);

@@ -759,7 +759,10 @@ export async function getReplyFromConfig(
         .join("\n\n")
     : baseBodyFinal;
   const queuedBody = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    ? [mediaNote, mediaReplyHint, queueBodyBase]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
     : queueBodyBase;
 
   if (queueEmbeddedPiMessage(sessionIdFinal, queuedBody)) {

@@ -43,7 +43,6 @@ import {
   createClawdisCodingTools,
   sanitizeContentBlocksImages,
 } from "./pi-tools.js";
-import { SteerableProviderTransport } from "./steerable-provider-transport.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -51,6 +50,7 @@ import {
   loadWorkspaceSkillEntries,
   type SkillSnapshot,
 } from "./skills.js";
+import { SteerableProviderTransport } from "./steerable-provider-transport.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 

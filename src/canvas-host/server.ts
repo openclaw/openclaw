@@ -48,7 +48,11 @@ export type CanvasHostHandler = {
     req: IncomingMessage,
     res: ServerResponse,
   ) => Promise<boolean>;
-  handleUpgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => boolean;
+  handleUpgrade: (
+    req: IncomingMessage,
+    socket: Socket,
+    head: Buffer,
+  ) => boolean;
   close: () => Promise<void>;
 };
 

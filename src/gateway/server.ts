@@ -18,7 +18,10 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
-import { handleA2uiHttpRequest, CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
+import {
+  CANVAS_HOST_PATH,
+  handleA2uiHttpRequest,
+} from "../canvas-host/a2ui.js";
 import {
   type CanvasHostHandler,
   createCanvasHostHandler,
@@ -2380,7 +2383,10 @@ export async function startGatewayServer(
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
-    const canvasHostUrl = deriveCanvasHostUrl(req, canvasHost ? port : undefined);
+    const canvasHostUrl = deriveCanvasHostUrl(
+      req,
+      canvasHost ? port : undefined,
+    );
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
       params?.client?.mode === "webchat" ||

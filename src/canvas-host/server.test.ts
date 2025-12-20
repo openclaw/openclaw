@@ -1,17 +1,17 @@
-import { createServer } from "node:http";
-import { type AddressInfo } from "node:net";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { defaultRuntime } from "../runtime.js";
-import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 import {
   CANVAS_HOST_PATH,
   CANVAS_WS_PATH,
   injectCanvasLiveReload,
 } from "./a2ui.js";
+import { createCanvasHostHandler, startCanvasHost } from "./server.js";
 
 describe("canvas host", () => {
   it("injects live reload script", () => {
@@ -80,9 +80,7 @@ describe("canvas host", () => {
     const port = (server.address() as AddressInfo).port;
 
     try {
-      const res = await fetch(
-        `http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`,
-      );
+      const res = await fetch(`http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`);
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain("v1");

@@ -1,18 +1,15 @@
-import {
-  agentLoop,
-  agentLoopContinue,
-} from "./steerable-agent-loop.js";
+import type {
+  AgentRunConfig,
+  AgentTransport,
+  ProviderTransportOptions,
+} from "@mariozechner/pi-agent-core";
 import type {
   AgentContext,
   AgentLoopConfig,
   Message,
   UserMessage,
 } from "@mariozechner/pi-ai";
-import type {
-  AgentRunConfig,
-  AgentTransport,
-} from "@mariozechner/pi-agent-core";
-import type { ProviderTransportOptions } from "@mariozechner/pi-agent-core";
+import { agentLoop, agentLoopContinue } from "./steerable-agent-loop.js";
 
 export class SteerableProviderTransport implements AgentTransport {
   private options: ProviderTransportOptions;
