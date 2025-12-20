@@ -14,8 +14,9 @@ struct OnboardingViewSmokeTests {
         _ = view.body
     }
 
-    @Test func pageOrderOmitsWorkspaceStep() {
+    @Test func pageOrderOmitsWorkspaceAndIdentitySteps() {
         let order = OnboardingView.pageOrder(for: .local)
         #expect(!order.contains(7))
+        #expect(!order.contains(3))
     }
 }

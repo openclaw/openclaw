@@ -5,6 +5,9 @@ enum AgentWorkspace {
     private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "workspace")
     static let agentsFilename = "AGENTS.md"
     static let soulFilename = "SOUL.md"
+    static let identityFilename = "IDENTITY.md"
+    static let userFilename = "USER.md"
+    static let bootstrapFilename = "BOOTSTRAP.md"
     private static let templateDirname = "templates"
     static let identityStartMarker = "<!-- clawdis:identity:start -->"
     static let identityEndMarker = "<!-- clawdis:identity:end -->"
@@ -42,6 +45,21 @@ enum AgentWorkspace {
             try self.defaultSoulTemplate().write(to: soulURL, atomically: true, encoding: .utf8)
             self.logger.info("Created SOUL.md at \(soulURL.path, privacy: .public)")
         }
+        let identityURL = workspaceURL.appendingPathComponent(self.identityFilename)
+        if !FileManager.default.fileExists(atPath: identityURL.path) {
+            try self.defaultIdentityTemplate().write(to: identityURL, atomically: true, encoding: .utf8)
+            self.logger.info("Created IDENTITY.md at \(identityURL.path, privacy: .public)")
+        }
+        let userURL = workspaceURL.appendingPathComponent(self.userFilename)
+        if !FileManager.default.fileExists(atPath: userURL.path) {
+            try self.defaultUserTemplate().write(to: userURL, atomically: true, encoding: .utf8)
+            self.logger.info("Created USER.md at \(userURL.path, privacy: .public)")
+        }
+        let bootstrapURL = workspaceURL.appendingPathComponent(self.bootstrapFilename)
+        if !FileManager.default.fileExists(atPath: bootstrapURL.path) {
+            try self.defaultBootstrapTemplate().write(to: bootstrapURL, atomically: true, encoding: .utf8)
+            self.logger.info("Created BOOTSTRAP.md at \(bootstrapURL.path, privacy: .public)")
+        }
         return agentsURL
     }
 
@@ -75,6 +93,11 @@ enum AgentWorkspace {
         # AGENTS.md - Clawdis Workspace
 
         This folder is the assistant's working directory.
+
+        ## First run (one-time)
+        - If BOOTSTRAP.md exists, follow its ritual and delete it once complete.
+        - Your agent identity lives in IDENTITY.md.
+        - Your profile lives in USER.md.
 
         ## Backup tip (recommended)
         If you treat this workspace as the agent's "memory", make it a git repo (ideally private) so identity
@@ -113,6 +136,78 @@ enum AgentWorkspace {
         - Never send streaming/partial replies to external messaging surfaces.
         """
         return self.loadTemplate(named: self.soulFilename, fallback: fallback)
+    }
+
+    static func defaultIdentityTemplate() -> String {
+        let fallback = """
+        # IDENTITY.md - Agent Identity
+
+        - Name:
+        - Creature:
+        - Vibe:
+        - Emoji:
+        """
+        return self.loadTemplate(named: self.identityFilename, fallback: fallback)
+    }
+
+    static func defaultUserTemplate() -> String {
+        let fallback = """
+        # USER.md - User Profile
+
+        - Name:
+        - Preferred address:
+        - Pronouns (optional):
+        - Timezone (optional):
+        - Notes:
+        """
+        return self.loadTemplate(named: self.userFilename, fallback: fallback)
+    }
+
+    static func defaultBootstrapTemplate() -> String {
+        let fallback = """
+        # BOOTSTRAP.md - First Run Ritual (delete after)
+
+        Hello. I was just born.
+
+        ## Your mission
+        Start a short, playful conversation and learn:
+        - Who am I?
+        - What am I?
+        - Who are you?
+        - How should I call you?
+
+        ## How to ask (cute + helpful)
+        Say:
+        "Hello! I was just born. Who am I? What am I? Who are you? How should I call you?"
+
+        Then offer suggestions:
+        - 3-5 name ideas.
+        - 3-5 creature/vibe combos.
+        - 5 emoji ideas.
+
+        ## Write these files
+        After the user chooses, update:
+
+        1) IDENTITY.md
+        - Name
+        - Creature
+        - Vibe
+        - Emoji
+
+        2) USER.md
+        - Name
+        - Preferred address
+        - Pronouns (optional)
+        - Timezone (optional)
+        - Notes
+
+        3) ~/.clawdis/clawdis.json
+        Set identity.name, identity.theme, identity.emoji to match IDENTITY.md.
+
+        ## Cleanup
+        Delete BOOTSTRAP.md once this is complete.
+        """
+        return self.loadTemplate(named: self.bootstrapFilename, fallback: fallback)
     }
 
     private static func loadTemplate(named: String, fallback: String) -> String {

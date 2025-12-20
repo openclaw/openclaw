@@ -38,8 +38,14 @@ struct AgentWorkspaceTests {
         let contents = try String(contentsOf: agentsURL, encoding: .utf8)
         #expect(contents.contains("# AGENTS.md"))
 
+        let identityURL = tmp.appendingPathComponent(AgentWorkspace.identityFilename)
+        let userURL = tmp.appendingPathComponent(AgentWorkspace.userFilename)
+        let bootstrapURL = tmp.appendingPathComponent(AgentWorkspace.bootstrapFilename)
+        #expect(FileManager.default.fileExists(atPath: identityURL.path))
+        #expect(FileManager.default.fileExists(atPath: userURL.path))
+        #expect(FileManager.default.fileExists(atPath: bootstrapURL.path))
+
         let second = try AgentWorkspace.bootstrap(workspaceURL: tmp)
         #expect(second == agentsURL)
     }
 }
-

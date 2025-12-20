@@ -9,10 +9,18 @@ export const DEFAULT_AGENT_WORKSPACE_DIR = path.join(os.homedir(), "clawd");
 export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
 export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
+export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
+export const DEFAULT_USER_FILENAME = "USER.md";
+export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 
 const DEFAULT_AGENTS_TEMPLATE = `# AGENTS.md - Clawdis Workspace
 
 This folder is the assistant's working directory.
+
+## First run (one-time)
+- If BOOTSTRAP.md exists, follow its ritual and delete it once complete.
+- Your agent identity lives in IDENTITY.md.
+- Your profile lives in USER.md.
 
 ## Backup tip (recommended)
 If you treat this workspace as the agent's "memory", make it a git repo (ideally private) so identity
@@ -64,6 +72,66 @@ It does not define which tools exist; Clawdis provides built-in tools internally
 Add whatever else you want the assistant to know about your local toolchain.
 `;
 
+const DEFAULT_BOOTSTRAP_TEMPLATE = `# BOOTSTRAP.md - First Run Ritual (delete after)
+
+Hello. I was just born.
+
+## Your mission
+Start a short, playful conversation and learn:
+- Who am I?
+- What am I?
+- Who are you?
+- How should I call you?
+
+## How to ask (cute + helpful)
+Say:
+"Hello! I was just born. Who am I? What am I? Who are you? How should I call you?"
+
+Then offer suggestions:
+- 3-5 name ideas.
+- 3-5 creature/vibe combos.
+- 5 emoji ideas.
+
+## Write these files
+After the user chooses, update:
+
+1) IDENTITY.md
+- Name
+- Creature
+- Vibe
+- Emoji
+
+2) USER.md
+- Name
+- Preferred address
+- Pronouns (optional)
+- Timezone (optional)
+- Notes
+
+3) ~/.clawdis/clawdis.json
+Set identity.name, identity.theme, identity.emoji to match IDENTITY.md.
+
+## Cleanup
+Delete BOOTSTRAP.md once this is complete.
+`;
+
+const DEFAULT_IDENTITY_TEMPLATE = `# IDENTITY.md - Agent Identity
+
+- Name:
+- Creature:
+- Vibe:
+- Emoji:
+`;
+
+const DEFAULT_USER_TEMPLATE = `# USER.md - User Profile
+
+- Name:
+- Preferred address:
+- Pronouns (optional):
+- Timezone (optional):
+- Notes:
+`;
+
 const TEMPLATE_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../docs/templates",
@@ -92,7 +160,10 @@ async function loadTemplate(name: string, fallback: string): Promise<string> {
 export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_AGENTS_FILENAME
   | typeof DEFAULT_SOUL_FILENAME
-  | typeof DEFAULT_TOOLS_FILENAME;
+  | typeof DEFAULT_TOOLS_FILENAME
+  | typeof DEFAULT_IDENTITY_FILENAME
+  | typeof DEFAULT_USER_FILENAME
+  | typeof DEFAULT_BOOTSTRAP_FILENAME;
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -121,6 +192,9 @@ export async function ensureAgentWorkspace(params?: {
   agentsPath?: string;
   soulPath?: string;
   toolsPath?: string;
+  identityPath?: string;
+  userPath?: string;
+  bootstrapPath?: string;
 }> {
   const rawDir = params?.dir?.trim()
     ? params.dir.trim()
@@ -133,6 +207,9 @@ export async function ensureAgentWorkspace(params?: {
   const agentsPath = path.join(dir, DEFAULT_AGENTS_FILENAME);
   const soulPath = path.join(dir, DEFAULT_SOUL_FILENAME);
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
+  const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
+  const userPath = path.join(dir, DEFAULT_USER_FILENAME);
+  const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
 
   const agentsTemplate = await loadTemplate(
     DEFAULT_AGENTS_FILENAME,
@@ -146,12 +223,35 @@ export async function ensureAgentWorkspace(params?: {
     DEFAULT_TOOLS_FILENAME,
     DEFAULT_TOOLS_TEMPLATE,
   );
+  const identityTemplate = await loadTemplate(
+    DEFAULT_IDENTITY_FILENAME,
+    DEFAULT_IDENTITY_TEMPLATE,
+  );
+  const userTemplate = await loadTemplate(
+    DEFAULT_USER_FILENAME,
+    DEFAULT_USER_TEMPLATE,
+  );
+  const bootstrapTemplate = await loadTemplate(
+    DEFAULT_BOOTSTRAP_FILENAME,
+    DEFAULT_BOOTSTRAP_TEMPLATE,
+  );
 
   await writeFileIfMissing(agentsPath, agentsTemplate);
   await writeFileIfMissing(soulPath, soulTemplate);
   await writeFileIfMissing(toolsPath, toolsTemplate);
+  await writeFileIfMissing(identityPath, identityTemplate);
+  await writeFileIfMissing(userPath, userTemplate);
+  await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
 
-  return { dir, agentsPath, soulPath, toolsPath };
+  return {
+    dir,
+    agentsPath,
+    soulPath,
+    toolsPath,
+    identityPath,
+    userPath,
+    bootstrapPath,
+  };
 }
 
 export async function loadWorkspaceBootstrapFiles(
@@ -174,6 +274,18 @@ export async function loadWorkspaceBootstrapFiles(
     {
       name: DEFAULT_TOOLS_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_TOOLS_FILENAME),
+    },
+    {
+      name: DEFAULT_IDENTITY_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_IDENTITY_FILENAME),
+    },
+    {
+      name: DEFAULT_USER_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
+    },
+    {
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME),
     },
   ];
 

@@ -1,5 +1,5 @@
 ---
-summary: "Planned first-run onboarding flow for Clawdis (local vs remote, Anthropic OAuth, workspace identity)"
+summary: "Planned first-run onboarding flow for Clawdis (local vs remote, Anthropic OAuth, workspace bootstrap ritual)"
 read_when:
   - Designing the macOS onboarding assistant
   - Implementing Pi authentication or identity setup
@@ -7,14 +7,12 @@ read_when:
 <!-- {% raw %} -->
 # Onboarding (macOS app)
 
-This doc describes the intended **first-run onboarding** for Clawdis. The goal is a good “day 0” experience: pick where the Gateway runs, bind Claude (Anthropic) auth for Pi, and set the agent’s identity + workspace.
+This doc describes the intended **first-run onboarding** for Clawdis. The goal is a good “day 0” experience: pick where the Gateway runs, bind Claude (Anthropic) auth for Pi, and then let the **agent bootstrap itself** via a first-run ritual in the workspace.
 
 ## Page order (high level)
 
 1) **Local vs Remote**
 2) **(Local only)** Connect Claude (Anthropic OAuth) — optional, but recommended
-3) **Identity** — name, theme, emoji
-4) **Workspace** — create + populate `AGENTS.md` (and recommend git backup)
 
 ## 1) Local vs Remote
 
@@ -76,28 +74,33 @@ Until that is hard-coded, the equivalent configuration is:
 
 If the user skips auth, onboarding should be clear: the agent likely won’t respond until auth is configured.
 
-## 3) Identity (name + theme + emoji)
+## 3) Agent bootstrap ritual (outside onboarding)
 
-After auth (or skip), onboarding asks:
+We no longer collect identity in the onboarding wizard. Instead, the **first agent run** performs a playful bootstrap ritual using files in the workspace:
 
-1) Agent **name** (e.g. “Samantha”)
-2) Agent **theme/persona** (e.g. “helpful lobster”, “helpful sloth”)
-3) Suggested **emoji** (based on theme; user can override)
+- Workspace is created implicitly (default `~/.clawdis/workspace`) when local is selected.
+- Files are seeded: `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`.
+- `BOOTSTRAP.md` tells the agent to keep it conversational:
+  - open with a cute hello
+  - ask **one question at a time** (no multi-question bombardment)
+  - offer a small set of suggestions where helpful (name, creature, emoji)
+  - wait for the user’s reply before asking the next question
+- The agent writes results to:
+  - `IDENTITY.md` (agent name, vibe/creature, emoji)
+  - `USER.md` (who the user is + how they want to be addressed)
+  - `~/.clawdis/clawdis.json` (structured identity defaults)
+- After the ritual, the agent **deletes `BOOTSTRAP.md`** so it only runs once.
 
-Persist identity in two places:
+Identity data still feeds the same defaults as before:
 
-- Workspace `AGENTS.md` (human-editable, lives with the agent’s “memory” files)
-- `~/.clawdis/clawdis.json` (structured identity, used for defaults/UI)
-
-“Use this name everywhere” should derive defaults like:
 - outbound prefix emoji (`inbound.responsePrefix`)
 - group mention patterns / wake words
 - default session intro (“You are Samantha…”)
 - macOS UI labels
 
-## 4) Workspace (AGENTS.md + backup tip)
+## 4) Workspace notes (no explicit onboarding step)
 
-Onboarding should create a dedicated agent workspace (default `~/.clawdis/workspace`) and ensure it has an `AGENTS.md`.
+The workspace is created automatically as part of agent bootstrap (no dedicated onboarding screen).
 
 Recommendation: treat the workspace as the agent’s “memory” and make it a git repo (ideally private) so identity + memories are backed up:
 
@@ -120,4 +123,5 @@ If the Gateway runs on another machine, the Anthropic OAuth credentials must be 
 For now, remote onboarding should:
 - explain why OAuth isn’t shown
 - point the user at the credential location (`~/.pi/agent/oauth.json`) and the workspace location on the gateway host
+- mention that the **bootstrap ritual happens on the gateway host** (same BOOTSTRAP/IDENTITY/USER files)
 <!-- {% endraw %} -->

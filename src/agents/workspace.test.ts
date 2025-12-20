@@ -20,6 +20,13 @@ describe("ensureAgentWorkspace", () => {
     if (!result.agentsPath) throw new Error("agentsPath missing");
     const content = await fs.readFile(result.agentsPath, "utf-8");
     expect(content).toContain("# AGENTS.md");
+
+    const identity = path.join(path.resolve(nested), "IDENTITY.md");
+    const user = path.join(path.resolve(nested), "USER.md");
+    const bootstrap = path.join(path.resolve(nested), "BOOTSTRAP.md");
+    await expect(fs.stat(identity)).resolves.toBeDefined();
+    await expect(fs.stat(user)).resolves.toBeDefined();
+    await expect(fs.stat(bootstrap)).resolves.toBeDefined();
   });
 
   it("does not overwrite existing AGENTS.md", async () => {
