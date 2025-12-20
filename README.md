@@ -169,16 +169,16 @@ Browser control (optional):
 
 ## Docs
 
-- `docs/index.md` (overview)
-- `docs/configuration.md`
-- `docs/gateway.md`
-- `docs/web.md`
-- `docs/discovery.md`
-- `docs/agent.md`
-- `docs/security.md`
-- `docs/troubleshooting.md`
-- `docs/ios/connect.md`
-- `docs/clawdis-mac.md`
+- [`docs/index.md`](docs/index.md) (overview)
+- [`docs/configuration.md`](docs/configuration.md)
+- [`docs/gateway.md`](docs/gateway.md)
+- [`docs/web.md`](docs/web.md)
+- [`docs/discovery.md`](docs/discovery.md)
+- [`docs/agent.md`](docs/agent.md)
+- [`docs/security.md`](docs/security.md)
+- [`docs/troubleshooting.md`](docs/troubleshooting.md)
+- [`docs/ios/connect.md`](docs/ios/connect.md)
+- [`docs/clawdis-mac.md`](docs/clawdis-mac.md)
 
 ## Clawd
 
