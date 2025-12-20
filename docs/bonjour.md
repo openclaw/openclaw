@@ -60,6 +60,7 @@ In the Tailscale admin console:
 - Add split DNS so the domain `clawdis.internal` uses that nameserver.
 
 Once clients accept tailnet DNS, iOS nodes can browse `_clawdis-bridge._tcp` in `clawdis.internal.` without multicast.
+Wide-area beacons also include `tailnetDns` (when available) so the macOS app can auto-fill SSH targets off-LAN.
 
 ### Bridge listener security (recommended)
 

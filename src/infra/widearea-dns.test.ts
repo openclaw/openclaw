@@ -28,4 +28,20 @@ describe("wide-area DNS-SD zone rendering", () => {
     );
     expect(txt).toContain(`displayName=Mac Studio (Clawdis)`);
   });
+
+  it("includes tailnetDns when provided", () => {
+    const txt = renderWideAreaBridgeZoneText({
+      serial: 2025121701,
+      bridgePort: 18790,
+      displayName: "Mac Studio (Clawdis)",
+      tailnetIPv4: "100.123.224.76",
+      tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net",
+      hostLabel: "studio-london",
+      instanceLabel: "studio-london",
+    });
+
+    expect(txt).toContain(
+      `tailnetDns=peters-mac-studio-1.sheep-coho.ts.net`,
+    );
+  });
 });
