@@ -48,40 +48,47 @@ describe("createTelegramBot", () => {
   });
 
   it("wraps inbound message with Telegram envelope", async () => {
-    onSpy.mockReset();
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
-    replySpy.mockReset();
+    const originalTz = process.env.TZ;
+    process.env.TZ = "Europe/Vienna";
 
-    createTelegramBot({ token: "tok" });
-    expect(onSpy).toHaveBeenCalledWith("message", expect.any(Function));
-    const handler = onSpy.mock.calls[0][1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    try {
+      onSpy.mockReset();
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<
+        typeof vi.fn
+      >;
+      replySpy.mockReset();
 
-    const message = {
-      chat: { id: 1234, type: "private" },
-      text: "hello world",
-      date: 1736380800, // 2025-01-09T00:00:00Z
-      from: {
-        first_name: "Ada",
-        last_name: "Lovelace",
-        username: "ada_bot",
-      },
-    };
-    await handler({
-      message,
-      me: { username: "clawdis_bot" },
-      getFile: async () => ({ download: async () => new Uint8Array() }),
-    });
+      createTelegramBot({ token: "tok" });
+      expect(onSpy).toHaveBeenCalledWith("message", expect.any(Function));
+      const handler = onSpy.mock.calls[0][1] as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
 
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replySpy.mock.calls[0][0];
-    expect(payload.Body).toMatch(
-      /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 2025-01-09 00:00]/,
-    );
-    expect(payload.Body).toContain("hello world");
+      const message = {
+        chat: { id: 1234, type: "private" },
+        text: "hello world",
+        date: 1736380800, // 2025-01-09T00:00:00Z
+        from: {
+          first_name: "Ada",
+          last_name: "Lovelace",
+          username: "ada_bot",
+        },
+      };
+      await handler({
+        message,
+        me: { username: "clawdis_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toMatch(
+        /^\[Telegram Ada Lovelace \(@ada_bot\) id:1234 2025-01-09T01:00\+01:00\{Europe\/Vienna\}\]/,
+      );
+      expect(payload.Body).toContain("hello world");
+    } finally {
+      process.env.TZ = originalTz;
+    }
   });
 
   it("triggers typing cue via onReplyStart", async () => {

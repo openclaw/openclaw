@@ -868,6 +868,9 @@ describe("web auto-reply", () => {
   });
 
   it("processes inbound messages without batching and preserves timestamps", async () => {
+    const originalTz = process.env.TZ;
+    process.env.TZ = "Europe/Vienna";
+
     const originalMax = process.getMaxListeners();
     process.setMaxListeners?.(1); // force low to confirm bump
 
@@ -875,72 +878,75 @@ describe("web auto-reply", () => {
       main: { sessionId: "sid", updatedAt: Date.now() },
     });
 
-    const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn();
-    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+    try {
+      const sendMedia = vi.fn();
+      const reply = vi.fn().mockResolvedValue(undefined);
+      const sendComposing = vi.fn();
+      const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
-    let capturedOnMessage:
-      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
-      | undefined;
-    const listenerFactory = async (opts: {
-      onMessage: (
-        msg: import("./inbound.js").WebInboundMessage,
-      ) => Promise<void>;
-    }) => {
-      capturedOnMessage = opts.onMessage;
-      return { close: vi.fn() };
-    };
+      let capturedOnMessage:
+        | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+        | undefined;
+      const listenerFactory = async (opts: {
+        onMessage: (
+          msg: import("./inbound.js").WebInboundMessage,
+        ) => Promise<void>;
+      }) => {
+        capturedOnMessage = opts.onMessage;
+        return { close: vi.fn() };
+      };
 
-    setLoadConfigMock(() => ({
-      inbound: {
-        timestampPrefix: "UTC",
-        session: { store: store.storePath },
-      },
-    }));
+      setLoadConfigMock(() => ({
+        inbound: {
+          timestampPrefix: "UTC",
+          session: { store: store.storePath },
+        },
+      }));
 
-    await monitorWebProvider(false, listenerFactory, false, resolver);
-    expect(capturedOnMessage).toBeDefined();
+      await monitorWebProvider(false, listenerFactory, false, resolver);
+      expect(capturedOnMessage).toBeDefined();
 
-    // Two messages from the same sender with fixed timestamps
-    await capturedOnMessage?.({
-      body: "first",
-      from: "+1",
-      to: "+2",
-      id: "m1",
-      timestamp: 1735689600000, // Jan 1 2025 00:00:00 UTC
-      sendComposing,
-      reply,
-      sendMedia,
-    });
-    await capturedOnMessage?.({
-      body: "second",
-      from: "+1",
-      to: "+2",
-      id: "m2",
-      timestamp: 1735693200000, // Jan 1 2025 01:00:00 UTC
-      sendComposing,
-      reply,
-      sendMedia,
-    });
+      // Two messages from the same sender with fixed timestamps
+      await capturedOnMessage?.({
+        body: "first",
+        from: "+1",
+        to: "+2",
+        id: "m1",
+        timestamp: 1735689600000, // Jan 1 2025 00:00:00 UTC
+        sendComposing,
+        reply,
+        sendMedia,
+      });
+      await capturedOnMessage?.({
+        body: "second",
+        from: "+1",
+        to: "+2",
+        id: "m2",
+        timestamp: 1735693200000, // Jan 1 2025 01:00:00 UTC
+        sendComposing,
+        reply,
+        sendMedia,
+      });
 
-    expect(resolver).toHaveBeenCalledTimes(2);
-    const firstArgs = resolver.mock.calls[0][0];
-    const secondArgs = resolver.mock.calls[1][0];
-    expect(firstArgs.Body).toContain(
-      "[WhatsApp +1 2025-01-01 00:00] [clawdis] first",
-    );
-    expect(firstArgs.Body).not.toContain("second");
-    expect(secondArgs.Body).toContain(
-      "[WhatsApp +1 2025-01-01 01:00] [clawdis] second",
-    );
-    expect(secondArgs.Body).not.toContain("first");
+      expect(resolver).toHaveBeenCalledTimes(2);
+      const firstArgs = resolver.mock.calls[0][0];
+      const secondArgs = resolver.mock.calls[1][0];
+      expect(firstArgs.Body).toContain(
+        "[WhatsApp +1 2025-01-01T01:00+01:00{Europe/Vienna}] [clawdis] first",
+      );
+      expect(firstArgs.Body).not.toContain("second");
+      expect(secondArgs.Body).toContain(
+        "[WhatsApp +1 2025-01-01T02:00+01:00{Europe/Vienna}] [clawdis] second",
+      );
+      expect(secondArgs.Body).not.toContain("first");
 
-    // Max listeners bumped to avoid warnings in multi-instance test runs
-    expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
-
-    process.setMaxListeners?.(originalMax);
-    await store.cleanup();
+      // Max listeners bumped to avoid warnings in multi-instance test runs
+      expect(process.getMaxListeners?.()).toBeGreaterThanOrEqual(50);
+    } finally {
+      process.setMaxListeners?.(originalMax);
+      process.env.TZ = originalTz;
+      await store.cleanup();
+    }
   });
 
   it("falls back to text when media send fails", async () => {
