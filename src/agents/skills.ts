@@ -10,7 +10,22 @@ import {
 import type { ClawdisConfig, SkillConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 
-type ClawdisSkillMetadata = {
+export type SkillInstallSpec = {
+  id?: string;
+  kind: "brew" | "node" | "go" | "pnpm" | "git" | "shell";
+  label?: string;
+  bins?: string[];
+  formula?: string;
+  package?: string;
+  module?: string;
+  repoPath?: string;
+  script?: string;
+  url?: string;
+  destination?: string;
+  command?: string;
+};
+
+export type ClawdisSkillMetadata = {
   always?: boolean;
   skillKey?: string;
   primaryEnv?: string;
@@ -19,11 +34,12 @@ type ClawdisSkillMetadata = {
     env?: string[];
     config?: string[];
   };
+  install?: SkillInstallSpec[];
 };
 
 type ParsedSkillFrontmatter = Record<string, string>;
 
-type SkillEntry = {
+export type SkillEntry = {
   skill: Skill;
   frontmatter: ParsedSkillFrontmatter;
   clawdis?: ClawdisSkillMetadata;
@@ -82,6 +98,47 @@ function normalizeStringList(input: unknown): string[] {
       .filter(Boolean);
   }
   return [];
+}
+
+function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const raw = input as Record<string, unknown>;
+  const kindRaw =
+    typeof raw.kind === "string"
+      ? raw.kind
+      : typeof raw.type === "string"
+        ? raw.type
+        : "";
+  const kind = kindRaw.trim().toLowerCase();
+  if (
+    kind !== "brew" &&
+    kind !== "node" &&
+    kind !== "go" &&
+    kind !== "pnpm" &&
+    kind !== "git" &&
+    kind !== "shell"
+  ) {
+    return undefined;
+  }
+
+  const spec: SkillInstallSpec = {
+    kind: kind as SkillInstallSpec["kind"],
+  };
+
+  if (typeof raw.id === "string") spec.id = raw.id;
+  if (typeof raw.label === "string") spec.label = raw.label;
+  const bins = normalizeStringList(raw.bins);
+  if (bins.length > 0) spec.bins = bins;
+  if (typeof raw.formula === "string") spec.formula = raw.formula;
+  if (typeof raw.package === "string") spec.package = raw.package;
+  if (typeof raw.module === "string") spec.module = raw.module;
+  if (typeof raw.repoPath === "string") spec.repoPath = raw.repoPath;
+  if (typeof raw.script === "string") spec.script = raw.script;
+  if (typeof raw.url === "string") spec.url = raw.url;
+  if (typeof raw.destination === "string") spec.destination = raw.destination;
+  if (typeof raw.command === "string") spec.command = raw.command;
+
+  return spec;
 }
 
 function isTruthy(value: unknown): boolean {
@@ -158,6 +215,12 @@ function resolveClawdisMetadata(
       typeof clawdisObj.requires === "object" && clawdisObj.requires !== null
         ? (clawdisObj.requires as Record<string, unknown>)
         : undefined;
+    const installRaw = Array.isArray(clawdisObj.install)
+      ? (clawdisObj.install as unknown[])
+      : [];
+    const install = installRaw
+      .map((entry) => parseInstallSpec(entry))
+      .filter((entry): entry is SkillInstallSpec => Boolean(entry));
     return {
       always:
         typeof clawdisObj.always === "boolean" ? clawdisObj.always : undefined,
@@ -176,6 +239,7 @@ function resolveClawdisMetadata(
             config: normalizeStringList(requiresRaw.config),
           }
         : undefined,
+      install: install.length > 0 ? install : undefined,
     };
   } catch {
     return undefined;
