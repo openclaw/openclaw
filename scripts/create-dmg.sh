@@ -15,6 +15,7 @@ set -euo pipefail
 #   DMG_APP_POS            default: "125 160"
 #   DMG_APPS_POS           default: "375 160"
 #   SKIP_DMG_STYLE=1       skip Finder styling
+#   DMG_EXTRA_SECTORS      extra sectors to keep when shrinking RW image (default: 2048)
 
 APP_PATH="${1:-}"
 OUT_PATH="${2:-}"
@@ -44,6 +45,7 @@ DMG_WINDOW_BOUNDS="${DMG_WINDOW_BOUNDS:-400 100 900 420}"
 DMG_ICON_SIZE="${DMG_ICON_SIZE:-128}"
 DMG_APP_POS="${DMG_APP_POS:-125 160}"
 DMG_APPS_POS="${DMG_APPS_POS:-375 160}"
+DMG_EXTRA_SECTORS="${DMG_EXTRA_SECTORS:-2048}"
 
 to_applescript_list4() {
   local raw="$1"
@@ -157,6 +159,15 @@ for i in {1..5}; do
   fi
   sleep 2
 done
+
+hdiutil resize -limits "$DMG_RW_PATH" >/tmp/clawdis-dmg-limits.txt 2>/dev/null || true
+MIN_SECTORS="$(tail -n 1 /tmp/clawdis-dmg-limits.txt 2>/dev/null | awk '{print $1}')"
+rm -f /tmp/clawdis-dmg-limits.txt
+if [[ "$MIN_SECTORS" =~ ^[0-9]+$ ]] && [[ "$DMG_EXTRA_SECTORS" =~ ^[0-9]+$ ]]; then
+  TARGET_SECTORS=$((MIN_SECTORS + DMG_EXTRA_SECTORS))
+  echo "Shrinking RW image: min sectors=$MIN_SECTORS (+$DMG_EXTRA_SECTORS) -> $TARGET_SECTORS"
+  hdiutil resize -sectors "$TARGET_SECTORS" "$DMG_RW_PATH" >/dev/null 2>&1 || true
+fi
 
 hdiutil convert "$DMG_RW_PATH" -format ULMO -o "$OUT_PATH" -ov
 rm -f "$DMG_RW_PATH"
