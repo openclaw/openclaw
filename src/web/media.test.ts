@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 
 import sharp from "sharp";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadWebMedia } from "./media.js";
 
@@ -53,5 +53,26 @@ describe("web media loading", () => {
 
     expect(result.kind).toBe("image");
     expect(result.contentType).toBe("image/jpeg");
+  });
+
+  it("adds extension to URL fileName when missing", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => Buffer.from("%PDF-1.4").buffer,
+      headers: { get: () => "application/pdf" },
+      status: 200,
+    } as Response);
+
+    const result = await loadWebMedia(
+      "https://example.com/download",
+      1024 * 1024,
+    );
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/pdf");
+    expect(result.fileName).toBe("download.pdf");
+
+    fetchMock.mockRestore();
   });
 });
