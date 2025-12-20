@@ -196,7 +196,11 @@ export function registerBrowserAgentRoutes(
         case "press": {
           const key = toStringOrEmpty(body.key);
           if (!key) return jsonError(res, 400, "key is required");
-          await pw.pressKeyViaPlaywright({ cdpPort, targetId: tab.targetId, key });
+          await pw.pressKeyViaPlaywright({
+            cdpPort,
+            targetId: tab.targetId,
+            key,
+          });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "hover": {
@@ -465,7 +469,9 @@ export function registerBrowserAgentRoutes(
         ? "aria"
         : req.query.format === "ai"
           ? "ai"
-          : ((await getPwAiModule()) ? "ai" : "aria");
+          : (await getPwAiModule())
+            ? "ai"
+            : "aria";
     const limit =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
 
