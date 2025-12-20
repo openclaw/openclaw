@@ -167,7 +167,7 @@ struct OnboardingView: View {
 
             self.navigationBar
         }
-        .frame(width: self.pageWidth, height: 720)
+        .frame(width: self.pageWidth, height: 820)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.currentPage = 0
@@ -1134,8 +1134,8 @@ struct OnboardingView: View {
             .buttonStyle(.borderedProminent)
         }
         .padding(.horizontal, 28)
-        .padding(.bottom, 24)
-        .frame(height: 60)
+        .padding(.bottom, 28)
+        .frame(minHeight: 60)
     }
 
     private func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
