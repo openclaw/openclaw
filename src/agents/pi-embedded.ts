@@ -5,6 +5,7 @@ import {
   Agent,
   type AgentEvent,
   type AppMessage,
+  ProviderTransport,
   type ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
 import {
@@ -50,7 +51,6 @@ import {
   loadWorkspaceSkillEntries,
   type SkillSnapshot,
 } from "./skills.js";
-import { SteerableProviderTransport } from "./steerable-provider-transport.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
@@ -317,7 +317,6 @@ export async function runEmbeddedPiAgent(params: {
       const sessionManager = new SessionManager(false, params.sessionFile);
       const settingsManager = new SettingsManager();
 
-      // TODO(steipete): Drop the steerable transport after pi-mono PR #259 lands and deps are bumped.
       const agent = new Agent({
         initialState: {
           systemPrompt: systemPromptWithSkills,
@@ -329,7 +328,7 @@ export async function runEmbeddedPiAgent(params: {
         },
         messageTransformer,
         queueMode: settingsManager.getQueueMode(),
-        transport: new SteerableProviderTransport({
+        transport: new ProviderTransport({
           getApiKey: async (providerName) => {
             const key = await getApiKeyForProvider(providerName);
             if (!key) {

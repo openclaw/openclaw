@@ -2407,7 +2407,8 @@ export async function startGatewayServer(
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
-    const canvasHostPortForWs = canvasHostServer?.port ?? (canvasHost ? port : undefined);
+    const canvasHostPortForWs =
+      canvasHostServer?.port ?? (canvasHost ? port : undefined);
     const canvasHostOverride =
       bridgeHost && bridgeHost !== "0.0.0.0" && bridgeHost !== "::"
         ? bridgeHost
