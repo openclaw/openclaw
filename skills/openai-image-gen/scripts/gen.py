@@ -21,7 +21,8 @@ def slugify(text: str) -> str:
 
 def default_out_dir() -> Path:
     now = dt.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
-    base = Path("./tmp")
+    preferred = Path.home() / "Projects" / "tmp"
+    base = preferred if preferred.is_dir() else Path("./tmp")
     base.mkdir(parents=True, exist_ok=True)
     return base / f"openai-image-gen-{now}"
 

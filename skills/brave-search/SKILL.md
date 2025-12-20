@@ -26,4 +26,4 @@ node {baseDir}/scripts/content.mjs "https://example.com/article"
 Notes:
 - Needs `BRAVE_API_KEY`.
 - Content extraction is best-effort (good for articles; not for app-like sites).
- - If a site is blocked or too JS-heavy, prefer the `summarize` skill (it can use a Firecrawl fallback).
+- If a site is blocked or too JS-heavy, prefer the `summarize` skill (it can use a Firecrawl fallback).

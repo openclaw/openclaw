@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
 
 function usage() {
   console.error(`Usage: search.mjs "query" [-n 5] [--content]`);
