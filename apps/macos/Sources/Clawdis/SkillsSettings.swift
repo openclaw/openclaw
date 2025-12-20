@@ -6,7 +6,6 @@ struct SkillsSettings: View {
     @Bindable var state: AppState
     @State private var model = SkillsSettingsModel()
     @State private var envEditor: EnvEditorState?
-    @State private var searchQuery = ""
     @State private var filter: SkillsFilter = .all
 
     init(state: AppState = AppStateStore.shared) {
@@ -106,7 +105,6 @@ struct SkillsSettings: View {
                 }
             }
             .listStyle(.inset)
-            .searchable(text: self.$searchQuery, placement: .automatic, prompt: "Search skills")
         }
     }
 
@@ -123,14 +121,7 @@ struct SkillsSettings: View {
     }
 
     private var filteredSkills: [SkillStatus] {
-        let trimmed = self.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let query = trimmed.lowercased()
         return self.model.skills.filter { skill in
-            if !query.isEmpty {
-                let matchesName = skill.name.lowercased().contains(query)
-                let matchesDescription = skill.description.lowercased().contains(query)
-                if !(matchesName || matchesDescription) { return false }
-            }
             switch self.filter {
             case .all:
                 return true
