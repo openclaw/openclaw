@@ -6,7 +6,10 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import {
+  queueEmbeddedPiMessage,
+  runEmbeddedPiAgent,
+} from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
@@ -749,6 +752,25 @@ export async function getReplyFromConfig(
 
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionTranscriptPath(sessionIdFinal);
+
+  const queueBodyBase = transcribedText
+    ? [baseBodyFinal, `Transcript:\n${transcribedText}`]
+        .filter(Boolean)
+        .join("\n\n")
+    : baseBodyFinal;
+  const queuedBody = mediaNote
+    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+    : queueBodyBase;
+
+  if (queueEmbeddedPiMessage(sessionIdFinal, queuedBody)) {
+    if (sessionEntry && sessionStore && sessionKey) {
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    }
+    cleanupTyping();
+    return undefined;
+  }
 
   await onReplyStart();
 
