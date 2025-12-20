@@ -260,7 +260,9 @@ private struct HoverHUDView: View {
     }
 
     private var dotColor: Color {
-        if self.activityStore.iconState.isWorking { return .green }
+        if self.activityStore.iconState.isWorking {
+            return Color(nsColor: NSColor.systemGreen.withAlphaComponent(0.7))
+        }
         return .secondary
     }
 
