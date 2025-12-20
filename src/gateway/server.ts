@@ -24,7 +24,9 @@ import {
 } from "../canvas-host/a2ui.js";
 import {
   type CanvasHostHandler,
+  type CanvasHostServer,
   createCanvasHostHandler,
+  startCanvasHost,
 } from "../canvas-host/server.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
@@ -395,6 +397,7 @@ const MAX_BUFFERED_BYTES = 1.5 * 1024 * 1024; // per-connection send buffer limi
 function deriveCanvasHostUrl(
   req: IncomingMessage | undefined,
   canvasPort: number | undefined,
+  hostOverride?: string,
 ) {
   if (!req || !canvasPort) return undefined;
   const hostHeader = req.headers.host?.trim();
@@ -406,8 +409,9 @@ function deriveCanvasHostUrl(
         : undefined;
   const scheme = forwardedProto === "https" ? "https" : "http";
 
-  let host = "";
-  if (hostHeader) {
+  let host = (hostOverride ?? "").trim();
+  if (host === "0.0.0.0" || host === "::") host = "";
+  if (!host && hostHeader) {
     try {
       const parsed = new URL(`http://${hostHeader}`);
       host = parsed.hostname;
@@ -1025,6 +1029,7 @@ export async function startGatewayServer(
   }
 
   let canvasHost: CanvasHostHandler | null = null;
+  let canvasHostServer: CanvasHostServer | null = null;
   if (canvasHostEnabled) {
     try {
       const handler = await createCanvasHostHandler({
@@ -1317,6 +1322,31 @@ export async function startGatewayServer(
     }
     return "0.0.0.0";
   })();
+
+  const canvasHostPort = (() => {
+    const configured = cfgAtStart.canvasHost?.port;
+    if (typeof configured === "number" && configured > 0) return configured;
+    return 18793;
+  })();
+
+  if (canvasHostEnabled && bridgeEnabled && bridgeHost) {
+    try {
+      const started = await startCanvasHost({
+        runtime: defaultRuntime,
+        rootDir: cfgAtStart.canvasHost?.root,
+        port: canvasHostPort,
+        listenHost: bridgeHost,
+        allowInTests: opts.allowCanvasHostInTests,
+      });
+      if (started.port > 0) {
+        canvasHostServer = started;
+      }
+    } catch (err) {
+      logWarn(
+        `gateway: canvas host failed to start on ${bridgeHost}:${canvasHostPort}: ${String(err)}`,
+      );
+    }
+  }
 
   const bridgeSubscribe = (nodeId: string, sessionKey: string) => {
     const normalizedNodeId = nodeId.trim();
@@ -2079,11 +2109,7 @@ export async function startGatewayServer(
   };
 
   const machineDisplayName = await getMachineDisplayName();
-  const bridgeHostIsLoopback = bridgeHost ? isLoopbackHost(bridgeHost) : false;
-  const canvasHostPortForBridge =
-    canvasHost && (!isLoopbackHost(bindHost) || bridgeHostIsLoopback)
-      ? port
-      : undefined;
+  const canvasHostPortForBridge = canvasHostServer?.port;
 
   if (bridgeEnabled && bridgePort > 0 && bridgeHost) {
     try {
@@ -2381,9 +2407,15 @@ export async function startGatewayServer(
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
+    const canvasHostPortForWs = canvasHostServer?.port ?? (canvasHost ? port : undefined);
+    const canvasHostOverride =
+      bridgeHost && bridgeHost !== "0.0.0.0" && bridgeHost !== "::"
+        ? bridgeHost
+        : undefined;
     const canvasHostUrl = deriveCanvasHostUrl(
       req,
-      canvasHost ? port : undefined,
+      canvasHostPortForWs,
+      canvasHostServer ? canvasHostOverride : undefined,
     );
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
@@ -4394,6 +4426,13 @@ export async function startGatewayServer(
       if (canvasHost) {
         try {
           await canvasHost.close();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (canvasHostServer) {
+        try {
+          await canvasHostServer.close();
         } catch {
           /* ignore */
         }

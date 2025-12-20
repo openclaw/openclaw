@@ -377,7 +377,7 @@ export async function startCanvasHost(
   const handler = await createCanvasHostHandler({
     runtime: opts.runtime,
     rootDir: opts.rootDir,
-    basePath: "/",
+    basePath: CANVAS_HOST_PATH,
     allowInTests: opts.allowInTests,
   });
 
