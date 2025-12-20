@@ -74,7 +74,10 @@ import {
   verifyNodeToken,
 } from "../infra/node-pairing.js";
 import { ensureClawdisCliOnPath } from "../infra/path-env.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
+import {
+  enqueueSystemEvent,
+  isSystemEventContextChanged,
+} from "../infra/system-events.js";
 import {
   listSystemPresence,
   updateSystemPresence,
@@ -4014,7 +4017,7 @@ export async function startGatewayServer(
                 params.tags.every((t) => typeof t === "string")
                   ? (params.tags as string[])
                   : undefined;
-              updateSystemPresence({
+              const presenceUpdate = updateSystemPresence({
                 text,
                 instanceId,
                 host,
@@ -4029,17 +4032,55 @@ export async function startGatewayServer(
                 tags,
               });
               const isNodePresenceLine = text.startsWith("Node:");
-              const normalizedReason = (reason ?? "").toLowerCase();
-              const looksPeriodic =
-                normalizedReason.startsWith("periodic") ||
-                normalizedReason === "heartbeat";
-              if (!(isNodePresenceLine && looksPeriodic)) {
-                const compactNodeText =
-                  isNodePresenceLine &&
-                  (host || ip || version || mode || reason)
-                    ? `Node: ${host?.trim() || "Unknown"}${ip ? ` (${ip})` : ""} · app ${version?.trim() || "unknown"} · mode ${mode?.trim() || "unknown"} · reason ${reason?.trim() || "event"}`
-                    : text;
-                enqueueSystemEvent(compactNodeText);
+              if (isNodePresenceLine) {
+                const next = presenceUpdate.next;
+                const changed = new Set(presenceUpdate.changedKeys);
+                const reasonValue = next.reason ?? reason;
+                const normalizedReason = (reasonValue ?? "").toLowerCase();
+                const ignoreReason =
+                  normalizedReason.startsWith("periodic") ||
+                  normalizedReason === "heartbeat";
+                const hostChanged = changed.has("host");
+                const ipChanged = changed.has("ip");
+                const versionChanged = changed.has("version");
+                const modeChanged = changed.has("mode");
+                const reasonChanged = changed.has("reason") && !ignoreReason;
+                const hasChanges =
+                  hostChanged ||
+                  ipChanged ||
+                  versionChanged ||
+                  modeChanged ||
+                  reasonChanged;
+                if (hasChanges) {
+                  const contextChanged = isSystemEventContextChanged(
+                    presenceUpdate.key,
+                  );
+                  const parts: string[] = [];
+                  if (contextChanged || hostChanged || ipChanged) {
+                    const hostLabel = next.host?.trim() || "Unknown";
+                    const ipLabel = next.ip?.trim();
+                    parts.push(
+                      `Node: ${hostLabel}${ipLabel ? ` (${ipLabel})` : ""}`,
+                    );
+                  }
+                  if (versionChanged) {
+                    parts.push(`app ${next.version?.trim() || "unknown"}`);
+                  }
+                  if (modeChanged) {
+                    parts.push(`mode ${next.mode?.trim() || "unknown"}`);
+                  }
+                  if (reasonChanged) {
+                    parts.push(`reason ${reasonValue?.trim() || "event"}`);
+                  }
+                  const deltaText = parts.join(" · ");
+                  if (deltaText) {
+                    enqueueSystemEvent(deltaText, {
+                      contextKey: presenceUpdate.key,
+                    });
+                  }
+                }
+              } else {
+                enqueueSystemEvent(text);
               }
               presenceVersion += 1;
               broadcast(

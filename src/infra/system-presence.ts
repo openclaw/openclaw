@@ -16,6 +16,14 @@ export type SystemPresence = {
   ts: number;
 };
 
+export type SystemPresenceUpdate = {
+  key: string;
+  previous?: SystemPresence;
+  next: SystemPresence;
+  changes: Partial<SystemPresence>;
+  changedKeys: (keyof SystemPresence)[];
+};
+
 const entries = new Map<string, SystemPresence>();
 const TTL_MS = 5 * 60 * 1000; // 5 minutes
 const MAX_ENTRIES = 200;
@@ -154,7 +162,9 @@ type SystemPresencePayload = {
   tags?: string[];
 };
 
-export function updateSystemPresence(payload: SystemPresencePayload) {
+export function updateSystemPresence(
+  payload: SystemPresencePayload,
+): SystemPresenceUpdate {
   ensureSelfPresence();
   const parsed = parsePresence(payload.text);
   const key =
@@ -164,6 +174,7 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
     parsed.ip ||
     parsed.text.slice(0, 64) ||
     os.hostname().toLowerCase();
+  const hadExisting = entries.has(key);
   const existing = entries.get(key) ?? ({} as SystemPresence);
   const merged: SystemPresence = {
     ...existing,
@@ -185,6 +196,25 @@ export function updateSystemPresence(payload: SystemPresencePayload) {
     ts: Date.now(),
   };
   entries.set(key, merged);
+  const trackKeys = ["host", "ip", "version", "mode", "reason"] as const;
+  type TrackKey = (typeof trackKeys)[number];
+  const changes: Partial<Pick<SystemPresence, TrackKey>> = {};
+  const changedKeys: TrackKey[] = [];
+  for (const k of trackKeys) {
+    const prev = existing[k];
+    const next = merged[k];
+    if (prev !== next) {
+      changes[k] = next;
+      changedKeys.push(k);
+    }
+  }
+  return {
+    key,
+    previous: hadExisting ? existing : undefined,
+    next: merged,
+    changes,
+    changedKeys,
+  } satisfies SystemPresenceUpdate;
 }
 
 export function upsertPresence(key: string, presence: Partial<SystemPresence>) {
