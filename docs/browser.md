@@ -8,7 +8,7 @@ read_when:
 
 # Browser (integrated) — clawd-managed Chrome
 
-Status: draft spec · Date: 2025-12-19
+Status: draft spec · Date: 2025-12-20
 
 Goal: give the **clawd** persona its own browser that is:
 - Visually distinct (lobster-orange, profile labeled "clawd").
@@ -98,7 +98,7 @@ Fallback behavior:
   the user set the profile color/name once via Chrome UI; it must persist because
   the `userDataDir` is persistent.
 
-## Control server contract (current)
+## Control server contract (vNext)
 
 Expose a small local HTTP API (and/or gateway RPC surface) so the agent can manage
 state without touching the user's Chrome.
@@ -111,32 +111,21 @@ Basics:
 - `POST /tabs/open` open a new tab
 - `POST /tabs/focus` focus a tab by id/prefix
 - `DELETE /tabs/:targetId` close a tab by id/prefix
-- `POST /close` close the current tab (optional targetId in body)
 
 Inspection:
-- `GET /screenshot` (CDP screenshot)
-- `POST /screenshot` (Playwright screenshot with ref/element)
-- `GET /query`
-- `GET /dom`
-- `GET /snapshot` (`aria` | `domSnapshot` | `ai`)
-
-Debug-only endpoints (intentionally omitted for now):
-- network request log (privacy)
-- tracing export (large + sensitive)
-- locator generation (dev convenience)
+- `POST /screenshot` `{ targetId?, fullPage?, ref?, element?, type? }`
+- `GET /snapshot` `?format=aria|ai&targetId?&limit?`
+- `GET /console` `?level?&targetId?`
+- `POST /pdf` `{ targetId? }`
 
 Actions:
 - `POST /navigate`
-- `POST /resize`
-- `POST /click`, `POST /type`, `POST /press`, `POST /hover`, `POST /drag`, `POST /select`
-- `POST /upload` (arms the next file chooser)
-- `POST /fill` (JSON field descriptors)
-- `POST /dialog` (arms the next alert/confirm/prompt)
-- `POST /wait` (time/text/textGone)
-- `POST /evaluate` (function + optional ref)
-- `GET /console`
-- `POST /pdf`
-- `POST /verify/element`, `POST /verify/text`, `POST /verify/list`, `POST /verify/value`
+- `POST /act` `{ kind, targetId?, ... }` where `kind` is one of:
+  - `click`, `type`, `press`, `hover`, `drag`, `select`, `fill`, `wait`, `resize`, `close`, `evaluate`
+
+Hooks (arming):
+- `POST /hooks/file-chooser` `{ targetId?, paths, timeoutMs? }`
+- `POST /hooks/dialog` `{ targetId?, accept, promptText?, timeoutMs? }`
 
 ### "Is it open or closed?"
 
@@ -178,8 +167,6 @@ Inspection:
 - `clawdis browser screenshot`
 - `clawdis browser screenshot --full-page`
 - `clawdis browser screenshot --ref 12`
-- `clawdis browser query "a" --limit 5`
-- `clawdis browser dom --format text --max-chars 5000`
 - `clawdis browser snapshot --format aria --limit 200`
 - `clawdis browser snapshot --format ai`
 
@@ -199,14 +186,10 @@ Actions:
 - `clawdis browser evaluate --fn '(el) => el.textContent' --ref 7`
 - `clawdis browser console --level error`
 - `clawdis browser pdf`
-- `clawdis browser verify-element --role button --name "Submit"`
-- `clawdis browser verify-text "Welcome"`
-- `clawdis browser verify-list 3 ItemA ItemB`
-- `clawdis browser verify-value --ref 4 --type textbox --value hello`
 
 Notes:
 - `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.
-- `snapshot --format ai` returns Playwright-for-AI markup used for ref-based actions.
+- `snapshot --format ai` returns AI snapshot markup used for ref-based actions.
 
 ## Security & privacy notes
 
