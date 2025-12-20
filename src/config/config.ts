@@ -359,11 +359,12 @@ const ClawdisSchema = z.object({
     .optional(),
   skills: z
     .record(
+      z.string(),
       z
         .object({
           enabled: z.boolean().optional(),
           apiKey: z.string().optional(),
-          env: z.record(z.string()).optional(),
+          env: z.record(z.string(), z.string()).optional(),
         })
         .passthrough(),
     )
@@ -459,7 +460,10 @@ export function validateConfigObject(
       })),
     };
   }
-  return { ok: true, config: applyIdentityDefaults(validated.data) };
+  return {
+    ok: true,
+    config: applyIdentityDefaults(validated.data as ClawdisConfig),
+  };
 }
 
 export function parseConfigJson5(

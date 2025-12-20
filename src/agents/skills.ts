@@ -5,7 +5,6 @@ import {
   formatSkillsForPrompt,
   loadSkillsFromDir,
   type Skill,
-  type SkillFrontmatter,
 } from "@mariozechner/pi-coding-agent";
 
 import type { ClawdisConfig, SkillConfig } from "../config/config.js";
@@ -22,9 +21,11 @@ type ClawdisSkillMetadata = {
   };
 };
 
+type ParsedSkillFrontmatter = Record<string, string>;
+
 type SkillEntry = {
   skill: Skill;
-  frontmatter: SkillFrontmatter;
+  frontmatter: ParsedSkillFrontmatter;
   clawdis?: ClawdisSkillMetadata;
 };
 
@@ -34,7 +35,7 @@ export type SkillSnapshot = {
 };
 
 function getFrontmatterValue(
-  frontmatter: SkillFrontmatter,
+  frontmatter: ParsedSkillFrontmatter,
   key: string,
 ): string | undefined {
   const raw = frontmatter[key];
@@ -51,8 +52,8 @@ function stripQuotes(value: string): string {
   return value;
 }
 
-function parseFrontmatter(content: string): SkillFrontmatter {
-  const frontmatter: SkillFrontmatter = {};
+function parseFrontmatter(content: string): ParsedSkillFrontmatter {
+  const frontmatter: ParsedSkillFrontmatter = {};
   const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
   if (!normalized.startsWith("---")) return frontmatter;
   const endIndex = normalized.indexOf("\n---", 3);
@@ -143,7 +144,7 @@ function hasBinary(bin: string): boolean {
 }
 
 function resolveClawdisMetadata(
-  frontmatter: SkillFrontmatter,
+  frontmatter: ParsedSkillFrontmatter,
 ): ClawdisSkillMetadata | undefined {
   const raw = getFrontmatterValue(frontmatter, "metadata");
   if (!raw) return undefined;
@@ -324,11 +325,11 @@ function loadSkillEntries(
   const managedSkills = loadSkillsFromDir({
     dir: managedSkillsDir,
     source: "clawdis-managed",
-  }).skills;
+  });
   const workspaceSkills = loadSkillsFromDir({
     dir: workspaceSkillsDir,
     source: "clawdis-workspace",
-  }).skills;
+  });
 
   const merged = new Map<string, Skill>();
   for (const skill of managedSkills) merged.set(skill.name, skill);
@@ -336,7 +337,7 @@ function loadSkillEntries(
 
   const skillEntries: SkillEntry[] = Array.from(merged.values()).map(
     (skill) => {
-      let frontmatter: SkillFrontmatter = {};
+      let frontmatter: ParsedSkillFrontmatter = {};
       try {
         const raw = fs.readFileSync(skill.filePath, "utf-8");
         frontmatter = parseFrontmatter(raw);

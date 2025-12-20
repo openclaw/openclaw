@@ -3,6 +3,7 @@ import fs from "node:fs";
 import {
   createServer as createHttpServer,
   type Server as HttpServer,
+  type IncomingMessage,
 } from "node:http";
 import os from "node:os";
 import path from "node:path";
@@ -325,6 +326,38 @@ function buildSnapshot(): Snapshot {
 
 const MAX_PAYLOAD_BYTES = 512 * 1024; // cap incoming frame size
 const MAX_BUFFERED_BYTES = 1.5 * 1024 * 1024; // per-connection send buffer limit
+
+function deriveCanvasHostUrl(
+  req: IncomingMessage | undefined,
+  canvasPort: number | undefined,
+) {
+  if (!req || !canvasPort) return undefined;
+  const hostHeader = req.headers.host?.trim();
+  const forwardedProto =
+    typeof req.headers["x-forwarded-proto"] === "string"
+      ? req.headers["x-forwarded-proto"]
+      : Array.isArray(req.headers["x-forwarded-proto"])
+        ? req.headers["x-forwarded-proto"][0]
+        : undefined;
+  const scheme = forwardedProto === "https" ? "https" : "http";
+
+  let host = "";
+  if (hostHeader) {
+    try {
+      const parsed = new URL(`http://${hostHeader}`);
+      host = parsed.hostname;
+    } catch {
+      host = "";
+    }
+  }
+  if (!host) {
+    host = req.socket?.localAddress?.trim() ?? "";
+  }
+  if (!host) return undefined;
+
+  const formattedHost = host.includes(":") ? `[${host}]` : host;
+  return `${scheme}://${formattedHost}:${canvasPort}`;
+}
 const MAX_CHAT_HISTORY_MESSAGES_BYTES = 6 * 1024 * 1024; // keep history responses comfortably under client WS limits
 const HANDSHAKE_TIMEOUT_MS = 10_000;
 const TICK_INTERVAL_MS = 30_000;
@@ -1896,6 +1929,7 @@ export async function startGatewayServer(
         host: bridgeHost,
         port: bridgePort,
         serverName: machineDisplayName,
+        canvasHostPort: canvasHost?.port,
         onRequest: (nodeId, req) => handleBridgeRequest(nodeId, req),
         onAuthenticated: async (node) => {
           const host = node.displayName?.trim() || node.nodeId;
@@ -2181,13 +2215,14 @@ export async function startGatewayServer(
     .start()
     .catch((err) => logError(`cron failed to start: ${String(err)}`));
 
-  wss.on("connection", (socket) => {
+  wss.on("connection", (socket, req) => {
     let client: Client | null = null;
     let closed = false;
     const connId = randomUUID();
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
+    const canvasHostUrl = deriveCanvasHostUrl(req, canvasHost?.port);
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
       params?.client?.mode === "webchat" ||
@@ -2399,6 +2434,7 @@ export async function startGatewayServer(
             },
             features: { methods: METHODS, events: EVENTS },
             snapshot,
+            canvasHostUrl,
             policy: {
               maxPayload: MAX_PAYLOAD_BYTES,
               maxBufferedBytes: MAX_BUFFERED_BYTES,

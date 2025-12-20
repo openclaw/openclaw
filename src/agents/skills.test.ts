@@ -35,6 +35,16 @@ ${body ?? `# ${name}\n`}
 }
 
 describe("buildWorkspaceSkillsPrompt", () => {
+  it("returns empty prompt when skills dirs are missing", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+
+    expect(prompt).toBe("");
+  });
+
   it("loads skills from workspace skills/", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
     const skillDir = path.join(workspaceDir, "skills", "demo-skill");
@@ -193,6 +203,19 @@ describe("buildWorkspaceSkillsPrompt", () => {
       config: { skills: { alias: { enabled: false } } },
     });
     expect(prompt).not.toContain("alias-skill");
+  });
+});
+
+describe("buildWorkspaceSkillSnapshot", () => {
+  it("returns an empty snapshot when skills dirs are missing", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+    });
+
+    expect(snapshot.prompt).toBe("");
+    expect(snapshot.skills).toEqual([]);
   });
 });
 
