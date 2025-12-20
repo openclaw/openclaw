@@ -116,7 +116,6 @@ Basics:
 Inspection:
 - `GET /screenshot` (CDP screenshot)
 - `POST /screenshot` (Playwright screenshot with ref/element)
-- `POST /eval` (CDP evaluate)
 - `GET /query`
 - `GET /dom`
 - `GET /snapshot` (`aria` | `domSnapshot` | `ai`)
@@ -127,19 +126,17 @@ Debug-only endpoints (intentionally omitted for now):
 - locator generation (dev convenience)
 
 Actions:
-- `POST /navigate`, `POST /back`
+- `POST /navigate`
 - `POST /resize`
 - `POST /click`, `POST /type`, `POST /press`, `POST /hover`, `POST /drag`, `POST /select`
-- `POST /upload` (file chooser modal must be open)
+- `POST /upload` (arms the next file chooser)
 - `POST /fill` (JSON field descriptors)
-- `POST /dialog` (alert/confirm/prompt)
+- `POST /dialog` (arms the next alert/confirm/prompt)
 - `POST /wait` (time/text/textGone)
 - `POST /evaluate` (function + optional ref)
-- `POST /run` (function(page) → result)
 - `GET /console`
 - `POST /pdf`
 - `POST /verify/element`, `POST /verify/text`, `POST /verify/list`, `POST /verify/value`
-- `POST /mouse/move`, `POST /mouse/click`, `POST /mouse/drag`
 
 ### "Is it open or closed?"
 
@@ -181,7 +178,6 @@ Inspection:
 - `clawdis browser screenshot`
 - `clawdis browser screenshot --full-page`
 - `clawdis browser screenshot --ref 12`
-- `clawdis browser eval "document.title"`
 - `clawdis browser query "a" --limit 5`
 - `clawdis browser dom --format text --max-chars 5000`
 - `clawdis browser snapshot --format aria --limit 200`
@@ -189,7 +185,6 @@ Inspection:
 
 Actions:
 - `clawdis browser navigate https://example.com`
-- `clawdis browser back`
 - `clawdis browser resize 1280 720`
 - `clawdis browser click 12 --double`
 - `clawdis browser type 23 "hello" --submit`
@@ -202,19 +197,15 @@ Actions:
 - `clawdis browser dialog --accept`
 - `clawdis browser wait --text "Done"`
 - `clawdis browser evaluate --fn '(el) => el.textContent' --ref 7`
-- `clawdis browser run --code '(page) => page.title()'`
 - `clawdis browser console --level error`
 - `clawdis browser pdf`
 - `clawdis browser verify-element --role button --name "Submit"`
 - `clawdis browser verify-text "Welcome"`
 - `clawdis browser verify-list 3 ItemA ItemB`
 - `clawdis browser verify-value --ref 4 --type textbox --value hello`
-- `clawdis browser mouse-move --x 120 --y 240`
-- `clawdis browser mouse-click --x 120 --y 240`
-- `clawdis browser mouse-drag --start-x 10 --start-y 20 --end-x 200 --end-y 300`
 
 Notes:
-- `upload` and `dialog` only work when a file chooser or dialog is present.
+- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.
 - `snapshot --format ai` returns Playwright-for-AI markup used for ref-based actions.
 
 ## Security & privacy notes
