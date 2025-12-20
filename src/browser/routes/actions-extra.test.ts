@@ -3,19 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
 
 const pw = vi.hoisted(() => ({
-  generateLocatorForRef: vi
-    .fn()
-    .mockImplementation((ref: string) => `locator('aria-ref=${ref}')`),
   getConsoleMessagesViaPlaywright: vi.fn().mockResolvedValue([]),
-  getNetworkRequestsViaPlaywright: vi.fn().mockResolvedValue([]),
   mouseClickViaPlaywright: vi.fn().mockResolvedValue(undefined),
   mouseDragViaPlaywright: vi.fn().mockResolvedValue(undefined),
   mouseMoveViaPlaywright: vi.fn().mockResolvedValue(undefined),
   pdfViaPlaywright: vi.fn().mockResolvedValue({ buffer: Buffer.from("pdf") }),
-  startTracingViaPlaywright: vi.fn().mockResolvedValue(undefined),
-  stopTracingViaPlaywright: vi
-    .fn()
-    .mockResolvedValue({ buffer: Buffer.from("trace") }),
   verifyElementVisibleViaPlaywright: vi.fn().mockResolvedValue(undefined),
   verifyListVisibleViaPlaywright: vi.fn().mockResolvedValue(undefined),
   verifyTextVisibleViaPlaywright: vi.fn().mockResolvedValue(undefined),
@@ -114,24 +106,6 @@ describe("handleBrowserActionExtra", () => {
         expectBody: { ok: true, messages: [], targetId: "tab1" },
       },
       {
-        action: "network" as const,
-        args: { includeStatic: true },
-        fn: pw.getNetworkRequestsViaPlaywright,
-        expectArgs: {
-          cdpPort: 18792,
-          targetId: "tab1",
-          includeStatic: true,
-        },
-        expectBody: { ok: true, requests: [], targetId: "tab1" },
-      },
-      {
-        action: "traceStart" as const,
-        args: {},
-        fn: pw.startTracingViaPlaywright,
-        expectArgs: { cdpPort: 18792, targetId: "tab1" },
-        expectBody: { ok: true },
-      },
-      {
         action: "verifyElement" as const,
         args: { role: "button", accessibleName: "Submit" },
         fn: pw.verifyElementVisibleViaPlaywright,
@@ -209,13 +183,6 @@ describe("handleBrowserActionExtra", () => {
         },
         expectBody: { ok: true },
       },
-      {
-        action: "locator" as const,
-        args: { ref: "99" },
-        fn: pw.generateLocatorForRef,
-        expectArgs: "99",
-        expectBody: { ok: true, locator: "locator('aria-ref=99')" },
-      },
     ];
 
     for (const item of cases) {
@@ -226,7 +193,7 @@ describe("handleBrowserActionExtra", () => {
     }
   });
 
-  it("stores PDF and trace outputs", async () => {
+  it("stores PDF output", async () => {
     const { res: pdfRes } = await callAction("pdf");
     expect(pw.pdfViaPlaywright).toHaveBeenCalledWith({
       cdpPort: 18792,
@@ -237,19 +204,6 @@ describe("handleBrowserActionExtra", () => {
     expect(pdfRes.body).toMatchObject({
       ok: true,
       path: "/tmp/fake.pdf",
-      targetId: "tab1",
-      url: baseTab.url,
-    });
-
-    media.saveMediaBuffer.mockResolvedValueOnce({ path: "/tmp/fake.zip" });
-    const { res: traceRes } = await callAction("traceStop");
-    expect(pw.stopTracingViaPlaywright).toHaveBeenCalledWith({
-      cdpPort: 18792,
-      targetId: "tab1",
-    });
-    expect(traceRes.body).toMatchObject({
-      ok: true,
-      path: "/tmp/fake.zip",
       targetId: "tab1",
       url: baseTab.url,
     });

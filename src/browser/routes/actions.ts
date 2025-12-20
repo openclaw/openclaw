@@ -3,7 +3,7 @@ import type express from "express";
 import type { BrowserRouteContext } from "../server-context.js";
 import { handleBrowserActionCore } from "./actions-core.js";
 import { handleBrowserActionExtra } from "./actions-extra.js";
-import { jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
+import { jsonError, toStringOrEmpty } from "./utils.js";
 
 function readBody(req: express.Request): Record<string, unknown> {
   const body = req.body as Record<string, unknown> | undefined;
@@ -176,24 +176,6 @@ export function registerBrowserActionRoutes(
     await runExtraAction(ctx, res, "console", args, targetId);
   });
 
-  app.get("/network", async (req, res) => {
-    const targetId = readTargetId(req.query.targetId);
-    const includeStatic = toBoolean(req.query.includeStatic) ?? false;
-    await runExtraAction(ctx, res, "network", { includeStatic }, targetId);
-  });
-
-  app.post("/trace/start", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runExtraAction(ctx, res, "traceStart", body, targetId);
-  });
-
-  app.post("/trace/stop", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runExtraAction(ctx, res, "traceStop", body, targetId);
-  });
-
   app.post("/pdf", async (req, res) => {
     const body = readBody(req);
     const targetId = readTargetId(body.targetId);
@@ -240,10 +222,5 @@ export function registerBrowserActionRoutes(
     const body = readBody(req);
     const targetId = readTargetId(body.targetId);
     await runExtraAction(ctx, res, "mouseDrag", body, targetId);
-  });
-
-  app.post("/locator", async (req, res) => {
-    const body = readBody(req);
-    await runExtraAction(ctx, res, "locator", body, "");
   });
 }

@@ -1,6 +1,5 @@
 export {
   type BrowserConsoleMessage,
-  type BrowserNetworkRequest,
   closePlaywrightBrowserConnection,
   ensurePageState,
   getPageForTargetId,
@@ -32,14 +31,10 @@ export {
 } from "./pw-tools-core.js";
 
 export {
-  generateLocatorForRef,
   getConsoleMessagesViaPlaywright,
-  getNetworkRequestsViaPlaywright,
   mouseClickViaPlaywright,
   mouseDragViaPlaywright,
   mouseMoveViaPlaywright,
-  startTracingViaPlaywright,
-  stopTracingViaPlaywright,
   verifyElementVisibleViaPlaywright,
   verifyListVisibleViaPlaywright,
   verifyTextVisibleViaPlaywright,

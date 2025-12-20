@@ -1,19 +1,9 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-
 import {
   type BrowserConsoleMessage,
-  type BrowserNetworkRequest,
   ensurePageState,
   getPageForTargetId,
   refLocator,
 } from "./pw-session.js";
-
-const STATIC_RESOURCE_TYPES = new Set(["image", "font", "stylesheet", "media"]);
-
-const tracingContexts = new WeakSet<object>();
 
 function consolePriority(level: string) {
   switch (level) {
@@ -31,39 +21,6 @@ function consolePriority(level: string) {
   }
 }
 
-export async function startTracingViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-}): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  const context = page.context();
-  if (tracingContexts.has(context)) throw new Error("Tracing already started");
-  await context.tracing.start({
-    screenshots: true,
-    snapshots: true,
-    sources: true,
-  });
-  tracingContexts.add(context);
-}
-
-export async function stopTracingViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-}): Promise<{ buffer: Buffer }> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  const context = page.context();
-  if (!tracingContexts.has(context)) throw new Error("Tracing not started");
-  const fileName = `clawd-trace-${crypto.randomUUID()}.zip`;
-  const filePath = path.join(os.tmpdir(), fileName);
-  await context.tracing.stop({ path: filePath });
-  tracingContexts.delete(context);
-  const buffer = await fs.readFile(filePath);
-  await fs.rm(filePath).catch(() => {});
-  return { buffer };
-}
-
 export async function getConsoleMessagesViaPlaywright(opts: {
   cdpPort: number;
   targetId?: string;
@@ -74,19 +31,6 @@ export async function getConsoleMessagesViaPlaywright(opts: {
   if (!opts.level) return [...state.console];
   const min = consolePriority(opts.level);
   return state.console.filter((msg) => consolePriority(msg.type) >= min);
-}
-
-export async function getNetworkRequestsViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  includeStatic?: boolean;
-}): Promise<BrowserNetworkRequest[]> {
-  const page = await getPageForTargetId(opts);
-  const state = ensurePageState(page);
-  if (opts.includeStatic) return [...state.network];
-  return state.network.filter(
-    (req) => !req.resourceType || !STATIC_RESOURCE_TYPES.has(req.resourceType),
-  );
 }
 
 export async function mouseMoveViaPlaywright(opts: {
@@ -193,8 +137,4 @@ export async function verifyValueViaPlaywright(opts: {
   const value = await locator.inputValue();
   if (value !== opts.value)
     throw new Error(`expected ${opts.value}, got ${value}`);
-}
-
-export function generateLocatorForRef(ref: string) {
-  return `locator('aria-ref=${ref}')`;
 }

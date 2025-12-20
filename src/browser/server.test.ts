@@ -104,9 +104,7 @@ vi.mock("./pw-ai.js", () => ({
   evaluateViaPlaywright: vi.fn(async () => "ok"),
   fileUploadViaPlaywright: vi.fn(async () => {}),
   fillFormViaPlaywright: vi.fn(async () => {}),
-  generateLocatorForRef: vi.fn((ref: string) => `locator('aria-ref=${ref}')`),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  getNetworkRequestsViaPlaywright: vi.fn(async () => []),
   handleDialogViaPlaywright: vi.fn(async () => ({
     message: "ok",
     type: "alert",
@@ -123,10 +121,6 @@ vi.mock("./pw-ai.js", () => ({
   runCodeViaPlaywright: vi.fn(async () => "ok"),
   selectOptionViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
-  startTracingViaPlaywright: vi.fn(async () => {}),
-  stopTracingViaPlaywright: vi.fn(async () => ({
-    buffer: Buffer.from("trace"),
-  })),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),
   })),

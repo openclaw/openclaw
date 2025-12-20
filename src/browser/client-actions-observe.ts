@@ -3,10 +3,7 @@ import type {
   BrowserActionPathResult,
 } from "./client-actions-types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-import type {
-  BrowserConsoleMessage,
-  BrowserNetworkRequest,
-} from "./pw-session.js";
+import type { BrowserConsoleMessage } from "./pw-session.js";
 
 export async function browserConsoleMessages(
   baseUrl: string,
@@ -21,48 +18,6 @@ export async function browserConsoleMessages(
     messages: BrowserConsoleMessage[];
     targetId: string;
   }>(`${baseUrl}/console${suffix}`, { timeoutMs: 20000 });
-}
-
-export async function browserNetworkRequests(
-  baseUrl: string,
-  opts: { includeStatic?: boolean; targetId?: string } = {},
-): Promise<{ ok: true; requests: BrowserNetworkRequest[]; targetId: string }> {
-  const q = new URLSearchParams();
-  if (opts.includeStatic) q.set("includeStatic", "true");
-  if (opts.targetId) q.set("targetId", opts.targetId);
-  const suffix = q.toString() ? `?${q.toString()}` : "";
-  return await fetchBrowserJson<{
-    ok: true;
-    requests: BrowserNetworkRequest[];
-    targetId: string;
-  }>(`${baseUrl}/network${suffix}`, { timeoutMs: 20000 });
-}
-
-export async function browserStartTracing(
-  baseUrl: string,
-  opts: { targetId?: string } = {},
-): Promise<BrowserActionOk> {
-  return await fetchBrowserJson<BrowserActionOk>(`${baseUrl}/trace/start`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserStopTracing(
-  baseUrl: string,
-  opts: { targetId?: string } = {},
-): Promise<BrowserActionPathResult> {
-  return await fetchBrowserJson<BrowserActionPathResult>(
-    `${baseUrl}/trace/stop`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId }),
-      timeoutMs: 20000,
-    },
-  );
 }
 
 export async function browserPdfSave(
@@ -189,19 +144,4 @@ export async function browserMouseDrag(
     }),
     timeoutMs: 20000,
   });
-}
-
-export async function browserGenerateLocator(
-  baseUrl: string,
-  opts: { ref: string },
-): Promise<{ ok: true; locator: string }> {
-  return await fetchBrowserJson<{ ok: true; locator: string }>(
-    `${baseUrl}/locator`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ref: opts.ref }),
-      timeoutMs: 20000,
-    },
-  );
 }

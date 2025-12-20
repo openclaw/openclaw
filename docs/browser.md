@@ -121,6 +121,11 @@ Inspection:
 - `GET /dom`
 - `GET /snapshot` (`aria` | `domSnapshot` | `ai`)
 
+Debug-only endpoints (intentionally omitted for now):
+- network request log (privacy)
+- tracing export (large + sensitive)
+- locator generation (dev convenience)
+
 Actions:
 - `POST /navigate`, `POST /back`
 - `POST /resize`
@@ -131,12 +136,10 @@ Actions:
 - `POST /wait` (time/text/textGone)
 - `POST /evaluate` (function + optional ref)
 - `POST /run` (function(page) → result)
-- `GET /console`, `GET /network`
-- `POST /trace/start`, `POST /trace/stop`
+- `GET /console`
 - `POST /pdf`
 - `POST /verify/element`, `POST /verify/text`, `POST /verify/list`, `POST /verify/value`
 - `POST /mouse/move`, `POST /mouse/click`, `POST /mouse/drag`
-- `POST /locator` (generate Playwright locator)
 
 ### "Is it open or closed?"
 
@@ -201,9 +204,6 @@ Actions:
 - `clawdis browser evaluate --fn '(el) => el.textContent' --ref 7`
 - `clawdis browser run --code '(page) => page.title()'`
 - `clawdis browser console --level error`
-- `clawdis browser network --include-static`
-- `clawdis browser trace-start`
-- `clawdis browser trace-stop`
 - `clawdis browser pdf`
 - `clawdis browser verify-element --role button --name "Submit"`
 - `clawdis browser verify-text "Welcome"`
@@ -212,7 +212,6 @@ Actions:
 - `clawdis browser mouse-move --x 120 --y 240`
 - `clawdis browser mouse-click --x 120 --y 240`
 - `clawdis browser mouse-drag --start-x 10 --start-y 20 --end-x 200 --end-y 300`
-- `clawdis browser locator 77`
 
 Notes:
 - `upload` and `dialog` only work when a file chooser or dialog is present.

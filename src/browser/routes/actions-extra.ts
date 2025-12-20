@@ -4,15 +4,11 @@ import type express from "express";
 
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import {
-  generateLocatorForRef,
   getConsoleMessagesViaPlaywright,
-  getNetworkRequestsViaPlaywright,
   mouseClickViaPlaywright,
   mouseDragViaPlaywright,
   mouseMoveViaPlaywright,
   pdfViaPlaywright,
-  startTracingViaPlaywright,
-  stopTracingViaPlaywright,
   verifyElementVisibleViaPlaywright,
   verifyListVisibleViaPlaywright,
   verifyTextVisibleViaPlaywright,
@@ -21,7 +17,6 @@ import {
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   jsonError,
-  toBoolean,
   toNumber,
   toStringArray,
   toStringOrEmpty,
@@ -37,14 +32,10 @@ function normalizeMouseButton(value: unknown): MouseButton | undefined {
 
 export type BrowserActionExtra =
   | "console"
-  | "locator"
   | "mouseClick"
   | "mouseDrag"
   | "mouseMove"
-  | "network"
   | "pdf"
-  | "traceStart"
-  | "traceStop"
   | "verifyElement"
   | "verifyList"
   | "verifyText"
@@ -77,17 +68,6 @@ export async function handleBrowserActionExtra(
       res.json({ ok: true, messages, targetId: tab.targetId });
       return true;
     }
-    case "network": {
-      const includeStatic = toBoolean(args.includeStatic) ?? false;
-      const tab = await ctx.ensureTabAvailable(target);
-      const requests = await getNetworkRequestsViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-        includeStatic,
-      });
-      res.json({ ok: true, requests, targetId: tab.targetId });
-      return true;
-    }
     case "pdf": {
       const tab = await ctx.ensureTabAvailable(target);
       const pdf = await pdfViaPlaywright({
@@ -100,36 +80,6 @@ export async function handleBrowserActionExtra(
         "application/pdf",
         "browser",
         pdf.buffer.byteLength,
-      );
-      res.json({
-        ok: true,
-        path: path.resolve(saved.path),
-        targetId: tab.targetId,
-        url: tab.url,
-      });
-      return true;
-    }
-    case "traceStart": {
-      const tab = await ctx.ensureTabAvailable(target);
-      await startTracingViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-      });
-      res.json({ ok: true });
-      return true;
-    }
-    case "traceStop": {
-      const tab = await ctx.ensureTabAvailable(target);
-      const trace = await stopTracingViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-      });
-      await ensureMediaDir();
-      const saved = await saveMediaBuffer(
-        trace.buffer,
-        "application/zip",
-        "browser",
-        trace.buffer.byteLength,
       );
       res.json({
         ok: true,
@@ -267,16 +217,6 @@ export async function handleBrowserActionExtra(
         endY,
       });
       res.json({ ok: true });
-      return true;
-    }
-    case "locator": {
-      const ref = toStringOrEmpty(args.ref);
-      if (!ref) {
-        jsonError(res, 400, "ref is required");
-        return true;
-      }
-      const locator = generateLocatorForRef(ref);
-      res.json({ ok: true, locator });
       return true;
     }
     default:

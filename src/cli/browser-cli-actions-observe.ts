@@ -2,14 +2,10 @@ import type { Command } from "commander";
 import { resolveBrowserControlUrl } from "../browser/client.js";
 import {
   browserConsoleMessages,
-  browserGenerateLocator,
   browserMouseClick,
   browserMouseDrag,
   browserMouseMove,
-  browserNetworkRequests,
   browserPdfSave,
-  browserStartTracing,
-  browserStopTracing,
   browserVerifyElementVisible,
   browserVerifyListVisible,
   browserVerifyTextVisible,
@@ -41,74 +37,6 @@ export function registerBrowserActionObserveCommands(
           return;
         }
         defaultRuntime.log(JSON.stringify(result.messages, null, 2));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("network")
-    .description("Get recent network requests")
-    .option("--include-static", "Include static assets", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const result = await browserNetworkRequests(baseUrl, {
-          includeStatic: Boolean(opts.includeStatic),
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(JSON.stringify(result.requests, null, 2));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("trace-start")
-    .description("Start Playwright tracing")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const result = await browserStartTracing(baseUrl, {
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("trace started");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("trace-stop")
-    .description("Stop tracing and save a trace.zip")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const result = await browserStopTracing(baseUrl, {
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(`trace: ${result.path}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -351,26 +279,6 @@ export function registerBrowserActionObserveCommands(
           return;
         }
         defaultRuntime.log("mouse dragged");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("locator")
-    .description("Generate a Playwright locator for a ref")
-    .argument("<ref>", "Ref id from ai snapshot")
-    .action(async (ref: string, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const result = await browserGenerateLocator(baseUrl, { ref });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(result.locator);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

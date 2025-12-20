@@ -3,7 +3,6 @@ import type {
   BrowserContext,
   ConsoleMessage,
   Page,
-  Request,
 } from "playwright-core";
 import { chromium } from "playwright-core";
 
@@ -15,14 +14,12 @@ export type BrowserConsoleMessage = {
 };
 
 export type BrowserNetworkRequest = {
+  requestId?: string;
   url: string;
   method: string;
-  resourceType?: string;
   status?: number;
-  ok?: boolean;
-  fromCache?: boolean;
-  failureText?: string;
-  timestamp: string;
+  resourceType?: string;
+  timestamp?: string;
 };
 
 type SnapshotForAIResult = { full: string; incremental?: string };
@@ -47,8 +44,6 @@ type ConnectedBrowser = {
 
 type PageState = {
   console: BrowserConsoleMessage[];
-  network: BrowserNetworkRequest[];
-  requestMap: Map<Request, BrowserNetworkRequest>;
 };
 
 const pageStates = new WeakMap<Page, PageState>();
@@ -56,7 +51,6 @@ const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
 
 const MAX_CONSOLE_MESSAGES = 500;
-const MAX_NETWORK_REQUESTS = 1000;
 
 let cached: ConnectedBrowser | null = null;
 let connecting: Promise<ConnectedBrowser> | null = null;
@@ -71,8 +65,6 @@ export function ensurePageState(page: Page): PageState {
 
   const state: PageState = {
     console: [],
-    network: [],
-    requestMap: new Map(),
   };
   pageStates.set(page, state);
 
@@ -87,34 +79,6 @@ export function ensurePageState(page: Page): PageState {
       };
       state.console.push(entry);
       if (state.console.length > MAX_CONSOLE_MESSAGES) state.console.shift();
-    });
-    page.on("request", (req: Request) => {
-      const entry: BrowserNetworkRequest = {
-        url: req.url(),
-        method: req.method(),
-        resourceType: req.resourceType(),
-        timestamp: new Date().toISOString(),
-      };
-      state.network.push(entry);
-      state.requestMap.set(req, entry);
-      if (state.network.length > MAX_NETWORK_REQUESTS) state.network.shift();
-    });
-    page.on("requestfinished", async (req: Request) => {
-      const entry = state.requestMap.get(req);
-      if (!entry) return;
-      const response = await req.response().catch(() => null);
-      if (response) {
-        entry.status = response.status();
-        entry.ok = response.ok();
-        entry.fromCache = response.fromServiceWorker();
-      }
-      state.requestMap.delete(req);
-    });
-    page.on("requestfailed", (req: Request) => {
-      const entry = state.requestMap.get(req);
-      if (!entry) return;
-      entry.failureText = req.failure()?.errorText;
-      state.requestMap.delete(req);
     });
     page.on("close", () => {
       pageStates.delete(page);
