@@ -2096,6 +2096,7 @@ export async function startGatewayServer(
           displayName: formatBonjourInstanceName(machineDisplayName),
           tailnetIPv4,
           tailnetIPv6: tailnetIPv6 ?? undefined,
+          tailnetDns,
         });
         defaultRuntime.log(
           `discovery: wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${WIDE_AREA_DISCOVERY_DOMAIN} → ${result.zonePath})`,

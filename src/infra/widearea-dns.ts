@@ -75,6 +75,7 @@ export type WideAreaBridgeZoneOpts = {
   tailnetIPv6?: string;
   instanceLabel?: string;
   hostLabel?: string;
+  tailnetDns?: string;
 };
 
 function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
@@ -90,6 +91,9 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
     `transport=bridge`,
     `bridgePort=${opts.bridgePort}`,
   ];
+  if (opts.tailnetDns?.trim()) {
+    txt.push(`tailnetDns=${opts.tailnetDns.trim()}`);
+  }
 
   const records: string[] = [];
 

@@ -70,7 +70,7 @@ Disable/override:
 For London/Vienna style setups, Bonjour won’t help. The recommended “direct” target is:
 - Tailscale MagicDNS name (preferred) or a stable tailnet IP.
 
-If the gateway can detect it is running under Tailscale, it publishes `tailnetDns` as an optional hint for clients.
+If the gateway can detect it is running under Tailscale, it publishes `tailnetDns` as an optional hint for clients (including wide-area beacons).
 
 ### 3) Manual / SSH target
 
