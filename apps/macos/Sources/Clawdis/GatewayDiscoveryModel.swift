@@ -60,7 +60,8 @@ final class GatewayDiscoveryModel {
                         let advertisedName = txt["displayName"]
                             .map(Self.prettifyInstanceName)
                             .flatMap { $0.isEmpty ? nil : $0 }
-                        let prettyName = advertisedName ?? Self.prettifyInstanceName(decodedName)
+                        let prettyName =
+                            advertisedName ?? Self.prettifyServiceName(decodedName)
 
                         var lanHost: String?
                         var tailnetDns: String?
@@ -175,6 +176,26 @@ final class GatewayDiscoveryModel {
         let stripped = normalized.replacingOccurrences(of: " (Clawdis)", with: "")
             .replacingOccurrences(of: #"\s+\(\d+\)$"#, with: "", options: .regularExpression)
         return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func prettifyServiceName(_ decodedName: String) -> String {
+        let normalized = Self.prettifyInstanceName(decodedName)
+        var cleaned = normalized.replacingOccurrences(of: #"\s*-?bridge$"#, with: "", options: .regularExpression)
+        cleaned = cleaned
+            .replacingOccurrences(of: "_", with: " ")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            cleaned = normalized
+        }
+        let words = cleaned.split(separator: " ")
+        let titled = words.map { word -> String in
+            let lower = word.lowercased()
+            guard let first = lower.first else { return "" }
+            return String(first).uppercased() + lower.dropFirst()
+        }.joined(separator: " ")
+        return titled.isEmpty ? normalized : titled
     }
 
     static func isLocalGateway(

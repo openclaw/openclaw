@@ -279,7 +279,7 @@ struct OnboardingView: View {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "Clawdis uses a single Gateway that stays running. Pick this Mac, " +
-                    "connect to a discovered Gateway nearby, or configure later.")
+                    "connect to a discovered bridge nearby for pairing, or configure later.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -323,12 +323,16 @@ struct OnboardingView: View {
                     }
 
                     if self.gatewayDiscovery.gateways.isEmpty {
-                        Text("Searching for nearby gateways…")
+                        Text("Searching for nearby bridges…")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .padding(.leading, 4)
                     } else {
                         VStack(alignment: .leading, spacing: 6) {
+                            Text("Nearby bridges (pairing only)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .padding(.leading, 4)
                             ForEach(self.gatewayDiscovery.gateways.prefix(6)) { gateway in
                                 self.connectionChoiceButton(
                                     title: gateway.displayName,
@@ -1336,7 +1340,7 @@ struct OnboardingView: View {
         if shouldMonitor, !self.monitoringDiscovery {
             self.monitoringDiscovery = true
             Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 250_000_000)
+                try? await Task.sleep(nanoseconds: 550_000_000)
                 guard self.monitoringDiscovery else { return }
                 self.gatewayDiscovery.start()
                 await self.refreshLocalGatewayProbe()
