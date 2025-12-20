@@ -8,23 +8,24 @@ read_when:
 
 # Bundled bun Gateway (macOS)
 
-Goal: ship **Clawdis.app** with a self-contained Gateway binary. No global `npm install -g clawdis`, no system Node requirement.
+Goal: ship **Clawdis.app** with a self-contained relay binary that can run both the CLI and the Gateway daemon. No global `npm install -g clawdis`, no system Node requirement.
 
 ## What gets bundled
 
 App bundle layout:
 
-- `Clawdis.app/Contents/Resources/Relay/clawdis-gateway`
-  - bun `--compile` executable built from `dist/macos/gateway-daemon.js`
 - `Clawdis.app/Contents/Resources/Relay/clawdis`
-  - bun `--compile` CLI executable built from `dist/index.js`
+  - bun `--compile` relay executable built from `dist/macos/relay.js`
+  - Supports:
+    - `clawdis …` (CLI)
+    - `clawdis gateway-daemon …` (LaunchAgent daemon)
 - `Clawdis.app/Contents/Resources/Relay/package.json`
   - tiny “Pi compatibility” file (see below)
 - `Clawdis.app/Contents/Resources/Relay/theme/`
   - Pi TUI theme payload (optional, but strongly recommended)
 
 Why the sidecar files matter:
-- `@mariozechner/pi-coding-agent` detects “bun binary mode” and then looks for `package.json` + `theme/` **next to `process.execPath`** (i.e. next to `clawdis-gateway`).
+- `@mariozechner/pi-coding-agent` detects “bun binary mode” and then looks for `package.json` + `theme/` **next to `process.execPath`** (i.e. next to `clawdis`).
 - So even if bun can embed assets, Pi currently expects filesystem paths. Keep the sidecar files.
 
 ## Build pipeline
@@ -35,14 +36,14 @@ Packaging script:
 It builds:
 - TS: `pnpm exec tsc`
 - Swift app + helper: `swift build …`
-- bun gateway: `bun build dist/macos/gateway-daemon.js --compile --bytecode …`
+- bun relay: `bun build dist/macos/relay.js --compile --bytecode …`
 
 Important bundler flags:
 - `--compile`: produces a standalone executable
 - `--bytecode`: reduces startup time / parsing overhead (works here)
 - externals:
-  - `-e playwright-core -e electron -e "chromium-bidi*"`
-  - Reason: keep heavy/optional browser-control deps out of the embedded daemon path
+  - `-e electron`
+  - Reason: avoid bundling Electron stubs in the relay binary
 
 Version injection:
 - `--define "__CLAWDIS_VERSION__=\"<pkg version>\""`
@@ -67,7 +68,6 @@ Logging:
 - launchd stdout/err: `/tmp/clawdis/clawdis-gateway.log`
 
 Default LaunchAgent env:
-- `CLAWDIS_SKIP_BROWSER_CONTROL_SERVER=1`
 - `CLAWDIS_IMAGE_BACKEND=sips` (avoid sharp native addon under bun)
 
 ## Codesigning (hardened runtime + bun)
@@ -77,7 +77,7 @@ Symptom (when mis-signed):
 
 Fix:
 - The bun executable needs JIT-ish permissions under hardened runtime.
-- `scripts/codesign-mac-app.sh` signs `Relay/clawdis-gateway` with:
+- `scripts/codesign-mac-app.sh` signs `Relay/clawdis` with:
   - `com.apple.security.cs.allow-jit`
   - `com.apple.security.cs.allow-unsigned-executable-memory`
 
@@ -95,26 +95,21 @@ Solution:
   - `src/browser/screenshot.ts`
   - `src/agents/pi-tools.ts` (image sanitization)
 
-## Browser control server (optional)
+## Browser control server
 
-Browser control pulls in Playwright/Electron baggage. For the embedded gateway:
-- `src/gateway/server.ts` starts browser control via lazy dynamic import.
-- Embedded mode sets `CLAWDIS_SKIP_BROWSER_CONTROL_SERVER=1` so it never imports that module.
-
-Override (dev only):
-- set `CLAWDIS_BROWSER_CONTROL_MODULE` to force-load the module path.
+The Gateway starts the browser control server (loopback only) from `src/gateway/server.ts`.
+It’s started from the relay daemon process, so the relay binary includes Playwright deps.
 
 ## Tests / smoke checks
 
 From a packaged app (local build):
 
 ```bash
-dist/Clawdis.app/Contents/Resources/Relay/clawdis-gateway --version
+dist/Clawdis.app/Contents/Resources/Relay/clawdis --version
 
 CLAWDIS_SKIP_PROVIDERS=1 \
-CLAWDIS_SKIP_BROWSER_CONTROL_SERVER=1 \
 CLAWDIS_SKIP_CANVAS_HOST=1 \
-dist/Clawdis.app/Contents/Resources/Relay/clawdis-gateway --port 18999 --bind loopback
+dist/Clawdis.app/Contents/Resources/Relay/clawdis gateway-daemon --port 18999 --bind loopback
 ```
 
 Then, in another shell:

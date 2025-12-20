@@ -23,8 +23,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
   - `Clawdis` (LSUIElement MenuBarExtra app; hosts Gateway + node bridge + PeekabooBridgeHost).
 - Bundle ID: `com.steipete.clawdis`.
 - Bundled runtime binaries live under `Contents/Resources/Relay/`:
-  - `clawdis-gateway` (bun‑compiled Gateway)
-  - `clawdis` (bun‑compiled CLI)
+  - `clawdis` (bun‑compiled relay: CLI + gateway-daemon)
 - The app symlinks `clawdis` into `/usr/local/bin` and `/opt/homebrew/bin`.
 
 ## Gateway + node bridge
