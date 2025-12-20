@@ -352,12 +352,11 @@ final class GatewayDiscoveryModel {
 
     nonisolated private static func mergeLocalIdentity(
         fast: LocalIdentity,
-        slow: LocalIdentity
-    ) -> LocalIdentity {
+        slow: LocalIdentity) -> LocalIdentity
+    {
         LocalIdentity(
             hostTokens: fast.hostTokens.union(slow.hostTokens),
-            displayTokens: fast.displayTokens.union(slow.displayTokens)
-        )
+            displayTokens: fast.displayTokens.union(slow.displayTokens))
     }
 
     nonisolated private static func buildLocalIdentityFast() -> LocalIdentity {

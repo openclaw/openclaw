@@ -99,11 +99,11 @@ struct OnboardingView: View {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            return hasIdentity ? [0, 1, 5, 9] : [0, 1, 5, 8, 9]
+            hasIdentity ? [0, 1, 5, 9] : [0, 1, 5, 8, 9]
         case .unconfigured:
-            return hasIdentity ? [0, 1, 9] : [0, 1, 8, 9]
+            hasIdentity ? [0, 1, 9] : [0, 1, 8, 9]
         case .local:
-            return hasIdentity ? [0, 1, 2, 5, 6, 9] : [0, 1, 2, 5, 6, 8, 9]
+            hasIdentity ? [0, 1, 2, 5, 6, 9] : [0, 1, 2, 5, 6, 8, 9]
         }
     }
 
