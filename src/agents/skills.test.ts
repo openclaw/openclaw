@@ -282,6 +282,21 @@ describe("buildWorkspaceSkillsPrompt", () => {
   });
 });
 
+describe("loadWorkspaceSkillEntries", () => {
+  it("handles an empty managed skills dir without throwing", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
+    const managedDir = path.join(workspaceDir, ".managed");
+    await fs.mkdir(managedDir, { recursive: true });
+
+    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+      managedSkillsDir: managedDir,
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+    });
+
+    expect(entries).toEqual([]);
+  });
+});
+
 describe("buildWorkspaceSkillSnapshot", () => {
   it("returns an empty snapshot when skills dirs are missing", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
