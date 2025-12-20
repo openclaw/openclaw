@@ -67,6 +67,7 @@ import {
   requestNodePairing,
   verifyNodeToken,
 } from "../infra/node-pairing.js";
+import { ensureClawdisCliOnPath } from "../infra/path-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   listSystemPresence,
@@ -101,6 +102,8 @@ import { sendMessageWhatsApp } from "../web/outbound.js";
 import { requestReplyHeartbeatNow } from "../web/reply-heartbeat-wake.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
+
+ensureClawdisCliOnPath();
 
 let stopBrowserControlServerIfStarted: (() => Promise<void>) | null = null;
 

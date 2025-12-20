@@ -17,6 +17,7 @@ import {
   saveSessionStore,
 } from "./config/sessions.js";
 import { ensureBinary } from "./infra/binaries.js";
+import { ensureClawdisCliOnPath } from "./infra/path-env.js";
 import {
   describePortOwner,
   ensurePortAvailable,
@@ -30,6 +31,7 @@ import { monitorWebProvider } from "./provider-web.js";
 import { assertProvider, normalizeE164, toWhatsappJid } from "./utils.js";
 
 dotenv.config({ quiet: true });
+ensureClawdisCliOnPath();
 
 // Capture all console output into structured logs while keeping stdout/stderr behavior.
 enableConsoleCapture();

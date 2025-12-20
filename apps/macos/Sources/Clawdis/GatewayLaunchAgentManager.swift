@@ -10,6 +10,10 @@ enum GatewayLaunchAgentManager {
         "\(bundlePath)/Contents/Resources/Relay/clawdis-gateway"
     }
 
+    private static func relayDir(bundlePath: String) -> String {
+        "\(bundlePath)/Contents/Resources/Relay"
+    }
+
     static func status() async -> Bool {
         guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return false }
         let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
@@ -45,6 +49,10 @@ enum GatewayLaunchAgentManager {
 
     private static func writePlist(bundlePath: String, port: Int) {
         let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
+        let relayDir = self.relayDir(bundlePath: bundlePath)
+        let preferredPath =
+            ([relayDir] + CommandResolver.preferredPaths())
+                .joined(separator: ":")
         let plist = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -69,7 +77,7 @@ enum GatewayLaunchAgentManager {
           <key>EnvironmentVariables</key>
           <dict>
             <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+            <string>\(preferredPath)</string>
             <key>CLAWDIS_SKIP_BROWSER_CONTROL_SERVER</key>
             <string>1</string>
             <key>CLAWDIS_IMAGE_BACKEND</key>
