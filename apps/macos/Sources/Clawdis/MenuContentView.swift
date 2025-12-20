@@ -42,7 +42,10 @@ struct MenuContent: View {
                 self.voiceWakeMicMenu
             }
             Button("Open Chat") {
-                WebChatManager.shared.show(sessionKey: WebChatManager.shared.preferredSessionKey())
+                Task { @MainActor in
+                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                    WebChatManager.shared.show(sessionKey: sessionKey)
+                }
             }
             Button("Open Dashboard") {
                 Task { @MainActor in

@@ -125,9 +125,12 @@ struct ClawdisApp: App {
     private func toggleWebChatPanel() {
         HoverHUDController.shared.setSuppressed(true)
         self.isMenuPresented = false
-        WebChatManager.shared.togglePanel(
-            sessionKey: WebChatManager.shared.preferredSessionKey(),
-            anchorProvider: { [self] in self.statusButtonScreenFrame() })
+        Task { @MainActor in
+            let sessionKey = await WebChatManager.shared.preferredSessionKey()
+            WebChatManager.shared.togglePanel(
+                sessionKey: sessionKey,
+                anchorProvider: { [self] in self.statusButtonScreenFrame() })
+        }
     }
 
     @MainActor
@@ -235,7 +238,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Developer/testing helper: auto-open chat when launched with --chat (or legacy --webchat).
         if CommandLine.arguments.contains("--chat") || CommandLine.arguments.contains("--webchat") {
             self.webChatAutoLogger.debug("Auto-opening chat via CLI flag")
-            WebChatManager.shared.show(sessionKey: "main")
+            Task { @MainActor in
+                let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                WebChatManager.shared.show(sessionKey: sessionKey)
+            }
         }
     }
 

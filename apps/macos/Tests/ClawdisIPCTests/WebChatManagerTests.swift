@@ -4,7 +4,8 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct WebChatManagerTests {
-    @Test func preferredSessionKeyIsMain() {
-        #expect(WebChatManager.shared.preferredSessionKey() == "main")
+    @Test func preferredSessionKeyIsNonEmpty() async {
+        let key = await WebChatManager.shared.preferredSessionKey()
+        #expect(!key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
     }
 }

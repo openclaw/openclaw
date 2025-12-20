@@ -22,22 +22,31 @@ final class WebChatManager {
     static let shared = WebChatManager()
 
     private var windowController: WebChatSwiftUIWindowController?
+    private var windowSessionKey: String?
     private var panelController: WebChatSwiftUIWindowController?
     private var panelSessionKey: String?
+    private var cachedPreferredSessionKey: String?
 
     var onPanelVisibilityChanged: ((Bool) -> Void)?
 
     func show(sessionKey: String) {
         self.closePanel()
         if let controller = self.windowController {
-            controller.show()
-            return
+            if self.windowSessionKey == sessionKey {
+                controller.show()
+                return
+            }
+
+            controller.close()
+            self.windowController = nil
+            self.windowSessionKey = nil
         }
         let controller = WebChatSwiftUIWindowController(sessionKey: sessionKey, presentation: .window)
         controller.onVisibilityChanged = { [weak self] visible in
             self?.onPanelVisibilityChanged?(visible)
         }
         self.windowController = controller
+        self.windowSessionKey = sessionKey
         controller.show()
     }
 
@@ -75,26 +84,31 @@ final class WebChatManager {
         self.panelController?.close()
     }
 
-    func preferredSessionKey() -> String {
-        // The gateway store uses a canonical direct-chat bucket (default: "main").
-        // Avoid reading local session files; in remote mode they are not authoritative.
-        "main"
+    func preferredSessionKey() async -> String {
+        if let cachedPreferredSessionKey { return cachedPreferredSessionKey }
+        let key = await GatewayConnection.shared.mainSessionKey()
+        self.cachedPreferredSessionKey = key
+        return key
     }
 
     func resetTunnels() {
         self.windowController?.close()
         self.windowController = nil
+        self.windowSessionKey = nil
         self.panelController?.close()
         self.panelController = nil
         self.panelSessionKey = nil
+        self.cachedPreferredSessionKey = nil
     }
 
     func close() {
         self.windowController?.close()
         self.windowController = nil
+        self.windowSessionKey = nil
         self.panelController?.close()
         self.panelController = nil
         self.panelSessionKey = nil
+        self.cachedPreferredSessionKey = nil
     }
 
     private func panelHidden() {

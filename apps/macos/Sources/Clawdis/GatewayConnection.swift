@@ -231,6 +231,38 @@ actor GatewayConnection {
 // MARK: - Typed gateway API
 
 extension GatewayConnection {
+    struct ConfigGetSnapshot: Decodable, Sendable {
+        struct SnapshotConfig: Decodable, Sendable {
+            struct Inbound: Decodable, Sendable {
+                struct Session: Decodable, Sendable {
+                    let mainKey: String?
+                }
+
+                let session: Session?
+            }
+
+            let inbound: Inbound?
+        }
+
+        let config: SnapshotConfig?
+    }
+
+    static func mainSessionKey(fromConfigGetData data: Data) throws -> String {
+        let snapshot = try JSONDecoder().decode(ConfigGetSnapshot.self, from: data)
+        let raw = snapshot.config?.inbound?.session?.mainKey
+        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "main" : trimmed
+    }
+
+    func mainSessionKey(timeoutMs: Double = 15000) async -> String {
+        do {
+            let data = try await self.requestRaw(method: "config.get", params: nil, timeoutMs: timeoutMs)
+            return try Self.mainSessionKey(fromConfigGetData: data)
+        } catch {
+            return "main"
+        }
+    }
+
     func status() async -> (ok: Bool, error: String?) {
         do {
             _ = try await self.requestRaw(method: .status)
