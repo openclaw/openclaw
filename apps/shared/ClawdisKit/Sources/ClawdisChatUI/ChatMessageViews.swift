@@ -93,7 +93,7 @@ private struct ChatMessageBody: View {
         if self.isUser {
             fill = ClawdisChatTheme.userBubble
         } else if self.style == .onboarding {
-            fill = ClawdisChatTheme.card
+            fill = ClawdisChatTheme.onboardingAssistantBubble
         } else {
             fill = ClawdisChatTheme.assistantBubble
         }
@@ -239,12 +239,16 @@ private struct MarkdownTextView: View {
     let textColor: Color
 
     var body: some View {
-        if let attributed = try? AttributedString(markdown: self.text) {
+        let normalized = self.text.replacingOccurrences(
+            of: "(?<!\\n)\\n(?!\\n)",
+            with: " \\n",
+            options: .regularExpression)
+        if let attributed = try? AttributedString(markdown: normalized) {
             Text(attributed)
                 .font(.system(size: 14))
                 .foregroundStyle(self.textColor)
         } else {
-            Text(self.text)
+            Text(normalized)
                 .font(.system(size: 14))
                 .foregroundStyle(self.textColor)
         }

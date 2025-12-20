@@ -47,6 +47,14 @@ enum ClawdisChatTheme {
         #endif
     }
 
+    static var onboardingAssistantBubble: Color {
+        #if os(macOS)
+        Color(nsColor: .controlBackgroundColor).opacity(0.92)
+        #else
+        Color(uiColor: .secondarySystemBackground)
+        #endif
+    }
+
     static var userText: Color { .white }
 
     static var assistantText: Color {
