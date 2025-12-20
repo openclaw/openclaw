@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { agentCommand } from "../commands/agent.js";
+import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
@@ -129,23 +130,90 @@ vi.mock("../config/sessions.js", async () => {
     }),
   };
 });
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    inbound: {
-      allowFrom: testAllowFrom,
-      workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
-      agent: { provider: "anthropic", model: "claude-opus-4-5" },
-      session: { mainKey: "main", store: testSessionStorePath },
+vi.mock("../config/config.js", () => {
+  const resolveConfigPath = () =>
+    path.join(os.homedir(), ".clawdis", "clawdis.json");
+
+  const readConfigFileSnapshot = async () => {
+    const configPath = resolveConfigPath();
+    try {
+      await fs.access(configPath);
+    } catch {
+      return {
+        path: configPath,
+        exists: false,
+        raw: null,
+        parsed: {},
+        valid: true,
+        config: {},
+        issues: [],
+      };
+    }
+    try {
+      const raw = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      return {
+        path: configPath,
+        exists: true,
+        raw,
+        parsed,
+        valid: true,
+        config: parsed,
+        issues: [],
+      };
+    } catch (err) {
+      return {
+        path: configPath,
+        exists: true,
+        raw: null,
+        parsed: {},
+        valid: false,
+        config: {},
+        issues: [{ path: "", message: `read failed: ${String(err)}` }],
+      };
+    }
+  };
+
+  const writeConfigFile = async (cfg: Record<string, unknown>) => {
+    const configPath = resolveConfigPath();
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
+    await fs.writeFile(configPath, raw, "utf-8");
+  };
+
+  return {
+    CONFIG_PATH_CLAWDIS: resolveConfigPath(),
+    loadConfig: () => ({
+      inbound: {
+        allowFrom: testAllowFrom,
+        workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
+        agent: { provider: "anthropic", model: "claude-opus-4-5" },
+        session: { mainKey: "main", store: testSessionStorePath },
+      },
+      gateway: testGatewayBind ? { bind: testGatewayBind } : undefined,
+      cron: (() => {
+        const cron: Record<string, unknown> = {};
+        if (typeof testCronEnabled === "boolean") cron.enabled = testCronEnabled;
+        if (typeof testCronStorePath === "string") cron.store = testCronStorePath;
+        return Object.keys(cron).length > 0 ? cron : undefined;
+      })(),
+    }),
+    parseConfigJson5: (raw: string) => {
+      try {
+        return { ok: true, parsed: JSON.parse(raw) as unknown };
+      } catch (err) {
+        return { ok: false, error: String(err) };
+      }
     },
-    gateway: testGatewayBind ? { bind: testGatewayBind } : undefined,
-    cron: (() => {
-      const cron: Record<string, unknown> = {};
-      if (typeof testCronEnabled === "boolean") cron.enabled = testCronEnabled;
-      if (typeof testCronStorePath === "string") cron.store = testCronStorePath;
-      return Object.keys(cron).length > 0 ? cron : undefined;
-    })(),
-  }),
-}));
+    validateConfigObject: (parsed: unknown) => ({
+      ok: true,
+      config: parsed as Record<string, unknown>,
+      issues: [],
+    }),
+    readConfigFileSnapshot,
+    writeConfigFile,
+  };
+});
 
 vi.mock("../commands/health.js", () => ({
   getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
@@ -1889,6 +1957,81 @@ describe("gateway server", () => {
       await server.close();
     },
   );
+
+  test("providers.status returns snapshot without probe", async () => {
+    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{
+      whatsapp?: { linked?: boolean };
+      telegram?: {
+        configured?: boolean;
+        tokenSource?: string;
+        probe?: unknown;
+        lastProbeAt?: unknown;
+      };
+    }>(ws, "providers.status", { probe: false, timeoutMs: 2000 });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.whatsapp).toBeTruthy();
+    expect(res.payload?.telegram?.configured).toBe(false);
+    expect(res.payload?.telegram?.tokenSource).toBe("none");
+    expect(res.payload?.telegram?.probe).toBeUndefined();
+    expect(res.payload?.telegram?.lastProbeAt).toBeNull();
+
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.TELEGRAM_BOT_TOKEN;
+    } else {
+      process.env.TELEGRAM_BOT_TOKEN = prevToken;
+    }
+  });
+
+  test("web.logout reports no session when missing", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{ cleared?: boolean }>(ws, "web.logout");
+    expect(res.ok).toBe(true);
+    expect(res.payload?.cleared).toBe(false);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("telegram.logout clears bot token from config", async () => {
+    const prevToken = process.env.TELEGRAM_BOT_TOKEN;
+    delete process.env.TELEGRAM_BOT_TOKEN;
+    await writeConfigFile({
+      telegram: { botToken: "123:abc", requireMention: false },
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{ cleared?: boolean; envToken?: boolean }>(
+      ws,
+      "telegram.logout",
+    );
+    expect(res.ok).toBe(true);
+    expect(res.payload?.cleared).toBe(true);
+    expect(res.payload?.envToken).toBe(false);
+
+    const snap = await readConfigFileSnapshot();
+    expect(snap.valid).toBe(true);
+    expect(snap.config?.telegram?.botToken).toBeUndefined();
+    expect(snap.config?.telegram?.requireMention).toBe(false);
+
+    ws.close();
+    await server.close();
+    if (prevToken === undefined) {
+      delete process.env.TELEGRAM_BOT_TOKEN;
+    } else {
+      process.env.TELEGRAM_BOT_TOKEN = prevToken;
+    }
+  });
 
   test(
     "presence events carry seq + stateVersion",
