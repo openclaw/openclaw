@@ -21,6 +21,8 @@ If a skill name conflicts, precedence is:
 
 `<workspace>/skills` (highest) → `~/.clawdis/skills` → bundled skills (lowest)
 
+Additionally, you can configure extra skill folders (lowest precedence) via `skillsLoad.extraDirs` in `~/.clawdis/clawdis.json`.
+
 ## Format (AgentSkills + Pi-compatible)
 
 `SKILL.md` must include at least:

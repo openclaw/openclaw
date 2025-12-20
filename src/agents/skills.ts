@@ -9,7 +9,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 
 import type { ClawdisConfig, SkillConfig } from "../config/config.js";
-import { CONFIG_DIR } from "../utils.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 export type SkillInstallSpec = {
   id?: string;
@@ -414,6 +414,10 @@ function loadSkillEntries(
     opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.join(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const extraDirsRaw = opts?.config?.skillsLoad?.extraDirs ?? [];
+  const extraDirs = extraDirsRaw
+    .map((d) => (typeof d === "string" ? d.trim() : ""))
+    .filter(Boolean);
 
   const bundledSkills = bundledSkillsDir
     ? loadSkillsFromDir({
@@ -421,6 +425,13 @@ function loadSkillEntries(
         source: "clawdis-bundled",
       })
     : [];
+  const extraSkills = extraDirs.flatMap((dir) => {
+    const resolved = resolveUserPath(dir);
+    return loadSkillsFromDir({
+      dir: resolved,
+      source: "clawdis-extra",
+    });
+  });
   const managedSkills = loadSkillsFromDir({
     dir: managedSkillsDir,
     source: "clawdis-managed",
@@ -431,7 +442,8 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: bundled < managed < workspace
+  // Precedence: extra < bundled < managed < workspace
+  for (const skill of extraSkills) merged.set(skill.name, skill);
   for (const skill of bundledSkills) merged.set(skill.name, skill);
   for (const skill of managedSkills) merged.set(skill.name, skill);
   for (const skill of workspaceSkills) merged.set(skill.name, skill);

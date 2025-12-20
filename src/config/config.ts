@@ -127,6 +127,14 @@ export type SkillConfig = {
   [key: string]: unknown;
 };
 
+export type SkillsLoadConfig = {
+  /**
+   * Additional skill folders to scan (lowest precedence).
+   * Each directory should contain skill subfolders with `SKILL.md`.
+   */
+  extraDirs?: string[];
+};
+
 export type ClawdisConfig = {
   identity?: {
     name?: string;
@@ -135,6 +143,7 @@ export type ClawdisConfig = {
   };
   logging?: LoggingConfig;
   browser?: BrowserConfig;
+  skillsLoad?: SkillsLoadConfig;
   inbound?: {
     allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
@@ -355,6 +364,11 @@ const ClawdisSchema = z.object({
           enabled: z.boolean().optional(),
         })
         .optional(),
+    })
+    .optional(),
+  skillsLoad: z
+    .object({
+      extraDirs: z.array(z.string()).optional(),
     })
     .optional(),
   skills: z

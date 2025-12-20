@@ -157,6 +157,21 @@ Example:
 }
 ```
 
+### `skillsLoad`
+
+Additional skill directories to scan (lowest precedence). This is useful if you keep skills in a separate repo but want Clawdis to pick them up without copying them into the workspace.
+
+```json5
+{
+  skillsLoad: {
+    extraDirs: [
+      "~/Projects/agent-scripts/skills",
+      "~/Projects/oss/some-skill-pack/skills"
+    ]
+  }
+}
+```
+
 ### `browser` (clawd-managed Chrome)
 
 Clawdis can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
