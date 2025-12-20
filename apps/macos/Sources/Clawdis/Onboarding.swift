@@ -1006,7 +1006,7 @@ struct OnboardingView: View {
     }
 
     private func onboardingChatPage() -> some View {
-        self.onboardingPage {
+        VStack(spacing: 16) {
             Text("Meet your agent")
                 .font(.largeTitle.weight(.semibold))
             Text(
@@ -1020,9 +1020,12 @@ struct OnboardingView: View {
 
             self.onboardingCard(padding: 8) {
                 ClawdisChatView(viewModel: self.onboardingChatModel, style: .onboarding)
-                    .frame(height: 420)
+                    .frame(maxHeight: .infinity)
             }
+            .frame(maxHeight: .infinity)
         }
+        .padding(.horizontal, 28)
+        .frame(width: self.pageWidth, height: self.contentHeight, alignment: .top)
     }
 
     private func readyPage() -> some View {
@@ -1143,7 +1146,7 @@ struct OnboardingView: View {
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 0)
-        .frame(minHeight: 60)
+        .frame(minHeight: 60, alignment: .bottom)
     }
 
     private func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
