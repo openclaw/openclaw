@@ -11,6 +11,9 @@ import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
+import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { installSkill } from "../agents/skills-install.js";
+import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -90,7 +93,7 @@ import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { sendMessageTelegram } from "../telegram/send.js";
-import { normalizeE164 } from "../utils.js";
+import { normalizeE164, resolveUserPath } from "../utils.js";
 import { setHeartbeatsEnabled } from "../web/auto-reply.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { requestReplyHeartbeatNow } from "../web/reply-heartbeat-wake.js";
@@ -150,6 +153,9 @@ import {
   validateSendParams,
   validateSessionsListParams,
   validateSessionsPatchParams,
+  validateSkillsInstallParams,
+  validateSkillsStatusParams,
+  validateSkillsUpdateParams,
   validateWakeParams,
 } from "./protocol/index.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
@@ -210,6 +216,9 @@ const METHODS = [
   "status",
   "config.get",
   "config.set",
+  "skills.status",
+  "skills.install",
+  "skills.update",
   "voicewake.get",
   "voicewake.set",
   "sessions.list",
@@ -3059,6 +3068,119 @@ export async function startGatewayServer(
                   path: CONFIG_PATH_CLAWDIS,
                   config: validated.config,
                 },
+                undefined,
+              );
+              break;
+            }
+            case "skills.status": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateSkillsStatusParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid skills.status params: ${formatValidationErrors(validateSkillsStatusParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const cfg = loadConfig();
+              const workspaceDirRaw =
+                cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+              const workspaceDir = resolveUserPath(workspaceDirRaw);
+              const report = buildWorkspaceSkillStatus(workspaceDir, {
+                config: cfg,
+              });
+              respond(true, report, undefined);
+              break;
+            }
+            case "skills.install": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateSkillsInstallParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid skills.install params: ${formatValidationErrors(validateSkillsInstallParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as {
+                name: string;
+                installId: string;
+                timeoutMs?: number;
+              };
+              const cfg = loadConfig();
+              const workspaceDirRaw =
+                cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+              const result = await installSkill({
+                workspaceDir: workspaceDirRaw,
+                skillName: p.name,
+                installId: p.installId,
+                timeoutMs: p.timeoutMs,
+              });
+              respond(
+                result.ok,
+                result,
+                result.ok
+                  ? undefined
+                  : errorShape(ErrorCodes.UNAVAILABLE, result.message),
+              );
+              break;
+            }
+            case "skills.update": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateSkillsUpdateParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid skills.update params: ${formatValidationErrors(validateSkillsUpdateParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const p = params as {
+                skillKey: string;
+                enabled?: boolean;
+                apiKey?: string;
+                env?: Record<string, string>;
+              };
+              const cfg = loadConfig();
+              const skills = { ...(cfg.skills ?? {}) };
+              const current = { ...(skills[p.skillKey] ?? {}) };
+              if (typeof p.enabled === "boolean") {
+                current.enabled = p.enabled;
+              }
+              if (typeof p.apiKey === "string") {
+                const trimmed = p.apiKey.trim();
+                if (trimmed) current.apiKey = trimmed;
+                else delete current.apiKey;
+              }
+              if (p.env && typeof p.env === "object") {
+                const nextEnv = { ...(current.env ?? {}) };
+                for (const [key, value] of Object.entries(p.env)) {
+                  const trimmedKey = key.trim();
+                  if (!trimmedKey) continue;
+                  const trimmedVal = String(value ?? "").trim();
+                  if (!trimmedVal) delete nextEnv[trimmedKey];
+                  else nextEnv[trimmedKey] = trimmedVal;
+                }
+                current.env = nextEnv;
+              }
+              skills[p.skillKey] = current;
+              const nextConfig: ClawdisConfig = {
+                ...cfg,
+                skills,
+              };
+              await writeConfigFile(nextConfig);
+              respond(
+                true,
+                { ok: true, skillKey: p.skillKey, config: current },
                 undefined,
               );
               break;

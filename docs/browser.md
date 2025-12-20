@@ -20,7 +20,7 @@ Playwright vs Puppeteer; the key is the **contract** and the **separation guaran
 
 ## User-facing settings
 
-Add a dedicated settings section (preferably under **Tools** or its own "Browser" tab):
+Add a dedicated settings section (preferably under **Skills** or its own "Browser" tab):
 
 - **Enable clawd browser** (`default: on`)
   - When off: no browser is launched, and browser tools return "disabled".

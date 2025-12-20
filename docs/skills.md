@@ -58,6 +58,17 @@ Fields under `metadata.clawdis`:
 - `requires.env` — list; env var must exist **or** be provided in config.
 - `requires.config` — list of `clawdis.json` paths that must be truthy.
 - `primaryEnv` — env var name associated with `skills.<name>.apiKey`.
+- `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/pnpm/git/shell).
+
+Installer example:
+
+```markdown
+---
+name: gemini
+description: Use Gemini CLI for coding assistance and Google search lookups.
+metadata: {"clawdis":{"requires":{"bins":["gemini"]},"install":[{"id":"brew","kind":"brew","formula":"gemini-cli","bins":["gemini"],"label":"Install Gemini CLI (brew)"}]}}
+---
+```
 
 If no `metadata.clawdis` is present, the skill is always eligible (unless disabled in config).
 

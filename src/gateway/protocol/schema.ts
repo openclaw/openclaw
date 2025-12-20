@@ -305,6 +305,30 @@ export const ConfigSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SkillsStatusParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
+
+export const SkillsInstallParamsSchema = Type.Object(
+  {
+    name: NonEmptyString,
+    installId: NonEmptyString,
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsUpdateParamsSchema = Type.Object(
+  {
+    skillKey: NonEmptyString,
+    enabled: Type.Optional(Type.Boolean()),
+    apiKey: Type.Optional(Type.String()),
+    env: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+  },
+  { additionalProperties: false },
+);
+
 export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
@@ -557,6 +581,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   SessionsPatchParams: SessionsPatchParamsSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
+  SkillsStatusParams: SkillsStatusParamsSchema,
+  SkillsInstallParams: SkillsInstallParamsSchema,
+  SkillsUpdateParams: SkillsUpdateParamsSchema,
   CronJob: CronJobSchema,
   CronListParams: CronListParamsSchema,
   CronStatusParams: CronStatusParamsSchema,
@@ -600,6 +627,9 @@ export type SessionsListParams = Static<typeof SessionsListParamsSchema>;
 export type SessionsPatchParams = Static<typeof SessionsPatchParamsSchema>;
 export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
 export type ConfigSetParams = Static<typeof ConfigSetParamsSchema>;
+export type SkillsStatusParams = Static<typeof SkillsStatusParamsSchema>;
+export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;
+export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;
 export type CronJob = Static<typeof CronJobSchema>;
 export type CronListParams = Static<typeof CronListParamsSchema>;
 export type CronStatusParams = Static<typeof CronStatusParamsSchema>;

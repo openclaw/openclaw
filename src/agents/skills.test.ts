@@ -11,6 +11,7 @@ import {
   buildWorkspaceSkillsPrompt,
   loadWorkspaceSkillEntries,
 } from "./skills.js";
+import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
 async function writeSkill(params: {
   dir: string;
@@ -292,6 +293,34 @@ describe("buildWorkspaceSkillSnapshot", () => {
 
     expect(snapshot.prompt).toBe("");
     expect(snapshot.skills).toEqual([]);
+  });
+});
+
+describe("buildWorkspaceSkillStatus", () => {
+  it("reports missing requirements and install options", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
+    const skillDir = path.join(workspaceDir, "skills", "status-skill");
+
+    await writeSkill({
+      dir: skillDir,
+      name: "status-skill",
+      description: "Needs setup",
+      metadata:
+        '{"clawdis":{"requires":{"bins":["fakebin"],"env":["ENV_KEY"],"config":["browser.enabled"]},"install":[{"id":"brew","kind":"brew","formula":"fakebin","bins":["fakebin"],"label":"Install fakebin"}]}}',
+    });
+
+    const report = buildWorkspaceSkillStatus(workspaceDir, {
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: { browser: { enabled: false } },
+    });
+    const skill = report.skills.find((entry) => entry.name === "status-skill");
+
+    expect(skill).toBeDefined();
+    expect(skill?.eligible).toBe(false);
+    expect(skill?.missing.bins).toContain("fakebin");
+    expect(skill?.missing.env).toContain("ENV_KEY");
+    expect(skill?.missing.config).toContain("browser.enabled");
+    expect(skill?.install[0]?.id).toBe("brew");
   });
 });
 

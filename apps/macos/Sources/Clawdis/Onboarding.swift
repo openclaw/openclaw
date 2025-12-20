@@ -1132,10 +1132,10 @@ struct OnboardingView: View {
                     systemImage: "bell.badge")
                 self.featureActionRow(
                     title: "Give your agent more powers",
-                    subtitle: "Install optional tools (Peekaboo, oracle, camsnap, …) from Settings → Tools.",
-                    systemImage: "wrench.and.screwdriver")
+                    subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Settings → Skills.",
+                    systemImage: "sparkles")
                 {
-                    self.openSettings(tab: .tools)
+                    self.openSettings(tab: .skills)
                 }
                 Toggle("Launch at login", isOn: self.$state.launchAtLogin)
                     .onChange(of: self.state.launchAtLogin) { _, newValue in
@@ -1259,7 +1259,7 @@ struct OnboardingView: View {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                Button("Open Settings → Tools", action: action)
+                Button("Open Settings → Skills", action: action)
                     .buttonStyle(.link)
                     .padding(.top, 2)
             }

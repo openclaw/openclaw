@@ -50,6 +50,9 @@ actor GatewayConnection {
         case chatHistory = "chat.history"
         case chatSend = "chat.send"
         case chatAbort = "chat.abort"
+        case skillsStatus = "skills.status"
+        case skillsInstall = "skills.install"
+        case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
         case nodePairApprove = "node.pair.approve"
@@ -353,6 +356,42 @@ extension GatewayConnection {
     func healthOK(timeoutMs: Int = 8000) async throws -> Bool {
         let data = try await self.requestRaw(method: .health, timeoutMs: Double(timeoutMs))
         return (try? self.decoder.decode(ClawdisGatewayHealthOK.self, from: data))?.ok ?? true
+    }
+
+    // MARK: - Skills
+
+    func skillsStatus() async throws -> SkillsStatusReport {
+        try await self.requestDecoded(method: .skillsStatus)
+    }
+
+    func skillsInstall(
+        name: String,
+        installId: String,
+        timeoutMs: Int? = nil) async throws -> SkillInstallResult
+    {
+        var params: [String: AnyCodable] = [
+            "name": AnyCodable(name),
+            "installId": AnyCodable(installId),
+        ]
+        if let timeoutMs {
+            params["timeoutMs"] = AnyCodable(timeoutMs)
+        }
+        return try await self.requestDecoded(method: .skillsInstall, params: params)
+    }
+
+    func skillsUpdate(
+        skillKey: String,
+        enabled: Bool? = nil,
+        apiKey: String? = nil,
+        env: [String: String]? = nil) async throws -> SkillUpdateResult
+    {
+        var params: [String: AnyCodable] = [
+            "skillKey": AnyCodable(skillKey),
+        ]
+        if let enabled { params["enabled"] = AnyCodable(enabled) }
+        if let apiKey { params["apiKey"] = AnyCodable(apiKey) }
+        if let env, !env.isEmpty { params["env"] = AnyCodable(env) }
+        return try await self.requestDecoded(method: .skillsUpdate, params: params)
     }
 
     // MARK: - Chat

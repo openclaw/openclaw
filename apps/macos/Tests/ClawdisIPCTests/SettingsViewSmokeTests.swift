@@ -144,12 +144,8 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
-    @Test func toolsSettingsBuildsBody() {
-        let view = ToolsSettings()
+    @Test func skillsSettingsBuildsBody() {
+        let view = SkillsSettings()
         _ = view.body
-    }
-
-    @Test func toolsSettingsIncludesSummarize() {
-        #expect(ToolsSettings.toolIDsForTests.contains("summarize"))
     }
 }

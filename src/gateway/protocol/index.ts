@@ -13,6 +13,12 @@ import {
   ConfigGetParamsSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
+  type SkillsInstallParams,
+  SkillsInstallParamsSchema,
+  type SkillsStatusParams,
+  SkillsStatusParamsSchema,
+  type SkillsUpdateParams,
+  SkillsUpdateParamsSchema,
   type ConnectParams,
   ConnectParamsSchema,
   type CronAddParams,
@@ -135,6 +141,15 @@ export const validateConfigGetParams = ajv.compile<ConfigGetParams>(
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(
   ConfigSetParamsSchema,
 );
+export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(
+  SkillsStatusParamsSchema,
+);
+export const validateSkillsInstallParams = ajv.compile<SkillsInstallParams>(
+  SkillsInstallParamsSchema,
+);
+export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(
+  SkillsUpdateParamsSchema,
+);
 export const validateCronListParams =
   ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(
@@ -193,6 +208,9 @@ export {
   SessionsPatchParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
+  SkillsStatusParamsSchema,
+  SkillsInstallParamsSchema,
+  SkillsUpdateParamsSchema,
   CronJobSchema,
   CronListParamsSchema,
   CronStatusParamsSchema,
@@ -232,6 +250,9 @@ export type {
   NodePairApproveParams,
   ConfigGetParams,
   ConfigSetParams,
+  SkillsStatusParams,
+  SkillsInstallParams,
+  SkillsUpdateParams,
   NodePairRejectParams,
   NodePairVerifyParams,
   NodeListParams,

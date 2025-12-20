@@ -76,7 +76,6 @@ function resolveBundledSkillsDir(): string | undefined {
 
   return undefined;
 }
-
 function getFrontmatterValue(
   frontmatter: ParsedSkillFrontmatter,
   key: string,
@@ -180,7 +179,10 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
   "browser.enabled": true,
 };
 
-function resolveConfigPath(config: ClawdisConfig | undefined, pathStr: string) {
+export function resolveConfigPath(
+  config: ClawdisConfig | undefined,
+  pathStr: string,
+) {
   const parts = pathStr.split(".").filter(Boolean);
   let current: unknown = config;
   for (const part of parts) {
@@ -190,7 +192,7 @@ function resolveConfigPath(config: ClawdisConfig | undefined, pathStr: string) {
   return current;
 }
 
-function isConfigPathTruthy(
+export function isConfigPathTruthy(
   config: ClawdisConfig | undefined,
   pathStr: string,
 ): boolean {
@@ -201,7 +203,7 @@ function isConfigPathTruthy(
   return isTruthy(value);
 }
 
-function resolveSkillConfig(
+export function resolveSkillConfig(
   config: ClawdisConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
@@ -212,7 +214,7 @@ function resolveSkillConfig(
   return entry;
 }
 
-function hasBinary(bin: string): boolean {
+export function hasBinary(bin: string): boolean {
   const pathEnv = process.env.PATH ?? "";
   const parts = pathEnv.split(path.delimiter).filter(Boolean);
   for (const part of parts) {
@@ -277,6 +279,7 @@ function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
   return entry?.clawdis?.skillKey ?? skill.name;
 }
 
+
 function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: ClawdisConfig;
@@ -325,6 +328,7 @@ function filterSkillEntries(
 ): SkillEntry[] {
   return entries.filter((entry) => shouldIncludeSkill({ entry, config }));
 }
+
 
 export function applySkillEnvOverrides(params: {
   skills: SkillEntry[];
@@ -435,11 +439,11 @@ function loadSkillEntries(
   const managedSkills = loadSkillsFromDir({
     dir: managedSkillsDir,
     source: "clawdis-managed",
-  });
+  }).skills;
   const workspaceSkills = loadSkillsFromDir({
     dir: workspaceSkillsDir,
     source: "clawdis-workspace",
-  });
+  }).skills;
 
   const merged = new Map<string, Skill>();
   // Precedence: extra < bundled < managed < workspace

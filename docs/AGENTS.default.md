@@ -1,8 +1,8 @@
 ---
-summary: "Default Clawdis agent instructions and tool roster for the personal assistant setup"
+summary: "Default Clawdis agent instructions and skills roster for the personal assistant setup"
 read_when:
   - Starting a new Clawdis agent session
-  - Enabling or auditing default tools
+  - Enabling or auditing default skills
 ---
 # AGENTS.md — Clawdis Personal Assistant (default)
 
@@ -24,7 +24,7 @@ cp docs/templates/SOUL.md ~/.clawdis/workspace/SOUL.md
 cp docs/templates/TOOLS.md ~/.clawdis/workspace/TOOLS.md
 ```
 
-3) Optional: if you want the personal assistant tool roster, replace AGENTS.md with this file:
+3) Optional: if you want the personal assistant skill roster, replace AGENTS.md with this file:
 
 ```bash
 cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
@@ -62,16 +62,16 @@ git commit -m "Add Clawd workspace"
 ```
 
 ## What Clawdis Does
-- Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run tools via the host Mac.
+- Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run skills via the host Mac.
 - macOS app manages permissions (screen recording, notifications, microphone) and exposes the `clawdis` CLI via its bundled binary.
 - Direct chats collapse into the shared `main` session by default; groups stay isolated as `group:<jid>`; heartbeats keep background tasks alive.
 
-## Core Tools (enable in Settings → Tools)
-- **mcporter** — MCP runtime/CLI to list, call, and sync Model Context Protocol servers.
+## Core Skills (enable in Settings → Skills)
+- **mcporter** — Tool server runtime/CLI for managing external skill backends.
 - **Peekaboo** — Fast macOS screenshots with optional AI vision analysis.
 - **camsnap** — Capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
 - **oracle** — OpenAI-ready agent CLI with session replay and browser control.
-- **qmd** — Hybrid markdown search (BM25 + vectors + rerank) with an MCP server for agents.
+- **qmd** — Hybrid markdown search (BM25 + vectors + rerank) with a local server for agents.
 - **eightctl** — Control your sleep, from the terminal.
 - **imsg** — Send, read, stream iMessage & SMS.
 - **wacli** — WhatsApp CLI: sync, search, send.
@@ -84,16 +84,11 @@ git commit -m "Add Clawd workspace"
 - **OpenAI Whisper** — Local speech-to-text for quick dictation and voicemail transcripts.
 - **Gemini CLI** — Google Gemini models from the terminal for fast Q&A.
 - **bird** — X/Twitter CLI to tweet, reply, read threads, and search without a browser.
-- **agent-tools** — Utility toolkit for automations and MCP-friendly scripts.
-
-## MCP Servers (added via mcporter)
-- **Gmail MCP** (`gmail`) — Search, read, and send Gmail messages.
-- **Google Calendar MCP** (`google-calendar`) — List, create, and update events.
+- **agent-tools** — Utility toolkit for automations and helper scripts.
 
 ## Usage Notes
 - Prefer the `clawdis` CLI for scripting; mac app handles permissions.
-- Run installs from the Tools tab; it hides the button if a tool is already present.
-- For MCPs, mcporter writes to the home-scope config; re-run installs if you rotate tokens.
+- Run installs from the Skills tab; it hides the button if a binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
 - For browser-driven verification, use `clawdis browser` (tabs/status/screenshot) with the clawd-managed Chrome profile.
 - For DOM inspection, use `clawdis browser eval|query|dom|snapshot` (and `--json`/`--out` when you need machine output).
