@@ -396,8 +396,7 @@ class NodeRuntime(context: Context) {
       val actionId = (userActionObj["id"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty {
         java.util.UUID.randomUUID().toString()
       }
-      val name = (userActionObj["name"] as? JsonPrimitive)?.content?.trim().orEmpty()
-      if (name.isEmpty()) return@launch
+      val name = ClawdisCanvasA2UIAction.extractActionName(userActionObj) ?: return@launch
 
       val surfaceId =
         (userActionObj["surfaceId"] as? JsonPrimitive)?.content?.trim().orEmpty().ifEmpty { "main" }

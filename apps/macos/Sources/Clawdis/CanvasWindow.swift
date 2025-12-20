@@ -639,7 +639,7 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
         }()
         guard !userAction.isEmpty else { return }
 
-        guard let name = userAction["name"] as? String, !name.isEmpty else { return }
+        guard let name = ClawdisCanvasA2UIAction.extractActionName(userAction) else { return }
         let actionId =
             (userAction["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
                 ?? UUID().uuidString

@@ -9,6 +9,13 @@ import Testing
         #expect(ClawdisCanvasA2UIAction.sanitizeTagValue("macOS 26.2") == "macOS_26.2")
     }
 
+    @Test func extractActionNameAcceptsNameOrAction() {
+        #expect(ClawdisCanvasA2UIAction.extractActionName(["name": "Hello"]) == "Hello")
+        #expect(ClawdisCanvasA2UIAction.extractActionName(["action": "Wave"]) == "Wave")
+        #expect(ClawdisCanvasA2UIAction.extractActionName(["name": "  ", "action": "Fallback"]) == "Fallback")
+        #expect(ClawdisCanvasA2UIAction.extractActionName(["action": " "]) == nil)
+    }
+
     @Test func formatAgentMessageIsTokenEfficientAndUnambiguous() {
         let msg = ClawdisCanvasA2UIAction.formatAgentMessage(
             actionName: "Get Weather",

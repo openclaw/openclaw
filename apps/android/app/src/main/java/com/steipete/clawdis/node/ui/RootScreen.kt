@@ -191,11 +191,14 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         setBackgroundColor(Color.BLACK)
         setLayerType(View.LAYER_TYPE_HARDWARE, null)
 
-        addJavascriptInterface(
+        val a2uiBridge =
           CanvasA2UIActionBridge { payload ->
             viewModel.handleCanvasA2UIActionFromWebView(payload)
-          },
-          CanvasA2UIActionBridge.interfaceName,
+          }
+        addJavascriptInterface(a2uiBridge, CanvasA2UIActionBridge.interfaceName)
+        addJavascriptInterface(
+          CanvasA2UIActionLegacyBridge(a2uiBridge),
+          CanvasA2UIActionLegacyBridge.interfaceName,
         )
         viewModel.canvas.attach(this)
       }
@@ -213,5 +216,21 @@ private class CanvasA2UIActionBridge(private val onMessage: (String) -> Unit) {
 
   companion object {
     const val interfaceName: String = "clawdisCanvasA2UIAction"
+  }
+}
+
+private class CanvasA2UIActionLegacyBridge(private val bridge: CanvasA2UIActionBridge) {
+  @JavascriptInterface
+  fun canvasAction(payload: String?) {
+    bridge.postMessage(payload)
+  }
+
+  @JavascriptInterface
+  fun postMessage(payload: String?) {
+    bridge.postMessage(payload)
+  }
+
+  companion object {
+    const val interfaceName: String = "Android"
   }
 }

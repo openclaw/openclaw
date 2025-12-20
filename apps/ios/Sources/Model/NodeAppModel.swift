@@ -80,7 +80,7 @@ final class NodeAppModel {
         }()
         guard !userAction.isEmpty else { return }
 
-        guard let name = userAction["name"] as? String, !name.isEmpty else { return }
+        guard let name = ClawdisCanvasA2UIAction.extractActionName(userAction) else { return }
         let actionId: String = {
             let id = (userAction["id"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return id.isEmpty ? UUID().uuidString : id

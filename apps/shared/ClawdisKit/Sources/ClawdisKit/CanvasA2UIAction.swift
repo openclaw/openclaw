@@ -1,6 +1,17 @@
 import Foundation
 
 public enum ClawdisCanvasA2UIAction: Sendable {
+    public static func extractActionName(_ userAction: [String: Any]) -> String? {
+        let keys = ["name", "action"]
+        for key in keys {
+            if let raw = userAction[key] as? String {
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return trimmed }
+            }
+        }
+        return nil
+    }
+
     public static func sanitizeTagValue(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let nonEmpty = trimmed.isEmpty ? "-" : trimmed

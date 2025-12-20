@@ -24,7 +24,9 @@ final class ScreenController {
         config.websiteDataStore = .nonPersistent()
         let a2uiActionHandler = CanvasA2UIActionMessageHandler()
         let userContentController = WKUserContentController()
-        userContentController.add(a2uiActionHandler, name: CanvasA2UIActionMessageHandler.messageName)
+        for name in CanvasA2UIActionMessageHandler.handlerNames {
+            userContentController.add(a2uiActionHandler, name: name)
+        }
         config.userContentController = userContentController
         self.navigationDelegate = ScreenNavigationDelegate()
         self.a2uiActionHandler = a2uiActionHandler
@@ -323,6 +325,8 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
 
 private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
     static let messageName = "clawdisCanvasA2UIAction"
+    static let legacyMessageNames = ["canvas", "a2ui", "userAction", "action"]
+    static let handlerNames = [messageName] + legacyMessageNames
 
     weak var controller: ScreenController?
 

@@ -1,6 +1,24 @@
 package com.steipete.clawdis.node.protocol
 
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+
 object ClawdisCanvasA2UIAction {
+  fun extractActionName(userAction: JsonObject): String? {
+    val name =
+      (userAction["name"] as? JsonPrimitive)
+        ?.content
+        ?.trim()
+        .orEmpty()
+    if (name.isNotEmpty()) return name
+    val action =
+      (userAction["action"] as? JsonPrimitive)
+        ?.content
+        ?.trim()
+        .orEmpty()
+    return action.ifEmpty { null }
+  }
+
   fun sanitizeTagValue(value: String): String {
     val trimmed = value.trim().ifEmpty { "-" }
     val normalized = trimmed.replace(" ", "_")
@@ -46,4 +64,3 @@ object ClawdisCanvasA2UIAction {
     return "window.dispatchEvent(new CustomEvent('clawdis:a2ui-action-status', { detail: { id: \"${idEscaped}\", ok: ${okLiteral}, error: \"${err}\" } }));"
   }
 }
-
