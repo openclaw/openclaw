@@ -1,7 +1,13 @@
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 
 type BootstrapFile = {
-  name: "AGENTS.md" | "SOUL.md" | "TOOLS.md";
+  name:
+    | "AGENTS.md"
+    | "SOUL.md"
+    | "TOOLS.md"
+    | "IDENTITY.md"
+    | "USER.md"
+    | "BOOTSTRAP.md";
   path: string;
   content?: string;
   missing: boolean;

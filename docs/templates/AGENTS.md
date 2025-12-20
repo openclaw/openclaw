@@ -7,6 +7,11 @@ read_when:
 
 This folder is the assistant's working directory.
 
+## First run (one-time)
+- If `BOOTSTRAP.md` exists, follow its ritual and delete it once complete.
+- Your agent identity lives in `IDENTITY.md`.
+- Your profile lives in `USER.md`.
+
 ## Backup tip (recommended)
 If you treat this workspace as the agent's "memory", make it a git repo (ideally private) so identity
 and notes are backed up.
