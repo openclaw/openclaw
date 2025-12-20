@@ -163,7 +163,7 @@ extension SessionRow {
     }
 }
 
-struct ModelChoice: Identifiable, Hashable {
+struct ModelChoice: Identifiable, Hashable, Codable {
     let id: String
     let name: String
     let provider: String

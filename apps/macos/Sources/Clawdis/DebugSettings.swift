@@ -404,7 +404,7 @@ struct DebugSettings: View {
                                     .font(.footnote)
                                     .foregroundStyle(.secondary)
                             }
-                            Text("Used by the Config tab model picker; point at a different build when debugging.")
+                            Text("Local fallback for model picker when gateway models.list is unavailable.")
                                 .font(.footnote)
                                 .foregroundStyle(.tertiary)
                         }
