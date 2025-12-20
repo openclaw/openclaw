@@ -78,6 +78,7 @@ struct OnboardingView: View {
     @State private var showAdvancedConnection = false
     @State private var preferredGatewayID: String?
     @State private var gatewayDiscovery: GatewayDiscoveryModel
+    @State private var localGatewayProbe: LocalGatewayProbe?
     @Bindable private var state: AppState
     private var permissionMonitor: PermissionMonitor
 
@@ -109,6 +110,13 @@ struct OnboardingView: View {
     private var buttonTitle: String { self.currentPage == self.pageCount - 1 ? "Finish" : "Next" }
     private let devLinkCommand =
         "ln -sf /Applications/Clawdis.app/Contents/Resources/Relay/clawdis /usr/local/bin/clawdis"
+
+    private struct LocalGatewayProbe: Equatable {
+        let port: Int
+        let pid: Int32
+        let command: String
+        let expected: Bool
+    }
 
     init(
         state: AppState = AppStateStore.shared,
@@ -281,9 +289,19 @@ struct OnboardingView: View {
 
             self.onboardingCard(spacing: 12, padding: 14) {
                 VStack(alignment: .leading, spacing: 10) {
+                    let localSubtitle: String = {
+                        guard let probe = self.localGatewayProbe else {
+                            return "Run the Gateway locally."
+                        }
+                        let base = probe.expected
+                            ? "Existing gateway detected"
+                            : "Port \(probe.port) already in use"
+                        let command = probe.command.isEmpty ? "" : " (\(probe.command) pid \(probe.pid))"
+                        return "\(base)\(command). Will attach."
+                    }()
                     self.connectionChoiceButton(
                         title: "This Mac",
-                        subtitle: "Run the Gateway locally.",
+                        subtitle: localSubtitle,
                         selected: self.state.connectionMode == .local)
                     {
                         self.selectLocalGateway()
@@ -1318,6 +1336,7 @@ struct OnboardingView: View {
         if shouldMonitor, !self.monitoringDiscovery {
             self.monitoringDiscovery = true
             self.gatewayDiscovery.start()
+            Task { await self.refreshLocalGatewayProbe() }
         } else if !shouldMonitor, self.monitoringDiscovery {
             self.monitoringDiscovery = false
             self.gatewayDiscovery.stop()
@@ -1391,6 +1410,27 @@ struct OnboardingView: View {
                 GatewayEnvironment.check()
             }.value
             self.gatewayStatus = status
+            await self.refreshLocalGatewayProbe()
+        }
+    }
+
+    private func refreshLocalGatewayProbe() async {
+        let port = GatewayEnvironment.gatewayPort()
+        let desc = await PortGuardian.shared.describe(port: port)
+        await MainActor.run {
+            guard let desc else {
+                self.localGatewayProbe = nil
+                return
+            }
+            let command = desc.command.trimmingCharacters(in: .whitespacesAndNewlines)
+            let expectedTokens = ["node", "clawdis", "tsx", "pnpm", "bun"]
+            let lower = command.lowercased()
+            let expected = expectedTokens.contains { lower.contains($0) }
+            self.localGatewayProbe = LocalGatewayProbe(
+                port: port,
+                pid: desc.pid,
+                command: command,
+                expected: expected)
         }
     }
 

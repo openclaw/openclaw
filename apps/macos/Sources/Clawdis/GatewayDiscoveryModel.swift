@@ -6,6 +6,11 @@ import Observation
 @MainActor
 @Observable
 final class GatewayDiscoveryModel {
+    struct LocalIdentity: Equatable {
+        var hostTokens: Set<String>
+        var displayTokens: Set<String>
+    }
+
     struct DiscoveredGateway: Identifiable, Equatable {
         var id: String { self.stableID }
         var displayName: String
@@ -14,6 +19,7 @@ final class GatewayDiscoveryModel {
         var sshPort: Int
         var stableID: String
         var debugID: String
+        var isLocal: Bool
     }
 
     var gateways: [DiscoveredGateway] = []
@@ -22,6 +28,7 @@ final class GatewayDiscoveryModel {
     private var browsers: [String: NWBrowser] = [:]
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
+    private let localIdentity: LocalIdentity = GatewayDiscoveryModel.buildLocalIdentity()
 
     func start() {
         if !self.browsers.isEmpty { return }
@@ -74,13 +81,19 @@ final class GatewayDiscoveryModel {
                             sshPort = parsed
                         }
 
+                        let isLocal = Self.isLocalGateway(
+                            lanHost: lanHost,
+                            tailnetDns: tailnetDns,
+                            displayName: prettyName,
+                            local: self.localIdentity)
                         return DiscoveredGateway(
                             displayName: prettyName,
                             lanHost: lanHost,
                             tailnetDns: tailnetDns,
                             sshPort: sshPort,
                             stableID: BridgeEndpointID.stableID(result.endpoint),
-                            debugID: BridgeEndpointID.prettyDescription(result.endpoint))
+                            debugID: BridgeEndpointID.prettyDescription(result.endpoint),
+                            isLocal: isLocal)
                     }
                     .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
 
@@ -107,6 +120,7 @@ final class GatewayDiscoveryModel {
     private func recomputeGateways() {
         self.gateways = self.gatewaysByDomain.values
             .flatMap(\.self)
+            .filter { !$0.isLocal }
             .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
     }
 
@@ -160,5 +174,80 @@ final class GatewayDiscoveryModel {
         let stripped = normalized.replacingOccurrences(of: " (Clawdis)", with: "")
             .replacingOccurrences(of: #"\s+\(\d+\)$"#, with: "", options: .regularExpression)
         return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func isLocalGateway(
+        lanHost: String?,
+        tailnetDns: String?,
+        displayName: String?,
+        local: LocalIdentity) -> Bool
+    {
+        if let host = normalizeHostToken(lanHost),
+           local.hostTokens.contains(host)
+        {
+            return true
+        }
+        if let host = normalizeHostToken(tailnetDns),
+           local.hostTokens.contains(host)
+        {
+            return true
+        }
+        if let name = normalizeDisplayToken(displayName),
+           local.displayTokens.contains(name)
+        {
+            return true
+        }
+        return false
+    }
+
+    private static func buildLocalIdentity() -> LocalIdentity {
+        var hostTokens: Set<String> = []
+        var displayTokens: Set<String> = []
+
+        let hostName = ProcessInfo.processInfo.hostName
+        if let token = normalizeHostToken(hostName) {
+            hostTokens.insert(token)
+        }
+        if let host = Host.current().name,
+           let token = normalizeHostToken(host)
+        {
+            hostTokens.insert(token)
+        }
+
+        let displayCandidates = [
+            Host.current().localizedName,
+            InstanceIdentity.displayName,
+        ]
+        for raw in displayCandidates {
+            if let token = normalizeDisplayToken(raw) {
+                displayTokens.insert(token)
+            }
+        }
+
+        return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
+    }
+
+    private static func normalizeHostToken(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        let lower = trimmed.lowercased()
+        let strippedTrailingDot = lower.hasSuffix(".")
+            ? String(lower.dropLast())
+            : lower
+        let withoutLocal = strippedTrailingDot.hasSuffix(".local")
+            ? String(strippedTrailingDot.dropLast(6))
+            : strippedTrailingDot
+        let firstLabel = withoutLocal.split(separator: ".").first.map(String.init)
+        let token = (firstLabel ?? withoutLocal).trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
+    }
+
+    private static func normalizeDisplayToken(_ raw: String?) -> String? {
+        guard let raw else { return nil }
+        let prettified = Self.prettifyInstanceName(raw)
+        let trimmed = prettified.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        return trimmed.lowercased()
     }
 }
