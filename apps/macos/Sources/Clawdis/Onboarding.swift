@@ -133,9 +133,8 @@ struct OnboardingView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            GlowingClawdisIcon(size: 156)
-                .padding(.top, 10)
-                .padding(.bottom, 2)
+            GlowingClawdisIcon(size: 156, glowIntensity: 0.28)
+                .offset(y: 8)
                 .frame(height: 176)
 
             GeometryReader { _ in
@@ -867,10 +866,10 @@ struct OnboardingView: View {
                                 .opacity(self.installingCLI ? 0 : 1)
                             if self.installingCLI {
                                 ProgressView()
-                                    .controlSize(.small)
+                                    .controlSize(.mini)
                             }
                         }
-                        .frame(minWidth: 120, minHeight: 28)
+                        .frame(minWidth: 120)
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(self.installingCLI)
@@ -1485,6 +1484,8 @@ private struct GlowingClawdisIcon: View {
     }
 
     var body: some View {
+        let glowBlurRadius: CGFloat = 18
+        let glowCanvasSize: CGFloat = self.size + 56
         ZStack {
             Circle()
                 .fill(
@@ -1495,9 +1496,11 @@ private struct GlowingClawdisIcon: View {
                         ],
                         startPoint: .topLeading,
                         endPoint: .bottomTrailing))
-                .blur(radius: 22)
-                .scaleEffect(self.breathe ? 1.12 : 0.95)
-                .opacity(0.9)
+                .frame(width: glowCanvasSize, height: glowCanvasSize)
+                .padding(glowBlurRadius)
+                .blur(radius: glowBlurRadius)
+                .scaleEffect(self.breathe ? 1.08 : 0.96)
+                .opacity(0.84)
 
             Image(nsImage: NSApp.applicationIconImage)
                 .resizable()
@@ -1506,7 +1509,9 @@ private struct GlowingClawdisIcon: View {
                 .shadow(color: .black.opacity(0.18), radius: 14, y: 6)
                 .scaleEffect(self.breathe ? 1.02 : 1.0)
         }
-        .frame(width: self.size + 60, height: self.size + 60)
+        .frame(
+            width: glowCanvasSize + (glowBlurRadius * 2),
+            height: glowCanvasSize + (glowBlurRadius * 2))
         .onAppear {
             guard self.enableFloating else { return }
             withAnimation(Animation.easeInOut(duration: 3.6).repeatForever(autoreverses: true)) {

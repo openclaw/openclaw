@@ -272,10 +272,10 @@ struct GeneralSettings: View {
                             .opacity(self.isInstallingCLI ? 0 : 1)
                         if self.isInstallingCLI {
                             ProgressView()
-                                .controlSize(.small)
+                                .controlSize(.mini)
                         }
                     }
-                    .frame(minWidth: 150, minHeight: 24)
+                    .frame(minWidth: 150)
                 }
                 .disabled(self.isInstallingCLI)
 
