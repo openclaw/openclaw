@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { danger, info, success } from "../globals.js";
 import { logInfo } from "../logger.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { renderQrPngBase64 } from "./qr-image.js";
 import {
   createWaSocket,
   formatError,
@@ -10,7 +11,6 @@ import {
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
-import { renderQrPngBase64 } from "./qr-image.js";
 
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
@@ -84,9 +84,12 @@ export async function startWebLoginWithQr(
     rejectQr = reject;
   });
 
-  const qrTimer = setTimeout(() => {
-    rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
-  }, Math.max(opts.timeoutMs ?? 30_000, 5000));
+  const qrTimer = setTimeout(
+    () => {
+      rejectQr?.(new Error("Timed out waiting for WhatsApp QR"));
+    },
+    Math.max(opts.timeoutMs ?? 30_000, 5000),
+  );
 
   let sock: WaSocket;
   try {
@@ -151,7 +154,10 @@ export async function waitForWebLogin(
 ): Promise<{ connected: boolean; message: string }> {
   const runtime = opts.runtime ?? defaultRuntime;
   if (!activeLogin) {
-    return { connected: false, message: "No active WhatsApp login in progress." };
+    return {
+      connected: false,
+      message: "No active WhatsApp login in progress.",
+    };
   }
 
   const login = activeLogin;
@@ -166,12 +172,16 @@ export async function waitForWebLogin(
   const timeout = new Promise<"timeout">((resolve) =>
     setTimeout(() => resolve("timeout"), timeoutMs),
   );
-  const result = await Promise.race([login.waitPromise.then(() => "done"), timeout]);
+  const result = await Promise.race([
+    login.waitPromise.then(() => "done"),
+    timeout,
+  ]);
 
   if (result === "timeout") {
     return {
       connected: false,
-      message: "Still waiting for the QR scan. Let me know when you’ve scanned it.",
+      message:
+        "Still waiting for the QR scan. Let me know when you’ve scanned it.",
     };
   }
 

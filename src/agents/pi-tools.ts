@@ -1,6 +1,6 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-ai";
 import { bashTool, codingTools, readTool } from "@mariozechner/pi-coding-agent";
-import { Type, type TSchema } from "@sinclair/typebox";
+import { type TSchema, Type } from "@sinclair/typebox";
 
 import { getImageMetadata, resizeToJpeg } from "../media/image-ops.js";
 import { detectMime } from "../media/mime.js";
