@@ -126,7 +126,7 @@ struct SettingsRootView: View {
 
 enum SettingsTab: CaseIterable {
     case general, skills, sessions, cron, config, instances, voiceWake, permissions, debug, about
-    static let windowWidth: CGFloat = 724 // +10% (tabs fit better)
+    static let windowWidth: CGFloat = 824 // wider
     static let windowHeight: CGFloat = 790 // +10% (more room)
     var title: String {
         switch self {
