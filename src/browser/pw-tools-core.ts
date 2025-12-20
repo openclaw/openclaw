@@ -222,7 +222,7 @@ export async function armFileUploadViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 10_000));
+  const timeout = Math.max(500, Math.min(120_000, opts.timeoutMs ?? 30_000));
 
   state.armIdUpload = nextUploadArmId += 1;
   const armId = state.armIdUpload;
@@ -256,7 +256,7 @@ export async function armDialogViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 10_000));
+  const timeout = Math.max(500, Math.min(120_000, opts.timeoutMs ?? 30_000));
 
   state.armIdDialog = nextDialogArmId += 1;
   const armId = state.armIdDialog;
