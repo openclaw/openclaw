@@ -13,15 +13,6 @@ export type BrowserConsoleMessage = {
   location?: { url?: string; lineNumber?: number; columnNumber?: number };
 };
 
-export type BrowserNetworkRequest = {
-  requestId?: string;
-  url: string;
-  method: string;
-  status?: number;
-  resourceType?: string;
-  timestamp?: string;
-};
-
 type SnapshotForAIResult = { full: string; incremental?: string };
 type SnapshotForAIOptions = { timeout?: number; track?: string };
 
@@ -44,6 +35,8 @@ type ConnectedBrowser = {
 
 type PageState = {
   console: BrowserConsoleMessage[];
+  armIdUpload: number;
+  armIdDialog: number;
 };
 
 const pageStates = new WeakMap<Page, PageState>();
@@ -65,6 +58,8 @@ export function ensurePageState(page: Page): PageState {
 
   const state: PageState = {
     console: [],
+    armIdUpload: 0,
+    armIdDialog: 0,
   };
   pageStates.set(page, state);
 

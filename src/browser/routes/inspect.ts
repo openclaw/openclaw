@@ -5,7 +5,6 @@ import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import {
   captureScreenshot,
   captureScreenshotPng,
-  evaluateJavaScript,
   getDomText,
   querySelector,
   snapshotAria,
@@ -116,45 +115,6 @@ export function registerBrowserInspectRoutes(
         targetId: tab.targetId,
         url: tab.url,
         filename: filename || undefined,
-      });
-    } catch (err) {
-      const mapped = ctx.mapTabError(err);
-      if (mapped) return jsonError(res, mapped.status, mapped.message);
-      jsonError(res, 500, String(err));
-    }
-  });
-
-  app.post("/eval", async (req, res) => {
-    const js = toStringOrEmpty((req.body as { js?: unknown })?.js);
-    const targetId = toStringOrEmpty(
-      (req.body as { targetId?: unknown })?.targetId,
-    );
-    const awaitPromise = Boolean((req.body as { await?: unknown })?.await);
-
-    if (!js) return jsonError(res, 400, "js is required");
-
-    try {
-      const tab = await ctx.ensureTabAvailable(targetId || undefined);
-      const evaluated = await evaluateJavaScript({
-        wsUrl: tab.wsUrl ?? "",
-        expression: js,
-        awaitPromise,
-        returnByValue: true,
-      });
-
-      if (evaluated.exceptionDetails) {
-        const msg =
-          evaluated.exceptionDetails.exception?.description ||
-          evaluated.exceptionDetails.text ||
-          "JavaScript evaluation failed";
-        return jsonError(res, 400, msg);
-      }
-
-      res.json({
-        ok: true,
-        targetId: tab.targetId,
-        url: tab.url,
-        result: evaluated.result,
       });
     } catch (err) {
       const mapped = ctx.mapTabError(err);

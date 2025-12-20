@@ -33,47 +33,6 @@ export async function getConsoleMessagesViaPlaywright(opts: {
   return state.console.filter((msg) => consolePriority(msg.type) >= min);
 }
 
-export async function mouseMoveViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  x: number;
-  y: number;
-}): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.mouse.move(opts.x, opts.y);
-}
-
-export async function mouseClickViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  x: number;
-  y: number;
-  button?: "left" | "right" | "middle";
-}): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.mouse.click(opts.x, opts.y, {
-    button: opts.button,
-  });
-}
-
-export async function mouseDragViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  startX: number;
-  startY: number;
-  endX: number;
-  endY: number;
-}): Promise<void> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.mouse.move(opts.startX, opts.startY);
-  await page.mouse.down();
-  await page.mouse.move(opts.endX, opts.endY);
-  await page.mouse.up();
-}
-
 export async function verifyElementVisibleViaPlaywright(opts: {
   cdpPort: number;
   targetId?: string;

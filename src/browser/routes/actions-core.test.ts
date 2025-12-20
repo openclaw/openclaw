@@ -3,23 +3,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext } from "../server-context.js";
 
 const pw = vi.hoisted(() => ({
+  armDialogViaPlaywright: vi.fn().mockResolvedValue(undefined),
+  armFileUploadViaPlaywright: vi.fn().mockResolvedValue(undefined),
   clickViaPlaywright: vi.fn().mockResolvedValue(undefined),
   closePageViaPlaywright: vi.fn().mockResolvedValue(undefined),
   dragViaPlaywright: vi.fn().mockResolvedValue(undefined),
   evaluateViaPlaywright: vi.fn().mockResolvedValue("result"),
-  fileUploadViaPlaywright: vi.fn().mockResolvedValue(undefined),
   fillFormViaPlaywright: vi.fn().mockResolvedValue(undefined),
-  handleDialogViaPlaywright: vi
-    .fn()
-    .mockResolvedValue({ message: "ok", type: "alert" }),
   hoverViaPlaywright: vi.fn().mockResolvedValue(undefined),
-  navigateBackViaPlaywright: vi.fn().mockResolvedValue({ url: "about:blank" }),
   navigateViaPlaywright: vi
     .fn()
     .mockResolvedValue({ url: "https://example.com" }),
   pressKeyViaPlaywright: vi.fn().mockResolvedValue(undefined),
   resizeViewportViaPlaywright: vi.fn().mockResolvedValue(undefined),
-  runCodeViaPlaywright: vi.fn().mockResolvedValue("ok"),
   selectOptionViaPlaywright: vi.fn().mockResolvedValue(undefined),
   typeViaPlaywright: vi.fn().mockResolvedValue(undefined),
   waitForViaPlaywright: vi.fn().mockResolvedValue(undefined),
@@ -127,14 +123,14 @@ describe("handleBrowserActionCore", () => {
       {
         action: "dialog" as const,
         args: { accept: true, promptText: "ok" },
-        fn: pw.handleDialogViaPlaywright,
+        fn: pw.armDialogViaPlaywright,
         expectArgs: {
           cdpPort: 18792,
           targetId: "tab1",
           accept: true,
           promptText: "ok",
         },
-        expectBody: { ok: true, message: "ok", type: "alert" },
+        expectBody: { ok: true },
       },
       {
         action: "evaluate" as const,
@@ -151,7 +147,7 @@ describe("handleBrowserActionCore", () => {
       {
         action: "upload" as const,
         args: { paths: ["/tmp/file.txt"] },
-        fn: pw.fileUploadViaPlaywright,
+        fn: pw.armFileUploadViaPlaywright,
         expectArgs: {
           cdpPort: 18792,
           targetId: "tab1",
@@ -201,20 +197,6 @@ describe("handleBrowserActionCore", () => {
           url: "https://example.com",
         },
         expectBody: { ok: true, targetId: "tab1", url: baseTab.url },
-      },
-      {
-        action: "back" as const,
-        args: {},
-        fn: pw.navigateBackViaPlaywright,
-        expectArgs: { cdpPort: 18792, targetId: "tab1" },
-        expectBody: { ok: true, targetId: "tab1", url: "about:blank" },
-      },
-      {
-        action: "run" as const,
-        args: { code: "return 1" },
-        fn: pw.runCodeViaPlaywright,
-        expectArgs: { cdpPort: 18792, targetId: "tab1", code: "return 1" },
-        expectBody: { ok: true, result: "ok" },
       },
       {
         action: "click" as const,

@@ -2,9 +2,6 @@ import type { Command } from "commander";
 import { resolveBrowserControlUrl } from "../browser/client.js";
 import {
   browserConsoleMessages,
-  browserMouseClick,
-  browserMouseDrag,
-  browserMouseMove,
   browserPdfSave,
   browserVerifyElementVisible,
   browserVerifyListVisible,
@@ -173,112 +170,6 @@ export function registerBrowserActionObserveCommands(
           return;
         }
         defaultRuntime.log("value verified");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("mouse-move")
-    .description("Move mouse to viewport coordinates")
-    .option("--x <n>", "X coordinate", (v: string) => Number(v))
-    .option("--y <n>", "Y coordinate", (v: string) => Number(v))
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      if (!Number.isFinite(opts.x) || !Number.isFinite(opts.y)) {
-        defaultRuntime.error(danger("--x and --y are required"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      try {
-        const result = await browserMouseMove(baseUrl, {
-          x: opts.x,
-          y: opts.y,
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("mouse moved");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("mouse-click")
-    .description("Click at viewport coordinates")
-    .option("--x <n>", "X coordinate", (v: string) => Number(v))
-    .option("--y <n>", "Y coordinate", (v: string) => Number(v))
-    .option("--button <left|right|middle>", "Mouse button")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      if (!Number.isFinite(opts.x) || !Number.isFinite(opts.y)) {
-        defaultRuntime.error(danger("--x and --y are required"));
-        defaultRuntime.exit(1);
-        return;
-      }
-      try {
-        const result = await browserMouseClick(baseUrl, {
-          x: opts.x,
-          y: opts.y,
-          button: opts.button?.trim() || undefined,
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("mouse clicked");
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("mouse-drag")
-    .description("Drag by viewport coordinates")
-    .option("--start-x <n>", "Start X", (v: string) => Number(v))
-    .option("--start-y <n>", "Start Y", (v: string) => Number(v))
-    .option("--end-x <n>", "End X", (v: string) => Number(v))
-    .option("--end-y <n>", "End Y", (v: string) => Number(v))
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      if (
-        !Number.isFinite(opts.startX) ||
-        !Number.isFinite(opts.startY) ||
-        !Number.isFinite(opts.endX) ||
-        !Number.isFinite(opts.endY)
-      ) {
-        defaultRuntime.error(
-          danger("--start-x, --start-y, --end-x, --end-y are required"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      try {
-        const result = await browserMouseDrag(baseUrl, {
-          startX: opts.startX,
-          startY: opts.startY,
-          endX: opts.endX,
-          endY: opts.endY,
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log("mouse dragged");
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

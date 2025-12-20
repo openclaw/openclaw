@@ -1,11 +1,12 @@
-import type { Page } from "playwright-core";
-
 import {
   ensurePageState,
   getPageForTargetId,
   refLocator,
   type WithSnapshotForAI,
 } from "./pw-session.js";
+
+let nextUploadArmId = 0;
+let nextDialogArmId = 0;
 
 export async function snapshotAiViaPlaywright(opts: {
   cdpPort: number;
@@ -221,44 +222,63 @@ export async function evaluateViaPlaywright(opts: {
   }, fnText);
 }
 
-export async function fileUploadViaPlaywright(opts: {
+export async function armFileUploadViaPlaywright(opts: {
   cdpPort: number;
   targetId?: string;
   paths?: string[];
   timeoutMs?: number;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const state = ensurePageState(page);
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 10_000));
-  const fileChooser = await page.waitForEvent("filechooser", { timeout });
-  if (!opts.paths?.length) {
-    // Playwright removed `FileChooser.cancel()`; best-effort close the chooser instead.
-    try {
-      await page.keyboard.press("Escape");
-    } catch {
-      // Best-effort.
-    }
-    return;
-  }
-  await fileChooser.setFiles(opts.paths);
+
+  state.armIdUpload = nextUploadArmId += 1;
+  const armId = state.armIdUpload;
+
+  void page
+    .waitForEvent("filechooser", { timeout })
+    .then(async (fileChooser) => {
+      if (state.armIdUpload !== armId) return;
+      if (!opts.paths?.length) {
+        // Playwright removed `FileChooser.cancel()`; best-effort close the chooser instead.
+        try {
+          await page.keyboard.press("Escape");
+        } catch {
+          // Best-effort.
+        }
+        return;
+      }
+      await fileChooser.setFiles(opts.paths);
+    })
+    .catch(() => {
+      // Ignore timeouts; the chooser may never appear.
+    });
 }
 
-export async function handleDialogViaPlaywright(opts: {
+export async function armDialogViaPlaywright(opts: {
   cdpPort: number;
   targetId?: string;
   accept: boolean;
   promptText?: string;
   timeoutMs?: number;
-}): Promise<{ message: string; type: string }> {
+}): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const state = ensurePageState(page);
   const timeout = Math.max(500, Math.min(60_000, opts.timeoutMs ?? 10_000));
-  const dialog = await page.waitForEvent("dialog", { timeout });
-  const message = dialog.message();
-  const type = dialog.type();
-  if (opts.accept) await dialog.accept(opts.promptText);
-  else await dialog.dismiss();
-  return { message, type };
+
+  state.armIdDialog = nextDialogArmId += 1;
+  const armId = state.armIdDialog;
+
+  void page
+    .waitForEvent("dialog", { timeout })
+    .then(async (dialog) => {
+      if (state.armIdDialog !== armId) return;
+      if (opts.accept) await dialog.accept(opts.promptText);
+      else await dialog.dismiss();
+    })
+    .catch(() => {
+      // Ignore timeouts; the dialog may never appear.
+    });
 }
 
 export async function navigateViaPlaywright(opts: {
@@ -272,19 +292,6 @@ export async function navigateViaPlaywright(opts: {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
   await page.goto(url, {
-    timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
-  });
-  return { url: page.url() };
-}
-
-export async function navigateBackViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  timeoutMs?: number;
-}): Promise<{ url: string }> {
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  await page.goBack({
     timeout: Math.max(1000, Math.min(120_000, opts.timeoutMs ?? 20_000)),
   });
   return { url: page.url() };
@@ -321,22 +328,6 @@ export async function waitForViaPlaywright(opts: {
         timeout: Math.max(500, Math.min(120_000, opts.timeoutMs ?? 20_000)),
       });
   }
-}
-
-export async function runCodeViaPlaywright(opts: {
-  cdpPort: number;
-  targetId?: string;
-  code: string;
-}): Promise<unknown> {
-  const code = String(opts.code ?? "").trim();
-  if (!code) throw new Error("code is required");
-  const page = await getPageForTargetId(opts);
-  ensurePageState(page);
-  const fn = new Function(`return (${code});`)() as
-    | ((page: Page) => unknown)
-    | undefined;
-  if (typeof fn !== "function") throw new Error("code is not a function");
-  return await fn(page);
 }
 
 export async function takeScreenshotViaPlaywright(opts: {

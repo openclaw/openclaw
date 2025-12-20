@@ -5,9 +5,6 @@ import type express from "express";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import {
   getConsoleMessagesViaPlaywright,
-  mouseClickViaPlaywright,
-  mouseDragViaPlaywright,
-  mouseMoveViaPlaywright,
   pdfViaPlaywright,
   verifyElementVisibleViaPlaywright,
   verifyListVisibleViaPlaywright,
@@ -15,26 +12,10 @@ import {
   verifyValueViaPlaywright,
 } from "../pw-ai.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import {
-  jsonError,
-  toNumber,
-  toStringArray,
-  toStringOrEmpty,
-} from "./utils.js";
-
-type MouseButton = "left" | "right" | "middle";
-
-function normalizeMouseButton(value: unknown): MouseButton | undefined {
-  const raw = toStringOrEmpty(value);
-  if (raw === "left" || raw === "right" || raw === "middle") return raw;
-  return undefined;
-}
+import { jsonError, toStringArray, toStringOrEmpty } from "./utils.js";
 
 export type BrowserActionExtra =
   | "console"
-  | "mouseClick"
-  | "mouseDrag"
-  | "mouseMove"
   | "pdf"
   | "verifyElement"
   | "verifyList"
@@ -153,68 +134,6 @@ export async function handleBrowserActionExtra(
         ref,
         type,
         value,
-      });
-      res.json({ ok: true });
-      return true;
-    }
-    case "mouseMove": {
-      const x = toNumber(args.x);
-      const y = toNumber(args.y);
-      if (x === undefined || y === undefined) {
-        jsonError(res, 400, "x and y are required");
-        return true;
-      }
-      const tab = await ctx.ensureTabAvailable(target);
-      await mouseMoveViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-        x,
-        y,
-      });
-      res.json({ ok: true });
-      return true;
-    }
-    case "mouseClick": {
-      const x = toNumber(args.x);
-      const y = toNumber(args.y);
-      if (x === undefined || y === undefined) {
-        jsonError(res, 400, "x and y are required");
-        return true;
-      }
-      const button = normalizeMouseButton(args.button);
-      const tab = await ctx.ensureTabAvailable(target);
-      await mouseClickViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-        x,
-        y,
-        button,
-      });
-      res.json({ ok: true });
-      return true;
-    }
-    case "mouseDrag": {
-      const startX = toNumber(args.startX);
-      const startY = toNumber(args.startY);
-      const endX = toNumber(args.endX);
-      const endY = toNumber(args.endY);
-      if (
-        startX === undefined ||
-        startY === undefined ||
-        endX === undefined ||
-        endY === undefined
-      ) {
-        jsonError(res, 400, "startX, startY, endX, endY are required");
-        return true;
-      }
-      const tab = await ctx.ensureTabAvailable(target);
-      await mouseDragViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-        startX,
-        startY,
-        endX,
-        endY,
       });
       res.json({ ok: true });
       return true;

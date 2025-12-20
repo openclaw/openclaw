@@ -62,21 +62,10 @@ vi.mock("./chrome.js", () => ({
   }),
 }));
 
-const evalCalls = vi.hoisted(() => [] as Array<string>);
-let evalThrows = false;
 vi.mock("./cdp.js", () => ({
   createTargetViaCdp: vi.fn(async () => {
     if (createTargetId) return { targetId: createTargetId };
     throw new Error("cdp disabled");
-  }),
-  evaluateJavaScript: vi.fn(async ({ expression }: { expression: string }) => {
-    evalCalls.push(expression);
-    if (evalThrows) {
-      return {
-        exceptionDetails: { text: "boom" },
-      };
-    }
-    return { result: { type: "string", value: "ok" } };
   }),
   getDomText: vi.fn(async () => ({ text: "<html/>" })),
   querySelector: vi.fn(async () => ({ matches: [{ index: 0, tag: "a" }] })),
@@ -97,28 +86,20 @@ vi.mock("./cdp.js", () => ({
 }));
 
 vi.mock("./pw-ai.js", () => ({
+  armDialogViaPlaywright: vi.fn(async () => {}),
+  armFileUploadViaPlaywright: vi.fn(async () => {}),
   clickRefViaPlaywright: vi.fn(async () => {}),
   clickViaPlaywright: vi.fn(async () => {}),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
   evaluateViaPlaywright: vi.fn(async () => "ok"),
-  fileUploadViaPlaywright: vi.fn(async () => {}),
   fillFormViaPlaywright: vi.fn(async () => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
-  handleDialogViaPlaywright: vi.fn(async () => ({
-    message: "ok",
-    type: "alert",
-  })),
   hoverViaPlaywright: vi.fn(async () => {}),
-  mouseClickViaPlaywright: vi.fn(async () => {}),
-  mouseDragViaPlaywright: vi.fn(async () => {}),
-  mouseMoveViaPlaywright: vi.fn(async () => {}),
-  navigateBackViaPlaywright: vi.fn(async () => ({ url: "about:blank" })),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
   pressKeyViaPlaywright: vi.fn(async () => {}),
   resizeViewportViaPlaywright: vi.fn(async () => {}),
-  runCodeViaPlaywright: vi.fn(async () => "ok"),
   selectOptionViaPlaywright: vi.fn(async () => {}),
   snapshotAiViaPlaywright: vi.fn(async () => ({ snapshot: "ok" })),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
@@ -179,6 +160,7 @@ describe("browser control server", () => {
     cfgAttachOnly = false;
     createTargetId = null;
     screenshotThrowsOnce = false;
+
     testPort = await getFreePort();
 
     // Minimal CDP JSON endpoints used by the server.
@@ -286,30 +268,6 @@ describe("browser control server", () => {
       body: JSON.stringify({ targetId: "abc" }),
     });
     expect(focus.status).toBe(409);
-  });
-
-  it("maps JS exceptions to a 400 and returns results otherwise", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
-    await startBrowserControlServerFromConfig();
-    const base = `http://127.0.0.1:${testPort}`;
-    await realFetch(`${base}/start`, { method: "POST" }).then((r) => r.json());
-
-    evalThrows = true;
-    const bad = await realFetch(`${base}/eval`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ js: "throw 1" }),
-    });
-    expect(bad.status).toBe(400);
-
-    evalThrows = false;
-    const ok = (await realFetch(`${base}/eval`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ js: "1+1", await: true }),
-    }).then((r) => r.json())) as { ok: boolean; result?: unknown };
-    expect(ok.ok).toBe(true);
-    expect(evalCalls.length).toBeGreaterThan(0);
   });
 
   it("supports query/dom/snapshot/click/screenshot and stop", async () => {
@@ -442,13 +400,6 @@ describe("browser control server", () => {
 
     const shotAmbiguous = await realFetch(`${base}/screenshot?targetId=abc`);
     expect(shotAmbiguous.status).toBe(409);
-
-    const evalMissing = await realFetch(`${base}/eval`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
-    expect(evalMissing.status).toBe(400);
 
     const queryMissing = await realFetch(`${base}/query`);
     expect(queryMissing.status).toBe(400);

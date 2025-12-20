@@ -1,5 +1,8 @@
 import type { ScreenshotResult } from "./client.js";
-import type { BrowserActionTabResult } from "./client-actions-types.js";
+import type {
+  BrowserActionOk,
+  BrowserActionTabResult,
+} from "./client-actions-types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 
 export async function browserNavigate(
@@ -10,18 +13,6 @@ export async function browserNavigate(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
-}
-
-export async function browserBack(
-  baseUrl: string,
-  opts: { targetId?: string } = {},
-): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/back`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ targetId: opts.targetId }),
     timeoutMs: 20000,
   });
 }
@@ -185,20 +176,17 @@ export async function browserFillForm(
 export async function browserHandleDialog(
   baseUrl: string,
   opts: { accept: boolean; promptText?: string; targetId?: string },
-): Promise<{ ok: true; message: string; type: string }> {
-  return await fetchBrowserJson<{ ok: true; message: string; type: string }>(
-    `${baseUrl}/dialog`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        accept: opts.accept,
-        promptText: opts.promptText,
-        targetId: opts.targetId,
-      }),
-      timeoutMs: 20000,
-    },
-  );
+): Promise<BrowserActionOk> {
+  return await fetchBrowserJson<BrowserActionOk>(`${baseUrl}/dialog`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      accept: opts.accept,
+      promptText: opts.promptText,
+      targetId: opts.targetId,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserWaitFor(
@@ -237,21 +225,6 @@ export async function browserEvaluate(
         ref: opts.ref,
         targetId: opts.targetId,
       }),
-      timeoutMs: 20000,
-    },
-  );
-}
-
-export async function browserRunCode(
-  baseUrl: string,
-  opts: { code: string; targetId?: string },
-): Promise<{ ok: true; result: unknown }> {
-  return await fetchBrowserJson<{ ok: true; result: unknown }>(
-    `${baseUrl}/run`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: opts.code, targetId: opts.targetId }),
       timeoutMs: 20000,
     },
   );

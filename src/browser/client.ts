@@ -29,20 +29,6 @@ export type ScreenshotResult = {
   url: string;
 };
 
-export type EvalResult = {
-  ok: true;
-  targetId: string;
-  url: string;
-  result: {
-    type: string;
-    subtype?: string;
-    value?: unknown;
-    description?: string;
-    unserializableValue?: string;
-    preview?: unknown;
-  };
-};
-
 export type QueryResult = {
   ok: true;
   targetId: string;
@@ -199,26 +185,6 @@ export async function browserScreenshot(
       timeoutMs: 20000,
     },
   );
-}
-
-export async function browserEval(
-  baseUrl: string,
-  opts: {
-    js: string;
-    targetId?: string;
-    awaitPromise?: boolean;
-  },
-): Promise<EvalResult> {
-  return await fetchBrowserJson<EvalResult>(`${baseUrl}/eval`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      js: opts.js,
-      targetId: opts.targetId,
-      await: Boolean(opts.awaitPromise),
-    }),
-    timeoutMs: 15000,
-  });
 }
 
 export async function browserQuery(

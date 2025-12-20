@@ -1,19 +1,17 @@
 import type express from "express";
 
 import {
+  armDialogViaPlaywright,
+  armFileUploadViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   dragViaPlaywright,
   evaluateViaPlaywright,
-  fileUploadViaPlaywright,
   fillFormViaPlaywright,
-  handleDialogViaPlaywright,
   hoverViaPlaywright,
-  navigateBackViaPlaywright,
   navigateViaPlaywright,
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,
-  runCodeViaPlaywright,
   selectOptionViaPlaywright,
   typeViaPlaywright,
   waitForViaPlaywright,
@@ -51,7 +49,6 @@ function normalizeModifiers(value: unknown): KeyboardModifier[] | undefined {
 }
 
 export type BrowserActionCore =
-  | "back"
   | "click"
   | "close"
   | "dialog"
@@ -62,7 +59,6 @@ export type BrowserActionCore =
   | "navigate"
   | "press"
   | "resize"
-  | "run"
   | "select"
   | "type"
   | "upload"
@@ -115,13 +111,13 @@ export async function handleBrowserActionCore(
       }
       const promptText = toStringOrEmpty(args.promptText) || undefined;
       const tab = await ctx.ensureTabAvailable(target);
-      const result = await handleDialogViaPlaywright({
+      await armDialogViaPlaywright({
         cdpPort,
         targetId: tab.targetId,
         accept,
         promptText,
       });
-      res.json({ ok: true, ...result });
+      res.json({ ok: true });
       return true;
     }
     case "evaluate": {
@@ -144,7 +140,7 @@ export async function handleBrowserActionCore(
     case "upload": {
       const paths = toStringArray(args.paths) ?? [];
       const tab = await ctx.ensureTabAvailable(target);
-      await fileUploadViaPlaywright({
+      await armFileUploadViaPlaywright({
         cdpPort,
         targetId: tab.targetId,
         paths: paths.length ? paths : undefined,
@@ -218,30 +214,6 @@ export async function handleBrowserActionCore(
         url,
       });
       res.json({ ok: true, targetId: tab.targetId, ...result });
-      return true;
-    }
-    case "back": {
-      const tab = await ctx.ensureTabAvailable(target);
-      const result = await navigateBackViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-      });
-      res.json({ ok: true, targetId: tab.targetId, ...result });
-      return true;
-    }
-    case "run": {
-      const code = toStringOrEmpty(args.code);
-      if (!code) {
-        jsonError(res, 400, "code is required");
-        return true;
-      }
-      const tab = await ctx.ensureTabAvailable(target);
-      const result = await runCodeViaPlaywright({
-        cdpPort,
-        targetId: tab.targetId,
-        code,
-      });
-      res.json({ ok: true, result });
       return true;
     }
     case "click": {

@@ -8,21 +8,19 @@ export {
 } from "./pw-session.js";
 
 export {
+  armDialogViaPlaywright,
+  armFileUploadViaPlaywright,
   clickRefViaPlaywright,
   clickViaPlaywright,
   closePageViaPlaywright,
   dragViaPlaywright,
   evaluateViaPlaywright,
-  fileUploadViaPlaywright,
   fillFormViaPlaywright,
-  handleDialogViaPlaywright,
   hoverViaPlaywright,
-  navigateBackViaPlaywright,
   navigateViaPlaywright,
   pdfViaPlaywright,
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,
-  runCodeViaPlaywright,
   selectOptionViaPlaywright,
   snapshotAiViaPlaywright,
   takeScreenshotViaPlaywright,
@@ -32,9 +30,6 @@ export {
 
 export {
   getConsoleMessagesViaPlaywright,
-  mouseClickViaPlaywright,
-  mouseDragViaPlaywright,
-  mouseMoveViaPlaywright,
   verifyElementVisibleViaPlaywright,
   verifyListVisibleViaPlaywright,
   verifyTextVisibleViaPlaywright,

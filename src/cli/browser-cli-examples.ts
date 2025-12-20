@@ -9,7 +9,6 @@ export const browserCoreExamples = [
   "clawdis browser screenshot",
   "clawdis browser screenshot --full-page",
   "clawdis browser screenshot --ref 12",
-  'clawdis browser eval "document.title"',
   'clawdis browser query "a" --limit 5',
   "clawdis browser dom --format text --max-chars 5000",
   "clawdis browser snapshot --format aria --limit 200",
@@ -18,7 +17,6 @@ export const browserCoreExamples = [
 
 export const browserActionExamples = [
   "clawdis browser navigate https://example.com",
-  "clawdis browser back",
   "clawdis browser resize 1280 720",
   "clawdis browser click 12 --double",
   'clawdis browser type 23 "hello" --submit',
@@ -31,14 +29,10 @@ export const browserActionExamples = [
   "clawdis browser dialog --accept",
   'clawdis browser wait --text "Done"',
   "clawdis browser evaluate --fn '(el) => el.textContent' --ref 7",
-  "clawdis browser run --code '(page) => page.title()'",
   "clawdis browser console --level error",
   "clawdis browser pdf",
   'clawdis browser verify-element --role button --name "Submit"',
   'clawdis browser verify-text "Welcome"',
   "clawdis browser verify-list 3 ItemA ItemB",
   "clawdis browser verify-value --ref 4 --type textbox --value hello",
-  "clawdis browser mouse-move --x 120 --y 240",
-  "clawdis browser mouse-click --x 120 --y 240",
-  "clawdis browser mouse-drag --start-x 10 --start-y 20 --end-x 200 --end-y 300",
 ];

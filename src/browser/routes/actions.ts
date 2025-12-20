@@ -79,12 +79,6 @@ export function registerBrowserActionRoutes(
     await runCoreAction(ctx, res, "navigate", body, targetId);
   });
 
-  app.post("/back", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runCoreAction(ctx, res, "back", body, targetId);
-  });
-
   app.post("/resize", async (req, res) => {
     const body = readBody(req);
     const targetId = readTargetId(body.targetId);
@@ -163,12 +157,6 @@ export function registerBrowserActionRoutes(
     await runCoreAction(ctx, res, "evaluate", body, targetId);
   });
 
-  app.post("/run", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runCoreAction(ctx, res, "run", body, targetId);
-  });
-
   app.get("/console", async (req, res) => {
     const targetId = readTargetId(req.query.targetId);
     const level = toStringOrEmpty(req.query.level);
@@ -206,21 +194,5 @@ export function registerBrowserActionRoutes(
     await runExtraAction(ctx, res, "verifyValue", body, targetId);
   });
 
-  app.post("/mouse/move", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runExtraAction(ctx, res, "mouseMove", body, targetId);
-  });
-
-  app.post("/mouse/click", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runExtraAction(ctx, res, "mouseClick", body, targetId);
-  });
-
-  app.post("/mouse/drag", async (req, res) => {
-    const body = readBody(req);
-    const targetId = readTargetId(body.targetId);
-    await runExtraAction(ctx, res, "mouseDrag", body, targetId);
-  });
+  // Intentionally no coordinate-based mouse actions (move/click/drag).
 }

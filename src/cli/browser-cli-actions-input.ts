@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { resolveBrowserControlUrl } from "../browser/client.js";
 import {
-  browserBack,
   browserClick,
   browserDrag,
   browserEvaluate,
@@ -11,7 +10,6 @@ import {
   browserNavigate,
   browserPressKey,
   browserResize,
-  browserRunCode,
   browserSelectOption,
   browserType,
   browserUpload,
@@ -21,29 +19,9 @@ import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
 
-async function readStdin(): Promise<string> {
-  const chunks: string[] = [];
-  return await new Promise((resolve, reject) => {
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => chunks.push(String(chunk)));
-    process.stdin.on("end", () => resolve(chunks.join("")));
-    process.stdin.on("error", reject);
-  });
-}
-
 async function readFile(path: string): Promise<string> {
   const fs = await import("node:fs/promises");
   return await fs.readFile(path, "utf8");
-}
-
-async function readCode(opts: {
-  code?: string;
-  codeFile?: string;
-  codeStdin?: boolean;
-}): Promise<string> {
-  if (opts.codeFile) return await readFile(opts.codeFile);
-  if (opts.codeStdin) return await readStdin();
-  return opts.code ?? "";
 }
 
 async function readFields(opts: {
@@ -81,30 +59,6 @@ export function registerBrowserActionInputCommands(
           return;
         }
         defaultRuntime.log(`navigated to ${result.url ?? url}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("back")
-    .description("Navigate back in history")
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const result = await browserBack(baseUrl, {
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(
-          `navigated back to ${result.url ?? "previous page"}`,
-        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -311,7 +265,7 @@ export function registerBrowserActionInputCommands(
 
   browser
     .command("upload")
-    .description("Upload file(s) when a file chooser is open")
+    .description("Arm file upload for the next file chooser")
     .argument("<paths...>", "File paths to upload")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (paths: string[], opts, cmd) => {
@@ -326,7 +280,7 @@ export function registerBrowserActionInputCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`uploaded ${paths.length} file(s)`);
+        defaultRuntime.log(`upload armed for ${paths.length} file(s)`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -364,7 +318,7 @@ export function registerBrowserActionInputCommands(
 
   browser
     .command("dialog")
-    .description("Handle a modal dialog (alert/confirm/prompt)")
+    .description("Arm the next modal dialog (alert/confirm/prompt)")
     .option("--accept", "Accept the dialog", false)
     .option("--dismiss", "Dismiss the dialog", false)
     .option("--prompt <text>", "Prompt response text")
@@ -388,7 +342,7 @@ export function registerBrowserActionInputCommands(
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
-        defaultRuntime.log(`dialog handled: ${result.type}`);
+        defaultRuntime.log("dialog armed");
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -441,42 +395,6 @@ export function registerBrowserActionInputCommands(
         const result = await browserEvaluate(baseUrl, {
           fn: opts.fn,
           ref: opts.ref?.trim() || undefined,
-          targetId: opts.targetId?.trim() || undefined,
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(JSON.stringify(result.result, null, 2));
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("run")
-    .description("Run a Playwright code function (page => ...) ")
-    .option("--code <code>", "Function source, e.g. (page) => page.title()")
-    .option("--code-file <path>", "Read function source from a file")
-    .option("--code-stdin", "Read function source from stdin", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .action(async (opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const code = await readCode({
-          code: opts.code,
-          codeFile: opts.codeFile,
-          codeStdin: Boolean(opts.codeStdin),
-        });
-        if (!code.trim()) {
-          defaultRuntime.error(danger("Missing --code (or file/stdin)"));
-          defaultRuntime.exit(1);
-          return;
-        }
-        const result = await browserRunCode(baseUrl, {
-          code,
           targetId: opts.targetId?.trim() || undefined,
         });
         if (parent?.json) {

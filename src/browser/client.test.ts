@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   browserClickRef,
   browserDom,
-  browserEval,
   browserOpenTab,
   browserQuery,
   browserScreenshot,
@@ -50,7 +49,7 @@ describe("browser client", () => {
     );
 
     await expect(
-      browserEval("http://127.0.0.1:18791", { js: "1+1" }),
+      browserDom("http://127.0.0.1:18791", { format: "text", maxChars: 1 }),
     ).rejects.toThrow(/409: conflict/i);
   });
 

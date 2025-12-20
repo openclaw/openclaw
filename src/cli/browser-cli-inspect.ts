@@ -2,7 +2,6 @@ import type { Command } from "commander";
 
 import {
   browserDom,
-  browserEval,
   browserQuery,
   browserScreenshot,
   browserSnapshot,
@@ -12,31 +11,6 @@ import { browserScreenshotAction } from "../browser/client-actions.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
-
-async function readStdin(): Promise<string> {
-  const chunks: string[] = [];
-  return await new Promise((resolve, reject) => {
-    process.stdin.setEncoding("utf8");
-    process.stdin.on("data", (chunk) => chunks.push(String(chunk)));
-    process.stdin.on("end", () => resolve(chunks.join("")));
-    process.stdin.on("error", reject);
-  });
-}
-
-async function readTextFromSource(opts: {
-  js?: string;
-  jsFile?: string;
-  jsStdin?: boolean;
-}): Promise<string> {
-  if (opts.jsFile) {
-    const fs = await import("node:fs/promises");
-    return await fs.readFile(opts.jsFile, "utf8");
-  }
-  if (opts.jsStdin) {
-    return await readStdin();
-  }
-  return opts.js ?? "";
-}
 
 export function registerBrowserInspectCommands(
   browser: Command,
@@ -74,44 +48,6 @@ export function registerBrowserInspectCommands(
           return;
         }
         defaultRuntime.log(`MEDIA:${result.path}`);
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  browser
-    .command("eval")
-    .description("Run JavaScript in the active tab")
-    .argument("[js]", "JavaScript expression")
-    .option("--js-file <path>", "Read JavaScript from a file")
-    .option("--js-stdin", "Read JavaScript from stdin", false)
-    .option("--target-id <id>", "CDP target id (or unique prefix)")
-    .option("--await", "Await promise result", false)
-    .action(async (js: string | undefined, opts, cmd) => {
-      const parent = parentOpts(cmd);
-      const baseUrl = resolveBrowserControlUrl(parent?.url);
-      try {
-        const source = await readTextFromSource({
-          js,
-          jsFile: opts.jsFile,
-          jsStdin: Boolean(opts.jsStdin),
-        });
-        if (!source.trim()) {
-          defaultRuntime.error(danger("Missing JavaScript input."));
-          defaultRuntime.exit(1);
-          return;
-        }
-        const result = await browserEval(baseUrl, {
-          js: source,
-          targetId: opts.targetId?.trim() || undefined,
-          awaitPromise: Boolean(opts.await),
-        });
-        if (parent?.json) {
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-          return;
-        }
-        defaultRuntime.log(JSON.stringify(result.result, null, 2));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
