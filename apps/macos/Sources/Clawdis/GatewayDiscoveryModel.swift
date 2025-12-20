@@ -277,14 +277,14 @@ final class GatewayDiscoveryModel {
         resolver.start()
     }
 
-    private static func prettifyInstanceName(_ decodedName: String) -> String {
+    nonisolated private static func prettifyInstanceName(_ decodedName: String) -> String {
         let normalized = decodedName.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         let stripped = normalized.replacingOccurrences(of: " (Clawdis)", with: "")
             .replacingOccurrences(of: #"\s+\(\d+\)$"#, with: "", options: .regularExpression)
         return stripped.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func prettifyServiceName(_ decodedName: String) -> String {
+    nonisolated private static func prettifyServiceName(_ decodedName: String) -> String {
         let normalized = Self.prettifyInstanceName(decodedName)
         var cleaned = normalized.replacingOccurrences(of: #"\s*-?bridge$"#, with: "", options: .regularExpression)
         cleaned = cleaned
@@ -304,7 +304,7 @@ final class GatewayDiscoveryModel {
         return titled.isEmpty ? normalized : titled
     }
 
-    static func isLocalGateway(
+    nonisolated static func isLocalGateway(
         lanHost: String?,
         tailnetDns: String?,
         displayName: String?,
@@ -350,7 +350,7 @@ final class GatewayDiscoveryModel {
         }
     }
 
-    private static func mergeLocalIdentity(
+    nonisolated private static func mergeLocalIdentity(
         fast: LocalIdentity,
         slow: LocalIdentity
     ) -> LocalIdentity {
@@ -360,7 +360,7 @@ final class GatewayDiscoveryModel {
         )
     }
 
-    private static func buildLocalIdentityFast() -> LocalIdentity {
+    nonisolated private static func buildLocalIdentityFast() -> LocalIdentity {
         var hostTokens: Set<String> = []
         var displayTokens: Set<String> = []
 
@@ -376,7 +376,7 @@ final class GatewayDiscoveryModel {
         return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
     }
 
-    private static func buildLocalIdentitySlow() -> LocalIdentity {
+    nonisolated private static func buildLocalIdentitySlow() -> LocalIdentity {
         var hostTokens: Set<String> = []
         var displayTokens: Set<String> = []
 
@@ -393,7 +393,7 @@ final class GatewayDiscoveryModel {
         return LocalIdentity(hostTokens: hostTokens, displayTokens: displayTokens)
     }
 
-    private static func normalizeHostToken(_ raw: String?) -> String? {
+    nonisolated private static func normalizeHostToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
@@ -409,7 +409,7 @@ final class GatewayDiscoveryModel {
         return token.isEmpty ? nil : token
     }
 
-    private static func normalizeDisplayToken(_ raw: String?) -> String? {
+    nonisolated private static func normalizeDisplayToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let prettified = Self.prettifyInstanceName(raw)
         let trimmed = prettified.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -417,7 +417,7 @@ final class GatewayDiscoveryModel {
         return trimmed.lowercased()
     }
 
-    private static func normalizeServiceToken(_ raw: String?) -> String? {
+    nonisolated private static func normalizeServiceToken(_ raw: String?) -> String? {
         guard let raw else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return nil }
