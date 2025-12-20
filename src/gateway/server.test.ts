@@ -1580,7 +1580,7 @@ describe("gateway server", () => {
     });
     await new Promise<void>((resolve) => ws.once("open", resolve));
 
-    const hello = await connectOk(ws);
+    const hello = await connectOk(ws, { token: "secret" });
     expect(hello.canvasHostUrl).toBe(`http://100.64.0.1:${port}`);
 
     ws.close();
