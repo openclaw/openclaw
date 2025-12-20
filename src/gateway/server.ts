@@ -11,8 +11,8 @@ import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { installSkill } from "../agents/skills-install.js";
+import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
 import {
   normalizeThinkLevel,

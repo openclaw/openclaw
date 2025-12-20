@@ -279,7 +279,6 @@ function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
   return entry?.clawdis?.skillKey ?? skill.name;
 }
 
-
 function shouldIncludeSkill(params: {
   entry: SkillEntry;
   config?: ClawdisConfig;
@@ -328,7 +327,6 @@ function filterSkillEntries(
 ): SkillEntry[] {
   return entries.filter((entry) => shouldIncludeSkill({ entry, config }));
 }
-
 
 export function applySkillEnvOverrides(params: {
   skills: SkillEntry[];

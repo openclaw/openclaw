@@ -91,7 +91,10 @@ function normalizeInstallOptions(entry: SkillEntry): SkillInstallOption[] {
   });
 }
 
-function buildSkillStatus(entry: SkillEntry, config?: ClawdisConfig): SkillStatusEntry {
+function buildSkillStatus(
+  entry: SkillEntry,
+  config?: ClawdisConfig,
+): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
@@ -113,11 +116,13 @@ function buildSkillStatus(entry: SkillEntry, config?: ClawdisConfig): SkillStatu
     missingEnv.push(envName);
   }
 
-  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map((pathStr) => {
-    const value = resolveConfigPath(config, pathStr);
-    const satisfied = isConfigPathTruthy(config, pathStr);
-    return { path: pathStr, value, satisfied };
-  });
+  const configChecks: SkillStatusConfigCheck[] = requiredConfig.map(
+    (pathStr) => {
+      const value = resolveConfigPath(config, pathStr);
+      const satisfied = isConfigPathTruthy(config, pathStr);
+      return { path: pathStr, value, satisfied };
+    },
+  );
   const missingConfig = configChecks
     .filter((check) => !check.satisfied)
     .map((check) => check.path);

@@ -48,20 +48,27 @@ function buildInstallCommand(spec: SkillInstallSpec): {
 } {
   switch (spec.kind) {
     case "brew": {
-      if (!spec.formula) return { argv: null, shell: null, error: "missing brew formula" };
+      if (!spec.formula)
+        return { argv: null, shell: null, error: "missing brew formula" };
       return { argv: ["brew", "install", spec.formula], shell: null };
     }
     case "node": {
-      if (!spec.package) return { argv: null, shell: null, error: "missing node package" };
+      if (!spec.package)
+        return { argv: null, shell: null, error: "missing node package" };
       return { argv: ["npm", "install", "-g", spec.package], shell: null };
     }
     case "go": {
-      if (!spec.module) return { argv: null, shell: null, error: "missing go module" };
+      if (!spec.module)
+        return { argv: null, shell: null, error: "missing go module" };
       return { argv: ["go", "install", spec.module], shell: null };
     }
     case "pnpm": {
       if (!spec.repoPath || !spec.script) {
-        return { argv: null, shell: null, error: "missing pnpm repoPath/script" };
+        return {
+          argv: null,
+          shell: null,
+          error: "missing pnpm repoPath/script",
+        };
       }
       const repoPath = resolveUserPath(spec.repoPath);
       const cmd = `cd ${JSON.stringify(repoPath)} && pnpm install && pnpm run ${JSON.stringify(spec.script)}`;
@@ -69,14 +76,19 @@ function buildInstallCommand(spec: SkillInstallSpec): {
     }
     case "git": {
       if (!spec.url || !spec.destination) {
-        return { argv: null, shell: null, error: "missing git url/destination" };
+        return {
+          argv: null,
+          shell: null,
+          error: "missing git url/destination",
+        };
       }
       const dest = resolveUserPath(spec.destination);
       const cmd = `if [ -d ${JSON.stringify(dest)} ]; then echo "Already cloned"; else git clone ${JSON.stringify(spec.url)} ${JSON.stringify(dest)}; fi`;
       return { argv: null, shell: cmd };
     }
     case "shell": {
-      if (!spec.command) return { argv: null, shell: null, error: "missing shell command" };
+      if (!spec.command)
+        return { argv: null, shell: null, error: "missing shell command" };
       return { argv: null, shell: spec.command };
     }
     default:
@@ -87,7 +99,10 @@ function buildInstallCommand(spec: SkillInstallSpec): {
 export async function installSkill(
   params: SkillInstallRequest,
 ): Promise<SkillInstallResult> {
-  const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
+  const timeoutMs = Math.min(
+    Math.max(params.timeoutMs ?? 300_000, 1_000),
+    900_000,
+  );
   const workspaceDir = resolveUserPath(params.workspaceDir);
   const entries = loadWorkspaceSkillEntries(workspaceDir);
   const entry = entries.find((item) => item.skill.name === params.skillName);
@@ -134,7 +149,10 @@ export async function installSkill(
 
   const result = command.shell
     ? await runShell(command.shell, timeoutMs)
-    : await runCommandWithTimeout(command.argv, { timeoutMs, cwd: command.cwd });
+    : await runCommandWithTimeout(command.argv, {
+        timeoutMs,
+        cwd: command.cwd,
+      });
 
   const success = result.code === 0;
   return {
