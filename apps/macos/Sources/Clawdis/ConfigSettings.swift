@@ -17,6 +17,7 @@ struct ConfigSettings: View {
     @State private var models: [ModelChoice] = []
     @State private var modelsLoading = false
     @State private var modelError: String?
+    @State private var modelsSourceLabel: String?
     @AppStorage(modelCatalogPathKey) private var modelCatalogPath: String = ModelCatalogLoader.defaultPath
     @AppStorage(modelCatalogReloadKey) private var modelCatalogReloadBump: Int = 0
     @State private var allowAutosave = false
@@ -139,6 +140,12 @@ struct ConfigSettings: View {
 
         if let modelError {
             Text(modelError)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+
+        if let modelsSourceLabel {
+            Text("Model catalog: \(modelsSourceLabel)")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         }
@@ -410,18 +417,42 @@ struct ConfigSettings: View {
         guard !self.modelsLoading else { return }
         self.modelsLoading = true
         self.modelError = nil
+        self.modelsSourceLabel = nil
         do {
-            let loaded = try await ModelCatalogLoader.load(from: self.modelCatalogPath)
-            self.models = loaded
-            if !self.configModel.isEmpty, !loaded.contains(where: { $0.id == self.configModel }) {
+            let res: ModelsListResult =
+                try await GatewayConnection.shared
+                    .requestDecoded(
+                        method: .modelsList,
+                        timeoutMs: 15000)
+            self.models = res.models
+            self.modelsSourceLabel = "gateway"
+            if !self.configModel.isEmpty,
+               !res.models.contains(where: { $0.id == self.configModel })
+            {
                 self.customModel = self.configModel
                 self.configModel = "__custom__"
             }
         } catch {
-            self.modelError = error.localizedDescription
-            self.models = []
+            do {
+                let loaded = try await ModelCatalogLoader.load(from: self.modelCatalogPath)
+                self.models = loaded
+                self.modelsSourceLabel = "local fallback"
+                if !self.configModel.isEmpty,
+                   !loaded.contains(where: { $0.id == self.configModel })
+                {
+                    self.customModel = self.configModel
+                    self.configModel = "__custom__"
+                }
+            } catch {
+                self.modelError = error.localizedDescription
+                self.models = []
+            }
         }
         self.modelsLoading = false
+    }
+
+    private struct ModelsListResult: Decodable {
+        let models: [ModelChoice]
     }
 
     private var selectedContextLabel: String? {
