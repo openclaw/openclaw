@@ -16,10 +16,10 @@ Status: Implemented · Date: 2025-12-20
 - A2UI renders only when the **Gateway is reachable** (acceptable failure mode).
 
 ## Decision
-All A2UI HTML/JS assets are **served by the Gateway HTTP server** (single port,
-same as the Gateway WebSocket). Nodes (mac/iOS/Android) **navigate to the
-Gateway URL** before applying A2UI messages. No local custom-scheme or bundled
-fallback remains.
+All A2UI HTML/JS assets are **served by the Gateway canvas host** on
+`canvasHost.port` (default `18793`), bound to the **bridge interface**. Nodes
+(mac/iOS/Android) **navigate to the advertised `canvasHostUrl`** before applying
+A2UI messages. No local custom-scheme or bundled fallback remains.
 
 ## Why
 - One source of truth (TS) for A2UI rendering.
@@ -37,8 +37,8 @@ fallback remains.
 ## Gateway changes
 
 ### Serve A2UI assets
-Add A2UI HTML/JS to the Gateway Canvas host (same HTTP server as the Gateway
-WS), e.g.:
+Add A2UI HTML/JS to the Gateway Canvas host (standalone HTTP server on
+`canvasHost.port`), e.g.:
 
 ```
 /__clawdis__/a2ui/           -> index.html
@@ -49,14 +49,7 @@ Serve Canvas files at `/__clawdis__/canvas/` and A2UI at `/__clawdis__/a2ui/`.
 Use the shared Canvas host handler (`src/canvas-host/server.ts`) to serve these
 assets and inject the action bridge + live reload if desired.
 
-### Derive HTTP host from WebSocket
-Nodes derive the Canvas host URL from the Gateway WS URL:
-
-```
-ws://host:port  -> http://host:port
-wss://host:port -> https://host:port
-```
-
+### Canonical host URL
 The Gateway exposes a **canonical** `canvasHostUrl` in hello/bridge payloads
 so nodes don’t need to guess.
 
@@ -84,7 +77,7 @@ If `canvasHostUrl` is missing or unreachable:
 1) Gateway
    - Add A2UI assets under `src/canvas-host/`.
    - Serve them at `/__clawdis__/a2ui/` (align with existing naming).
-   - Serve Canvas files at `/__clawdis__/canvas/` on the Gateway port.
+   - Serve Canvas files at `/__clawdis__/canvas/` on `canvasHost.port`.
    - Expose `canvasHostUrl` in handshake + bridge hello payloads.
 2) Node runtimes
    - Update `canvas.a2ui.*` to navigate to `canvasHostUrl`.

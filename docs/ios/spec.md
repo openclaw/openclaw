@@ -30,7 +30,7 @@ Non-goals (v1):
 
 ## Current repo reality (constraints we respect)
 - The Gateway WebSocket server binds to `127.0.0.1:18789` (`src/gateway/server.ts`) with an optional `CLAWDIS_GATEWAY_TOKEN`.
-- The Gateway exposes a Canvas file server (`canvasHost`) on the **same port** as the Gateway, so nodes can `canvas.navigate` to `http://<lanHost>:18789/__clawdis__/canvas/` and auto-reload on file changes (`docs/configuration.md`).
+- The Gateway exposes a Canvas file server (`canvasHost`) on `canvasHost.port` (default `18793`), so nodes can `canvas.navigate` to `http://<lanHost>:18793/__clawdis__/canvas/` and auto-reload on file changes (`docs/configuration.md`).
 - macOS “Canvas” is controlled via the Gateway node protocol (`canvas.*`), matching iOS/Android (`docs/mac/canvas.md`).
 - Voice wake forwards via `GatewayChannel` to Gateway `agent` (mac app: `VoiceWakeForwarder` → `GatewayConnection.sendAgent`).
 
@@ -127,7 +127,7 @@ These are values for `node.invoke.command`:
   - `canvas.a2ui.push` with `{ messages: [...] }` (A2UI v0.8 server→client messages)
   - `canvas.a2ui.pushJSONL` with `{ jsonl: "..." }` (legacy alias)
   - `canvas.a2ui.reset`
-  - A2UI is hosted by the Gateway canvas host (`/__clawdis__/a2ui/`); commands fail if the host is unreachable.
+  - A2UI is hosted by the Gateway canvas host (`/__clawdis__/a2ui/`) on `canvasHost.port`. Commands fail if the host is unreachable.
 
 Result pattern:
 - Request is a standard `req/res` with `ok` / `error`.

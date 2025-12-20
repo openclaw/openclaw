@@ -46,7 +46,7 @@ Clawdis already uses:
 For the clawd browser-control server, use "family" ports:
 - Browser control HTTP API: `18791` (bridge + 1)
 - Browser CDP/debugging port: `18792` (control + 1)
-- Canvas host HTTP: **same as the Gateway port** (`18789`), mounted at `/__clawdis__/canvas/`
+- Canvas host HTTP: `18793` by default, mounted at `/__clawdis__/canvas/`
 
 The user usually only configures the **control URL** (port `18791`). CDP is an
 internal detail.
