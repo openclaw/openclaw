@@ -13,7 +13,7 @@ import { loadConfig } from "../config/config.js";
 import { isVerbose, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
-import { jidToE164, normalizeE164 } from "../utils.js";
+import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
 import {
   createWaSocket,
   getStatusCode,
@@ -116,22 +116,6 @@ export async function monitorWebInbox(options: {
       // Ignore status/broadcast traffic; we only care about direct chats.
       if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast"))
         continue;
-      if (id) {
-        const participant = msg.key?.participant;
-        try {
-          await sock.readMessages([
-            { remoteJid, id, participant, fromMe: false },
-          ]);
-          if (isVerbose()) {
-            const suffix = participant ? ` (participant ${participant})` : "";
-            logVerbose(
-              `Marked message ${id} as read for ${remoteJid}${suffix}`,
-            );
-          }
-        } catch (err) {
-          logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
-        }
-      }
       const group = isJidGroup(remoteJid);
       const participantJid = msg.key?.participant ?? undefined;
       const senderE164 = participantJid ? jidToE164(participantJid) : null;
@@ -160,6 +144,7 @@ export async function monitorWebInbox(options: {
           ? configuredAllowFrom
           : defaultAllowFrom;
       const isSamePhone = from === selfE164;
+      const isSelfChat = isSelfChatMode(selfE164, configuredAllowFrom);
 
       const allowlistEnabled =
         !group && Array.isArray(allowFrom) && allowFrom.length > 0;
@@ -172,6 +157,26 @@ export async function monitorWebInbox(options: {
           );
           continue; // Skip processing entirely
         }
+      }
+
+      if (id && !isSelfChat) {
+        const participant = msg.key?.participant;
+        try {
+          await sock.readMessages([
+            { remoteJid, id, participant, fromMe: false },
+          ]);
+          if (isVerbose()) {
+            const suffix = participant ? ` (participant ${participant})` : "";
+            logVerbose(
+              `Marked message ${id} as read for ${remoteJid}${suffix}`,
+            );
+          }
+        } catch (err) {
+          logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
+        }
+      } else if (id && isSelfChat && isVerbose()) {
+        // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
+        logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
       }
 
       let body = extractText(msg.message ?? undefined);

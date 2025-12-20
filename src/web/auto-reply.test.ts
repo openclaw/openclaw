@@ -1425,6 +1425,82 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("[from: Bob (+222)]");
   });
 
+  it("ignores JID mentions in self-chat mode (group chats)", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+
+    setLoadConfigMock(() => ({
+      inbound: {
+        // Self-chat heuristic: allowFrom includes selfE164.
+        allowFrom: ["+999"],
+        groupChat: {
+          requireMention: true,
+          mentionPatterns: ["\\bclawd\\b"],
+        },
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    // WhatsApp @mention of the owner should NOT trigger the bot in self-chat mode.
+    await capturedOnMessage?.({
+      body: "@owner ping",
+      from: "[redacted-email]",
+      conversationId: "[redacted-email]",
+      chatId: "[redacted-email]",
+      chatType: "group",
+      to: "+2",
+      id: "g-self-1",
+      senderE164: "+111",
+      senderName: "Alice",
+      mentionedJids: ["[redacted-email]"],
+      selfE164: "+999",
+      selfJid: "[redacted-email]",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).not.toHaveBeenCalled();
+
+    // Text-based mentionPatterns still work (user can type "clawd" explicitly).
+    await capturedOnMessage?.({
+      body: "clawd ping",
+      from: "[redacted-email]",
+      conversationId: "[redacted-email]",
+      chatId: "[redacted-email]",
+      chatType: "group",
+      to: "+2",
+      id: "g-self-2",
+      senderE164: "+222",
+      senderName: "Bob",
+      selfE164: "+999",
+      selfJid: "[redacted-email]",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+
+    resetLoadConfigMock();
+  });
+
   it("emits heartbeat logs with connection metadata", async () => {
     vi.useFakeTimers();
     const logPath = `/tmp/clawdis-heartbeat-${crypto.randomUUID()}.log`;

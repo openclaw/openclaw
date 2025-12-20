@@ -19,7 +19,7 @@ import { logInfo } from "../logger.js";
 import { getChildLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { jidToE164, normalizeE164 } from "../utils.js";
+import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
 import { setActiveWebListener } from "./active-listener.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
@@ -85,6 +85,7 @@ function elide(text?: string, limit = 400) {
 type MentionConfig = {
   requireMention: boolean;
   mentionRegexes: RegExp[];
+  allowFrom?: Array<string | number>;
 };
 
 function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
@@ -100,7 +101,7 @@ function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
         }
       })
       .filter((r): r is RegExp => Boolean(r)) ?? [];
-  return { requireMention, mentionRegexes };
+  return { requireMention, mentionRegexes, allowFrom: cfg.inbound?.allowFrom };
 }
 
 function isBotMentioned(
@@ -113,7 +114,9 @@ function isBotMentioned(
       .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
       .toLowerCase();
 
-  if (msg.mentionedJids?.length) {
+  const isSelfChat = isSelfChatMode(msg.selfE164, mentionCfg.allowFrom);
+
+  if (msg.mentionedJids?.length && !isSelfChat) {
     const normalizedMentions = msg.mentionedJids
       .map((jid) => jidToE164(jid) ?? jid)
       .filter(Boolean);
@@ -123,6 +126,8 @@ function isBotMentioned(
       const bareSelf = msg.selfJid.replace(/:\\d+/, "");
       if (normalizedMentions.includes(bareSelf)) return true;
     }
+  } else if (msg.mentionedJids?.length && isSelfChat) {
+    // Self-chat mode: ignore WhatsApp @mention JIDs, otherwise @mentioning the owner in group chats triggers the bot.
   }
   const bodyClean = clean(msg.body);
   if (mentionCfg.mentionRegexes.some((re) => re.test(bodyClean))) return true;

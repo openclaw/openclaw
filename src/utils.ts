@@ -31,6 +31,28 @@ export function normalizeE164(number: string): string {
   return `+${digits}`;
 }
 
+/**
+ * "Self-chat mode" heuristic (single phone): the gateway is logged in as the owner's own WhatsApp account,
+ * and `inbound.allowFrom` includes that same number. Used to avoid side-effects that make no sense when the
+ * "bot" and the human are the same WhatsApp identity (e.g. auto read receipts, @mention JID triggers).
+ */
+export function isSelfChatMode(
+  selfE164: string | null | undefined,
+  allowFrom?: Array<string | number> | null,
+): boolean {
+  if (!selfE164) return false;
+  if (!Array.isArray(allowFrom) || allowFrom.length === 0) return false;
+  const normalizedSelf = normalizeE164(selfE164);
+  return allowFrom.some((n) => {
+    if (n === "*") return false;
+    try {
+      return normalizeE164(String(n)) === normalizedSelf;
+    } catch {
+      return false;
+    }
+  });
+}
+
 export function toWhatsappJid(number: string): string {
   const e164 = normalizeE164(number);
   const digits = e164.replace(/\D/g, "");

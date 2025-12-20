@@ -441,6 +441,56 @@ describe("web monitor inbox", () => {
 
     // Should NOT call onMessage for unauthorized senders
     expect(onMessage).not.toHaveBeenCalled();
+    // Should NOT send read receipts for blocked senders (privacy + avoids Baileys Bad MAC churn).
+    expect(sock.readMessages).not.toHaveBeenCalled();
+
+    // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        allowFrom: ["*"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    await listener.close();
+  });
+
+  it("skips read receipts in self-chat mode", async () => {
+    mockLoadConfig.mockReturnValue({
+      inbound: {
+        // Self-chat heuristic: allowFrom includes selfE164 (+123).
+        allowFrom: ["+123"],
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "self1", fromMe: false, remoteJid: "[redacted-email]" },
+          message: { conversation: "self ping" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ from: "+123", to: "+123", body: "self ping" }),
+    );
+    expect(sock.readMessages).not.toHaveBeenCalled();
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
