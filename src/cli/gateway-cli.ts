@@ -45,6 +45,132 @@ const callGatewayCli = async (
   });
 
 export function registerGatewayCli(program: Command) {
+  program
+    .command("gateway-daemon")
+    .description("Run the WebSocket Gateway as a long-lived daemon")
+    .option("--port <port>", "Port for the gateway WebSocket", "18789")
+    .option(
+      "--bind <mode>",
+      'Bind mode ("loopback"|"tailnet"|"lan"|"auto"). Defaults to config gateway.bind (or loopback).',
+    )
+    .option(
+      "--token <token>",
+      "Shared token required in connect.params.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
+    )
+    .option("--verbose", "Verbose logging to stdout/stderr", false)
+    .option(
+      "--ws-log <style>",
+      'WebSocket log style ("auto"|"full"|"compact")',
+      "auto",
+    )
+    .option("--compact", 'Alias for "--ws-log compact"', false)
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as
+        | string
+        | undefined;
+      const wsLogStyle: GatewayWsLogStyle =
+        wsLogRaw === "compact"
+          ? "compact"
+          : wsLogRaw === "full"
+            ? "full"
+            : "auto";
+      if (
+        wsLogRaw !== undefined &&
+        wsLogRaw !== "auto" &&
+        wsLogRaw !== "compact" &&
+        wsLogRaw !== "full"
+      ) {
+        defaultRuntime.error(
+          'Invalid --ws-log (use "auto", "full", "compact")',
+        );
+        defaultRuntime.exit(1);
+      }
+      setGatewayWsLogStyle(wsLogStyle);
+
+      const port = Number.parseInt(String(opts.port ?? "18789"), 10);
+      if (Number.isNaN(port) || port <= 0) {
+        defaultRuntime.error("Invalid port");
+        defaultRuntime.exit(1);
+        return;
+      }
+      if (opts.token) {
+        process.env.CLAWDIS_GATEWAY_TOKEN = String(opts.token);
+      }
+      const cfg = loadConfig();
+      const bindRaw = String(opts.bind ?? cfg.gateway?.bind ?? "loopback");
+      const bind =
+        bindRaw === "loopback" ||
+        bindRaw === "tailnet" ||
+        bindRaw === "lan" ||
+        bindRaw === "auto"
+          ? bindRaw
+          : null;
+      if (!bind) {
+        defaultRuntime.error(
+          'Invalid --bind (use "loopback", "tailnet", "lan", or "auto")',
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+      let shuttingDown = false;
+      let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const onSigterm = () => shutdown("SIGTERM");
+      const onSigint = () => shutdown("SIGINT");
+
+      const shutdown = (signal: string) => {
+        process.removeListener("SIGTERM", onSigterm);
+        process.removeListener("SIGINT", onSigint);
+
+        if (shuttingDown) {
+          defaultRuntime.log(
+            info(`gateway: received ${signal} during shutdown; exiting now`),
+          );
+          defaultRuntime.exit(0);
+        }
+        shuttingDown = true;
+        defaultRuntime.log(info(`gateway: received ${signal}; shutting down`));
+
+        forceExitTimer = setTimeout(() => {
+          defaultRuntime.error(
+            "gateway: shutdown timed out; exiting without full cleanup",
+          );
+          defaultRuntime.exit(0);
+        }, 5000);
+
+        void (async () => {
+          try {
+            await server?.close();
+          } catch (err) {
+            defaultRuntime.error(`gateway: shutdown error: ${String(err)}`);
+          } finally {
+            if (forceExitTimer) clearTimeout(forceExitTimer);
+            defaultRuntime.exit(0);
+          }
+        })();
+      };
+
+      process.once("SIGTERM", onSigterm);
+      process.once("SIGINT", onSigint);
+
+      try {
+        server = await startGatewayServer(port, { bind });
+      } catch (err) {
+        if (err instanceof GatewayLockError) {
+          defaultRuntime.error(`Gateway failed to start: ${err.message}`);
+          defaultRuntime.exit(1);
+          return;
+        }
+        defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+
+      await new Promise<never>(() => {});
+    });
+
   const gateway = program
     .command("gateway")
     .description("Run the WebSocket Gateway")

@@ -53,8 +53,12 @@ export function buildProgram() {
     outputError: (str, write) => write(chalk.red(str)),
   });
 
-  if (process.argv.includes("-V") || process.argv.includes("--version")) {
-    console.log(formatIntroLine(PROGRAM_VERSION));
+  if (
+    process.argv.includes("-V") ||
+    process.argv.includes("--version") ||
+    process.argv.includes("-v")
+  ) {
+    console.log(PROGRAM_VERSION);
     process.exit(0);
   }
 
