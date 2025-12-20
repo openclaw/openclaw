@@ -3,27 +3,7 @@ import path from "node:path";
 import type express from "express";
 
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
-import { snapshotAria } from "../cdp.js";
-import {
-  armDialogViaPlaywright,
-  armFileUploadViaPlaywright,
-  clickViaPlaywright,
-  closePageViaPlaywright,
-  dragViaPlaywright,
-  evaluateViaPlaywright,
-  fillFormViaPlaywright,
-  getConsoleMessagesViaPlaywright,
-  hoverViaPlaywright,
-  navigateViaPlaywright,
-  pdfViaPlaywright,
-  pressKeyViaPlaywright,
-  resizeViewportViaPlaywright,
-  selectOptionViaPlaywright,
-  snapshotAiViaPlaywright,
-  takeScreenshotViaPlaywright,
-  typeViaPlaywright,
-  waitForViaPlaywright,
-} from "../pw-ai.js";
+import { captureScreenshot, snapshotAria } from "../cdp.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -75,6 +55,35 @@ function parseClickButton(raw: string): ClickButton | undefined {
   return undefined;
 }
 
+type PwAiModule = typeof import("../pw-ai.js");
+let pwAiModule: Promise<PwAiModule | null> | null = null;
+
+async function getPwAiModule(): Promise<PwAiModule | null> {
+  if (pwAiModule) return pwAiModule;
+  pwAiModule = (async () => {
+    try {
+      return await import("../pw-ai.js");
+    } catch {
+      return null;
+    }
+  })();
+  return pwAiModule;
+}
+
+async function requirePwAi(
+  res: express.Response,
+  feature: string,
+): Promise<PwAiModule | null> {
+  const mod = await getPwAiModule();
+  if (mod) return mod;
+  jsonError(
+    res,
+    501,
+    `Playwright is not available in this gateway build; '${feature}' is unsupported.`,
+  );
+  return null;
+}
+
 export function registerBrowserAgentRoutes(
   app: express.Express,
   ctx: BrowserRouteContext,
@@ -86,7 +95,9 @@ export function registerBrowserAgentRoutes(
     if (!url) return jsonError(res, 400, "url is required");
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
-      const result = await navigateViaPlaywright({
+      const pw = await requirePwAi(res, "navigate");
+      if (!pw) return;
+      const result = await pw.navigateViaPlaywright({
         cdpPort: ctx.state().cdpPort,
         targetId: tab.targetId,
         url,
@@ -121,6 +132,8 @@ export function registerBrowserAgentRoutes(
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
       const cdpPort = ctx.state().cdpPort;
+      const pw = await requirePwAi(res, `act:${kind}`);
+      if (!pw) return;
 
       switch (kind) {
         case "click": {
@@ -152,7 +165,7 @@ export function registerBrowserAgentRoutes(
           const modifiers = modifiersRaw.length
             ? (modifiersRaw as ClickModifier[])
             : undefined;
-          await clickViaPlaywright({
+          await pw.clickViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             ref,
@@ -170,7 +183,7 @@ export function registerBrowserAgentRoutes(
           const text = body.text;
           const submit = toBoolean(body.submit) ?? false;
           const slowly = toBoolean(body.slowly) ?? false;
-          await typeViaPlaywright({
+          await pw.typeViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             ref,
@@ -183,13 +196,13 @@ export function registerBrowserAgentRoutes(
         case "press": {
           const key = toStringOrEmpty(body.key);
           if (!key) return jsonError(res, 400, "key is required");
-          await pressKeyViaPlaywright({ cdpPort, targetId: tab.targetId, key });
+          await pw.pressKeyViaPlaywright({ cdpPort, targetId: tab.targetId, key });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "hover": {
           const ref = toStringOrEmpty(body.ref);
           if (!ref) return jsonError(res, 400, "ref is required");
-          await hoverViaPlaywright({ cdpPort, targetId: tab.targetId, ref });
+          await pw.hoverViaPlaywright({ cdpPort, targetId: tab.targetId, ref });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "drag": {
@@ -197,7 +210,7 @@ export function registerBrowserAgentRoutes(
           const endRef = toStringOrEmpty(body.endRef);
           if (!startRef || !endRef)
             return jsonError(res, 400, "startRef and endRef are required");
-          await dragViaPlaywright({
+          await pw.dragViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             startRef,
@@ -210,7 +223,7 @@ export function registerBrowserAgentRoutes(
           const values = toStringArray(body.values);
           if (!ref || !values?.length)
             return jsonError(res, 400, "ref and values are required");
-          await selectOptionViaPlaywright({
+          await pw.selectOptionViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             ref,
@@ -224,7 +237,7 @@ export function registerBrowserAgentRoutes(
             : null;
           if (!fields?.length)
             return jsonError(res, 400, "fields are required");
-          await fillFormViaPlaywright({
+          await pw.fillFormViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             fields,
@@ -236,7 +249,7 @@ export function registerBrowserAgentRoutes(
           const height = toNumber(body.height);
           if (!width || !height)
             return jsonError(res, 400, "width and height are required");
-          await resizeViewportViaPlaywright({
+          await pw.resizeViewportViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             width,
@@ -248,7 +261,7 @@ export function registerBrowserAgentRoutes(
           const timeMs = toNumber(body.timeMs);
           const text = toStringOrEmpty(body.text) || undefined;
           const textGone = toStringOrEmpty(body.textGone) || undefined;
-          await waitForViaPlaywright({
+          await pw.waitForViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             timeMs,
@@ -261,7 +274,7 @@ export function registerBrowserAgentRoutes(
           const fn = toStringOrEmpty(body.fn);
           if (!fn) return jsonError(res, 400, "fn is required");
           const ref = toStringOrEmpty(body.ref) || undefined;
-          const result = await evaluateViaPlaywright({
+          const result = await pw.evaluateViaPlaywright({
             cdpPort,
             targetId: tab.targetId,
             fn,
@@ -275,7 +288,7 @@ export function registerBrowserAgentRoutes(
           });
         }
         case "close": {
-          await closePageViaPlaywright({ cdpPort, targetId: tab.targetId });
+          await pw.closePageViaPlaywright({ cdpPort, targetId: tab.targetId });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         default: {
@@ -295,7 +308,9 @@ export function registerBrowserAgentRoutes(
     if (!paths.length) return jsonError(res, 400, "paths are required");
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
-      await armFileUploadViaPlaywright({
+      const pw = await requirePwAi(res, "file chooser hook");
+      if (!pw) return;
+      await pw.armFileUploadViaPlaywright({
         cdpPort: ctx.state().cdpPort,
         targetId: tab.targetId,
         paths,
@@ -316,7 +331,9 @@ export function registerBrowserAgentRoutes(
     if (accept === undefined) return jsonError(res, 400, "accept is required");
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
-      await armDialogViaPlaywright({
+      const pw = await requirePwAi(res, "dialog hook");
+      if (!pw) return;
+      await pw.armDialogViaPlaywright({
         cdpPort: ctx.state().cdpPort,
         targetId: tab.targetId,
         accept,
@@ -336,7 +353,9 @@ export function registerBrowserAgentRoutes(
 
     try {
       const tab = await ctx.ensureTabAvailable(targetId || undefined);
-      const messages = await getConsoleMessagesViaPlaywright({
+      const pw = await requirePwAi(res, "console messages");
+      if (!pw) return;
+      const messages = await pw.getConsoleMessagesViaPlaywright({
         cdpPort: ctx.state().cdpPort,
         targetId: tab.targetId,
         level: level.trim() || undefined,
@@ -352,7 +371,9 @@ export function registerBrowserAgentRoutes(
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
-      const pdf = await pdfViaPlaywright({
+      const pw = await requirePwAi(res, "pdf");
+      if (!pw) return;
+      const pdf = await pw.pdfViaPlaywright({
         cdpPort: ctx.state().cdpPort,
         targetId: tab.targetId,
       });
@@ -392,16 +413,29 @@ export function registerBrowserAgentRoutes(
 
     try {
       const tab = await ctx.ensureTabAvailable(targetId);
-      const snap = await takeScreenshotViaPlaywright({
-        cdpPort: ctx.state().cdpPort,
-        targetId: tab.targetId,
-        ref,
-        element,
-        fullPage,
-        type,
-      });
+      let buffer: Buffer;
+      if (ref || element) {
+        const pw = await requirePwAi(res, "element/ref screenshot");
+        if (!pw) return;
+        const snap = await pw.takeScreenshotViaPlaywright({
+          cdpPort: ctx.state().cdpPort,
+          targetId: tab.targetId,
+          ref,
+          element,
+          fullPage,
+          type,
+        });
+        buffer = snap.buffer;
+      } else {
+        buffer = await captureScreenshot({
+          wsUrl: tab.wsUrl ?? "",
+          fullPage,
+          format: type,
+          quality: type === "jpeg" ? 85 : undefined,
+        });
+      }
 
-      const normalized = await normalizeBrowserScreenshot(snap.buffer, {
+      const normalized = await normalizeBrowserScreenshot(buffer, {
         maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
         maxBytes: DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
       });
@@ -426,14 +460,21 @@ export function registerBrowserAgentRoutes(
   app.get("/snapshot", async (req, res) => {
     const targetId =
       typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
-    const format = req.query.format === "aria" ? "aria" : "ai";
+    const format =
+      req.query.format === "aria"
+        ? "aria"
+        : req.query.format === "ai"
+          ? "ai"
+          : ((await getPwAiModule()) ? "ai" : "aria");
     const limit =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
 
     try {
       const tab = await ctx.ensureTabAvailable(targetId || undefined);
       if (format === "ai") {
-        const snap = await snapshotAiViaPlaywright({
+        const pw = await requirePwAi(res, "ai snapshot");
+        if (!pw) return;
+        const snap = await pw.snapshotAiViaPlaywright({
           cdpPort: ctx.state().cdpPort,
           targetId: tab.targetId,
         });

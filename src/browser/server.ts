@@ -8,7 +8,6 @@ import {
   resolveBrowserConfig,
   shouldStartLocalBrowserServer,
 } from "./config.js";
-import { closePlaywrightBrowserConnection } from "./pw-ai.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
@@ -99,5 +98,12 @@ export async function stopBrowserControlServer(
     current.server.close(() => resolve());
   });
   state = null;
-  await closePlaywrightBrowserConnection();
+
+  // Optional: Playwright is not always available (e.g. embedded gateway builds).
+  try {
+    const mod = await import("./pw-ai.js");
+    await mod.closePlaywrightBrowserConnection();
+  } catch {
+    // ignore
+  }
 }
