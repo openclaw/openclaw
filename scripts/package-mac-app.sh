@@ -138,9 +138,7 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
 	    --compile \
 	    --bytecode \
 	    --outfile "$BUN_OUT" \
-	    -e playwright-core \
 	    -e electron \
-	    -e "chromium-bidi*" \
 	    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
 	  chmod +x "$BUN_OUT"
 
