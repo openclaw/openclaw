@@ -30,7 +30,7 @@ Non-goals (v1):
 
 ## Current repo reality (constraints we respect)
 - The Gateway WebSocket server binds to `127.0.0.1:18789` (`src/gateway/server.ts`) with an optional `CLAWDIS_GATEWAY_TOKEN`.
-- The Gateway exposes a LAN/tailnet Canvas file server (`canvasHost`) by default so nodes can `canvas.navigate` to `http://<lanHost>:<canvasPort>/` and auto-reload when files change (`docs/configuration.md`).
+- The Gateway exposes a Canvas file server (`canvasHost`) on the **same port** as the Gateway, so nodes can `canvas.navigate` to `http://<lanHost>:18789/__clawdis__/canvas/` and auto-reload on file changes (`docs/configuration.md`).
 - macOS “Canvas” is controlled via the Gateway node protocol (`canvas.*`), matching iOS/Android (`docs/mac/canvas.md`).
 - Voice wake forwards via `GatewayChannel` to Gateway `agent` (mac app: `VoiceWakeForwarder` → `GatewayConnection.sendAgent`).
 

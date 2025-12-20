@@ -1,7 +1,7 @@
 ---
 name: clawdis-canvas
 description: Drive the Clawdis Canvas panel (present, eval, snapshot, A2UI) via the clawdis CLI, including gateway-hosted A2UI surfaces and action bridging.
-metadata: {"clawdis":{"always":true}}
+metadata: {"clawdis":{"emoji":"🎨","always":true}}
 ---
 
 # Clawdis Canvas
@@ -21,7 +21,7 @@ A2UI
 Notes
 - Keep HTML under `~/clawd/canvas` when targeting remote nodes.
 - Use snapshot after renders to verify UI state.
-- Treat A2UI as gateway-hosted at `http(s)://<gateway-host>:<canvasPort>/__clawdis__/a2ui/`.
+- Treat A2UI as gateway-hosted at `http(s)://<gateway-host>:18789/__clawdis__/a2ui/`.
 - Rely on `canvas a2ui push/reset` to auto-navigate the Canvas to the gateway-hosted A2UI page.
 - Expect A2UI to fail if the Gateway does not advertise `canvasHostUrl` or is unreachable:
   - `A2UI_HOST_NOT_CONFIGURED`

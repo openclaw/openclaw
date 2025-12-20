@@ -46,7 +46,7 @@ class BridgeSessionTest {
 
             val hello = reader.readLine()
             assertTrue(hello.contains("\"type\":\"hello\""))
-            writer.write("""{"type":"hello-ok","serverName":"Test Bridge","canvasHostUrl":"http://127.0.0.1:18793"}""")
+            writer.write("""{"type":"hello-ok","serverName":"Test Bridge","canvasHostUrl":"http://127.0.0.1:18789"}""")
             writer.write("\n")
             writer.flush()
 
@@ -77,7 +77,7 @@ class BridgeSessionTest {
     )
 
     connected.await()
-    assertEquals("http://127.0.0.1:18793", session.currentCanvasHostUrl())
+    assertEquals("http://127.0.0.1:18789", session.currentCanvasHostUrl())
     val payload = session.request(method = "health", paramsJson = null)
     assertEquals("""{"value":123}""", payload)
     server.await()

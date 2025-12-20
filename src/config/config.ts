@@ -97,7 +97,7 @@ export type CanvasHostConfig = {
   enabled?: boolean;
   /** Directory to serve (default: ~/clawd/canvas). */
   root?: string;
-  /** HTTP port to listen on (default: 18793). */
+  /** HTTP port to listen on (deprecated; Gateway port is used). */
   port?: number;
 };
 
@@ -133,6 +133,11 @@ export type SkillsLoadConfig = {
    * Each directory should contain skill subfolders with `SKILL.md`.
    */
   extraDirs?: string[];
+};
+
+export type SkillsInstallConfig = {
+  preferBrew?: boolean;
+  nodeManager?: "npm" | "pnpm" | "bun";
 };
 
 export type ClawdisConfig = {
@@ -185,6 +190,7 @@ export type ClawdisConfig = {
   canvasHost?: CanvasHostConfig;
   gateway?: GatewayConfig;
   skills?: Record<string, SkillConfig>;
+  skillsInstall?: SkillsInstallConfig;
 };
 
 // New branding path (preferred)
@@ -369,6 +375,14 @@ const ClawdisSchema = z.object({
   skillsLoad: z
     .object({
       extraDirs: z.array(z.string()).optional(),
+    })
+    .optional(),
+  skillsInstall: z
+    .object({
+      preferBrew: z.boolean().optional(),
+      nodeManager: z
+        .union([z.literal("npm"), z.literal("pnpm"), z.literal("bun")])
+        .optional(),
     })
     .optional(),
   skills: z

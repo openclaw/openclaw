@@ -18,11 +18,11 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
+import { handleA2uiHttpRequest, CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import {
-  type CanvasHostServer,
-  startCanvasHost,
+  type CanvasHostHandler,
+  createCanvasHostHandler,
 } from "../canvas-host/server.js";
-import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
@@ -339,6 +339,10 @@ export type GatewayServerOptions = {
    * Default: config `gateway.controlUi.enabled` (or true when absent).
    */
   controlUiEnabled?: boolean;
+  /**
+   * Test-only: allow canvas host startup even when NODE_ENV/VITEST would disable it.
+   */
+  allowCanvasHostInTests?: boolean;
 };
 
 function isLoopbackAddress(ip: string | undefined): boolean {
@@ -1000,23 +1004,43 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
-  const cfgForServer = loadConfig();
-  const bindMode = opts.bind ?? cfgForServer.gateway?.bind ?? "loopback";
+  const cfgAtStart = loadConfig();
+  const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
   const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
   if (!bindHost) {
     throw new Error(
       "gateway bind is tailnet, but no tailnet interface was found; refusing to start gateway",
     );
   }
-  const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const tailnetIPv6 = pickPrimaryTailnetIPv6();
-  const hasTailnet = Boolean(tailnetIPv4 || tailnetIPv6);
   const controlUiEnabled =
-    opts.controlUiEnabled ?? cfgForServer.gateway?.controlUi?.enabled ?? true;
+    opts.controlUiEnabled ?? cfgAtStart.gateway?.controlUi?.enabled ?? true;
+  const canvasHostEnabled =
+    process.env.CLAWDIS_SKIP_CANVAS_HOST !== "1" &&
+    cfgAtStart.canvasHost?.enabled !== false;
   if (!isLoopbackHost(bindHost) && !getGatewayToken()) {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${port} without CLAWDIS_GATEWAY_TOKEN`,
     );
+  }
+
+  let canvasHost: CanvasHostHandler | null = null;
+  if (canvasHostEnabled) {
+    try {
+      const handler = await createCanvasHostHandler({
+        runtime: defaultRuntime,
+        rootDir: cfgAtStart.canvasHost?.root,
+        basePath: CANVAS_HOST_PATH,
+        allowInTests: opts.allowCanvasHostInTests,
+      });
+      if (handler.rootDir) {
+        canvasHost = handler;
+        defaultRuntime.log(
+          `canvas host mounted at http://${bindHost}:${port}${CANVAS_HOST_PATH}/ (root ${handler.rootDir})`,
+        );
+      }
+    } catch (err) {
+      logWarn(`gateway: canvas host failed to start: ${String(err)}`);
+    }
   }
 
   const httpServer: HttpServer = createHttpServer((req, res) => {
@@ -1024,7 +1048,10 @@ export async function startGatewayServer(
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
 
     void (async () => {
-      if (await handleA2uiHttpRequest(req, res)) return;
+      if (canvasHost) {
+        if (await handleA2uiHttpRequest(req, res)) return;
+        if (await canvasHost.handleHttpRequest(req, res)) return;
+      }
       if (controlUiEnabled) {
         if (handleControlUiHttpRequest(req, res)) return;
       }
@@ -1040,7 +1067,6 @@ export async function startGatewayServer(
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: Awaited<ReturnType<typeof startNodeBridgeServer>> | null = null;
-  let canvasHost: CanvasHostServer | null = null;
   const bridgeNodeSubscriptions = new Map<string, Set<string>>();
   const bridgeSessionSubscribers = new Map<string, Set<string>>();
   try {
@@ -1072,8 +1098,14 @@ export async function startGatewayServer(
   }
 
   const wss = new WebSocketServer({
-    server: httpServer,
+    noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
+  });
+  httpServer.on("upgrade", (req, socket, head) => {
+    if (canvasHost?.handleUpgrade(req, socket, head)) return;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
   });
   const providerAbort = new AbortController();
   const providerTasks: Array<Promise<unknown>> = [];
@@ -1093,26 +1125,7 @@ export async function startGatewayServer(
     string,
     { controller: AbortController; sessionId: string; sessionKey: string }
   >();
-  const cfgAtStart = loadConfig();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
-
-  const canvasHostEnabled =
-    process.env.CLAWDIS_SKIP_CANVAS_HOST !== "1" &&
-    cfgAtStart.canvasHost?.enabled !== false;
-  const preferGatewayA2uiHost = hasTailnet && !isLoopbackHost(bindHost);
-
-  if (canvasHostEnabled) {
-    try {
-      const server = await startCanvasHost({
-        runtime: defaultRuntime,
-        rootDir: cfgAtStart.canvasHost?.root,
-        port: cfgAtStart.canvasHost?.port ?? 18793,
-      });
-      if (server.port > 0) canvasHost = server;
-    } catch (err) {
-      logWarn(`gateway: canvas host failed to start: ${String(err)}`);
-    }
-  }
 
   const cronStorePath = resolveCronStorePath(cfgAtStart.cron?.store);
   const cronLogger = getChildLogger({
@@ -2065,6 +2078,11 @@ export async function startGatewayServer(
   };
 
   const machineDisplayName = await getMachineDisplayName();
+  const bridgeHostIsLoopback = bridgeHost ? isLoopbackHost(bridgeHost) : false;
+  const canvasHostPortForBridge =
+    canvasHost && (!isLoopbackHost(bindHost) || bridgeHostIsLoopback)
+      ? port
+      : undefined;
 
   if (bridgeEnabled && bridgePort > 0 && bridgeHost) {
     try {
@@ -2072,7 +2090,7 @@ export async function startGatewayServer(
         host: bridgeHost,
         port: bridgePort,
         serverName: machineDisplayName,
-        canvasHostPort: preferGatewayA2uiHost ? port : canvasHost?.port,
+        canvasHostPort: canvasHostPortForBridge,
         onRequest: (nodeId, req) => handleBridgeRequest(nodeId, req),
         onAuthenticated: async (node) => {
           const host = node.displayName?.trim() || node.nodeId;
@@ -2188,7 +2206,7 @@ export async function startGatewayServer(
       instanceName: formatBonjourInstanceName(machineDisplayName),
       gatewayPort: port,
       bridgePort: bridge?.port,
-      canvasPort: canvasHost?.port,
+      canvasPort: canvasHostPortForBridge,
       sshPort,
       tailnetDns,
       cliPath: resolveBonjourCliPath(),
@@ -2362,10 +2380,7 @@ export async function startGatewayServer(
     const remoteAddr = (
       socket as WebSocket & { _socket?: { remoteAddress?: string } }
     )._socket?.remoteAddress;
-    const canvasHostUrl = deriveCanvasHostUrl(
-      req,
-      preferGatewayA2uiHost ? port : canvasHost?.port,
-    );
+    const canvasHostUrl = deriveCanvasHostUrl(req, canvasHost ? port : undefined);
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
       params?.client?.mode === "webchat" ||
@@ -3255,6 +3270,7 @@ export async function startGatewayServer(
                 skillName: p.name,
                 installId: p.installId,
                 timeoutMs: p.timeoutMs,
+                config: cfg,
               });
               respond(
                 result.ok,

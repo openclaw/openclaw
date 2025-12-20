@@ -1564,14 +1564,17 @@ describe("gateway server", () => {
     await server.close();
   });
 
-  test("hello-ok prefers gateway port for A2UI when tailnet present", async () => {
+  test("hello-ok advertises the gateway port for canvas host", async () => {
     const prevToken = process.env.CLAWDIS_GATEWAY_TOKEN;
     process.env.CLAWDIS_GATEWAY_TOKEN = "secret";
     testTailnetIPv4.value = "100.64.0.1";
     testGatewayBind = "lan";
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, { bind: "lan" });
+    const server = await startGatewayServer(port, {
+      bind: "lan",
+      allowCanvasHostInTests: true,
+    });
     const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
       headers: { Host: `100.64.0.1:${port}` },
     });

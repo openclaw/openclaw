@@ -105,18 +105,20 @@ The Android node’s Chat sheet uses the gateway’s **primary session key** (`m
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 
+Note: the Gateway must be bound to a LAN/tailnet interface (`gateway.bind=lan|tailnet`) so the node can reach `:18789`.
+
 1) Create `~/clawd/canvas/index.html` on the gateway host.
 
 2) Navigate the node to it (LAN):
 
 ```bash
-clawdis nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/"}'
+clawdis nodes invoke --node "<Android Node>" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18789/__clawdis__/canvas/"}'
 ```
 
-Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18793/`.
+Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__clawdis__/canvas/`.
 
 This server injects a live-reload client into HTML and reloads on file changes.
-The A2UI host lives at `http://<gateway-host>:18793/__clawdis__/a2ui/`.
+The A2UI host lives at `http://<gateway-host>:18789/__clawdis__/a2ui/`.
 
 Canvas commands (foreground only):
 - `canvas.eval`, `canvas.snapshot`, `canvas.navigate` (use `{"url":""}` or `{"url":"/"}` to return to the default scaffold). `canvas.snapshot` returns `{ format, base64 }` (default `format="jpeg"`).

@@ -93,7 +93,7 @@ The Gateway advertises small non-secret hints to make UI flows convenient:
 - `sshPort=<port>` (defaults to 22 when not overridden)
 - `gatewayPort=<port>` (informational; the Gateway WS is typically loopback-only)
 - `bridgePort=<port>` (only when bridge is enabled)
-- `canvasPort=<port>` (only when the canvas host is running; enabled by default; default `18793`)
+- `canvasPort=<port>` (only when the canvas host is enabled + reachable; same as `gatewayPort`; serves `/__clawdis__/canvas/`)
 - `cliPath=<path>` (optional; absolute path to a runnable `clawdis` entrypoint or binary)
 - `tailnetDns=<magicdns>` (optional hint; auto-detected from Tailscale when available; may be absent)
 

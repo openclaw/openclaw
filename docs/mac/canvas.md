@@ -99,7 +99,7 @@ Use the main `clawdis` CLI; it invokes canvas commands via `node.invoke`.
 Canvas A2UI is hosted by the **Gateway canvas host** at:
 
 ```
-http(s)://<gateway-host>:<canvasPort>/__clawdis__/a2ui/
+http(s)://<gateway-host>:18789/__clawdis__/a2ui/
 ```
 
 The macOS app simply renders that page in the Canvas panel. The agent can drive it with JSONL **server→client protocol messages** (one JSON object per line):

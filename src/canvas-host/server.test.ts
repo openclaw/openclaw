@@ -1,16 +1,22 @@
+import { createServer } from "node:http";
+import { type AddressInfo } from "node:net";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { defaultRuntime } from "../runtime.js";
-import { startCanvasHost } from "./server.js";
-import { injectCanvasLiveReload } from "./a2ui.js";
+import { createCanvasHostHandler, startCanvasHost } from "./server.js";
+import {
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  injectCanvasLiveReload,
+} from "./a2ui.js";
 
 describe("canvas host", () => {
   it("injects live reload script", () => {
     const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
-    expect(out).toContain("/__clawdis/ws");
+    expect(out).toContain(CANVAS_WS_PATH);
     expect(out).toContain("location.reload");
     expect(out).toContain("clawdisCanvasA2UIAction");
     expect(out).toContain("clawdisSendUserAction");
@@ -33,9 +39,62 @@ describe("canvas host", () => {
       expect(res.status).toBe(200);
       expect(html).toContain("Interactive test page");
       expect(html).toContain("clawdisSendUserAction");
-      expect(html).toContain("/__clawdis/ws");
+      expect(html).toContain(CANVAS_WS_PATH);
     } finally {
       await server.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("serves canvas content from the mounted base path", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    await fs.writeFile(
+      path.join(dir, "index.html"),
+      "<html><body>v1</body></html>",
+      "utf8",
+    );
+
+    const handler = await createCanvasHostHandler({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      basePath: CANVAS_HOST_PATH,
+      allowInTests: true,
+    });
+
+    const server = createServer((req, res) => {
+      void (async () => {
+        if (await handler.handleHttpRequest(req, res)) return;
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Not Found");
+      })();
+    });
+    server.on("upgrade", (req, socket, head) => {
+      if (handler.handleUpgrade(req, socket, head)) return;
+      socket.destroy();
+    });
+
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${port}${CANVAS_HOST_PATH}/`,
+      );
+      const html = await res.text();
+      expect(res.status).toBe(200);
+      expect(html).toContain("v1");
+      expect(html).toContain(CANVAS_WS_PATH);
+
+      const miss = await fetch(`http://127.0.0.1:${port}/`);
+      expect(miss.status).toBe(404);
+    } finally {
+      await handler.close();
+      await new Promise<void>((resolve, reject) =>
+        server.close((err) => (err ? reject(err) : resolve())),
+      );
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
@@ -58,9 +117,11 @@ describe("canvas host", () => {
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain("v1");
-      expect(html).toContain("/__clawdis/ws");
+      expect(html).toContain(CANVAS_WS_PATH);
 
-      const ws = new WebSocket(`ws://127.0.0.1:${server.port}/__clawdis/ws`);
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${server.port}${CANVAS_WS_PATH}`,
+      );
       await new Promise<void>((resolve, reject) => {
         const timer = setTimeout(
           () => reject(new Error("ws open timeout")),

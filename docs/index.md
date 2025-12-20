@@ -35,7 +35,7 @@ WhatsApp / Telegram
   ┌──────────────────────────┐
   │          Gateway          │  ws://127.0.0.1:18789 (loopback-only)
   │     (single source)       │  tcp://0.0.0.0:18790 (Bridge)
-  │                          │  http://0.0.0.0:18793 (Canvas host)
+  │                          │  http://<gateway-host>:18789/__clawdis__/canvas/ (Canvas host)
   └───────────┬───────────────┘
               │
               ├─ Pi agent (RPC)
@@ -53,7 +53,7 @@ Most operations flow through the **Gateway** (`clawdis gateway`), a single long-
 - **Loopback-first**: Gateway WS defaults to `ws://127.0.0.1:18789`.
   - For Tailnet access, run `clawdis gateway --bind tailnet --token ...` (token is required for non-loopback binds).
 - **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
-- **Canvas host**: LAN/tailnet HTTP file server (default `18793`) for node WebViews; see `docs/configuration.md` (`canvasHost`).
+- **Canvas host**: HTTP file server on the Gateway port, serving `/__clawdis__/canvas/` for node WebViews; see `docs/configuration.md` (`canvasHost`).
 - **Remote use**: SSH tunnel or tailnet/VPN; see `docs/remote.md` and `docs/discovery.md`.
 
 ## Features (high level)

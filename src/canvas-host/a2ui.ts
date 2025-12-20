@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { detectMime } from "../media/mime.js";
 
 export const A2UI_PATH = "/__clawdis__/a2ui";
-const WS_PATH = "/__clawdis/ws";
+export const CANVAS_HOST_PATH = "/__clawdis__/canvas";
+export const CANVAS_WS_PATH = "/__clawdis/ws";
 
 let cachedA2uiRootReal: string | null | undefined;
 let resolvingA2uiRoot: Promise<string | null> | null = null;
@@ -132,7 +133,7 @@ export function injectCanvasLiveReload(html: string): string {
 
   try {
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(WS_PATH)});
+    const ws = new WebSocket(proto + "://" + location.host + ${JSON.stringify(CANVAS_WS_PATH)});
     ws.onmessage = (ev) => {
       if (String(ev.data || "") === "reload") location.reload();
     };

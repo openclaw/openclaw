@@ -54,7 +54,7 @@ Troubleshooting and beacon details: `docs/bonjour.md`.
   - `sshPort=22` (or whatever is advertised)
   - `gatewayPort=18789` (loopback WS port; informational)
   - `bridgePort=18790` (when bridge is enabled)
-  - `canvasPort=18793` (when the canvas host is running; enabled by default)
+  - `canvasPort=18789` (same as `gatewayPort` when the canvas host is enabled + gateway bind is non-loopback; serves `/__clawdis__/canvas/`)
   - `cliPath=<path>` (optional; absolute path to a runnable `clawdis` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 

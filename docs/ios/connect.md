@@ -126,18 +126,20 @@ The iOS node runs a WKWebView “Canvas” scaffold which exposes:
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point it at the Gateway canvas host.
 
+Note: the Gateway must be bound to a LAN/tailnet interface (`gateway.bind=lan|tailnet`) so the node can reach `:18789`.
+
 1) Create `~/clawd/canvas/index.html` on the gateway host.
 
 2) Navigate the node to it (LAN):
 
 ```bash
-clawdis nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18793/"}'
+clawdis nodes invoke --node "iOS Node" --command canvas.navigate --params '{"url":"http://<gateway-hostname>.local:18789/__clawdis__/canvas/"}'
 ```
 
 Notes:
 - The server injects a live-reload client into HTML and reloads on file changes.
-- A2UI is hosted on the same canvas host at `http://<gateway-host>:18793/__clawdis__/a2ui/`.
-- Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18793/`.
+- A2UI is hosted on the same canvas host at `http://<gateway-host>:18789/__clawdis__/a2ui/`.
+- Tailnet (optional): if both devices are on Tailscale, use a MagicDNS name or tailnet IP instead of `.local`, e.g. `http://<gateway-magicdns>:18789/__clawdis__/canvas/`.
 - iOS may require App Transport Security allowances to load plain `http://` URLs; if it fails to load, prefer HTTPS or adjust the iOS app’s ATS config.
 
 ### Draw with `canvas.eval`

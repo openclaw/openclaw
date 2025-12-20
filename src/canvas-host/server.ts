@@ -1,15 +1,24 @@
 import fs from "node:fs/promises";
-import http, { type Server } from "node:http";
+import http, {
+  type IncomingMessage,
+  type Server,
+  type ServerResponse,
+} from "node:http";
+import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
 import chokidar from "chokidar";
-import express from "express";
 import { type WebSocket, WebSocketServer } from "ws";
 import { detectMime } from "../media/mime.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { ensureDir, resolveUserPath } from "../utils.js";
-import { handleA2uiHttpRequest, injectCanvasLiveReload } from "./a2ui.js";
+import {
+  CANVAS_HOST_PATH,
+  CANVAS_WS_PATH,
+  handleA2uiHttpRequest,
+  injectCanvasLiveReload,
+} from "./a2ui.js";
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -25,7 +34,23 @@ export type CanvasHostServer = {
   close: () => Promise<void>;
 };
 
-const WS_PATH = "/__clawdis/ws";
+export type CanvasHostHandlerOpts = {
+  runtime: RuntimeEnv;
+  rootDir?: string;
+  basePath?: string;
+  allowInTests?: boolean;
+};
+
+export type CanvasHostHandler = {
+  rootDir: string;
+  basePath: string;
+  handleHttpRequest: (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) => Promise<boolean>;
+  handleUpgrade: (req: IncomingMessage, socket: Socket, head: Buffer) => boolean;
+  close: () => Promise<void>;
+};
 
 function defaultIndexHTML() {
   return `<!doctype html>
@@ -153,16 +178,14 @@ function isDisabledByEnv() {
   return false;
 }
 
-export async function startCanvasHost(
-  opts: CanvasHostOpts,
-): Promise<CanvasHostServer> {
-  if (isDisabledByEnv() && opts.allowInTests !== true) {
-    return { port: 0, rootDir: "", close: async () => {} };
-  }
+function normalizeBasePath(rawPath: string | undefined) {
+  const trimmed = (rawPath ?? CANVAS_HOST_PATH).trim();
+  const normalized = normalizeUrlPath(trimmed || CANVAS_HOST_PATH);
+  if (normalized === "/") return "/";
+  return normalized.replace(/\/+$/, "");
+}
 
-  const rootDir = resolveUserPath(
-    opts.rootDir ?? path.join(os.homedir(), "clawd", "canvas"),
-  );
+async function prepareCanvasRoot(rootDir: string) {
   await ensureDir(rootDir);
   const rootReal = await fs.realpath(rootDir);
   try {
@@ -179,58 +202,29 @@ export async function startCanvasHost(
       // ignore; we'll still serve the "missing file" message if needed.
     }
   }
+  return rootReal;
+}
 
-  const bindHost = opts.listenHost?.trim() || "0.0.0.0";
-  const app = express();
-  app.disable("x-powered-by");
+export async function createCanvasHostHandler(
+  opts: CanvasHostHandlerOpts,
+): Promise<CanvasHostHandler> {
+  const basePath = normalizeBasePath(opts.basePath);
+  if (isDisabledByEnv() && opts.allowInTests !== true) {
+    return {
+      rootDir: "",
+      basePath,
+      handleHttpRequest: async () => false,
+      handleUpgrade: () => false,
+      close: async () => {},
+    };
+  }
 
-  app.get(/.*/, async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      if (url.pathname === WS_PATH) {
-        res.status(426).send("upgrade required");
-        return;
-      }
+  const rootDir = resolveUserPath(
+    opts.rootDir ?? path.join(os.homedir(), "clawd", "canvas"),
+  );
+  const rootReal = await prepareCanvasRoot(rootDir);
 
-      if (await handleA2uiHttpRequest(req, res)) return;
-
-      const filePath = await resolveFilePath(rootReal, url.pathname);
-      if (!filePath) {
-        if (url.pathname === "/" || url.pathname.endsWith("/")) {
-          res
-            .status(404)
-            .type("text/html")
-            .send(
-              `<!doctype html><meta charset="utf-8" /><title>Clawdis Canvas</title><pre>Missing file.\nCreate ${rootDir}/index.html</pre>`,
-            );
-          return;
-        }
-        res.status(404).send("not found");
-        return;
-      }
-
-      const lower = filePath.toLowerCase();
-      const mime =
-        lower.endsWith(".html") || lower.endsWith(".htm")
-          ? "text/html"
-          : (detectMime({ filePath }) ?? "application/octet-stream");
-
-      res.setHeader("Cache-Control", "no-store");
-      if (mime === "text/html") {
-        const html = await fs.readFile(filePath, "utf8");
-        res.type("text/html; charset=utf-8").send(injectCanvasLiveReload(html));
-        return;
-      }
-
-      res.type(mime).send(await fs.readFile(filePath));
-    } catch (err) {
-      opts.runtime.error(`canvasHost request failed: ${String(err)}`);
-      res.status(500).send("error");
-    }
-  });
-
-  const server: Server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: WS_PATH });
+  const wss = new WebSocketServer({ noServer: true });
   const sockets = new Set<WebSocket>();
   wss.on("connection", (ws) => {
     sockets.add(ws);
@@ -266,6 +260,143 @@ export async function startCanvasHost(
   });
   watcher.on("all", () => scheduleReload());
 
+  const handleUpgrade = (
+    req: IncomingMessage,
+    socket: Socket,
+    head: Buffer,
+  ) => {
+    const url = new URL(req.url ?? "/", "http://localhost");
+    if (url.pathname !== CANVAS_WS_PATH) return false;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+    return true;
+  };
+
+  const handleHttpRequest = async (
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) => {
+    const urlRaw = req.url;
+    if (!urlRaw) return false;
+
+    try {
+      const url = new URL(urlRaw, "http://localhost");
+      if (url.pathname === CANVAS_WS_PATH) {
+        res.statusCode = 426;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("upgrade required");
+        return true;
+      }
+
+      let urlPath = url.pathname;
+      if (basePath !== "/") {
+        if (urlPath === basePath) {
+          urlPath = "/";
+        } else if (urlPath.startsWith(`${basePath}/`)) {
+          urlPath = urlPath.slice(basePath.length) || "/";
+        } else {
+          return false;
+        }
+      }
+
+      if (req.method !== "GET" && req.method !== "HEAD") {
+        res.statusCode = 405;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("Method Not Allowed");
+        return true;
+      }
+
+      const filePath = await resolveFilePath(rootReal, urlPath);
+      if (!filePath) {
+        if (urlPath === "/" || urlPath.endsWith("/")) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.end(
+            `<!doctype html><meta charset="utf-8" /><title>Clawdis Canvas</title><pre>Missing file.\nCreate ${rootDir}/index.html</pre>`,
+          );
+          return true;
+        }
+        res.statusCode = 404;
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.end("not found");
+        return true;
+      }
+
+      const lower = filePath.toLowerCase();
+      const mime =
+        lower.endsWith(".html") || lower.endsWith(".htm")
+          ? "text/html"
+          : (detectMime({ filePath }) ?? "application/octet-stream");
+
+      res.setHeader("Cache-Control", "no-store");
+      if (mime === "text/html") {
+        const html = await fs.readFile(filePath, "utf8");
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.end(injectCanvasLiveReload(html));
+        return true;
+      }
+
+      res.setHeader("Content-Type", mime);
+      res.end(await fs.readFile(filePath));
+      return true;
+    } catch (err) {
+      opts.runtime.error(`canvasHost request failed: ${String(err)}`);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("error");
+      return true;
+    }
+  };
+
+  return {
+    rootDir,
+    basePath,
+    handleHttpRequest,
+    handleUpgrade,
+    close: async () => {
+      if (debounce) clearTimeout(debounce);
+      await watcher.close().catch(() => {});
+      await new Promise<void>((resolve) => wss.close(() => resolve()));
+    },
+  };
+}
+
+export async function startCanvasHost(
+  opts: CanvasHostOpts,
+): Promise<CanvasHostServer> {
+  if (isDisabledByEnv() && opts.allowInTests !== true) {
+    return { port: 0, rootDir: "", close: async () => {} };
+  }
+
+  const handler = await createCanvasHostHandler({
+    runtime: opts.runtime,
+    rootDir: opts.rootDir,
+    basePath: "/",
+    allowInTests: opts.allowInTests,
+  });
+
+  const bindHost = opts.listenHost?.trim() || "0.0.0.0";
+  const server: Server = http.createServer((req, res) => {
+    if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
+    void (async () => {
+      if (await handleA2uiHttpRequest(req, res)) return;
+      if (await handler.handleHttpRequest(req, res)) return;
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+    })().catch((err) => {
+      opts.runtime.error(`canvasHost request failed: ${String(err)}`);
+      res.statusCode = 500;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("error");
+    });
+  });
+  server.on("upgrade", (req, socket, head) => {
+    if (handler.handleUpgrade(req, socket, head)) return;
+    socket.destroy();
+  });
+
   const listenPort =
     typeof opts.port === "number" && Number.isFinite(opts.port) && opts.port > 0
       ? opts.port
@@ -287,16 +418,14 @@ export async function startCanvasHost(
   const addr = server.address();
   const boundPort = typeof addr === "object" && addr ? addr.port : 0;
   opts.runtime.log(
-    `canvas host listening on http://${bindHost}:${boundPort} (root ${rootDir})`,
+    `canvas host listening on http://${bindHost}:${boundPort} (root ${handler.rootDir})`,
   );
 
   return {
     port: boundPort,
-    rootDir,
+    rootDir: handler.rootDir,
     close: async () => {
-      if (debounce) clearTimeout(debounce);
-      await watcher.close().catch(() => {});
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await handler.close();
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
