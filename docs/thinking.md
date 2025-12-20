@@ -32,7 +32,7 @@ read_when:
 - Levels: `on|full` or `off` (default).
 - Directive-only message toggles session verbose and replies `Verbose logging enabled.` / `Verbose logging disabled.`; invalid levels return a hint without changing state.
 - Inline directive affects only that message; session/global defaults apply otherwise.
-- When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `[🛠️ <tool-name> <arg>]` when available (path/command); the tool output itself is not forwarded.
+- When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `[🛠️ <tool-name> <arg>]` when available (path/command); the tool output itself is not forwarded. These tool summaries are sent as soon as each tool finishes (separate bubbles), not as streaming deltas.
 
 ## Heartbeats
 - Heartbeat probe body is `HEARTBEAT`. Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).

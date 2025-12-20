@@ -760,6 +760,13 @@ export async function getReplyFromConfig(
               mediaUrls: payload.mediaUrls,
             })
         : undefined,
+      onToolResult: opts?.onToolResult
+        ? (payload) =>
+            opts.onToolResult?.({
+              text: payload.text,
+              mediaUrls: payload.mediaUrls,
+            })
+        : undefined,
     });
 
     const payloadArray = runResult.payloads ?? [];

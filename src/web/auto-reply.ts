@@ -887,6 +887,55 @@ export async function monitorWebProvider(
         }
       }
 
+      const responsePrefix = cfg.inbound?.responsePrefix;
+      let toolSendChain: Promise<void> = Promise.resolve();
+      const sendToolResult = (payload: ReplyPayload) => {
+        if (
+          !payload?.text &&
+          !payload?.mediaUrl &&
+          !(payload?.mediaUrls?.length ?? 0)
+        ) {
+          return;
+        }
+        const toolPayload: ReplyPayload = { ...payload };
+        if (
+          responsePrefix &&
+          toolPayload.text &&
+          toolPayload.text.trim() !== HEARTBEAT_TOKEN &&
+          !toolPayload.text.startsWith(responsePrefix)
+        ) {
+          toolPayload.text = `${responsePrefix} ${toolPayload.text}`;
+        }
+        toolSendChain = toolSendChain
+          .then(async () => {
+            await deliverWebReply({
+              replyResult: toolPayload,
+              msg,
+              maxMediaBytes,
+              replyLogger,
+              runtime,
+              connectionId,
+              skipLog: true,
+            });
+            if (toolPayload.text) {
+              recentlySent.add(toolPayload.text);
+              if (recentlySent.size > MAX_RECENT_MESSAGES) {
+                const firstKey = recentlySent.values().next().value;
+                if (firstKey) recentlySent.delete(firstKey);
+              }
+            }
+          })
+          .catch((err) => {
+            console.error(
+              danger(
+                `Failed sending web tool update to ${msg.from ?? conversationId}: ${String(
+                  err,
+                )}`,
+              ),
+            );
+          });
+      };
+
       const replyResult = await (replyResolver ?? getReplyFromConfig)(
         {
           Body: combinedBody,
@@ -905,6 +954,7 @@ export async function monitorWebProvider(
         },
         {
           onReplyStart: msg.sendComposing,
+          onToolResult: sendToolResult,
         },
       );
 
@@ -919,8 +969,7 @@ export async function monitorWebProvider(
         return;
       }
 
-      // Apply response prefix if configured (skip for HEARTBEAT_OK to preserve exact match)
-      const responsePrefix = cfg.inbound?.responsePrefix;
+      await toolSendChain;
 
       for (const replyPayload of replyList) {
         if (

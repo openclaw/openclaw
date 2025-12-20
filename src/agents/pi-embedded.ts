@@ -221,6 +221,10 @@ export async function runEmbeddedPiAgent(params: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
+  onToolResult?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => void | Promise<void>;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
@@ -415,6 +419,24 @@ export async function runEmbeddedPiAgent(params: {
                 isError,
               },
             });
+            if (params.verboseLevel === "on" && params.onToolResult) {
+              const agg = formatToolAggregate(
+                toolName,
+                meta ? [meta] : undefined,
+              );
+              const { text: cleanedText, mediaUrls } =
+                splitMediaFromOutput(agg);
+              if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
+                try {
+                  void params.onToolResult({
+                    text: cleanedText,
+                    mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                  });
+                } catch {
+                  // ignore tool result delivery failures
+                }
+              }
+            }
           }
 
           if (evt.type === "message_update") {
@@ -566,6 +588,7 @@ export async function runEmbeddedPiAgent(params: {
       const inlineToolResults =
         params.verboseLevel === "on" &&
         !params.onPartialReply &&
+        !params.onToolResult &&
         toolMetas.length > 0;
       if (inlineToolResults) {
         for (const { toolName, meta } of toolMetas) {
