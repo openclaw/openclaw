@@ -131,28 +131,16 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
     exit 1
   fi
 
-  echo "🧰 Building bundled gateway (bun --compile)"
+  echo "🧰 Building bundled relay (bun --compile)"
   mkdir -p "$RELAY_DIR"
-	  BUN_OUT="$RELAY_DIR/clawdis-gateway"
-	  bun build "$ROOT_DIR/dist/macos/gateway-daemon.js" \
+	  RELAY_OUT="$RELAY_DIR/clawdis"
+	  bun build "$ROOT_DIR/dist/macos/relay.js" \
 	    --compile \
 	    --bytecode \
-	    --outfile "$BUN_OUT" \
+	    --outfile "$RELAY_OUT" \
 	    -e electron \
 	    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
-	  chmod +x "$BUN_OUT"
-
-  echo "🧰 Building bundled CLI (bun --compile)"
-  CLI_OUT="$RELAY_DIR/clawdis"
-  bun build "$ROOT_DIR/dist/index.js" \
-    --compile \
-    --bytecode \
-    --outfile "$CLI_OUT" \
-    -e playwright-core \
-    -e electron \
-    -e "chromium-bidi*" \
-    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
-  chmod +x "$CLI_OUT"
+	  chmod +x "$RELAY_OUT"
 
   echo "🎨 Copying gateway A2UI host assets"
   rm -rf "$RELAY_DIR/a2ui"

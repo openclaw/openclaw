@@ -66,7 +66,7 @@ enum GatewayEnvironment {
 
     static func bundledGatewayExecutable() -> String? {
         guard let res = Bundle.main.resourceURL else { return nil }
-        let path = res.appendingPathComponent("Relay/clawdis-gateway").path
+        let path = res.appendingPathComponent("Relay/clawdis").path
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
@@ -198,7 +198,7 @@ enum GatewayEnvironment {
 
         let port = self.gatewayPort()
         if let bundled {
-            let cmd = [bundled, "--port", "\(port)", "--bind", "loopback"]
+            let cmd = [bundled, "gateway-daemon", "--port", "\(port)", "--bind", "loopback"]
             return GatewayCommandResolution(status: status, command: cmd)
         }
         if let gatewayBin {

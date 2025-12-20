@@ -12,11 +12,8 @@ describe("ensureClawdisCliOnPath", () => {
     try {
       const relayDir = path.join(tmp, "Relay");
       await fs.mkdir(relayDir, { recursive: true });
-      const gatewayPath = path.join(relayDir, "clawdis-gateway");
       const cliPath = path.join(relayDir, "clawdis");
-      await fs.writeFile(gatewayPath, "#!/bin/sh\nexit 0\n", "utf-8");
       await fs.writeFile(cliPath, "#!/bin/sh\necho ok\n", "utf-8");
-      await fs.chmod(gatewayPath, 0o755);
       await fs.chmod(cliPath, 0o755);
 
       const originalPath = process.env.PATH;
@@ -25,7 +22,7 @@ describe("ensureClawdisCliOnPath", () => {
       delete process.env.CLAWDIS_PATH_BOOTSTRAPPED;
       try {
         ensureClawdisCliOnPath({
-          execPath: gatewayPath,
+          execPath: cliPath,
           cwd: tmp,
           homeDir: tmp,
           platform: "darwin",

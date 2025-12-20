@@ -55,7 +55,7 @@ function candidateBinDirs(opts: EnsureClawdisPathOpts): string[] {
 
   const candidates: string[] = [];
 
-  // Bun bundled (macOS app): `clawdis` is shipped next to `clawdis-gateway`.
+  // Bun bundled (macOS app): `clawdis` lives in the Relay dir (process.execPath).
   try {
     const execDir = path.dirname(execPath);
     const siblingClawdis = path.join(execDir, "clawdis");

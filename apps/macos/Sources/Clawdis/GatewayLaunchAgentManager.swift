@@ -7,7 +7,7 @@ enum GatewayLaunchAgentManager {
     }
 
     private static func gatewayExecutablePath(bundlePath: String) -> String {
-        "\(bundlePath)/Contents/Resources/Relay/clawdis-gateway"
+        "\(bundlePath)/Contents/Resources/Relay/clawdis"
     }
 
     private static func relayDir(bundlePath: String) -> String {
@@ -62,6 +62,7 @@ enum GatewayLaunchAgentManager {
           <key>ProgramArguments</key>
           <array>
             <string>\(gatewayBin)</string>
+            <string>gateway-daemon</string>
             <string>--port</string>
             <string>\(port)</string>
             <string>--bind</string>
