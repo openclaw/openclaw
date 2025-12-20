@@ -100,6 +100,9 @@ enum DebugActions {
                     // ControlChannel will surface a degraded state; also refresh health to update the menu text.
                     Task { await HealthStore.shared.refresh(onDemand: true) }
                 }
+            case .unconfigured:
+                await GatewayConnection.shared.shutdown()
+                await ControlChannel.shared.disconnect()
             }
         }
     }

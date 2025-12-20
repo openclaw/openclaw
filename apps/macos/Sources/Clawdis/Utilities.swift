@@ -575,8 +575,14 @@ enum CommandResolver {
     }
 
     static func connectionSettings(defaults: UserDefaults = .standard) -> RemoteSettings {
-        let modeRaw = defaults.string(forKey: connectionModeKey) ?? "local"
-        let mode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
+        let modeRaw = defaults.string(forKey: connectionModeKey)
+        let mode: AppState.ConnectionMode
+        if let modeRaw {
+            mode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
+        } else {
+            let seen = defaults.bool(forKey: "clawdis.onboardingSeen")
+            mode = seen ? .local : .unconfigured
+        }
         let target = defaults.string(forKey: remoteTargetKey) ?? ""
         let identity = defaults.string(forKey: remoteIdentityKey) ?? ""
         let projectRoot = defaults.string(forKey: remoteProjectRootKey) ?? ""

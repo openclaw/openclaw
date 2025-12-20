@@ -92,6 +92,12 @@ final class ControlChannel {
         }
     }
 
+    func disconnect() async {
+        await GatewayConnection.shared.shutdown()
+        self.state = .disconnected
+        self.lastPingMs = nil
+    }
+
     func health(timeout: TimeInterval? = nil) async throws -> Data {
         do {
             let start = Date()

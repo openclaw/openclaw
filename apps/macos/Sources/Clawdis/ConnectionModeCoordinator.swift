@@ -11,6 +11,14 @@ final class ConnectionModeCoordinator {
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.
     func apply(mode: AppState.ConnectionMode, paused: Bool) async {
         switch mode {
+        case .unconfigured:
+            await RemoteTunnelManager.shared.stopAll()
+            WebChatManager.shared.resetTunnels()
+            GatewayProcessManager.shared.stop()
+            await GatewayConnection.shared.shutdown()
+            await ControlChannel.shared.disconnect()
+            Task.detached { await PortGuardian.shared.sweep(mode: .unconfigured) }
+
         case .local:
             await RemoteTunnelManager.shared.stopAll()
             WebChatManager.shared.resetTunnels()

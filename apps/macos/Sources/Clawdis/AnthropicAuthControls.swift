@@ -19,8 +19,8 @@ struct AnthropicAuthControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if self.connectionMode == .remote {
-                Text("Gateway runs remotely; OAuth must be created on the gateway host where Pi runs.")
+            if self.connectionMode != .local {
+                Text("Gateway isn’t running locally; OAuth must be created on the gateway host where Pi runs.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -64,7 +64,7 @@ struct AnthropicAuthControls: View {
                     }
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(self.connectionMode == .remote || self.busy)
+                .disabled(self.connectionMode != .local || self.busy)
 
                 if self.pkce != nil {
                     Button("Cancel") {
@@ -101,7 +101,7 @@ struct AnthropicAuthControls: View {
                         Task { await self.finishOAuth() }
                     }
                     .buttonStyle(.bordered)
-                    .disabled(self.busy || self.connectionMode == .remote || self.code
+                    .disabled(self.busy || self.connectionMode != .local || self.code
                         .trimmingCharacters(in: .whitespacesAndNewlines)
                         .isEmpty)
                 }

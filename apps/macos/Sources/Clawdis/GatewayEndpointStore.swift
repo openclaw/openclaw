@@ -37,8 +37,24 @@ actor GatewayEndpointStore {
 
     init(deps: Deps = .live) {
         self.deps = deps
+        let modeRaw = UserDefaults.standard.string(forKey: connectionModeKey)
+        let initialMode: AppState.ConnectionMode
+        if let modeRaw {
+            initialMode = AppState.ConnectionMode(rawValue: modeRaw) ?? .local
+        } else {
+            let seen = UserDefaults.standard.bool(forKey: "clawdis.onboardingSeen")
+            initialMode = seen ? .local : .unconfigured
+        }
+
         let port = deps.localPort()
-        self.state = .ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: deps.token())
+        switch initialMode {
+        case .local:
+            self.state = .ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: deps.token())
+        case .remote:
+            self.state = .unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel")
+        case .unconfigured:
+            self.state = .unavailable(mode: .unconfigured, reason: "Gateway not configured")
+        }
     }
 
     func subscribe(bufferingNewest: Int = 1) -> AsyncStream<GatewayEndpointState> {
@@ -72,6 +88,8 @@ actor GatewayEndpointStore {
                 return
             }
             self.setState(.ready(mode: .remote, url: URL(string: "ws://127.0.0.1:\(Int(port))")!, token: token))
+        case .unconfigured:
+            self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))
         }
     }
 

@@ -38,6 +38,10 @@ actor PortGuardian {
 
     func sweep(mode: AppState.ConnectionMode) async {
         self.logger.info("port sweep starting (mode=\(mode.rawValue, privacy: .public))")
+        guard mode != .unconfigured else {
+            self.logger.info("port sweep skipped (mode=unconfigured)")
+            return
+        }
         let ports = [18789]
         for port in ports {
             let listeners = await self.listeners(on: port)
@@ -141,6 +145,9 @@ actor PortGuardian {
     }
 
     func diagnose(mode: AppState.ConnectionMode) async -> [PortReport] {
+        if mode == .unconfigured {
+            return []
+        }
         let ports = [18789]
         var reports: [PortReport] = []
 
@@ -150,17 +157,20 @@ actor PortGuardian {
             let okPredicate: (Listener) -> Bool
             let expectedCommands = ["node", "clawdis", "tsx", "pnpm", "bun"]
 
-            switch mode {
-            case .remote:
-                expectedDesc = "SSH tunnel to remote gateway"
-                okPredicate = { $0.command.lowercased().contains("ssh") }
-            case .local:
-                expectedDesc = "Gateway websocket (node/tsx)"
-                okPredicate = { listener in
-                    let c = listener.command.lowercased()
-                    return expectedCommands.contains { c.contains($0) }
-                }
+        switch mode {
+        case .remote:
+            expectedDesc = "SSH tunnel to remote gateway"
+            okPredicate = { $0.command.lowercased().contains("ssh") }
+        case .local:
+            expectedDesc = "Gateway websocket (node/tsx)"
+            okPredicate = { listener in
+                let c = listener.command.lowercased()
+                return expectedCommands.contains { c.contains($0) }
             }
+        case .unconfigured:
+            expectedDesc = "Gateway not configured"
+            okPredicate = { _ in false }
+        }
 
             if listeners.isEmpty {
                 let text = "Nothing is listening on \(port) (\(expectedDesc))."
@@ -292,6 +302,8 @@ actor PortGuardian {
             return false
         case .local:
             return expectedCommands.contains { cmd.contains($0) }
+        case .unconfigured:
+            return false
         }
     }
 

@@ -22,12 +22,12 @@ struct MenuContent: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle(isOn: self.activeBinding) {
-                let label = self.state.connectionMode == .remote ? "Remote Clawdis Active" : "Clawdis Active"
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(label)
+                    Text(self.connectionLabel)
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
                 }
             }
+            .disabled(self.state.connectionMode == .unconfigured)
             Divider()
             Toggle(isOn: self.heartbeatsBinding) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -102,6 +102,17 @@ struct MenuContent: View {
         }
         .onAppear {
             self.browserControlEnabled = ClawdisConfigFile.browserControlEnabled()
+        }
+    }
+
+    private var connectionLabel: String {
+        switch self.state.connectionMode {
+        case .unconfigured:
+            return "Clawdis Not Configured"
+        case .remote:
+            return "Remote Clawdis Active"
+        case .local:
+            return "Clawdis Active"
         }
     }
 

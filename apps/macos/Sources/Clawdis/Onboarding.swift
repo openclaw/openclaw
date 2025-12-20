@@ -89,12 +89,16 @@ struct OnboardingView: View {
     private static let clipboardPoll = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
     private let permissionsPageIndex = 5
     private var pageOrder: [Int] {
-        if self.state.connectionMode == .remote {
+        switch self.state.connectionMode {
+        case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
             return [0, 1, 5, 9]
+        case .unconfigured:
+            return [0, 1, 9]
+        case .local:
+            return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
         }
-        return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
     }
 
     private var pageCount: Int { self.pageOrder.count }
@@ -266,7 +270,7 @@ struct OnboardingView: View {
                 .font(.largeTitle.weight(.semibold))
             Text(
                 "Clawdis uses a single Gateway that stays running. Pick this Mac, " +
-                    "or connect to a discovered Gateway nearby.")
+                    "connect to a discovered Gateway nearby, or configure later.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -322,37 +326,54 @@ struct OnboardingView: View {
                                 .fill(Color(NSColor.controlBackgroundColor)))
                     }
 
+                    self.connectionChoiceButton(
+                        title: "Configure later",
+                        subtitle: "Don’t start the Gateway yet.",
+                        selected: self.state.connectionMode == .unconfigured)
+                    {
+                        self.selectUnconfiguredGateway()
+                    }
+
                     Button(self.showAdvancedConnection ? "Hide Advanced" : "Advanced…") {
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
                             self.showAdvancedConnection.toggle()
+                        }
+                        if self.showAdvancedConnection, self.state.connectionMode != .remote {
+                            self.state.connectionMode = .remote
                         }
                     }
                     .buttonStyle(.link)
 
                     if self.showAdvancedConnection {
-                        let labelWidth: CGFloat = 90
+                        let labelWidth: CGFloat = 110
                         let fieldWidth: CGFloat = 320
 
-                        VStack(alignment: .leading, spacing: 8) {
-                            HStack(alignment: .center, spacing: 12) {
-                                Text("SSH target")
-                                    .font(.callout.weight(.semibold))
-                                    .frame(width: labelWidth, alignment: .leading)
-                                TextField("user@host[:port]", text: self.$state.remoteTarget)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: fieldWidth)
-                            }
-
-                            LabeledContent("Identity file") {
-                                TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: fieldWidth)
-                            }
-
-                            LabeledContent("Project root") {
-                                TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
-                                    .textFieldStyle(.roundedBorder)
-                                    .frame(width: fieldWidth)
+                        VStack(alignment: .leading, spacing: 10) {
+                            Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 8) {
+                                GridRow {
+                                    Text("SSH target")
+                                        .font(.callout.weight(.semibold))
+                                        .frame(width: labelWidth, alignment: .leading)
+                                    TextField("user@host[:port]", text: self.$state.remoteTarget)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: fieldWidth)
+                                }
+                                GridRow {
+                                    Text("Identity file")
+                                        .font(.callout.weight(.semibold))
+                                        .frame(width: labelWidth, alignment: .leading)
+                                    TextField("/Users/you/.ssh/id_ed25519", text: self.$state.remoteIdentity)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: fieldWidth)
+                                }
+                                GridRow {
+                                    Text("Project root")
+                                        .font(.callout.weight(.semibold))
+                                        .frame(width: labelWidth, alignment: .leading)
+                                    TextField("/home/you/Projects/clawdis", text: self.$state.remoteProjectRoot)
+                                        .textFieldStyle(.roundedBorder)
+                                        .frame(width: fieldWidth)
+                                }
                             }
 
                             Text("Tip: keep Tailscale enabled so your gateway stays reachable.")
@@ -370,6 +391,14 @@ struct OnboardingView: View {
     private func selectLocalGateway() {
         self.state.connectionMode = .local
         self.preferredGatewayID = nil
+        self.showAdvancedConnection = false
+        BridgeDiscoveryPreferences.setPreferredStableID(nil)
+    }
+
+    private func selectUnconfiguredGateway() {
+        self.state.connectionMode = .unconfigured
+        self.preferredGatewayID = nil
+        self.showAdvancedConnection = false
         BridgeDiscoveryPreferences.setPreferredStableID(nil)
     }
 
@@ -1064,6 +1093,14 @@ struct OnboardingView: View {
             Text("All set")
                 .font(.largeTitle.weight(.semibold))
             self.onboardingCard {
+                if self.state.connectionMode == .unconfigured {
+                    self.featureRow(
+                        title: "Configure later",
+                        subtitle: "Pick Local or Remote in Settings → General whenever you’re ready.",
+                        systemImage: "gearshape")
+                    Divider()
+                        .padding(.vertical, 6)
+                }
                 if self.state.connectionMode == .remote {
                     self.featureRow(
                         title: "Remote gateway checklist",

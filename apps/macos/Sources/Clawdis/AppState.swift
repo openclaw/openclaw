@@ -17,6 +17,7 @@ final class AppState {
     }
 
     enum ConnectionMode: String {
+        case unconfigured
         case local
         case remote
     }
@@ -182,9 +183,10 @@ final class AppState {
 
     init(preview: Bool = false) {
         self.isPreview = preview
+        let onboardingSeen = UserDefaults.standard.bool(forKey: "clawdis.onboardingSeen")
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.launchAtLogin = false
-        self.onboardingSeen = UserDefaults.standard.bool(forKey: "clawdis.onboardingSeen")
+        self.onboardingSeen = onboardingSeen
         self.debugPaneEnabled = UserDefaults.standard.bool(forKey: "clawdis.debugPaneEnabled")
         let savedVoiceWake = UserDefaults.standard.bool(forKey: swabbleEnabledKey)
         self.swabbleEnabled = voiceWakeSupported ? savedVoiceWake : false
@@ -225,7 +227,11 @@ final class AppState {
         }
 
         let storedMode = UserDefaults.standard.string(forKey: connectionModeKey)
-        self.connectionMode = ConnectionMode(rawValue: storedMode ?? "local") ?? .local
+        if let storedMode {
+            self.connectionMode = ConnectionMode(rawValue: storedMode) ?? .local
+        } else {
+            self.connectionMode = onboardingSeen ? .local : .unconfigured
+        }
         self.remoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""

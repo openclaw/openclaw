@@ -77,4 +77,18 @@ import Testing
         #expect(url.absoluteString == "ws://127.0.0.1:5555")
         #expect(token == "tok")
     }
+
+    @Test func unconfiguredModeRejectsConfig() async {
+        let mode = ModeBox(.unconfigured)
+        let store = GatewayEndpointStore(deps: .init(
+            mode: { mode.get() },
+            token: { nil },
+            localPort: { 18789 },
+            remotePortIfRunning: { nil },
+            ensureRemoteTunnel: { 18789 }))
+
+        await #expect(throws: Error.self) {
+            _ = try await store.requireConfig()
+        }
+    }
 }

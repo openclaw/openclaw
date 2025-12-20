@@ -111,11 +111,19 @@ struct GeneralSettings: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
 
             Picker("", selection: self.$state.connectionMode) {
+                Text("Not configured").tag(AppState.ConnectionMode.unconfigured)
                 Text("Local (this Mac)").tag(AppState.ConnectionMode.local)
                 Text("Remote over SSH").tag(AppState.ConnectionMode.remote)
             }
             .pickerStyle(.segmented)
             .frame(width: 380, alignment: .leading)
+
+            if self.state.connectionMode == .unconfigured {
+                Text("Pick Local or Remote to start the Gateway.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if self.state.connectionMode == .local {
                 self.gatewayInstallerCard
@@ -560,9 +568,13 @@ extension GeneralSettings {
         }
 
         // Restore original mode if we temporarily switched
-        if originalMode != .remote {
-            let restoreMode: ControlChannel.Mode = .local
-            try? await ControlChannel.shared.configure(mode: restoreMode)
+        switch originalMode {
+        case .remote:
+            break
+        case .local:
+            try? await ControlChannel.shared.configure(mode: .local)
+        case .unconfigured:
+            await ControlChannel.shared.disconnect()
         }
     }
 

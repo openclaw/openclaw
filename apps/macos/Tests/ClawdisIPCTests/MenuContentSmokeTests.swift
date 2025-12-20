@@ -18,5 +18,11 @@ struct MenuContentSmokeTests {
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
     }
-}
 
+    @Test func menuContentBuildsBodyUnconfiguredMode() {
+        let state = AppState(preview: true)
+        state.connectionMode = .unconfigured
+        let view = MenuContent(state: state, updater: nil)
+        _ = view.body
+    }
+}
