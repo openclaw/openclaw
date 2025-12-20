@@ -24,7 +24,7 @@ final class OnboardingController {
         let hosting = NSHostingController(rootView: OnboardingView())
         let window = NSWindow(contentViewController: hosting)
         window.title = UIStrings.welcomeTitle
-        window.setContentSize(NSSize(width: 680, height: 815))
+        window.setContentSize(NSSize(width: 680, height: 805))
         window.styleMask = [.titled, .closable, .fullSizeContentView]
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
@@ -165,9 +165,10 @@ struct OnboardingView: View {
             }
             .frame(height: self.contentHeight)
 
+            Spacer(minLength: 0)
             self.navigationBar
         }
-        .frame(width: self.pageWidth, height: 915)
+        .frame(width: self.pageWidth, height: 805)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.currentPage = 0
