@@ -144,9 +144,12 @@ struct ClawdisChatComposer: View {
                         self.sendButton
                     }
                 }
-            .padding(self.editorPadding)
             }
-            .frame(minHeight: self.editorMinHeight, idealHeight: self.editorMinHeight, maxHeight: self.editorMaxHeight)
+            .padding(self.editorPadding)
+            .frame(
+                minHeight: self.editorMinHeight,
+                idealHeight: self.editorMinHeight,
+                maxHeight: self.editorMaxHeight)
     }
 
     private var connectionPill: some View {
