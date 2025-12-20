@@ -6,55 +6,125 @@ private enum ChatUIConstants {
     static let bubbleCorner: CGFloat = 18
 }
 
-private struct BubbleTail: Shape {
-    enum TailDirection: CaseIterable, Identifiable {
-        case topRight
-        case topLeft
-        case bottomLeft
-        case bottomRight
-
-        var id: Self { self }
+private struct ChatBubbleShape: InsettableShape {
+    enum Tail {
+        case left
+        case right
+        case none
     }
 
-    let direction: TailDirection
+    let cornerRadius: CGFloat
+    let tail: Tail
+    var insetAmount: CGFloat = 0
+
+    private let tailWidth: CGFloat = 9
+    private let tailBaseHeight: CGFloat = 10
+
+    func inset(by amount: CGFloat) -> ChatBubbleShape {
+        var copy = self
+        copy.insetAmount += amount
+        return copy
+    }
 
     func path(in rect: CGRect) -> Path {
-        Path { path in
-            switch direction {
-            case .topRight:
-                let startPoint = CGPoint(x: rect.minX, y: rect.maxY)
-                path.move(to: startPoint)
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-                let control1 = CGPoint(x: rect.maxX - rect.maxX / 20, y: rect.minY - rect.maxY / 3)
-                let control2 = CGPoint(x: rect.maxX * 5 / 6, y: rect.maxY * 5 / 6)
-                path.addCurve(to: startPoint, control1: control1, control2: control2)
-            case .topLeft:
-                let startPoint = CGPoint(x: rect.maxX, y: rect.maxY)
-                path.move(to: startPoint)
-                path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
-                path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-                let control1 = CGPoint(x: rect.maxX / 20, y: rect.minY - rect.maxY / 3)
-                let control2 = CGPoint(x: rect.maxX * 1 / 6, y: rect.maxY * 5 / 6)
-                path.addCurve(to: startPoint, control1: control1, control2: control2)
-            case .bottomLeft:
-                let startPoint = CGPoint(x: rect.minX, y: rect.maxY)
-                path.move(to: startPoint)
-                path.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-                let control1 = CGPoint(x: rect.maxX / 6, y: rect.maxY / 6)
-                let control2 = CGPoint(x: rect.minX + rect.maxX / 20, y: rect.maxY + rect.maxY / 3)
-                path.addCurve(to: startPoint, control1: control1, control2: control2)
-            case .bottomRight:
-                let startPoint = CGPoint(x: rect.minX, y: rect.minY)
-                path.move(to: startPoint)
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
-                path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-                let control1 = CGPoint(x: rect.maxX - rect.maxX / 20, y: rect.maxY + rect.maxY / 3)
-                let control2 = CGPoint(x: rect.maxX * 5 / 6, y: rect.maxY * 1 / 6)
-                path.addCurve(to: startPoint, control1: control1, control2: control2)
-            }
+        let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
+        switch tail {
+        case .left:
+            return self.leftTailPath(in: rect, radius: cornerRadius)
+        case .right:
+            return self.rightTailPath(in: rect, radius: cornerRadius)
+        case .none:
+            return Path(roundedRect: rect, cornerRadius: cornerRadius)
         }
+    }
+
+    private func rightTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+        var path = Path()
+        let bubbleMinX = rect.minX
+        let bubbleMaxX = rect.maxX - tailWidth
+        let bubbleMinY = rect.minY
+        let bubbleMaxY = rect.maxY
+
+        let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
+        let baseH = min(tailBaseHeight, available)
+        let baseBottomY = bubbleMaxY - r
+        let baseTopY = baseBottomY - baseH
+        let midY = (baseTopY + baseBottomY) / 2
+
+        let baseTop = CGPoint(x: bubbleMaxX, y: baseTopY)
+        let baseBottom = CGPoint(x: bubbleMaxX, y: baseBottomY)
+        let tip = CGPoint(x: bubbleMaxX + tailWidth, y: midY)
+
+        path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
+        path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
+            control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
+        path.addLine(to: CGPoint(x: bubbleMaxX, y: baseTopY))
+        path.addQuadCurve(
+            to: tip,
+            control: CGPoint(x: bubbleMaxX + tailWidth * 0.85, y: baseTopY + baseH * 0.15))
+        path.addQuadCurve(
+            to: baseBottom,
+            control: CGPoint(x: bubbleMaxX + tailWidth * 0.6, y: baseBottomY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
+            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
+            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
+            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
+
+        return path
+    }
+
+    private func leftTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
+        var path = Path()
+        let bubbleMinX = rect.minX + tailWidth
+        let bubbleMaxX = rect.maxX
+        let bubbleMinY = rect.minY
+        let bubbleMaxY = rect.maxY
+
+        let available = max(4, bubbleMaxY - bubbleMinY - 2 * r)
+        let baseH = min(tailBaseHeight, available)
+        let baseBottomY = bubbleMaxY - r
+        let baseTopY = baseBottomY - baseH
+        let midY = (baseTopY + baseBottomY) / 2
+
+        let baseTop = CGPoint(x: bubbleMinX, y: baseTopY)
+        let baseBottom = CGPoint(x: bubbleMinX, y: baseBottomY)
+        let tip = CGPoint(x: bubbleMinX - tailWidth, y: midY)
+
+        path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
+        path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMaxX, y: bubbleMinY + r),
+            control: CGPoint(x: bubbleMaxX, y: bubbleMinY))
+        path.addLine(to: CGPoint(x: bubbleMaxX, y: bubbleMaxY - r))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
+            control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX + r, y: bubbleMaxY))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX, y: bubbleMaxY - r),
+            control: CGPoint(x: bubbleMinX, y: bubbleMaxY))
+        path.addLine(to: CGPoint(x: bubbleMinX, y: baseBottomY))
+        path.addQuadCurve(
+            to: tip,
+            control: CGPoint(x: bubbleMinX - tailWidth * 0.6, y: baseBottomY))
+        path.addQuadCurve(
+            to: baseTop,
+            control: CGPoint(x: bubbleMinX - tailWidth * 0.85, y: baseTopY + baseH * 0.15))
+        path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
+        path.addQuadCurve(
+            to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),
+            control: CGPoint(x: bubbleMinX, y: bubbleMinY))
+
+        return path
     }
 }
 
@@ -127,24 +197,8 @@ private struct ChatMessageBody: View {
         .padding(.horizontal, 12)
         .foregroundStyle(textColor)
         .background(self.bubbleBackground)
-        .overlay(self.bubbleBorder)
         .clipShape(self.bubbleShape)
-        .overlay(alignment: self.tailAlignment) {
-            if let tailDirection = self.tailDirection {
-                BubbleTail(direction: tailDirection)
-                    .fill(self.bubbleFillColor)
-                    .frame(width: self.tailSize.width, height: self.tailSize.height)
-                    .offset(x: self.tailOffsetX, y: self.tailOffsetY)
-            }
-        }
-        .overlay(alignment: self.tailAlignment) {
-            if let tailDirection = self.tailDirection {
-                BubbleTail(direction: tailDirection)
-                    .stroke(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
-                    .frame(width: self.tailSize.width, height: self.tailSize.height)
-                    .offset(x: self.tailOffsetX, y: self.tailOffsetY)
-            }
-        }
+        .overlay(self.bubbleBorder)
         .shadow(color: self.bubbleShadowColor, radius: self.bubbleShadowRadius, y: self.bubbleShadowYOffset)
         .padding(.leading, self.tailPaddingLeading)
         .padding(.trailing, self.tailPaddingTrailing)
@@ -190,42 +244,24 @@ private struct ChatMessageBody: View {
     }
 
     private var bubbleBorder: some View {
-        RoundedRectangle(cornerRadius: ChatUIConstants.bubbleCorner, style: .continuous)
-            .strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
-            .clipShape(self.bubbleShape)
+        self.bubbleShape.strokeBorder(self.bubbleBorderColor, lineWidth: self.bubbleBorderWidth)
     }
 
-    private var bubbleShape: RoundedRectangle {
-        RoundedRectangle(cornerRadius: ChatUIConstants.bubbleCorner, style: .continuous)
+    private var bubbleShape: ChatBubbleShape {
+        ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner, tail: self.bubbleTail)
     }
 
-    private var tailDirection: BubbleTail.TailDirection? {
-        guard self.style == .onboarding else { return nil }
-        return self.isUser ? .bottomRight : .bottomLeft
-    }
-
-    private var tailAlignment: Alignment {
-        self.isUser ? .bottomTrailing : .bottomLeading
-    }
-
-    private var tailSize: CGSize {
-        CGSize(width: 16, height: 22)
-    }
-
-    private var tailOffsetX: CGFloat {
-        self.isUser ? 6 : -6
-    }
-
-    private var tailOffsetY: CGFloat {
-        4
+    private var bubbleTail: ChatBubbleShape.Tail {
+        guard self.style == .onboarding else { return .none }
+        return self.isUser ? .right : .left
     }
 
     private var tailPaddingLeading: CGFloat {
-        self.style == .onboarding && !self.isUser ? 6 : 0
+        self.style == .onboarding && !self.isUser ? 10 : 0
     }
 
     private var tailPaddingTrailing: CGFloat {
-        self.style == .onboarding && self.isUser ? 6 : 0
+        self.style == .onboarding && self.isUser ? 10 : 0
     }
 
     private var bubbleShadowColor: Color {
