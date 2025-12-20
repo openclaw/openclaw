@@ -268,7 +268,7 @@ export function registerBrowserActionInputCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",
-      "How long to wait for the next file chooser (default: 30000)",
+      "How long to wait for the next file chooser (default: 120000)",
       (v: string) => Number(v),
     )
     .action(async (paths: string[], opts, cmd) => {
@@ -332,7 +332,7 @@ export function registerBrowserActionInputCommands(
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option(
       "--timeout-ms <ms>",
-      "How long to wait for the next dialog (default: 30000)",
+      "How long to wait for the next dialog (default: 120000)",
       (v: string) => Number(v),
     )
     .action(async (opts, cmd) => {

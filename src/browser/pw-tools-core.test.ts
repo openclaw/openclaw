@@ -127,7 +127,7 @@ describe("pw-tools-core", () => {
     await Promise.resolve();
 
     expect(waitForEvent).toHaveBeenCalledWith("filechooser", {
-      timeout: 30_000,
+      timeout: 120_000,
     });
     expect(fileChooser.setFiles).toHaveBeenCalledWith(["/tmp/a.txt"]);
   });
@@ -205,7 +205,7 @@ describe("pw-tools-core", () => {
     });
     await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 30_000 });
+    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 120_000 });
     expect(accept).toHaveBeenCalledWith("x");
     expect(dismiss).not.toHaveBeenCalled();
 
@@ -219,7 +219,7 @@ describe("pw-tools-core", () => {
     });
     await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 30_000 });
+    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 120_000 });
     expect(dismiss).toHaveBeenCalled();
     expect(accept).not.toHaveBeenCalled();
   });
