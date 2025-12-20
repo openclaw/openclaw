@@ -296,7 +296,7 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else {
-                Text("Symlink \"clawdis-mac\" into /usr/local/bin and /opt/homebrew/bin for scripts.")
+                Text("Symlink \"clawdis\" into /usr/local/bin and /opt/homebrew/bin for scripts.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

@@ -137,7 +137,7 @@ enum CLIInstaller {
         let fm = FileManager.default
 
         for basePath in cliHelperSearchPaths {
-            let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("clawdis-mac").path
+            let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("clawdis").path
             var isDirectory: ObjCBool = false
 
             guard fm.fileExists(atPath: candidate, isDirectory: &isDirectory), !isDirectory.boolValue else {
@@ -157,13 +157,13 @@ enum CLIInstaller {
     }
 
     static func install(statusHandler: @escaping @Sendable (String) async -> Void) async {
-        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/ClawdisCLI")
+        let helper = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/Relay/clawdis")
         guard FileManager.default.isExecutableFile(atPath: helper.path) else {
             await statusHandler("Helper missing in bundle; rebuild via scripts/package-mac-app.sh")
             return
         }
 
-        let targets = cliHelperSearchPaths.map { "\($0)/clawdis-mac" }
+        let targets = cliHelperSearchPaths.map { "\($0)/clawdis" }
         let result = await self.privilegedSymlink(source: helper.path, targets: targets)
         await statusHandler(result)
     }
@@ -432,25 +432,6 @@ enum CommandResolver {
         }
     }
 
-    static func clawdisMacCommand(
-        subcommand: String,
-        extraArgs: [String] = [],
-        defaults: UserDefaults = .standard) -> [String]
-    {
-        let settings = self.connectionSettings(defaults: defaults)
-        if settings.mode == .remote, let ssh = self.sshMacHelperCommand(
-            subcommand: subcommand,
-            extraArgs: extraArgs,
-            settings: settings)
-        {
-            return ssh
-        }
-        if let helper = self.findExecutable(named: "clawdis-mac") {
-            return [helper, subcommand] + extraArgs
-        }
-        return ["/usr/local/bin/clawdis-mac", subcommand] + extraArgs
-    }
-
     // Existing callers still refer to clawdisCommand; keep it as node alias.
     static func clawdisCommand(
         subcommand: String,
@@ -474,7 +455,7 @@ enum CommandResolver {
         let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
         args.append(userHost)
 
-        // Run the real clawdis CLI on the remote host; do not fall back to clawdis-mac.
+        // Run the real clawdis CLI on the remote host.
         let exportedPath = [
             "/opt/homebrew/bin",
             "/usr/local/bin",
@@ -530,38 +511,6 @@ enum CommandResolver {
         else
           echo "clawdis CLI missing on remote host"; exit 127;
         fi
-        """
-        args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
-        return ["/usr/bin/ssh"] + args
-    }
-
-    private static func sshMacHelperCommand(
-        subcommand: String,
-        extraArgs: [String],
-        settings: RemoteSettings) -> [String]?
-    {
-        guard !settings.target.isEmpty else { return nil }
-        guard let parsed = self.parseSSHTarget(settings.target) else { return nil }
-
-        var args: [String] = ["-o", "BatchMode=yes", "-o", "IdentitiesOnly=yes"]
-        if parsed.port > 0 { args.append(contentsOf: ["-p", String(parsed.port)]) }
-        if !settings.identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            args.append(contentsOf: ["-i", settings.identity])
-        }
-        let userHost = parsed.user.map { "\($0)@\(parsed.host)" } ?? parsed.host
-        args.append(userHost)
-
-        let exportedPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
-        let userPRJ = settings.projectRoot
-        let quotedArgs = ([subcommand] + extraArgs).map(self.shellQuote).joined(separator: " ")
-        let scriptBody = """
-        PATH=\(exportedPath);
-        PRJ=\(userPRJ.isEmpty ? "" : self.shellQuote(userPRJ))
-        DEFAULT_PRJ="$HOME/Projects/clawdis"
-        if [ -z "${PRJ:-}" ] && [ -d "$DEFAULT_PRJ" ]; then PRJ="$DEFAULT_PRJ"; fi
-        if [ -n "${PRJ:-}" ]; then cd "$PRJ" || { echo "Project root not found: $PRJ"; exit 127; }; fi
-        if ! command -v clawdis-mac >/dev/null 2>&1; then echo "clawdis-mac missing on remote host"; exit 127; fi;
-        clawdis-mac \(quotedArgs)
         """
         args.append(contentsOf: ["/bin/sh", "-c", scriptBody])
         return ["/usr/bin/ssh"] + args

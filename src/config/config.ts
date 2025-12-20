@@ -108,6 +108,11 @@ export type GatewayControlUiConfig = {
 
 export type GatewayConfig = {
   /**
+   * Explicit gateway mode. When set to "remote", local gateway start is disabled.
+   * When set to "local", the CLI may start the gateway locally.
+   */
+  mode?: "local" | "remote";
+  /**
    * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
    * Default: loopback (127.0.0.1).
    */
@@ -328,6 +333,7 @@ const ClawdisSchema = z.object({
     .optional(),
   gateway: z
     .object({
+      mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
       bind: z
         .union([
           z.literal("auto"),

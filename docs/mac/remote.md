@@ -7,7 +7,7 @@ read_when:
 
 Updated: 2025-12-08
 
-This flow lets the macOS app act as a full remote control for a Clawdis gateway running on another host (e.g. a Mac Studio). All features—health checks, permissions bootstrapping via the helper CLI, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from *Settings → General*.
+This flow lets the macOS app act as a full remote control for a Clawdis gateway running on another host (e.g. a Mac Studio). All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from *Settings → General*.
 
 ## Modes
 - **Local (this Mac)**: Everything runs on the laptop. No SSH involved.
@@ -15,7 +15,7 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
 
 ## Prereqs on the remote host
 1) Install Node + pnpm and build/install the Clawdis CLI (`pnpm install && pnpm build && pnpm link --global`).
-2) Ensure `clawdis` is on PATH for non-interactive shells. If you prefer, symlink `clawdis-mac` too so TCC-capable actions can run remotely when needed.
+2) Ensure `clawdis` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
 3) Open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
 
 ## macOS app setup
@@ -34,7 +34,7 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
 
 ## Permissions
 - The remote host needs the same TCC approvals as local (Automation, Accessibility, Screen Recording, Microphone, Speech Recognition, Notifications). Run onboarding on that machine to grant them once.
-- When remote commands need local TCC (e.g., screenshots on the remote Mac), ensure `clawdis-mac` is installed there so the helper can request/hold those permissions.
+- Nodes advertise their permission state via `node.list` / `node.describe` so agents know what’s available.
 
 ## WhatsApp login flow (remote)
 - Run `clawdis login --verbose` **on the remote host**. Scan the QR with WhatsApp on your phone.
@@ -47,10 +47,10 @@ This flow lets the macOS app act as a full remote control for a Clawdis gateway 
 - **Voice Wake**: trigger phrases are forwarded automatically in remote mode; no separate forwarder is needed.
 
 ## Notification sounds
-Pick sounds per notification from scripts with the helper CLI, e.g.:
+Pick sounds per notification from scripts with `clawdis` and `node.invoke`, e.g.:
 
 ```bash
-clawdis-mac notify --title "Ping" --body "Remote gateway ready" --sound Glass
+clawdis nodes notify --node <id> --title "Ping" --body "Remote gateway ready" --sound Glass
 ```
 
 There is no global “default sound” toggle in the app anymore; callers choose a sound (or none) per request.

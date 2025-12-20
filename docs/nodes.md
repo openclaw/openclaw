@@ -1,5 +1,5 @@
 ---
-summary: "Nodes: pairing, capabilities (canvas/camera), and the CLI helpers for screenshots + clips"
+summary: "Nodes: pairing, capabilities, permissions, and CLI helpers for canvas/camera/screen/system"
 read_when:
   - Pairing iOS/Android nodes to a gateway
   - Using node canvas/camera for agent context
@@ -8,7 +8,7 @@ read_when:
 
 # Nodes
 
-A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a small command surface (e.g. `canvas.*`, `camera.*`) via `node.invoke`.
+A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`.
 
 macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdis nodes …` works against this Mac).
 
@@ -89,6 +89,25 @@ Notes:
 - Android will show the system screen-capture prompt before recording.
 - Screen recordings are clamped to `<= 60s`.
 - `--no-audio` disables microphone capture (supported on iOS/Android; macOS uses system capture audio).
+
+## System commands (mac node)
+
+The macOS node exposes `system.run` and `system.notify`.
+
+Examples:
+
+```bash
+clawdis nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
+clawdis nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+```
+
+Notes:
+- `system.run` returns stdout/stderr/exit code in the payload.
+- `system.notify` respects notification permission state on the macOS app.
+
+## Permissions map
+
+Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by permission name (e.g. `screenRecording`, `accessibility`) with boolean values (`true` = granted).
 
 ## Mac node mode
 

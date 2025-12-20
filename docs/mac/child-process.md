@@ -23,13 +23,11 @@ Run the Node-based Clawdis/clawdis gateway as a direct child of the LSUIElement 
 - **TCC:** behaviorally, child processes often inherit the parent app’s “responsible process” for TCC, but this is *not a contract*. Continue to route all protected actions through the Swift app/broker so prompts stay tied to the signed app bundle.
 
 ## TCC guardrails (must keep)
-- Screen Recording, Accessibility, mic, and speech prompts must originate from the signed Swift app/broker. The Node child should never call these APIs directly; use the CLI broker (`clawdis-mac`) for:
-  - `ensure-permissions`
-  - `ui screenshot` (via PeekabooBridge host)
-  - other `ui …` automation (see/click/type/scroll/wait) when implemented
-  - mic/speech permission checks
-  - notifications
-  - shell runs that need `needs-screen-recording`
+- Screen Recording, Accessibility, mic, and speech prompts must originate from the signed Swift app/broker. The Node child should never call these APIs directly; route through the app’s node commands (via Gateway `node.invoke`) for:
+  - `system.notify`
+  - `system.run` (including `needsScreenRecording`)
+  - `screen.record` / `camera.*`
+  - PeekabooBridge UI automation (`peekaboo …`)
 - Usage strings (`NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription`, etc.) stay in the app target’s Info.plist; a bare Node binary has none and would fail.
 - If you ever embed Node that *must* touch TCC, wrap that call in a tiny signed helper target inside the app bundle and have Node exec that helper instead of calling the API directly.
 
@@ -69,6 +67,6 @@ Run the Node-based Clawdis/clawdis gateway as a direct child of the LSUIElement 
 - Do we want a tiny signed helper for rare TCC actions that cannot be brokered via the Swift app/broker?
 
 ## Decision snapshot (current recommendation)
-- Keep all TCC surfaces in the Swift app/broker (control socket + PeekabooBridgeHost).
+- Keep all TCC surfaces in the Swift app/broker (node commands + PeekabooBridgeHost).
 - Implement `GatewayProcessManager` with Swift Subprocess to start/stop the gateway on the “Clawdis Active” toggle.
-- Maintain the launchd path as a fallback for uptime/login persistence until child-mode proves stable. 
+- Maintain the launchd path as a fallback for uptime/login persistence until child-mode proves stable.

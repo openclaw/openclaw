@@ -77,9 +77,9 @@ Implementation notes:
 - Use an `NSTrackingArea` to fade the chrome in/out on `mouseEntered/mouseExited`.
 - Optionally show close/drag affordances only while hovered.
 
-## Agent API surface (proposed)
+## Agent API surface (current)
 
-Expose Canvas via the existing `clawdis-mac` → control socket → app routing so the agent can:
+Canvas is exposed via the Gateway **node bridge**, so the agent can:
 - Show/hide the panel.
 - Navigate to a path (relative to the session root).
 - Evaluate JavaScript and optionally return results.
@@ -94,21 +94,21 @@ Related:
 
 ## Agent commands (current)
 
-`clawdis-mac` exposes Canvas via the control socket. For agent use, prefer `--json` so you can read the structured `CanvasShowResult` (including `status`).
+Use the main `clawdis` CLI; it invokes canvas commands via `node.invoke`.
 
-- `clawdis-mac canvas present [--session <key>] [--target <...>] [--x/--y/--width/--height]`
+- `clawdis canvas present [--node <id>] [--target <...>] [--x/--y/--width/--height]`
   - Local targets map into the session directory via the custom scheme (directory targets resolve `index.html|index.htm`).
   - If `/` has no index file, Canvas shows the built-in A2UI shell and returns `status: "a2uiShell"`.
-- `clawdis-mac canvas hide [--session <key>]`
-- `clawdis-mac canvas eval --js <code> [--session <key>]`
-- `clawdis-mac canvas snapshot [--out <path>] [--session <key>]`
+- `clawdis canvas hide [--node <id>]`
+- `clawdis canvas eval --js <code> [--node <id>]`
+- `clawdis canvas snapshot [--node <id>]`
 
 ### Canvas A2UI
 
 Canvas includes a built-in **A2UI v0.8** renderer (Lit-based). The agent can drive it with JSONL **server→client protocol messages** (one JSON object per line):
 
-- `clawdis-mac canvas a2ui push --jsonl <path> [--session <key>]`
-- `clawdis-mac canvas a2ui reset [--session <key>]`
+- `clawdis canvas a2ui push --jsonl <path> [--node <id>]`
+- `clawdis canvas a2ui reset [--node <id>]`
 
 `push` expects a JSONL file where **each line is a single JSON object** (parsed and forwarded to the in-page A2UI renderer).
 
@@ -120,7 +120,7 @@ cat > /tmp/a2ui-v0.8.jsonl <<'EOF'
 {"beginRendering":{"surfaceId":"main","root":"root"}}
 EOF
 
-clawdis-mac canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --session main
+clawdis canvas a2ui push --jsonl /tmp/a2ui-v0.8.jsonl --node <id>
 ```
 
 Notes:

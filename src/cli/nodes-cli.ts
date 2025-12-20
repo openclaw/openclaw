@@ -29,6 +29,15 @@ type NodesRpcOpts = {
   params?: string;
   invokeTimeout?: string;
   idempotencyKey?: string;
+  cwd?: string;
+  env?: string[];
+  commandTimeout?: string;
+  needsScreenRecording?: boolean;
+  title?: string;
+  body?: string;
+  sound?: string;
+  priority?: string;
+  delivery?: string;
   facing?: string;
   format?: string;
   maxWidth?: string;
@@ -49,6 +58,7 @@ type NodeListNode = {
   modelIdentifier?: string;
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
   paired?: boolean;
   connected?: boolean;
 };
@@ -71,6 +81,7 @@ type PairedNode = {
   platform?: string;
   version?: string;
   remoteIp?: string;
+  permissions?: Record<string, boolean>;
   createdAtMs?: number;
   approvedAtMs?: number;
 };
@@ -137,12 +148,39 @@ function parseNodeList(value: unknown): NodeListNode[] {
   return Array.isArray(obj.nodes) ? (obj.nodes as NodeListNode[]) : [];
 }
 
+function formatPermissions(raw: unknown) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const entries = Object.entries(raw as Record<string, unknown>)
+    .map(([key, value]) => [String(key).trim(), value === true] as const)
+    .filter(([key]) => key.length > 0)
+    .sort((a, b) => a[0].localeCompare(b[0]));
+  if (entries.length === 0) return null;
+  const parts = entries.map(
+    ([key, granted]) => `${key}=${granted ? "yes" : "no"}`,
+  );
+  return `[${parts.join(", ")}]`;
+}
+
 function normalizeNodeKey(value: string) {
   return value
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
+}
+
+function parseEnvPairs(pairs: string[] | undefined) {
+  if (!Array.isArray(pairs) || pairs.length === 0) return undefined;
+  const env: Record<string, string> = {};
+  for (const pair of pairs) {
+    const idx = pair.indexOf("=");
+    if (idx <= 0) continue;
+    const key = pair.slice(0, idx).trim();
+    const value = pair.slice(idx + 1);
+    if (!key) continue;
+    env[key] = value;
+  }
+  return Object.keys(env).length > 0 ? env : undefined;
 }
 
 async function resolveNodeId(opts: NodesRpcOpts, query: string) {
@@ -223,6 +261,8 @@ export function registerNodesCli(program: Command) {
             const ip = n.remoteIp ? ` · ${n.remoteIp}` : "";
             const device = n.deviceFamily ? ` · device: ${n.deviceFamily}` : "";
             const hw = n.modelIdentifier ? ` · hw: ${n.modelIdentifier}` : "";
+            const perms = formatPermissions(n.permissions);
+            const permsText = perms ? ` · perms: ${perms}` : "";
             const caps =
               Array.isArray(n.caps) && n.caps.length > 0
                 ? `[${n.caps.map(String).filter(Boolean).sort().join(",")}]`
@@ -231,7 +271,7 @@ export function registerNodesCli(program: Command) {
                   : "?";
             const pairing = n.paired ? "paired" : "unpaired";
             defaultRuntime.log(
-              `- ${name} · ${n.nodeId}${ip}${device}${hw} · ${pairing} · ${n.connected ? "connected" : "disconnected"} · caps: ${caps}`,
+              `- ${name} · ${n.nodeId}${ip}${device}${hw}${permsText} · ${pairing} · ${n.connected ? "connected" : "disconnected"} · caps: ${caps}`,
             );
           }
         } catch (err) {
@@ -270,6 +310,7 @@ export function registerNodesCli(program: Command) {
           const commands = Array.isArray(obj.commands)
             ? obj.commands.map(String).filter(Boolean).sort()
             : [];
+          const perms = formatPermissions(obj.permissions);
           const family =
             typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model =
@@ -282,6 +323,7 @@ export function registerNodesCli(program: Command) {
           if (ip) parts.push(ip);
           if (family) parts.push(`device: ${family}`);
           if (model) parts.push(`hw: ${model}`);
+          if (perms) parts.push(`perms: ${perms}`);
           parts.push(connected ? "connected" : "disconnected");
           parts.push(`caps: ${caps ? `[${caps.join(",")}]` : "?"}`);
           defaultRuntime.log(parts.join(" · "));
@@ -472,6 +514,173 @@ export function registerNodesCli(program: Command) {
         }
       }),
     { timeoutMs: 30_000 },
+  );
+
+  nodesCallOpts(
+    nodes
+      .command("run")
+      .description("Run a shell command on a node (mac only)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--cwd <path>", "Working directory")
+      .option(
+        "--env <key=val>",
+        "Environment override (repeatable)",
+        (value: string, prev: string[] = []) => [...prev, value],
+      )
+      .option("--command-timeout <ms>", "Command timeout (ms)")
+      .option("--needs-screen-recording", "Require screen recording permission")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 30000)",
+        "30000",
+      )
+      .argument("<command...>", "Command and args")
+      .action(async (command: string[], opts: NodesRpcOpts) => {
+        try {
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          if (!Array.isArray(command) || command.length === 0) {
+            throw new Error("command required");
+          }
+          const env = parseEnvPairs(opts.env);
+          const timeoutMs = opts.commandTimeout
+            ? Number.parseInt(String(opts.commandTimeout), 10)
+            : undefined;
+          const invokeTimeout = opts.invokeTimeout
+            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            : undefined;
+
+          const invokeParams: Record<string, unknown> = {
+            nodeId,
+            command: "system.run",
+            params: {
+              command,
+              cwd: opts.cwd,
+              env,
+              timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+              needsScreenRecording: opts.needsScreenRecording === true,
+            },
+            idempotencyKey: String(
+              opts.idempotencyKey ?? randomIdempotencyKey(),
+            ),
+          };
+          if (
+            typeof invokeTimeout === "number" &&
+            Number.isFinite(invokeTimeout)
+          ) {
+            invokeParams.timeoutMs = invokeTimeout;
+          }
+
+          const result = (await callGatewayCli(
+            "node.invoke",
+            opts,
+            invokeParams,
+          )) as unknown;
+
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+
+          const payload =
+            typeof result === "object" && result !== null
+              ? (result as { payload?: Record<string, unknown> }).payload
+              : undefined;
+
+          const stdout =
+            typeof payload?.stdout === "string" ? payload.stdout : "";
+          const stderr =
+            typeof payload?.stderr === "string" ? payload.stderr : "";
+          const exitCode =
+            typeof payload?.exitCode === "number" ? payload.exitCode : null;
+          const timedOut = payload?.timedOut === true;
+          const success = payload?.success === true;
+
+          if (stdout) process.stdout.write(stdout);
+          if (stderr) process.stderr.write(stderr);
+          if (timedOut) {
+            defaultRuntime.error("run timed out");
+            defaultRuntime.exit(1);
+            return;
+          }
+          if (exitCode !== null && exitCode !== 0 && !success) {
+            defaultRuntime.error(`run exit ${exitCode}`);
+            defaultRuntime.exit(1);
+            return;
+          }
+        } catch (err) {
+          defaultRuntime.error(`nodes run failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+    { timeoutMs: 35_000 },
+  );
+
+  nodesCallOpts(
+    nodes
+      .command("notify")
+      .description("Send a local notification on a node (mac only)")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--title <text>", "Notification title")
+      .option("--body <text>", "Notification body")
+      .option("--sound <name>", "Notification sound")
+      .option(
+        "--priority <passive|active|timeSensitive>",
+        "Notification priority",
+      )
+      .option("--delivery <system|overlay|auto>", "Delivery mode", "system")
+      .option(
+        "--invoke-timeout <ms>",
+        "Node invoke timeout in ms (default 15000)",
+        "15000",
+      )
+      .action(async (opts: NodesRpcOpts) => {
+        try {
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const title = String(opts.title ?? "").trim();
+          const body = String(opts.body ?? "").trim();
+          if (!title && !body) {
+            throw new Error("missing --title or --body");
+          }
+          const invokeTimeout = opts.invokeTimeout
+            ? Number.parseInt(String(opts.invokeTimeout), 10)
+            : undefined;
+          const invokeParams: Record<string, unknown> = {
+            nodeId,
+            command: "system.notify",
+            params: {
+              title,
+              body,
+              sound: opts.sound,
+              priority: opts.priority,
+              delivery: opts.delivery,
+            },
+            idempotencyKey: String(
+              opts.idempotencyKey ?? randomIdempotencyKey(),
+            ),
+          };
+          if (
+            typeof invokeTimeout === "number" &&
+            Number.isFinite(invokeTimeout)
+          ) {
+            invokeParams.timeoutMs = invokeTimeout;
+          }
+
+          const result = await callGatewayCli(
+            "node.invoke",
+            opts,
+            invokeParams,
+          );
+
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          defaultRuntime.log("notify ok");
+        } catch (err) {
+          defaultRuntime.error(`nodes notify failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
   );
 
   const parseFacing = (value: string): CameraFacing => {

@@ -202,7 +202,6 @@ private final class StatusItemMouseHandlerView: NSView {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "Chat")
-    private let socketServer = ControlSocketServer()
     let updaterController: UpdaterProviding = makeUpdaterController()
 
     func application(_: NSApplication, open urls: [URL]) {
@@ -231,7 +230,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { PresenceReporter.shared.start() }
         Task { await HealthStore.shared.refresh(onDemand: true) }
         Task { await PortGuardian.shared.sweep(mode: AppStateStore.shared.connectionMode) }
-        Task { await self.socketServer.start() }
         Task { await PeekabooBridgeHostCoordinator.shared.setEnabled(AppStateStore.shared.peekabooBridgeEnabled) }
         self.scheduleFirstRunOnboardingIfNeeded()
 
@@ -255,7 +253,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WebChatManager.shared.resetTunnels()
         Task { await RemoteTunnelManager.shared.stopAll() }
         Task { await GatewayConnection.shared.shutdown() }
-        Task { await self.socketServer.stop() }
         Task { await PeekabooBridgeHostCoordinator.shared.stop() }
     }
 

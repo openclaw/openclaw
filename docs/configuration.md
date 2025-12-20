@@ -154,6 +154,27 @@ Defaults:
 }
 ```
 
+### `gateway` (Gateway server mode + bind)
+
+Use `gateway.mode` to explicitly declare whether this machine should run the Gateway.
+
+Defaults:
+- mode: **unset** (treated as “do not auto-start”)
+- bind: `loopback`
+
+```json5
+{
+  gateway: {
+    mode: "local", // or "remote"
+    bind: "loopback",
+    // controlUi: { enabled: true }
+  }
+}
+```
+
+Notes:
+- `clawdis gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
+
 ### `canvasHost` (LAN/tailnet Canvas file server + live reload)
 
 The Gateway serves a directory of HTML/CSS/JS over HTTP so iOS/Android nodes can simply `canvas.navigate` to it.

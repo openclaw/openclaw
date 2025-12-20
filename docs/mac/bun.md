@@ -16,6 +16,8 @@ App bundle layout:
 
 - `Clawdis.app/Contents/Resources/Relay/clawdis-gateway`
   - bun `--compile` executable built from `dist/macos/gateway-daemon.js`
+- `Clawdis.app/Contents/Resources/Relay/clawdis`
+  - bun `--compile` CLI executable built from `dist/index.js`
 - `Clawdis.app/Contents/Resources/Relay/package.json`
   - tiny “Pi compatibility” file (see below)
 - `Clawdis.app/Contents/Resources/Relay/theme/`

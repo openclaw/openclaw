@@ -185,6 +185,12 @@ actor MacNodeRuntime {
                     hasAudio: res.hasAudio))
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
+            case ClawdisSystemCommand.run.rawValue:
+                return try await self.handleSystemRun(req)
+
+            case ClawdisSystemCommand.notify.rawValue:
+                return try await self.handleSystemNotify(req)
+
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
@@ -247,6 +253,89 @@ actor MacNodeRuntime {
         """
         let resultJSON = try await CanvasManager.shared.eval(sessionKey: "main", javaScript: js)
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
+    }
+
+    private func handleSystemRun(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(ClawdisSystemRunParams.self, from: req.paramsJSON)
+        let command = params.command
+        guard !command.isEmpty else {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: command required")
+        }
+
+        if params.needsScreenRecording == true {
+            let authorized = await PermissionManager
+                .status([.screenRecording])[.screenRecording] ?? false
+            if !authorized {
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "PERMISSION_MISSING: screenRecording")
+            }
+        }
+
+        let timeoutSec = params.timeoutMs.flatMap { Double($0) / 1000.0 }
+        let result = await ShellExecutor.runDetailed(
+            command: command,
+            cwd: params.cwd,
+            env: params.env,
+            timeout: timeoutSec)
+
+        struct RunPayload: Encodable {
+            var exitCode: Int?
+            var timedOut: Bool
+            var success: Bool
+            var stdout: String
+            var stderr: String
+            var error: String?
+        }
+
+        let payload = try Self.encodePayload(RunPayload(
+            exitCode: result.exitCode,
+            timedOut: result.timedOut,
+            success: result.success,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            error: result.errorMessage))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+    }
+
+    private func handleSystemNotify(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = try Self.decodeParams(ClawdisSystemNotifyParams.self, from: req.paramsJSON)
+        let title = params.title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = params.body.trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.isEmpty && body.isEmpty {
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: empty notification")
+        }
+
+        let priority = params.priority.flatMap { NotificationPriority(rawValue: $0.rawValue) }
+        let delivery = params.delivery.flatMap { NotificationDelivery(rawValue: $0.rawValue) } ?? .system
+        let manager = NotificationManager()
+
+        switch delivery {
+        case .system:
+            let ok = await manager.send(
+                title: title,
+                body: body,
+                sound: params.sound,
+                priority: priority)
+            return ok
+                ? BridgeInvokeResponse(id: req.id, ok: true)
+                : Self.errorResponse(req, code: .unavailable, message: "NOT_AUTHORIZED: notifications")
+        case .overlay:
+            await NotifyOverlayController.shared.present(title: title, body: body)
+            return BridgeInvokeResponse(id: req.id, ok: true)
+        case .auto:
+            let ok = await manager.send(
+                title: title,
+                body: body,
+                sound: params.sound,
+                priority: priority)
+            if ok {
+                return BridgeInvokeResponse(id: req.id, ok: true)
+            }
+            await NotifyOverlayController.shared.present(title: title, body: body)
+            return BridgeInvokeResponse(id: req.id, ok: true)
+        }
     }
 
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {

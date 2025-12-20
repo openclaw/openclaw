@@ -63,7 +63,7 @@ git commit -m "Add Clawd workspace"
 
 ## What Clawdis Does
 - Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run tools via the host Mac.
-- macOS app manages permissions (screen recording, notifications, microphone) and exposes a CLI helper `clawdis-mac` for scripts.
+- macOS app manages permissions (screen recording, notifications, microphone) and exposes the `clawdis` CLI via its bundled binary.
 - Direct chats collapse into the shared `main` session by default; groups stay isolated as `group:<jid>`; heartbeats keep background tasks alive.
 
 ## Core Tools (enable in Settings → Tools)
@@ -91,7 +91,7 @@ git commit -m "Add Clawd workspace"
 - **Google Calendar MCP** (`google-calendar`) — List, create, and update events.
 
 ## Usage Notes
-- Prefer the `clawdis-mac` CLI for scripting; mac app handles permissions.
+- Prefer the `clawdis` CLI for scripting; mac app handles permissions.
 - Run installs from the Tools tab; it hides the button if a tool is already present.
 - For MCPs, mcporter writes to the home-scope config; re-run installs if you rotate tokens.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.

@@ -126,12 +126,9 @@ sign_plain_item() {
   codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$target"
 }
 
-# Sign main binary and CLI helper if present
+# Sign main binary
 if [ -f "$APP_BUNDLE/Contents/MacOS/Clawdis" ]; then
   echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Clawdis" "$APP_ENTITLEMENTS"
-fi
-if [ -f "$APP_BUNDLE/Contents/MacOS/ClawdisCLI" ]; then
-  echo "Signing CLI helper"; sign_item "$APP_BUNDLE/Contents/MacOS/ClawdisCLI" "$ENT_TMP_BASE"
 fi
 
 # Sign bundled gateway payload (native addons, libvips dylibs)
@@ -141,6 +138,9 @@ if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   done
   if [ -f "$APP_BUNDLE/Contents/Resources/Relay/clawdis-gateway" ]; then
     echo "Signing embedded gateway"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/clawdis-gateway" "$ENT_TMP_BUN"
+  fi
+  if [ -f "$APP_BUNDLE/Contents/Resources/Relay/clawdis" ]; then
+    echo "Signing embedded CLI"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/clawdis" "$ENT_TMP_BUN"
   fi
 fi
 

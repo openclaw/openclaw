@@ -60,9 +60,10 @@ final class MacNodeModeCoordinator {
 
             retryDelay = 1_000_000_000
             do {
+                let hello = await self.makeHello()
                 try await self.session.connect(
                     endpoint: endpoint,
-                    hello: self.makeHello(),
+                    hello: hello,
                     onConnected: { [weak self] serverName in
                         self?.logger.info("mac node connected to \(serverName, privacy: .public)")
                     },
@@ -86,10 +87,11 @@ final class MacNodeModeCoordinator {
         }
     }
 
-    private func makeHello() -> BridgeHello {
+    private func makeHello() async -> BridgeHello {
         let token = MacNodeTokenStore.loadToken()
         let caps = self.currentCaps()
         let commands = self.currentCommands(caps: caps)
+        let permissions = await self.currentPermissions()
         return BridgeHello(
             nodeId: Self.nodeId(),
             displayName: InstanceIdentity.displayName,
@@ -99,7 +101,8 @@ final class MacNodeModeCoordinator {
             deviceFamily: "Mac",
             modelIdentifier: InstanceIdentity.modelIdentifier,
             caps: caps,
-            commands: commands)
+            commands: commands,
+            permissions: permissions)
     }
 
     private func currentCaps() -> [String] {
@@ -108,6 +111,11 @@ final class MacNodeModeCoordinator {
             caps.append(ClawdisCapability.camera.rawValue)
         }
         return caps
+    }
+
+    private func currentPermissions() async -> [String: Bool] {
+        let statuses = await PermissionManager.status()
+        return Dictionary(uniqueKeysWithValues: statuses.map { ($0.key.rawValue, $0.value) })
     }
 
     private func currentCommands(caps: [String]) -> [String] {
@@ -121,6 +129,8 @@ final class MacNodeModeCoordinator {
             ClawdisCanvasA2UICommand.pushJSONL.rawValue,
             ClawdisCanvasA2UICommand.reset.rawValue,
             MacNodeScreenCommand.record.rawValue,
+            ClawdisSystemCommand.run.rawValue,
+            ClawdisSystemCommand.notify.rawValue,
         ]
 
         let capsSet = Set(caps)
@@ -140,9 +150,10 @@ final class MacNodeModeCoordinator {
             let shouldSilent = await MainActor.run {
                 AppStateStore.shared.connectionMode == .remote
             }
+            let hello = await self.makeHello()
             let token = try await MacNodeBridgePairingClient().pairAndHello(
                 endpoint: endpoint,
-                hello: self.makeHello(),
+                hello: hello,
                 silent: shouldSilent,
                 onStatus: { [weak self] status in
                     self?.logger.info("mac node pairing: \(status, privacy: .public)")

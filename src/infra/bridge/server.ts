@@ -22,6 +22,7 @@ type BridgeHelloFrame = {
   modelIdentifier?: string;
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
 };
 
 type BridgePairRequestFrame = {
@@ -34,6 +35,7 @@ type BridgePairRequestFrame = {
   modelIdentifier?: string;
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
   remoteAddress?: string;
   silent?: boolean;
 };
@@ -123,6 +125,7 @@ export type NodeBridgeClientInfo = {
   remoteIp?: string;
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
 };
 
 export type NodeBridgeServerOpts = {
@@ -288,6 +291,18 @@ export async function startNodeBridgeServer(
         return undefined;
       };
 
+      const normalizePermissions = (
+        raw: unknown,
+      ): Record<string, boolean> | undefined => {
+        if (!raw || typeof raw !== "object" || Array.isArray(raw))
+          return undefined;
+        const entries = Object.entries(raw as Record<string, unknown>)
+          .map(([key, value]) => [String(key).trim(), value === true] as const)
+          .filter(([key]) => key.length > 0);
+        if (entries.length === 0) return undefined;
+        return Object.fromEntries(entries);
+      };
+
       const caps =
         (Array.isArray(hello.caps)
           ? hello.caps.map((c) => String(c)).filter(Boolean)
@@ -299,6 +314,10 @@ export async function startNodeBridgeServer(
         Array.isArray(hello.commands) && hello.commands.length > 0
           ? hello.commands.map((c) => String(c)).filter(Boolean)
           : verified.node.commands;
+      const helloPermissions = normalizePermissions(hello.permissions);
+      const permissions = helloPermissions
+        ? { ...(verified.node.permissions ?? {}), ...helloPermissions }
+        : verified.node.permissions;
 
       isAuthenticated = true;
       const existing = connections.get(nodeId);
@@ -318,6 +337,7 @@ export async function startNodeBridgeServer(
         modelIdentifier: verified.node.modelIdentifier ?? hello.modelIdentifier,
         caps,
         commands,
+        permissions,
         remoteIp: remoteAddress,
       };
       await updatePairedNodeMetadata(
@@ -331,6 +351,7 @@ export async function startNodeBridgeServer(
           remoteIp: nodeInfo.remoteIp,
           caps: nodeInfo.caps,
           commands: nodeInfo.commands,
+          permissions: nodeInfo.permissions,
         },
         opts.pairingBaseDir,
       );
@@ -396,6 +417,10 @@ export async function startNodeBridgeServer(
           commands: Array.isArray(req.commands)
             ? req.commands.map((c) => String(c)).filter(Boolean)
             : undefined,
+          permissions:
+            req.permissions && typeof req.permissions === "object"
+              ? (req.permissions as Record<string, boolean>)
+              : undefined,
           remoteIp: remoteAddress,
           silent: req.silent === true ? true : undefined,
         },
@@ -433,6 +458,10 @@ export async function startNodeBridgeServer(
         commands: Array.isArray(req.commands)
           ? req.commands.map((c) => String(c)).filter(Boolean)
           : undefined,
+        permissions:
+          req.permissions && typeof req.permissions === "object"
+            ? (req.permissions as Record<string, boolean>)
+            : undefined,
         remoteIp: remoteAddress,
       };
       connections.set(nodeId, { socket, nodeInfo, invokeWaiters });

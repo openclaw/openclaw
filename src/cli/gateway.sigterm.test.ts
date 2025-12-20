@@ -79,7 +79,15 @@ describe("gateway SIGTERM", () => {
 
     child = spawn(
       process.execPath,
-      ["--import", "tsx", "src/index.ts", "gateway", "--port", String(port)],
+      [
+        "--import",
+        "tsx",
+        "src/index.ts",
+        "gateway",
+        "--port",
+        String(port),
+        "--allow-unconfigured",
+      ],
       {
         cwd: process.cwd(),
         env: {

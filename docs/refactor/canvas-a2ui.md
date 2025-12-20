@@ -20,7 +20,7 @@
   - Avoid double-sending actions when the bundled A2UI shell is present (let the shell forward clicks so it can resolve richer context).
   - Intercept `clawdis://…` navigations inside the Canvas WKWebView and route them through `DeepLinkHandler` (no NSWorkspace bounce).
   - `GatewayConnection` auto-starts the local gateway (and retries briefly) when a request fails in `.local` mode, so Canvas actions don’t silently fail if the gateway isn’t running yet.
-  - Fix a crash that made `clawdis-mac canvas present`/`eval` look “hung”:
+  - Fix a crash that made `clawdis canvas present`/`eval` look “hung”:
     - `VoicePushToTalkHotkey`’s NSEvent monitor could call `@MainActor` code off-main, triggering executor checks / EXC_BAD_ACCESS on macOS 26.2.
     - Now it hops back to the main actor before mutating state.
   - Preserve in-page state when closing Canvas (hide the window instead of closing the `WKWebView`).

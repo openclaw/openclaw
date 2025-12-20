@@ -107,7 +107,8 @@ struct OnboardingView: View {
     }
 
     private var buttonTitle: String { self.currentPage == self.pageCount - 1 ? "Finish" : "Next" }
-    private let devLinkCommand = "ln -sf $(pwd)/apps/macos/.build/debug/ClawdisCLI /usr/local/bin/clawdis-mac"
+    private let devLinkCommand =
+        "ln -sf /Applications/Clawdis.app/Contents/Resources/Relay/clawdis /usr/local/bin/clawdis"
 
     init(
         state: AppState = AppStateStore.shared,
@@ -897,7 +898,7 @@ struct OnboardingView: View {
         self.onboardingPage {
             Text("Install the helper CLI")
                 .font(.largeTitle.weight(.semibold))
-            Text("Optional, but recommended: link `clawdis-mac` so scripts can talk to this app.")
+            Text("Optional, but recommended: link `clawdis` so scripts can reach the local gateway.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -912,7 +913,7 @@ struct OnboardingView: View {
                         if self.installingCLI {
                             ProgressView()
                         } else {
-                            Text(self.cliInstalled ? "Reinstall helper" : "Install helper")
+                            Text(self.cliInstalled ? "Reinstall CLI" : "Install CLI")
                         }
                     }
                     .buttonStyle(.borderedProminent)

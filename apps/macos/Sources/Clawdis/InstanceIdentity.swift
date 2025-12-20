@@ -29,7 +29,7 @@ enum InstanceIdentity {
         {
             return name
         }
-        return "clawdis-mac"
+        return "clawdis"
     }()
 
     static let modelIdentifier: String? = {

@@ -1,5 +1,7 @@
+import fs from "node:fs";
+
 import type { Command } from "commander";
-import { loadConfig } from "../config/config.js";
+import { CONFIG_PATH_CLAWDIS, loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -54,6 +56,11 @@ export function registerGatewayCli(program: Command) {
     .option(
       "--token <token>",
       "Shared token required in connect.params.auth.token (default: CLAWDIS_GATEWAY_TOKEN env if set)",
+    )
+    .option(
+      "--allow-unconfigured",
+      "Allow gateway start without gateway.mode=local in config",
+      false,
     )
     .option(
       "--force",
@@ -135,6 +142,21 @@ export function registerGatewayCli(program: Command) {
         process.env.CLAWDIS_GATEWAY_TOKEN = String(opts.token);
       }
       const cfg = loadConfig();
+      const configExists = fs.existsSync(CONFIG_PATH_CLAWDIS);
+      const mode = cfg.gateway?.mode;
+      if (!opts.allowUnconfigured && mode !== "local") {
+        if (!configExists) {
+          defaultRuntime.error(
+            "Missing config. Run `clawdis setup` or set gateway.mode=local (or pass --allow-unconfigured).",
+          );
+        } else {
+          defaultRuntime.error(
+            "Gateway start blocked: set gateway.mode=local (or pass --allow-unconfigured).",
+          );
+        }
+        defaultRuntime.exit(1);
+        return;
+      }
       const bindRaw = String(opts.bind ?? cfg.gateway?.bind ?? "loopback");
       const bind =
         bindRaw === "loopback" ||

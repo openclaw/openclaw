@@ -67,7 +67,7 @@ What Clawdis should *not* embed:
 - **XPC**: don’t reintroduce helper targets; use the bridge.
 
 ## IPC / CLI surface
-### No `clawdis-mac ui …`
+### No `clawdis ui …`
 We avoid a parallel “Clawdis UI automation CLI”. Instead:
 - `peekaboo` is the user/agent-facing CLI surface for automation and capture.
 - Clawdis.app can host PeekabooBridge as a **thin TCC broker** so Peekaboo can piggyback on Clawdis permissions when Peekaboo.app isn’t running.

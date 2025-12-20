@@ -11,7 +11,7 @@ Clawdis supports **camera capture** for agent workflows:
 
 - **iOS node** (paired via Gateway): capture a **photo** (`jpg`) or **short video clip** (`mp4`, with optional audio) via `node.invoke`.
 - **Android node** (paired via Gateway): capture a **photo** (`jpg`) or **short video clip** (`mp4`, with optional audio) via `node.invoke`.
-- **macOS app** (local control socket): capture a **photo** (`jpg`) or **short video clip** (`mp4`, with optional audio) via `clawdis-mac`.
+- **macOS app** (node via Gateway): capture a **photo** (`jpg`) or **short video clip** (`mp4`, with optional audio) via `node.invoke`.
 
 All camera access is gated behind **user-controlled settings**.
 
@@ -100,22 +100,22 @@ The macOS companion app exposes a checkbox:
   - Default: **off**
   - When off: camera requests return “Camera disabled by user”.
 
-### CLI helper (local control socket)
+### CLI helper (node invoke)
 
-The `clawdis-mac` helper talks to the running menu bar app over the local control socket.
+Use the main `clawdis` CLI to invoke camera commands on the macOS node.
 
 Examples:
 
 ```bash
-clawdis-mac camera snap                         # prints MEDIA:<path>
-clawdis-mac camera snap --max-width 1280
-clawdis-mac camera clip --duration 10s          # prints MEDIA:<path>
-clawdis-mac camera clip --duration-ms 3000      # prints MEDIA:<path> (legacy flag)
-clawdis-mac camera clip --no-audio
+clawdis nodes camera snap --node <id>            # prints MEDIA:<path>
+clawdis nodes camera snap --node <id> --max-width 1280
+clawdis nodes camera clip --node <id> --duration 10s          # prints MEDIA:<path>
+clawdis nodes camera clip --node <id> --duration-ms 3000      # prints MEDIA:<path> (legacy flag)
+clawdis nodes camera clip --node <id> --no-audio
 ```
 
 Notes:
-- `clawdis-mac camera snap` defaults to `maxWidth=1600` unless overridden.
+- `clawdis nodes camera snap` defaults to `maxWidth=1600` unless overridden.
 
 ## Safety + practical limits
 
@@ -127,7 +127,7 @@ Notes:
 For *screen* video (not camera), use the macOS companion:
 
 ```bash
-clawdis-mac screen record --duration 10s --fps 15   # prints MEDIA:<path>
+clawdis nodes screen record --node <id> --duration 10s --fps 15   # prints MEDIA:<path>
 ```
 
 Notes:

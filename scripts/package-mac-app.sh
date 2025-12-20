@@ -36,12 +36,10 @@ fi
 cd "$ROOT_DIR/apps/macos"
 
 echo "🔨 Building $PRODUCT ($BUILD_CONFIG)"
-swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --product "${PRODUCT}CLI" --build-path "$BUILD_PATH"
+swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH"
 
 BIN="$BUILD_PATH/$BUILD_CONFIG/$PRODUCT"
-CLI_BIN="$BUILD_PATH/$BUILD_CONFIG/ClawdisCLI"
 echo "pkg: binary $BIN" >&2
-echo "pkg: cli $CLI_BIN" >&2
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
 mkdir -p "$APP_ROOT/Contents/MacOS"
@@ -146,6 +144,18 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
 	    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
 	  chmod +x "$BUN_OUT"
 
+  echo "🧰 Building bundled CLI (bun --compile)"
+  CLI_OUT="$RELAY_DIR/clawdis"
+  bun build "$ROOT_DIR/dist/index.js" \
+    --compile \
+    --bytecode \
+    --outfile "$CLI_OUT" \
+    -e playwright-core \
+    -e electron \
+    -e "chromium-bidi*" \
+    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
+  chmod +x "$CLI_OUT"
+
   echo "📄 Writing embedded runtime package.json (Pi compatibility)"
   cat > "$RELAY_DIR/package.json" <<JSON
 {
@@ -171,12 +181,6 @@ JSON
   fi
 else
   echo "🧰 Skipping gateway payload packaging (SKIP_GATEWAY_PACKAGE=1)"
-fi
-
-if [ -f "$CLI_BIN" ]; then
-  echo "🔧 Copying CLI helper"
-  cp "$CLI_BIN" "$APP_ROOT/Contents/MacOS/ClawdisCLI"
-  chmod +x "$APP_ROOT/Contents/MacOS/ClawdisCLI"
 fi
 
 echo "⏹  Stopping any running Clawdis"

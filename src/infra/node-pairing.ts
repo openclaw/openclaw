@@ -13,6 +13,7 @@ export type NodePairingPendingRequest = {
   modelIdentifier?: string;
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
   remoteIp?: string;
   silent?: boolean;
   isRepair?: boolean;
@@ -29,6 +30,7 @@ export type NodePairingPairedNode = {
   modelIdentifier?: string;
   caps?: string[];
   commands?: string[];
+  permissions?: Record<string, boolean>;
   remoteIp?: string;
   createdAtMs: number;
   approvedAtMs: number;
@@ -185,6 +187,7 @@ export async function requestNodePairing(
       modelIdentifier: req.modelIdentifier,
       caps: req.caps,
       commands: req.commands,
+      permissions: req.permissions,
       remoteIp: req.remoteIp,
       silent: req.silent,
       isRepair,
@@ -217,6 +220,7 @@ export async function approveNodePairing(
       modelIdentifier: pending.modelIdentifier,
       caps: pending.caps,
       commands: pending.commands,
+      permissions: pending.permissions,
       remoteIp: pending.remoteIp,
       createdAtMs: existing?.createdAtMs ?? now,
       approvedAtMs: now,
@@ -281,6 +285,7 @@ export async function updatePairedNodeMetadata(
       remoteIp: patch.remoteIp ?? existing.remoteIp,
       caps: patch.caps ?? existing.caps,
       commands: patch.commands ?? existing.commands,
+      permissions: patch.permissions ?? existing.permissions,
     };
 
     state.pairedByNodeId[normalized] = next;

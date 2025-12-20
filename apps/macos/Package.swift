@@ -1,5 +1,5 @@
 // swift-tools-version: 6.2
-// Package manifest for the Clawdis macOS companion (menu bar app + CLI + IPC library).
+// Package manifest for the Clawdis macOS companion (menu bar app + IPC library).
 
 import PackageDescription
 
@@ -11,7 +11,6 @@ let package = Package(
     products: [
         .library(name: "ClawdisIPC", targets: ["ClawdisIPC"]),
         .executable(name: "Clawdis", targets: ["Clawdis"]),
-        .executable(name: "ClawdisCLI", targets: ["ClawdisCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
@@ -55,25 +54,9 @@ let package = Package(
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
-        .executableTarget(
-            name: "ClawdisCLI",
-            dependencies: [
-                "ClawdisIPC",
-                "ClawdisProtocol",
-            ],
-            swiftSettings: [
-                .enableUpcomingFeature("StrictConcurrency"),
-            ]),
         .testTarget(
             name: "ClawdisIPCTests",
             dependencies: ["ClawdisIPC", "Clawdis", "ClawdisProtocol"],
-            swiftSettings: [
-                .enableUpcomingFeature("StrictConcurrency"),
-                .enableExperimentalFeature("SwiftTesting"),
-            ]),
-        .testTarget(
-            name: "ClawdisCLITests",
-            dependencies: ["ClawdisCLI"],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

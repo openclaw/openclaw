@@ -3516,6 +3516,7 @@ export async function startGatewayServer(
                     remoteIp: live?.remoteIp ?? paired?.remoteIp,
                     caps,
                     commands,
+                    permissions: live?.permissions ?? paired?.permissions,
                     paired: Boolean(paired),
                     connected: Boolean(live),
                   };
@@ -3609,6 +3610,7 @@ export async function startGatewayServer(
                     remoteIp: live?.remoteIp ?? paired?.remoteIp,
                     caps,
                     commands,
+                    permissions: live?.permissions ?? paired?.permissions,
                     paired: Boolean(paired),
                     connected: Boolean(live),
                   },

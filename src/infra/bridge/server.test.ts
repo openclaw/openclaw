@@ -228,6 +228,7 @@ describe("node bridge server", () => {
       deviceFamily?: string;
       modelIdentifier?: string;
       remoteIp?: string;
+      permissions?: Record<string, boolean>;
     } | null = null;
 
     let disconnected: {
@@ -238,6 +239,7 @@ describe("node bridge server", () => {
       deviceFamily?: string;
       modelIdentifier?: string;
       remoteIp?: string;
+      permissions?: Record<string, boolean>;
     } | null = null;
 
     let resolveDisconnected: (() => void) | null = null;
@@ -268,6 +270,7 @@ describe("node bridge server", () => {
       version: "1.0",
       deviceFamily: "iPad",
       modelIdentifier: "iPad16,6",
+      permissions: { screenRecording: true, notifications: false },
     });
 
     // Approve the pending request from the gateway side.
@@ -304,6 +307,7 @@ describe("node bridge server", () => {
       version: "2.0",
       deviceFamily: "iPad",
       modelIdentifier: "iPad99,1",
+      permissions: { screenRecording: false },
     });
     const line3 = JSON.parse(await readLine2()) as { type: string };
     expect(line3.type).toBe("hello-ok");
@@ -320,6 +324,10 @@ describe("node bridge server", () => {
     expect(lastAuthed?.version).toBe("1.0");
     expect(lastAuthed?.deviceFamily).toBe("iPad");
     expect(lastAuthed?.modelIdentifier).toBe("iPad16,6");
+    expect(lastAuthed?.permissions).toEqual({
+      screenRecording: false,
+      notifications: false,
+    });
     expect(lastAuthed?.remoteIp?.includes("127.0.0.1")).toBe(true);
 
     socket2.destroy();
@@ -432,6 +440,7 @@ describe("node bridge server", () => {
       modelIdentifier: "iPad14,5",
       caps: ["canvas", "camera"],
       commands: ["canvas.eval", "canvas.snapshot", "camera.snap"],
+      permissions: { accessibility: true },
     });
 
     // Approve the pending request from the gateway side.
@@ -464,6 +473,7 @@ describe("node bridge server", () => {
       "canvas.snapshot",
       "camera.snap",
     ]);
+    expect(node?.permissions).toEqual({ accessibility: true });
 
     const after = await listNodePairing(baseDir);
     const paired = after.paired.find((p) => p.nodeId === "n-caps");
@@ -473,6 +483,7 @@ describe("node bridge server", () => {
       "canvas.snapshot",
       "camera.snap",
     ]);
+    expect(paired?.permissions).toEqual({ accessibility: true });
 
     socket.destroy();
     await server.close();

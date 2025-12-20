@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
@@ -13,6 +15,13 @@ type CanvasOpts = {
   timeout?: string;
   json?: boolean;
   node?: string;
+  target?: string;
+  x?: string;
+  y?: string;
+  width?: string;
+  height?: string;
+  js?: string;
+  jsonl?: string;
   format?: string;
   maxWidth?: string;
   quality?: string;
@@ -176,7 +185,21 @@ function normalizeFormat(format: string) {
 export function registerCanvasCli(program: Command) {
   const canvas = program
     .command("canvas")
-    .description("Render the canvas to a snapshot via nodes");
+    .description("Control node canvases (present/navigate/eval/snapshot/a2ui)");
+
+  const invokeCanvas = async (
+    opts: CanvasOpts,
+    command: string,
+    params?: Record<string, unknown>,
+  ) => {
+    const nodeId = await resolveNodeId(opts, opts.node);
+    await callGatewayCli("node.invoke", opts, {
+      nodeId,
+      command,
+      params,
+      idempotencyKey: randomIdempotencyKey(),
+    });
+  };
 
   canvasCallOpts(
     canvas
@@ -238,6 +261,163 @@ export function registerCanvasCli(program: Command) {
           defaultRuntime.log(`MEDIA:${filePath}`);
         } catch (err) {
           defaultRuntime.error(`canvas snapshot failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  canvasCallOpts(
+    canvas
+      .command("present")
+      .description("Show the canvas (optionally with a target URL/path)")
+      .option("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .option("--target <urlOrPath>", "Target URL/path (optional)")
+      .option("--x <px>", "Placement x coordinate")
+      .option("--y <px>", "Placement y coordinate")
+      .option("--width <px>", "Placement width")
+      .option("--height <px>", "Placement height")
+      .action(async (opts: CanvasOpts) => {
+        try {
+          const placement = {
+            x: opts.x ? Number.parseFloat(opts.x) : undefined,
+            y: opts.y ? Number.parseFloat(opts.y) : undefined,
+            width: opts.width ? Number.parseFloat(opts.width) : undefined,
+            height: opts.height ? Number.parseFloat(opts.height) : undefined,
+          };
+          const params: Record<string, unknown> = {};
+          if (opts.target) params.url = String(opts.target);
+          if (
+            Number.isFinite(placement.x) ||
+            Number.isFinite(placement.y) ||
+            Number.isFinite(placement.width) ||
+            Number.isFinite(placement.height)
+          ) {
+            params.placement = placement;
+          }
+          await invokeCanvas(opts, "canvas.present", params);
+          if (!opts.json) {
+            defaultRuntime.log("canvas present ok");
+          }
+        } catch (err) {
+          defaultRuntime.error(`canvas present failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  canvasCallOpts(
+    canvas
+      .command("hide")
+      .description("Hide the canvas")
+      .option("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: CanvasOpts) => {
+        try {
+          await invokeCanvas(opts, "canvas.hide", undefined);
+          if (!opts.json) {
+            defaultRuntime.log("canvas hide ok");
+          }
+        } catch (err) {
+          defaultRuntime.error(`canvas hide failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  canvasCallOpts(
+    canvas
+      .command("navigate")
+      .description("Navigate the canvas to a URL")
+      .argument("<url>", "Target URL/path")
+      .option("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (url: string, opts: CanvasOpts) => {
+        try {
+          await invokeCanvas(opts, "canvas.navigate", { url });
+          if (!opts.json) {
+            defaultRuntime.log("canvas navigate ok");
+          }
+        } catch (err) {
+          defaultRuntime.error(`canvas navigate failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  canvasCallOpts(
+    canvas
+      .command("eval")
+      .description("Evaluate JavaScript in the canvas")
+      .argument("[js]", "JavaScript to evaluate")
+      .option("--js <code>", "JavaScript to evaluate")
+      .option("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (jsArg: string | undefined, opts: CanvasOpts) => {
+        try {
+          const js = opts.js ?? jsArg;
+          if (!js) throw new Error("missing --js or <js>");
+          const nodeId = await resolveNodeId(opts, opts.node);
+          const raw = (await callGatewayCli("node.invoke", opts, {
+            nodeId,
+            command: "canvas.eval",
+            params: { javaScript: js },
+            idempotencyKey: randomIdempotencyKey(),
+          })) as unknown;
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(raw, null, 2));
+            return;
+          }
+          const payload =
+            typeof raw === "object" && raw !== null
+              ? (raw as { payload?: { result?: string } }).payload
+              : undefined;
+          if (payload?.result) {
+            defaultRuntime.log(payload.result);
+          } else {
+            defaultRuntime.log("canvas eval ok");
+          }
+        } catch (err) {
+          defaultRuntime.error(`canvas eval failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  const a2ui = canvas
+    .command("a2ui")
+    .description("Render A2UI content on the canvas");
+
+  canvasCallOpts(
+    a2ui
+      .command("push")
+      .description("Push A2UI JSONL to the canvas")
+      .option("--jsonl <path>", "Path to JSONL payload")
+      .option("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: CanvasOpts) => {
+        try {
+          if (!opts.jsonl) throw new Error("missing --jsonl");
+          const jsonl = await fs.readFile(String(opts.jsonl), "utf8");
+          await invokeCanvas(opts, "canvas.a2ui.pushJSONL", { jsonl });
+          if (!opts.json) {
+            defaultRuntime.log("canvas a2ui push ok");
+          }
+        } catch (err) {
+          defaultRuntime.error(`canvas a2ui push failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  canvasCallOpts(
+    a2ui
+      .command("reset")
+      .description("Reset A2UI renderer state")
+      .option("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: CanvasOpts) => {
+        try {
+          await invokeCanvas(opts, "canvas.a2ui.reset", undefined);
+          if (!opts.json) {
+            defaultRuntime.log("canvas a2ui reset ok");
+          }
+        } catch (err) {
+          defaultRuntime.error(`canvas a2ui reset failed: ${String(err)}`);
           defaultRuntime.exit(1);
         }
       }),

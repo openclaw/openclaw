@@ -152,9 +152,10 @@ describe("gateway-cli coverage", () => {
     programForceFail.exitOverride();
     registerGatewayCli(programForceFail);
     await expect(
-      programForceFail.parseAsync(["gateway", "--port", "18789", "--force"], {
-        from: "user",
-      }),
+      programForceFail.parseAsync(
+        ["gateway", "--port", "18789", "--force", "--allow-unconfigured"],
+        { from: "user" },
+      ),
     ).rejects.toThrow("__exit__:1");
 
     // Start failure (generic)
@@ -165,9 +166,10 @@ describe("gateway-cli coverage", () => {
     const beforeSigterm = new Set(process.listeners("SIGTERM"));
     const beforeSigint = new Set(process.listeners("SIGINT"));
     await expect(
-      programStartFail.parseAsync(["gateway", "--port", "18789"], {
-        from: "user",
-      }),
+      programStartFail.parseAsync(
+        ["gateway", "--port", "18789", "--allow-unconfigured"],
+        { from: "user" },
+      ),
     ).rejects.toThrow("__exit__:1");
     for (const listener of process.listeners("SIGTERM")) {
       if (!beforeSigterm.has(listener))
