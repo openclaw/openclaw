@@ -16,7 +16,7 @@ struct VoiceWakeSettings: View {
     @State private var meterError: String?
     private let meter = MicLevelMonitor()
     @State private var availableLocales: [Locale] = []
-    private let fieldLabelWidth: CGFloat = 120
+    private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 240
     private let isPreview = ProcessInfo.processInfo.isPreview
 
@@ -338,7 +338,7 @@ struct VoiceWakeSettings: View {
     private var localePicker: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Language")
+                Text("Recognition language")
                     .font(.callout.weight(.semibold))
                     .frame(width: self.fieldLabelWidth, alignment: .leading)
                 Picker("Language", selection: self.$state.voiceWakeLocaleID) {
