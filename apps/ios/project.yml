@@ -29,6 +29,7 @@ targets:
       - package: ClawdisKit
       - package: ClawdisKit
         product: ClawdisChatUI
+      - sdk: AppIntents.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
         basedOnDependencyAnalysis: false
