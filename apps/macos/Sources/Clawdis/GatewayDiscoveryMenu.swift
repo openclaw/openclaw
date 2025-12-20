@@ -89,11 +89,10 @@ struct GatewayDiscoveryInlineList: View {
         let host = self.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost
         guard let host else { return nil }
         let user = NSUserName()
-        var target = "\(user)@\(host)"
-        if gateway.sshPort != 22 {
-            target += ":\(gateway.sshPort)"
-        }
-        return target
+        return GatewayDiscoveryModel.buildSSHTarget(
+            user: user,
+            host: host,
+            port: gateway.sshPort)
     }
 
     private func sanitizedTailnetHost(_ host: String?) -> String? {

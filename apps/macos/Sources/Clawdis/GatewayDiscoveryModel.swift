@@ -117,31 +117,9 @@ final class GatewayDiscoveryModel {
             let prettyName =
                 advertisedName ?? Self.prettifyServiceName(decodedName)
 
-            var lanHost: String?
-            var tailnetDns: String?
-            var sshPort = 22
-            var cliPath: String?
+            let parsedTXT = Self.parseGatewayTXT(txt)
 
-            if let value = txt["lanHost"] {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                lanHost = trimmed.isEmpty ? nil : trimmed
-            }
-            if let value = txt["tailnetDns"] {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                tailnetDns = trimmed.isEmpty ? nil : trimmed
-            }
-            if let value = txt["sshPort"],
-               let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
-               parsed > 0
-            {
-                sshPort = parsed
-            }
-            if let value = txt["cliPath"] {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                cliPath = trimmed.isEmpty ? nil : trimmed
-            }
-
-            if lanHost == nil || tailnetDns == nil {
+            if parsedTXT.lanHost == nil || parsedTXT.tailnetDns == nil {
                 self.ensureTXTResolution(
                     stableID: stableID,
                     serviceName: name,
@@ -150,17 +128,17 @@ final class GatewayDiscoveryModel {
             }
 
             let isLocal = Self.isLocalGateway(
-                lanHost: lanHost,
-                tailnetDns: tailnetDns,
+                lanHost: parsedTXT.lanHost,
+                tailnetDns: parsedTXT.tailnetDns,
                 displayName: prettyName,
                 serviceName: decodedName,
                 local: self.localIdentity)
             return DiscoveredGateway(
                 displayName: prettyName,
-                lanHost: lanHost,
-                tailnetDns: tailnetDns,
-                sshPort: sshPort,
-                cliPath: cliPath,
+                lanHost: parsedTXT.lanHost,
+                tailnetDns: parsedTXT.tailnetDns,
+                sshPort: parsedTXT.sshPort,
+                cliPath: parsedTXT.cliPath,
                 stableID: stableID,
                 debugID: BridgeEndpointID.prettyDescription(result.endpoint),
                 isLocal: isLocal)
@@ -226,6 +204,44 @@ final class GatewayDiscoveryModel {
         }
 
         return merged
+    }
+
+    static func parseGatewayTXT(_ txt: [String: String])
+        -> (lanHost: String?, tailnetDns: String?, sshPort: Int, cliPath: String?)
+    {
+        var lanHost: String?
+        var tailnetDns: String?
+        var sshPort = 22
+        var cliPath: String?
+
+        if let value = txt["lanHost"] {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            lanHost = trimmed.isEmpty ? nil : trimmed
+        }
+        if let value = txt["tailnetDns"] {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            tailnetDns = trimmed.isEmpty ? nil : trimmed
+        }
+        if let value = txt["sshPort"],
+           let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0
+        {
+            sshPort = parsed
+        }
+        if let value = txt["cliPath"] {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            cliPath = trimmed.isEmpty ? nil : trimmed
+        }
+
+        return (lanHost, tailnetDns, sshPort, cliPath)
+    }
+
+    static func buildSSHTarget(user: String, host: String, port: Int) -> String {
+        var target = "\(user)@\(host)"
+        if port != 22 {
+            target += ":\(port)"
+        }
+        return target
     }
 
     private func ensureTXTResolution(

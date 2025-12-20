@@ -454,11 +454,10 @@ struct OnboardingView: View {
 
         if let host = gateway.tailnetDns ?? gateway.lanHost {
             let user = NSUserName()
-            var target = "\(user)@\(host)"
-            if gateway.sshPort != 22 {
-                target += ":\(gateway.sshPort)"
-            }
-            self.state.remoteTarget = target
+            self.state.remoteTarget = GatewayDiscoveryModel.buildSSHTarget(
+                user: user,
+                host: host,
+                port: gateway.sshPort)
         }
         self.state.remoteCliPath = gateway.cliPath ?? ""
 
