@@ -48,6 +48,7 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
         let initialRows = self.cachedRows
         let initialIsLoading = initialRows.isEmpty
         let initialStatusText = initialIsLoading ? self.cacheErrorText : nil
+        let initialWidth = self.initialCardWidth(for: menu)
 
         let initial = AnyView(ContextMenuCardView(
             rows: initialRows,
@@ -55,8 +56,8 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
             isLoading: initialIsLoading))
 
         let hosting = NSHostingView(rootView: initial)
+        hosting.frame.size.width = max(1, initialWidth)
         let size = hosting.fittingSize
-        let initialWidth = self.initialCardWidth(for: menu)
         hosting.frame = NSRect(
             origin: .zero,
             size: NSSize(width: initialWidth, height: size.height))
@@ -83,6 +84,7 @@ final class MenuContextCardInjector: NSObject, NSMenuDelegate {
                     hosting.rootView = view
                     hosting.invalidateIntrinsicContentSize()
                     self.captureMenuWidthIfAvailable(for: menu, hosting: hosting)
+                    hosting.frame.size.width = max(1, initialWidth)
                     let size = hosting.fittingSize
                     hosting.frame.size.height = size.height
                 }
