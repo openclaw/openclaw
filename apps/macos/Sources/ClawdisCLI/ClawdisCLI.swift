@@ -2,6 +2,7 @@ import ClawdisIPC
 import Darwin
 import Foundation
 
+// swiftlint:disable type_body_length
 @main
 struct ClawdisCLI {
     static func main() async {
@@ -535,6 +536,7 @@ struct ClawdisCLI {
         return CanvasPlacement(x: x, y: y, width: width, height: height)
     }
 
+    // swiftlint:disable:next cyclomatic_complexity
     private static func printText(parsed: ParsedCLIRequest, response: Response) throws {
         guard response.ok else {
             let msg = response.message ?? "failed"
@@ -1056,6 +1058,7 @@ struct ClawdisCLI {
         try? await Task.sleep(nanoseconds: 100_000_000)
     }
 }
+// swiftlint:enable type_body_length
 
 enum CLIError: Error { case help, version }
 

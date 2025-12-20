@@ -33,7 +33,11 @@ final class CanvasManager {
         placement: CanvasPlacement? = nil) throws -> CanvasShowResult
     {
         Self.logger.debug(
-            "showDetailed start session=\(sessionKey, privacy: .public) target=\(target ?? "", privacy: .public) placement=\(placement != nil)")
+            """
+            showDetailed start session=\(sessionKey, privacy: .public) \
+            target=\(target ?? "", privacy: .public) \
+            placement=\(placement != nil)
+            """)
         let anchorProvider = self.defaultAnchorProvider ?? Self.mouseAnchorProvider
         let session = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let normalizedTarget = target?

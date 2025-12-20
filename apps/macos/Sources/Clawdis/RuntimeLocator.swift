@@ -138,17 +138,27 @@ enum RuntimeLocator {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
-                    "runtime --version slow (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+                    """
+                    runtime --version slow (\(elapsedMs, privacy: .public)ms) \
+                    bin=\(binary, privacy: .public)
+                    """)
             } else {
                 self.logger.debug(
-                    "runtime --version ok (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+                    """
+                    runtime --version ok (\(elapsedMs, privacy: .public)ms) \
+                    bin=\(binary, privacy: .public)
+                    """)
             }
             let data = pipe.fileHandleForReading.readToEndSafely()
             return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(
-                "runtime --version failed (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
+                """
+                runtime --version failed (\(elapsedMs, privacy: .public)ms) \
+                bin=\(binary, privacy: .public) \
+                err=\(error.localizedDescription, privacy: .public)
+                """)
             return nil
         }
     }

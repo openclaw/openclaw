@@ -685,7 +685,10 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
             }
             if !result.ok {
                 canvasWindowLogger.error(
-                    "A2UI action send failed name=\(name, privacy: .public) error=\(result.error ?? "unknown", privacy: .public)")
+                    """
+                    A2UI action send failed name=\(name, privacy: .public) \
+                    error=\(result.error ?? "unknown", privacy: .public)
+                    """)
             }
         }
     }

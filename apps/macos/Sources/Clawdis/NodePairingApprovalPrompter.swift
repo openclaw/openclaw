@@ -189,13 +189,20 @@ final class NodePairingApprovalPrompter {
             if self.activeRequestId == req.requestId, self.activeAlert != nil {
                 self.remoteResolutionsByRequestId[req.requestId] = resolution
                 self.logger.info(
-                    "pairing request resolved elsewhere; closing dialog requestId=\(req.requestId, privacy: .public) resolution=\(resolution.rawValue, privacy: .public)")
+                    """
+                    pairing request resolved elsewhere; closing dialog \
+                    requestId=\(req.requestId, privacy: .public) \
+                    resolution=\(resolution.rawValue, privacy: .public)
+                    """)
                 self.endActiveAlert()
                 continue
             }
 
             self.logger.info(
-                "pairing request resolved elsewhere requestId=\(req.requestId, privacy: .public) resolution=\(resolution.rawValue, privacy: .public)")
+                """
+                pairing request resolved elsewhere requestId=\(req.requestId, privacy: .public) \
+                resolution=\(resolution.rawValue, privacy: .public)
+                """)
             self.queue.removeAll { $0 == req }
             Task { @MainActor in
                 await self.notify(resolution: resolution, request: req, via: "remote")
@@ -623,7 +630,11 @@ final class NodePairingApprovalPrompter {
         if self.activeRequestId == resolved.requestId, self.activeAlert != nil {
             self.remoteResolutionsByRequestId[resolved.requestId] = resolution
             self.logger.info(
-                "pairing request resolved elsewhere; closing dialog requestId=\(resolved.requestId, privacy: .public) resolution=\(resolution.rawValue, privacy: .public)")
+                """
+                pairing request resolved elsewhere; closing dialog \
+                requestId=\(resolved.requestId, privacy: .public) \
+                resolution=\(resolution.rawValue, privacy: .public)
+                """)
             self.endActiveAlert()
             return
         }

@@ -7,7 +7,6 @@ struct GeneralSettings: View {
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
-    // swiftlint:disable:next inclusive_language
     @State private var gatewayDiscovery = GatewayDiscoveryModel()
     @State private var isInstallingCLI = false
     @State private var cliStatus: String?
@@ -598,7 +597,6 @@ extension GeneralSettings {
         alert.runModal()
     }
 
-    // swiftlint:disable:next inclusive_language
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
         MacNodeModeCoordinator.shared.setPreferredBridgeStableID(gateway.stableID)
 

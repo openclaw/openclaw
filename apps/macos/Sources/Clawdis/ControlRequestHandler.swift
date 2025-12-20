@@ -433,7 +433,7 @@ enum ControlRequestHandler {
         logger: Logger) async -> Response
     {
         do {
-            var paramsObj: Any? = nil
+            var paramsObj: Any?
             let raw = (paramsJSON ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !raw.isEmpty {
                 if let data = raw.data(using: .utf8) {

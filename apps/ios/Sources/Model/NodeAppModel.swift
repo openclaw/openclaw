@@ -113,7 +113,7 @@ final class NodeAppModel {
             contextJSON: contextJSON)
 
         let ok: Bool
-        var errorText: String? = nil
+        var errorText: String?
         if await !self.isBridgeConnected() {
             ok = false
             errorText = "bridge not connected"
@@ -362,6 +362,7 @@ final class NodeAppModel {
         return false
     }
 
+    // swiftlint:disable:next function_body_length cyclomatic_complexity
     private func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
 

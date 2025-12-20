@@ -7,6 +7,7 @@ actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     @MainActor private let screenRecorder = ScreenRecordService()
 
+    // swiftlint:disable:next function_body_length
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
         if command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui."), !Self.canvasEnabled() {

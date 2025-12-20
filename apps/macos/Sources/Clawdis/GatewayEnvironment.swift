@@ -100,12 +100,15 @@ enum GatewayEnvironment {
         if let bundled = self.bundledGatewayExecutable() {
             let installed = self.readGatewayVersion(binary: bundled)
             if let expected, let installed, !installed.compatible(with: expected) {
+                let message =
+                    "Bundled gateway \(installed.description) is incompatible with app " +
+                    "\(expected.description); rebuild the app bundle."
                 return GatewayEnvironmentStatus(
                     kind: .incompatible(found: installed.description, required: expected.description),
                     nodeVersion: nil,
                     gatewayVersion: installed.description,
                     requiredGateway: expected.description,
-                    message: "Bundled gateway \(installed.description) is incompatible with app \(expected.description); rebuild the app bundle.")
+                    message: message)
             }
             let gatewayVersionText = installed?.description ?? "unknown"
             return GatewayEnvironmentStatus(
@@ -258,18 +261,29 @@ enum GatewayEnvironment {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             if elapsedMs > 500 {
                 self.logger.warning(
-                    "gateway --version slow (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+                    """
+                    gateway --version slow (\(elapsedMs, privacy: .public)ms) \
+                    bin=\(binary, privacy: .public)
+                    """)
             } else {
                 self.logger.debug(
-                    "gateway --version ok (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public)")
+                    """
+                    gateway --version ok (\(elapsedMs, privacy: .public)ms) \
+                    bin=\(binary, privacy: .public)
+                    """)
             }
             let data = pipe.fileHandleForReading.readToEndSafely()
-            let raw = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let raw = String(data: data, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             return Semver.parse(raw)
         } catch {
             let elapsedMs = Int(Date().timeIntervalSince(start) * 1000)
             self.logger.error(
-                "gateway --version failed (\(elapsedMs, privacy: .public)ms) bin=\(binary, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
+                """
+                gateway --version failed (\(elapsedMs, privacy: .public)ms) \
+                bin=\(binary, privacy: .public) \
+                err=\(error.localizedDescription, privacy: .public)
+                """)
             return nil
         }
     }

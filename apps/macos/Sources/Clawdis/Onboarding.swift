@@ -77,7 +77,6 @@ struct OnboardingView: View {
     @State private var gatewayInstallMessage: String?
     @State private var showAdvancedConnection = false
     @State private var preferredGatewayID: String?
-    // swiftlint:disable:next inclusive_language
     @State private var gatewayDiscovery: GatewayDiscoveryModel
     @Bindable private var state: AppState
     private var permissionMonitor: PermissionMonitor
@@ -489,8 +488,8 @@ struct OnboardingView: View {
                 }
 
                 Text(
-                    "This lets Pi use Claude immediately. Credentials are stored at `~/.pi/agent/oauth.json` (owner-only). " +
-                        "You can redo this anytime.")
+                    "This lets Pi use Claude immediately. Credentials are stored at " +
+                        "`~/.pi/agent/oauth.json` (owner-only). You can redo this anytime.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -993,7 +992,8 @@ struct OnboardingView: View {
                     } else {
                         Text(
                             "Tip: edit AGENTS.md in this folder to shape the assistant’s behavior. " +
-                                "For backup, make the workspace a private git repo so your agent’s “memory” is versioned.")
+                                "For backup, make the workspace a private git repo so your agent’s " +
+                                "“memory” is versioned.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(2)

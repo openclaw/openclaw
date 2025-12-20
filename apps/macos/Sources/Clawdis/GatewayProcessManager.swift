@@ -94,7 +94,12 @@ final class GatewayProcessManager {
         self.lastFailureReason = nil
         self.status = .stopped
         let bundlePath = Bundle.main.bundleURL.path
-        Task { _ = await GatewayLaunchAgentManager.set(enabled: false, bundlePath: bundlePath, port: GatewayEnvironment.gatewayPort()) }
+        Task {
+            _ = await GatewayLaunchAgentManager.set(
+                enabled: false,
+                bundlePath: bundlePath,
+                port: GatewayEnvironment.gatewayPort())
+        }
     }
 
     func refreshEnvironmentStatus(force: Bool = false) {

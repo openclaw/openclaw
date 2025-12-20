@@ -35,7 +35,7 @@ final class MacNodeModeCoordinator {
 
     private func run() async {
         var retryDelay: UInt64 = 1_000_000_000
-        var lastCameraEnabled: Bool? = nil
+        var lastCameraEnabled: Bool?
         let defaults = UserDefaults.standard
         while !Task.isCancelled {
             if await MainActor.run(body: { AppStateStore.shared.isPaused }) {
