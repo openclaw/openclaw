@@ -13,14 +13,12 @@ import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 export type SkillInstallSpec = {
   id?: string;
-  kind: "brew" | "node" | "go" | "pnpm" | "shell";
+  kind: "brew" | "node" | "go" | "shell";
   label?: string;
   bins?: string[];
   formula?: string;
   package?: string;
   module?: string;
-  repoPath?: string;
-  script?: string;
   command?: string;
 };
 
@@ -145,7 +143,6 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     kind !== "brew" &&
     kind !== "node" &&
     kind !== "go" &&
-    kind !== "pnpm" &&
     kind !== "shell"
   ) {
     return undefined;
@@ -162,8 +159,6 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (typeof raw.formula === "string") spec.formula = raw.formula;
   if (typeof raw.package === "string") spec.package = raw.package;
   if (typeof raw.module === "string") spec.module = raw.module;
-  if (typeof raw.repoPath === "string") spec.repoPath = raw.repoPath;
-  if (typeof raw.script === "string") spec.script = raw.script;
   if (typeof raw.command === "string") spec.command = raw.command;
 
   return spec;
