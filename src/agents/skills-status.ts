@@ -76,13 +76,13 @@ function selectPreferredInstallSpec(
   const brewSpec = findKind("brew");
   const nodeSpec = findKind("node");
   const goSpec = findKind("go");
-  const shellSpec = findKind("shell");
+  const uvSpec = findKind("uv");
 
   if (prefs.preferBrew && hasBinary("brew") && brewSpec) return brewSpec;
+  if (uvSpec) return uvSpec;
   if (nodeSpec) return nodeSpec;
   if (brewSpec) return brewSpec;
   if (goSpec) return goSpec;
-  if (shellSpec) return shellSpec;
   return indexed[0];
 }
 
@@ -108,6 +108,8 @@ function normalizeInstallOptions(
       label = `Install ${spec.package} (${prefs.nodeManager})`;
     } else if (spec.kind === "go" && spec.module) {
       label = `Install ${spec.module} (go)`;
+    } else if (spec.kind === "uv" && spec.package) {
+      label = `Install ${spec.package} (uv)`;
     } else {
       label = "Run installer";
     }

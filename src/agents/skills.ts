@@ -13,13 +13,12 @@ import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
 export type SkillInstallSpec = {
   id?: string;
-  kind: "brew" | "node" | "go" | "shell";
+  kind: "brew" | "node" | "go" | "uv";
   label?: string;
   bins?: string[];
   formula?: string;
   package?: string;
   module?: string;
-  command?: string;
 };
 
 export type ClawdisSkillMetadata = {
@@ -143,7 +142,7 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
     kind !== "brew" &&
     kind !== "node" &&
     kind !== "go" &&
-    kind !== "shell"
+    kind !== "uv"
   ) {
     return undefined;
   }
@@ -159,7 +158,6 @@ function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   if (typeof raw.formula === "string") spec.formula = raw.formula;
   if (typeof raw.package === "string") spec.package = raw.package;
   if (typeof raw.module === "string") spec.module = raw.module;
-  if (typeof raw.command === "string") spec.command = raw.command;
 
   return spec;
 }

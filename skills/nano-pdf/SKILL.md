@@ -1,7 +1,7 @@
 ---
 name: nano-pdf
 description: Edit PDFs with natural-language instructions using the nano-pdf CLI.
-metadata: {"clawdis":{"emoji":"📄","requires":{"bins":["nano-pdf"]},"install":[{"id":"pipx","kind":"shell","command":"python3 -m pip install --user pipx && python3 -m pipx ensurepath && pipx install nano-pdf","bins":["nano-pdf"],"label":"Install nano-pdf (pipx)"},{"id":"pip","kind":"shell","command":"python3 -m pip install --user nano-pdf","bins":["nano-pdf"],"label":"Install nano-pdf (pip --user)"}]}}
+metadata: {"clawdis":{"emoji":"📄","requires":{"bins":["nano-pdf"]},"install":[{"id":"uv","kind":"uv","package":"nano-pdf","bins":["nano-pdf"],"label":"Install nano-pdf (uv)"}]}}
 ---
 
 # nano-pdf

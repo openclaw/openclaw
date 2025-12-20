@@ -13,7 +13,7 @@ The macOS app surfaces Clawdis skills via the gateway; it does not parse skills 
 - Requirements are derived from `metadata.clawdis.requires` in each `SKILL.md`.
 
 ## Install actions
-- `metadata.clawdis.install` defines install options (brew/node/go/shell).
+- `metadata.clawdis.install` defines install options (brew/node/go/uv).
 - The app calls `skills.install` to run installers on the gateway host.
 - The gateway surfaces only one preferred installer when multiple are provided (brew when available, otherwise node manager from `skillsInstall`, default npm).
 

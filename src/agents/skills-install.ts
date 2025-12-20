@@ -1,13 +1,14 @@
+import type { ClawdisConfig } from "../config/config.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import {
+  hasBinary,
   loadWorkspaceSkillEntries,
   resolveSkillsInstallPreferences,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
 } from "./skills.js";
-import type { ClawdisConfig } from "../config/config.js";
 
 export type SkillInstallRequest = {
   workspaceDir: string;
@@ -40,10 +41,6 @@ function findInstallSpec(
   return undefined;
 }
 
-function runShell(command: string, timeoutMs: number) {
-  return runCommandWithTimeout(["/bin/zsh", "-lc", command], { timeoutMs });
-}
-
 function buildNodeInstallCommand(
   packageName: string,
   prefs: SkillsInstallPreferences,
@@ -63,36 +60,33 @@ function buildInstallCommand(
   prefs: SkillsInstallPreferences,
 ): {
   argv: string[] | null;
-  shell: string | null;
-  cwd?: string;
   error?: string;
 } {
   switch (spec.kind) {
     case "brew": {
       if (!spec.formula)
-        return { argv: null, shell: null, error: "missing brew formula" };
-      return { argv: ["brew", "install", spec.formula], shell: null };
+        return { argv: null, error: "missing brew formula" };
+      return { argv: ["brew", "install", spec.formula] };
     }
     case "node": {
       if (!spec.package)
-        return { argv: null, shell: null, error: "missing node package" };
+        return { argv: null, error: "missing node package" };
       return {
         argv: buildNodeInstallCommand(spec.package, prefs),
-        shell: null,
       };
     }
     case "go": {
       if (!spec.module)
-        return { argv: null, shell: null, error: "missing go module" };
-      return { argv: ["go", "install", spec.module], shell: null };
+        return { argv: null, error: "missing go module" };
+      return { argv: ["go", "install", spec.module] };
     }
-    case "shell": {
-      if (!spec.command)
-        return { argv: null, shell: null, error: "missing shell command" };
-      return { argv: null, shell: spec.command };
+    case "uv": {
+      if (!spec.package)
+        return { argv: null, error: "missing uv package" };
+      return { argv: ["uv", "tool", "install", spec.package] };
     }
     default:
-      return { argv: null, shell: null, error: "unsupported installer" };
+      return { argv: null, error: "unsupported installer" };
   }
 }
 
@@ -138,7 +132,34 @@ export async function installSkill(
       code: null,
     };
   }
-  if (!command.shell && (!command.argv || command.argv.length === 0)) {
+  if (spec.kind === "uv" && !hasBinary("uv")) {
+    if (hasBinary("brew")) {
+      const brewResult = await runCommandWithTimeout(
+        ["brew", "install", "uv"],
+        {
+          timeoutMs,
+        },
+      );
+      if (brewResult.code !== 0) {
+        return {
+          ok: false,
+          message: "Failed to install uv (brew)",
+          stdout: brewResult.stdout.trim(),
+          stderr: brewResult.stderr.trim(),
+          code: brewResult.code,
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        message: "uv not installed (install via brew)",
+        stdout: "",
+        stderr: "",
+        code: null,
+      };
+    }
+  }
+  if (!command.argv || command.argv.length === 0) {
     return {
       ok: false,
       message: "invalid install command",
@@ -149,14 +170,12 @@ export async function installSkill(
   }
 
   const result = await (async () => {
-    if (command.shell) return runShell(command.shell, timeoutMs);
     const argv = command.argv;
     if (!argv || argv.length === 0) {
       return { code: null, stdout: "", stderr: "invalid install command" };
     }
     return runCommandWithTimeout(argv, {
       timeoutMs,
-      cwd: command.cwd,
     });
   })();
 
