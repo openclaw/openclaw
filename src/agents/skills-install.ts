@@ -86,18 +86,6 @@ function buildInstallCommand(
         return { argv: null, shell: null, error: "missing go module" };
       return { argv: ["go", "install", spec.module], shell: null };
     }
-    case "pnpm": {
-      if (!spec.repoPath || !spec.script) {
-        return {
-          argv: null,
-          shell: null,
-          error: "missing pnpm repoPath/script",
-        };
-      }
-      const repoPath = resolveUserPath(spec.repoPath);
-      const cmd = `cd ${JSON.stringify(repoPath)} && pnpm install && pnpm run ${JSON.stringify(spec.script)}`;
-      return { argv: null, shell: cmd };
-    }
     case "shell": {
       if (!spec.command)
         return { argv: null, shell: null, error: "missing shell command" };

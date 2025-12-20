@@ -62,7 +62,7 @@ Fields under `metadata.clawdis`:
 - `requires.env` — list; env var must exist **or** be provided in config.
 - `requires.config` — list of `clawdis.json` paths that must be truthy.
 - `primaryEnv` — env var name associated with `skills.<name>.apiKey`.
-- `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/pnpm/shell).
+- `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/shell).
 
 Installer example:
 

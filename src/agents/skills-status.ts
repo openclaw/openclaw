@@ -76,14 +76,12 @@ function selectPreferredInstallSpec(
   const brewSpec = findKind("brew");
   const nodeSpec = findKind("node");
   const goSpec = findKind("go");
-  const pnpmSpec = findKind("pnpm");
   const shellSpec = findKind("shell");
 
   if (prefs.preferBrew && hasBinary("brew") && brewSpec) return brewSpec;
   if (nodeSpec) return nodeSpec;
   if (brewSpec) return brewSpec;
   if (goSpec) return goSpec;
-  if (pnpmSpec) return pnpmSpec;
   if (shellSpec) return shellSpec;
   return indexed[0];
 }
@@ -110,8 +108,6 @@ function normalizeInstallOptions(
       label = `Install ${spec.package} (${prefs.nodeManager})`;
     } else if (spec.kind === "go" && spec.module) {
       label = `Install ${spec.module} (go)`;
-    } else if (spec.kind === "pnpm" && spec.repoPath) {
-      label = `Install ${spec.repoPath} (pnpm)`;
     } else {
       label = "Run installer";
     }
