@@ -360,7 +360,13 @@ export async function agentCommand(
   const telegramTarget = opts.to?.trim() || undefined;
 
   const logDeliveryError = (err: unknown) => {
-    const message = `Delivery failed (${deliveryProvider}): ${String(err)}`;
+    const deliveryTarget =
+      deliveryProvider === "telegram"
+        ? telegramTarget
+        : deliveryProvider === "whatsapp"
+          ? whatsappTarget
+          : undefined;
+    const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
     if (!runtime.error) runtime.log(message);
   };

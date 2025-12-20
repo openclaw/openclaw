@@ -40,8 +40,6 @@ describe("wide-area DNS-SD zone rendering", () => {
       instanceLabel: "studio-london",
     });
 
-    expect(txt).toContain(
-      `tailnetDns=peters-mac-studio-1.sheep-coho.ts.net`,
-    );
+    expect(txt).toContain(`tailnetDns=peters-mac-studio-1.sheep-coho.ts.net`);
   });
 });

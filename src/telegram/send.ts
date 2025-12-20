@@ -33,8 +33,27 @@ function resolveToken(explicit?: string): string {
 function normalizeChatId(to: string): string {
   const trimmed = to.trim();
   if (!trimmed) throw new Error("Recipient is required for Telegram sends");
-  if (trimmed.startsWith("@")) return trimmed;
-  return trimmed;
+
+  // Common internal prefixes that sometimes leak into outbound sends.
+  // - ctx.To uses `telegram:<id>`
+  // - group sessions often use `group:<id>`
+  let normalized = trimmed.replace(/^(telegram|tg|group):/i, "").trim();
+
+  // Accept t.me links for public chats/channels.
+  // (Invite links like `t.me/+...` are not resolvable via Bot API.)
+  const m =
+    /^https?:\/\/t\.me\/([A-Za-z0-9_]+)$/i.exec(normalized) ??
+    /^t\.me\/([A-Za-z0-9_]+)$/i.exec(normalized);
+  if (m?.[1]) normalized = `@${m[1]}`;
+
+  if (!normalized) throw new Error("Recipient is required for Telegram sends");
+  if (normalized.startsWith("@")) return normalized;
+  if (/^-?\d+$/.test(normalized)) return normalized;
+
+  // If the user passed a username without `@`, assume they meant a public chat/channel.
+  if (/^[A-Za-z0-9_]{5,}$/i.test(normalized)) return `@${normalized}`;
+
+  return normalized;
 }
 
 export async function sendMessageTelegram(
@@ -75,6 +94,18 @@ export async function sendMessageTelegram(
     throw lastErr ?? new Error(`Telegram send failed (${label})`);
   };
 
+  const wrapChatNotFound = (err: unknown) => {
+    if (!/400: Bad Request: chat not found/i.test(String(err ?? "")))
+      return err;
+    return new Error(
+      [
+        `Telegram send failed: chat not found (chat_id=${chatId}).`,
+        "Likely: bot not started in DM, bot removed from group/channel, group migrated (new -100… id), or wrong bot token.",
+        `Input was: ${JSON.stringify(to)}.`,
+      ].join(" "),
+    );
+  };
+
   if (mediaUrl) {
     const media = await loadWebMedia(mediaUrl, opts.maxBytes);
     const kind = mediaKindFromMime(media.contentType ?? undefined);
@@ -92,22 +123,30 @@ export async function sendMessageTelegram(
       result = await sendWithRetry(
         () => api.sendPhoto(chatId, file, { caption }),
         "photo",
-      );
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
     } else if (kind === "video") {
       result = await sendWithRetry(
         () => api.sendVideo(chatId, file, { caption }),
         "video",
-      );
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
     } else if (kind === "audio") {
       result = await sendWithRetry(
         () => api.sendAudio(chatId, file, { caption }),
         "audio",
-      );
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
     } else {
       result = await sendWithRetry(
         () => api.sendDocument(chatId, file, { caption }),
         "document",
-      );
+      ).catch((err) => {
+        throw wrapChatNotFound(err);
+      });
     }
     const messageId = String(result?.message_id ?? "unknown");
     return { messageId, chatId: String(result?.chat?.id ?? chatId) };
@@ -131,9 +170,11 @@ export async function sendMessageTelegram(
       return await sendWithRetry(
         () => api.sendMessage(chatId, text),
         "message-plain",
-      );
+      ).catch((err2) => {
+        throw wrapChatNotFound(err2);
+      });
     }
-    throw err;
+    throw wrapChatNotFound(err);
   });
   const messageId = String(res?.message_id ?? "unknown");
   return { messageId, chatId: String(res?.chat?.id ?? chatId) };
