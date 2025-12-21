@@ -202,8 +202,9 @@
 
 .list-item {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 260px);
   gap: 14px;
+  align-items: start;
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 12px;
@@ -213,6 +214,7 @@
 .list-main {
   display: grid;
   gap: 6px;
+  min-width: 0;
 }
 
 .list-title {
@@ -230,6 +232,13 @@
   font-size: 12px;
   display: grid;
   gap: 4px;
+  min-width: 220px;
+}
+
+.list-meta .field input,
+.list-meta .field textarea,
+.list-meta .field select {
+  width: 100%;
 }
 
 .chip-row {
@@ -347,4 +356,3 @@
   border-radius: 10px;
   image-rendering: pixelated;
 }
-
