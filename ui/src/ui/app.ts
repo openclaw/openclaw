@@ -70,7 +70,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
 export class ClawdisApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   @state() password = "";
-  @state() tab: Tab = "overview";
+  @state() tab: Tab = "chat";
   @state() connected = false;
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
@@ -156,6 +156,7 @@ export class ClawdisApp extends LitElement {
   @state() debugCallError: string | null = null;
 
   client: GatewayBrowserClient | null = null;
+  private chatScrollFrame: number | null = null;
 
   createRenderRoot() {
     return this;
@@ -164,6 +165,18 @@ export class ClawdisApp extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this.connect();
+  }
+
+  protected updated(changed: Map<PropertyKey, unknown>) {
+    if (
+      this.tab === "chat" &&
+      (changed.has("chatMessages") ||
+        changed.has("chatStream") ||
+        changed.has("chatLoading") ||
+        changed.has("tab"))
+    ) {
+      this.scheduleChatScroll();
+    }
   }
 
   connect() {
@@ -197,6 +210,16 @@ export class ClawdisApp extends LitElement {
       },
     });
     this.client.start();
+  }
+
+  private scheduleChatScroll() {
+    if (this.chatScrollFrame) cancelAnimationFrame(this.chatScrollFrame);
+    this.chatScrollFrame = requestAnimationFrame(() => {
+      this.chatScrollFrame = null;
+      const container = this.querySelector(".messages") as HTMLElement | null;
+      if (!container) return;
+      container.scrollTop = container.scrollHeight;
+    });
   }
 
   private onEvent(evt: GatewayEventFrame) {

@@ -38,6 +38,7 @@ export function renderChat(props: ChatProps) {
       </div>
 
       <div class="messages" style="margin-top: 12px;">
+        ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
         ${props.messages.map((m) => renderMessage(m))}
         ${props.stream
           ? html`${renderMessage({
@@ -113,4 +114,3 @@ function extractText(message: unknown): string | null {
   if (typeof m.text === "string") return m.text;
   return null;
 }
-

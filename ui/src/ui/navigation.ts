@@ -1,10 +1,11 @@
 export const TAB_GROUPS = [
+  { label: "Chat", tabs: ["chat"] },
   {
     label: "Control",
     tabs: ["overview", "connections", "instances", "sessions", "cron"],
   },
-  { label: "Agent", tabs: ["chat", "skills", "nodes"] },
-  { label: "Gateway", tabs: ["config", "debug"] },
+  { label: "Agent", tabs: ["skills", "nodes"] },
+  { label: "Settings", tabs: ["config", "debug"] },
 ] as const;
 
 export type Tab =
@@ -72,4 +73,3 @@ export function subtitleForTab(tab: Tab) {
       return "";
   }
 }
-
