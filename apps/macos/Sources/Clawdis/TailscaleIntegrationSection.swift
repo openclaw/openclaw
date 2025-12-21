@@ -270,8 +270,11 @@ struct TailscaleIntegrationSection: View {
         let authModeRaw = auth["mode"] as? String
         let allowTailscale = auth["allowTailscale"] as? Bool
 
-        if let authModeRaw, authModeRaw == "password" { self.authMode = .password }
-        else { self.authMode = .system }
+        if let authModeRaw, authModeRaw == "password" {
+            self.authMode = .password
+        } else {
+            self.authMode = .system
+        }
 
         self.username = auth["username"] as? String ?? ""
         self.password = auth["password"] as? String ?? ""

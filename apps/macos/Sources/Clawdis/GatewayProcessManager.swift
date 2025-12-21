@@ -33,6 +33,7 @@ final class GatewayProcessManager {
     private(set) var status: Status = .stopped {
         didSet { CanvasManager.shared.refreshDebugStatus() }
     }
+
     private(set) var log: String = ""
     private(set) var environmentStatus: GatewayEnvironmentStatus = .checking
     private(set) var existingGatewayDetails: String?
