@@ -43,6 +43,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     private let container: HoverChromeContainerView
     let presentation: CanvasPresentation
     private var preferredPlacement: CanvasPlacement?
+    private(set) var currentTarget: String?
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -237,6 +238,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
     func load(target: String) {
         let trimmed = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.currentTarget = trimmed
 
         if let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() {
             if scheme == "https" || scheme == "http" {
@@ -338,6 +340,18 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
 
     var directoryPath: String {
         self.sessionDir.path
+    }
+
+    func shouldAutoNavigateToA2UI(lastAutoTarget: String?) -> Bool {
+        let trimmed = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "/" { return true }
+        if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !lastAuto.isEmpty,
+           trimmed == lastAuto
+        {
+            return true
+        }
+        return false
     }
 
     // MARK: - Window

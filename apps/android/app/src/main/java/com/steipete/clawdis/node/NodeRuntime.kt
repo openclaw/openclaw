@@ -109,6 +109,8 @@ class NodeRuntime(context: Context) {
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
+  private var lastAutoA2uiUrl: String? = null
+
   private val session =
     BridgeSession(
       scope = scope,
@@ -118,6 +120,7 @@ class NodeRuntime(context: Context) {
         _remoteAddress.value = remote
         _isConnected.value = true
         scope.launch { refreshWakeWordsFromGateway() }
+        maybeNavigateToA2uiOnConnect()
       },
       onDisconnected = { message -> handleSessionDisconnected(message) },
       onEvent = { event, payloadJson ->
@@ -136,6 +139,21 @@ class NodeRuntime(context: Context) {
     _remoteAddress.value = null
     _isConnected.value = false
     chat.onDisconnected(message)
+    showLocalCanvasOnDisconnect()
+  }
+
+  private fun maybeNavigateToA2uiOnConnect() {
+    val a2uiUrl = resolveA2uiHostUrl() ?: return
+    val current = canvas.currentUrl()?.trim().orEmpty()
+    if (current.isEmpty() || current == lastAutoA2uiUrl) {
+      lastAutoA2uiUrl = a2uiUrl
+      canvas.navigate(a2uiUrl)
+    }
+  }
+
+  private fun showLocalCanvasOnDisconnect() {
+    lastAutoA2uiUrl = null
+    canvas.navigate("")
   }
 
   val instanceId: StateFlow<String> = prefs.instanceId

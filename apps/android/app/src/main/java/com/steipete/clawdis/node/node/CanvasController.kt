@@ -44,6 +44,10 @@ class CanvasController {
     reload()
   }
 
+  fun currentUrl(): String? = url
+
+  fun isDefaultCanvas(): Boolean = url == null
+
   private inline fun withWebViewOnMain(crossinline block: (WebView) -> Unit) {
     val wv = webView ?: return
     if (Looper.myLooper() == Looper.getMainLooper()) {

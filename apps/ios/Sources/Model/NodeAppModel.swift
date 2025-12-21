@@ -28,6 +28,7 @@ final class NodeAppModel {
     private var voiceWakeSyncTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
+    private var lastAutoA2uiURL: String?
 
     var bridgeSession: BridgeSession { self.bridge }
 
@@ -147,6 +148,20 @@ final class NodeAppModel {
         return base.appendingPathComponent("__clawdis__/a2ui/").absoluteString
     }
 
+    private func showA2UIOnConnectIfNeeded() async {
+        guard let a2uiUrl = await self.resolveA2UIHostURL() else { return }
+        let current = self.screen.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        if current.isEmpty || current == self.lastAutoA2uiURL {
+            self.screen.navigate(to: a2uiUrl)
+            self.lastAutoA2uiURL = a2uiUrl
+        }
+    }
+
+    private func showLocalCanvasOnDisconnect() {
+        self.lastAutoA2uiURL = nil
+        self.screen.showDefaultCanvas()
+    }
+
     func setScenePhase(_ phase: ScenePhase) {
         switch phase {
         case .background:
@@ -202,6 +217,7 @@ final class NodeAppModel {
                                 }
                             }
                             await self.startVoiceWakeSync()
+                            await self.showA2UIOnConnectIfNeeded()
                         },
                         onInvoke: { [weak self] req in
                             guard let self else {
@@ -214,6 +230,9 @@ final class NodeAppModel {
                         })
 
                     if Task.isCancelled { break }
+                    await MainActor.run {
+                        self.showLocalCanvasOnDisconnect()
+                    }
                     attempt += 1
                     let sleepSeconds = min(6.0, 0.35 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
@@ -224,6 +243,7 @@ final class NodeAppModel {
                         self.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
                         self.bridgeServerName = nil
                         self.bridgeRemoteAddress = nil
+                        self.showLocalCanvasOnDisconnect()
                     }
                     let sleepSeconds = min(8.0, 0.5 * pow(1.7, Double(attempt)))
                     try? await Task.sleep(nanoseconds: UInt64(sleepSeconds * 1_000_000_000))
@@ -235,6 +255,7 @@ final class NodeAppModel {
                 self.bridgeServerName = nil
                 self.bridgeRemoteAddress = nil
                 self.connectedBridgeID = nil
+                self.showLocalCanvasOnDisconnect()
             }
         }
     }
@@ -249,6 +270,7 @@ final class NodeAppModel {
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
         self.connectedBridgeID = nil
+        self.showLocalCanvasOnDisconnect()
     }
 
     func setGlobalWakeWords(_ words: [String]) async {
