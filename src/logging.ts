@@ -34,6 +34,7 @@ export type LoggerSettings = {
   file?: string;
   consoleLevel?: Level;
   consoleStyle?: ConsoleStyle;
+  consoleColor?: ConsoleColor;
 };
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -45,9 +46,11 @@ type ResolvedSettings = {
 export type LoggerResolvedSettings = ResolvedSettings;
 
 export type ConsoleStyle = "pretty" | "compact" | "json";
+export type ConsoleColor = "auto" | "always" | "never";
 type ConsoleSettings = {
   level: Level;
   style: ConsoleStyle;
+  color: ConsoleColor;
 };
 export type ConsoleLoggerSettings = ConsoleSettings;
 
@@ -87,7 +90,8 @@ function resolveConsoleSettings(): ConsoleSettings {
     overrideSettings ?? loadConfig().logging;
   const level = normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
-  return { level, style };
+  const color = normalizeConsoleColor(cfg?.consoleColor);
+  return { level, style, color };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
@@ -100,7 +104,7 @@ function consoleSettingsChanged(
   b: ConsoleSettings,
 ) {
   if (!a) return true;
-  return a.level !== b.level || a.style !== b.style;
+  return a.level !== b.level || a.style !== b.style || a.color !== b.color;
 }
 
 function levelToMinLevel(level: Level): number {
@@ -131,6 +135,13 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
   }
   if (!process.stdout.isTTY) return "compact";
   return "pretty";
+}
+
+function normalizeConsoleColor(color?: string): ConsoleColor {
+  if (color === "auto" || color === "always" || color === "never") {
+    return color;
+  }
+  return "auto";
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
@@ -339,7 +350,9 @@ function shouldLogToConsole(level: Level, settings: ConsoleSettings): boolean {
   return current <= min;
 }
 
-function getColorForConsole(): Chalk {
+function getColorForConsole(mode: ConsoleColor): Chalk {
+  if (mode === "never") return new Chalk({ level: 0 });
+  if (mode === "always") return new Chalk({ level: 1 });
   const supports =
     process.stdout.isTTY &&
     !process.env.NO_COLOR &&
@@ -347,11 +360,31 @@ function getColorForConsole(): Chalk {
   return supports ? chalk : new Chalk({ level: 0 });
 }
 
+const SUBSYSTEM_COLORS = [
+  "cyan",
+  "green",
+  "yellow",
+  "blue",
+  "magenta",
+  "red",
+] as const;
+
+function pickSubsystemColor(color: Chalk, subsystem: string): Chalk {
+  let hash = 0;
+  for (let i = 0; i < subsystem.length; i += 1) {
+    hash = (hash * 31 + subsystem.charCodeAt(i)) | 0;
+  }
+  const idx = Math.abs(hash) % SUBSYSTEM_COLORS.length;
+  const name = SUBSYSTEM_COLORS[idx];
+  return color[name];
+}
+
 function formatConsoleLine(opts: {
   level: Level;
   subsystem: string;
   message: string;
   style: ConsoleStyle;
+  colorMode: ConsoleColor;
   meta?: Record<string, unknown>;
 }): string {
   if (opts.style === "json") {
@@ -363,8 +396,9 @@ function formatConsoleLine(opts: {
       ...opts.meta,
     });
   }
-  const color = getColorForConsole();
+  const color = getColorForConsole(opts.colorMode);
   const prefix = `[${opts.subsystem}]`;
+  const prefixColor = pickSubsystemColor(color, opts.subsystem);
   const levelColor =
     opts.level === "error" || opts.level === "fatal"
       ? color.red
@@ -377,8 +411,7 @@ function formatConsoleLine(opts: {
     opts.style === "pretty"
       ? color.gray(new Date().toISOString().slice(11, 19))
       : "";
-  const prefixToken =
-    opts.style === "pretty" ? color.gray(prefix) : prefix;
+  const prefixToken = prefixColor(prefix);
   const head = [time, prefixToken].filter(Boolean).join(" ");
   return `${head} ${levelColor(opts.message)}`;
 }
@@ -422,6 +455,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       subsystem,
       message,
       style: consoleSettings.style,
+      colorMode: consoleSettings.color,
       meta,
     });
     writeConsoleLine(level, line);

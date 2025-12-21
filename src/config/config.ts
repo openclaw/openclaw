@@ -29,6 +29,7 @@ export type LoggingConfig = {
     | "debug"
     | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
+  consoleColor?: "auto" | "always" | "never";
 };
 
 export type WebReconnectConfig = {
@@ -268,6 +269,9 @@ const ClawdisSchema = z.object({
         .optional(),
       consoleStyle: z
         .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
+        .optional(),
+      consoleColor: z
+        .union([z.literal("auto"), z.literal("always"), z.literal("never")])
         .optional(),
     })
     .optional(),

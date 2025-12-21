@@ -74,7 +74,8 @@ Subsystem loggers are created via `createSubsystemLogger("gateway")`.
 Behavior:
 
 - **Subsystem prefixes** on every line (e.g. `[gateway]`, `[canvas]`, `[tailscale]`)
-- **Color only when TTY** (`process.stdout.isTTY` + `NO_COLOR` respected)
+- **Subsystem colors** (stable per subsystem) plus level coloring
+- **Color modes** (`logging.consoleColor`: `auto`/`always`/`never`; `auto` honors `NO_COLOR` and TTY)
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`)
 - **`logRaw()`** for QR/UX output (no prefix, no formatting)
 - **Console styles** (e.g. `pretty | compact | json`)
