@@ -12,6 +12,7 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 ## Prereqs
 - Developer ID Application cert installed (`Developer ID Application: Peter Steinberger (Y5PE65HELJ)` is expected).
 - Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE`; key lives in `/Users/steipete/Library/CloudStorage/Dropbox/Backup/Sparkle` (same key as Trimmy; public key baked into Info.plist).
+- Notary credentials (keychain profile or API key) for `xcrun notarytool` if you want Gatekeeper-safe DMG/zip distribution.
 - `pnpm` deps installed (`pnpm install --config.node-linker=hoisted`).
 - Sparkle tools are fetched automatically via SwiftPM at `apps/macos/.build/artifacts/sparkle/Sparkle/bin/` (`sign_update`, `generate_appcast`, etc.).
 
@@ -30,6 +31,18 @@ ditto -c -k --sequesterRsrc --keepParent dist/Clawdis.app dist/Clawdis-0.1.0.zip
 
 # Optional: also build a styled DMG for humans (drag to /Applications)
 scripts/create-dmg.sh dist/Clawdis.app dist/Clawdis-0.1.0.dmg
+
+# Recommended: build + notarize/staple zip + DMG
+# First, create a keychain profile once:
+#   xcrun notarytool store-credentials "clawdis-notary" \
+#     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
+NOTARIZE=1 NOTARYTOOL_PROFILE=clawdis-notary \
+BUNDLE_ID=com.steipete.clawdis \
+APP_VERSION=0.1.0 \
+APP_BUILD=0.1.0 \
+BUILD_CONFIG=release \
+SIGN_IDENTITY="Developer ID Application: Peter Steinberger (Y5PE65HELJ)" \
+scripts/package-mac-dist.sh
 
 # Optional: ship dSYM alongside the release
 ditto -c -k --keepParent apps/macos/.build/release/Clawdis.app.dSYM dist/Clawdis-0.1.0.dSYM.zip

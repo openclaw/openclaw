@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_BUNDLE="${1:-dist/Clawdis.app}"
 IDENTITY="${SIGN_IDENTITY:-}"
+TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
 ENT_TMP_BASE=$(mktemp -t clawdis-entitlements-base)
 ENT_TMP_APP=$(mktemp -t clawdis-entitlements-app)
 ENT_TMP_APP_BASE=$(mktemp -t clawdis-entitlements-app-base)
@@ -46,6 +47,25 @@ if [ -z "$IDENTITY" ]; then
 fi
 
 echo "Using signing identity: $IDENTITY"
+
+timestamp_arg="--timestamp=none"
+case "$TIMESTAMP_MODE" in
+  1|on|yes|true)
+    timestamp_arg="--timestamp"
+    ;;
+  0|off|no|false)
+    timestamp_arg="--timestamp=none"
+    ;;
+  auto)
+    if [[ "$IDENTITY" == *"Developer ID Application"* ]]; then
+      timestamp_arg="--timestamp"
+    fi
+    ;;
+  *)
+    echo "ERROR: Unknown CODESIGN_TIMESTAMP value: $TIMESTAMP_MODE (use auto|on|off)" >&2
+    exit 1
+    ;;
+esac
 
 cat > "$ENT_TMP_BASE" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -118,12 +138,12 @@ xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 sign_item() {
   local target="$1"
   local entitlements="$2"
-  codesign --force --options runtime --timestamp=none --entitlements "$entitlements" --sign "$IDENTITY" "$target"
+  codesign --force --options runtime "$timestamp_arg" --entitlements "$entitlements" --sign "$IDENTITY" "$target"
 }
 
 sign_plain_item() {
   local target="$1"
-  codesign --force --options runtime --timestamp=none --sign "$IDENTITY" "$target"
+  codesign --force --options runtime "$timestamp_arg" --sign "$IDENTITY" "$target"
 }
 
 # Sign main binary

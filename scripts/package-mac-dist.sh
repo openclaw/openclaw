@@ -21,6 +21,16 @@ fi
 VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Contents/Info.plist" 2>/dev/null || echo "0.0.0")
 ZIP="$ROOT_DIR/dist/Clawdis-$VERSION.zip"
 DMG="$ROOT_DIR/dist/Clawdis-$VERSION.dmg"
+NOTARY_ZIP="$ROOT_DIR/dist/Clawdis-$VERSION.notary.zip"
+NOTARIZE="${NOTARIZE:-0}"
+
+if [[ "$NOTARIZE" == "1" ]]; then
+  echo "📦 Notary zip: $NOTARY_ZIP"
+  rm -f "$NOTARY_ZIP"
+  ditto -c -k --sequesterRsrc --keepParent "$APP" "$NOTARY_ZIP"
+  STAPLE_APP_PATH="$APP" "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$NOTARY_ZIP"
+  rm -f "$NOTARY_ZIP"
+fi
 
 echo "📦 Zip: $ZIP"
 rm -f "$ZIP"
@@ -29,3 +39,6 @@ ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 echo "💿 DMG: $DMG"
 "$ROOT_DIR/scripts/create-dmg.sh" "$APP" "$DMG"
 
+if [[ "$NOTARIZE" == "1" ]]; then
+  "$ROOT_DIR/scripts/notarize-mac-artifact.sh" "$DMG"
+fi

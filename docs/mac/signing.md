@@ -10,6 +10,7 @@ This app is usually built from `scripts/package-mac-app.sh`, which now:
 - sets a stable debug bundle identifier: `com.steipete.clawdis.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
 - calls `scripts/codesign-mac-app.sh` to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). Defaults to ad‑hoc; set `SIGN_IDENTITY="Developer ID Application: …"` to use a real cert.
+- uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
 - injects build metadata into Info.plist: `ClawdisBuildTimestamp` (UTC) and `ClawdisGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
 - reads `SIGN_IDENTITY` from the environment. Add `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (or your Developer ID Application cert) to your shell rc to always sign with your cert; otherwise signing falls back to ad‑hoc.
 
