@@ -38,6 +38,7 @@ final class AppState {
     var debugPaneEnabled: Bool {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.debugPaneEnabled, forKey: "clawdis.debugPaneEnabled") }
+            CanvasManager.shared.refreshDebugStatus()
         }
     }
 

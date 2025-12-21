@@ -44,6 +44,9 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     let presentation: CanvasPresentation
     private var preferredPlacement: CanvasPlacement?
     private(set) var currentTarget: String?
+    private var debugStatusEnabled = false
+    private var debugStatusTitle: String?
+    private var debugStatusSubtitle: String?
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -276,6 +279,35 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         }
         canvasWindowLogger.debug("canvas load canvas \(url.absoluteString, privacy: .public)")
         self.webView.load(URLRequest(url: url))
+    }
+
+    func updateDebugStatus(enabled: Bool, title: String?, subtitle: String?) {
+        self.debugStatusEnabled = enabled
+        self.debugStatusTitle = title
+        self.debugStatusSubtitle = subtitle
+        self.applyDebugStatusIfNeeded()
+    }
+
+    private func applyDebugStatusIfNeeded() {
+        let enabled = self.debugStatusEnabled
+        let title = Self.jsOptionalStringLiteral(self.debugStatusTitle)
+        let subtitle = Self.jsOptionalStringLiteral(self.debugStatusSubtitle)
+        let js = """
+        (() => {
+          try {
+            const api = globalThis.__clawdis;
+            if (!api) return;
+            if (typeof api.setDebugStatusEnabled === 'function') {
+              api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
+            }
+            if (!\(enabled ? "true" : "false")) return;
+            if (typeof api.setStatus === 'function') {
+              api.setStatus(\(title), \(subtitle));
+            }
+          } catch (_) {}
+        })();
+        """
+        self.webView.evaluateJavaScript(js) { _, _ in }
     }
 
     private func loadFile(_ url: URL) {
@@ -551,6 +583,10 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
         decisionHandler(.cancel)
     }
 
+    func webView(_: WKWebView, didFinish _: WKNavigation?) {
+        self.applyDebugStatusIfNeeded()
+    }
+
     // MARK: - NSWindowDelegate
 
     func windowWillClose(_: Notification) {
@@ -583,6 +619,11 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     private static func jsStringLiteral(_ value: String) -> String {
         let data = try? JSONEncoder().encode(value)
         return data.flatMap { String(data: $0, encoding: .utf8) } ?? "\"\""
+    }
+
+    private static func jsOptionalStringLiteral(_ value: String?) -> String {
+        guard let value else { return "null" }
+        return Self.jsStringLiteral(value)
     }
 
     private static func storedFrameDefaultsKey(sessionKey: String) -> String {

@@ -56,6 +56,7 @@ final class CanvasManager {
             }
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
+            self.refreshDebugStatus()
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
@@ -103,6 +104,7 @@ final class CanvasManager {
         if normalizedTarget == nil {
             self.maybeAutoNavigateToA2UIAsync(controller: controller)
         }
+        self.refreshDebugStatus()
 
         return self.makeShowResult(
             directory: controller.directoryPath,
@@ -175,6 +177,14 @@ final class CanvasManager {
     private func resolveA2UIHostUrl() async -> String? {
         let raw = await GatewayConnection.shared.canvasHostUrl()
         return Self.resolveA2UIHostUrl(from: raw)
+    }
+
+    func refreshDebugStatus() {
+        guard let controller = self.panelController else { return }
+        let enabled = AppStateStore.shared.debugPaneEnabled
+        let title = GatewayProcessManager.shared.status.label
+        let subtitle = AppStateStore.shared.connectionMode.rawValue
+        controller.updateDebugStatus(enabled: enabled, title: title, subtitle: subtitle)
     }
 
     private static func resolveA2UIHostUrl(from raw: String?) -> String? {
