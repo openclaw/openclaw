@@ -161,6 +161,22 @@ function formatPermissions(raw: unknown) {
   return `[${parts.join(", ")}]`;
 }
 
+function unauthorizedHintForMessage(message: string): string | null {
+  const haystack = message.toLowerCase();
+  if (
+    haystack.includes("unauthorizedclient") ||
+    haystack.includes("bridge client is not authorized") ||
+    haystack.includes("unsigned bridge clients are not allowed")
+  ) {
+    return [
+      "peekaboo bridge rejected the client.",
+      "sign the peekaboo CLI (TeamID Y5PE65HELJ) or launch the host with",
+      "PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1 for local dev.",
+    ].join(" ");
+  }
+  return null;
+}
+
 function normalizeNodeKey(value: string) {
   return value
     .toLowerCase()
@@ -602,6 +618,10 @@ export function registerNodesCli(program: Command) {
             defaultRuntime.exit(1);
             return;
           }
+          if (exitCode !== null && exitCode !== 0) {
+            const hint = unauthorizedHintForMessage(`${stderr}\n${stdout}`);
+            if (hint) defaultRuntime.error(hint);
+          }
           if (exitCode !== null && exitCode !== 0 && !success) {
             defaultRuntime.error(`run exit ${exitCode}`);
             defaultRuntime.exit(1);
@@ -609,6 +629,8 @@ export function registerNodesCli(program: Command) {
           }
         } catch (err) {
           defaultRuntime.error(`nodes run failed: ${String(err)}`);
+          const hint = unauthorizedHintForMessage(String(err));
+          if (hint) defaultRuntime.error(hint);
           defaultRuntime.exit(1);
         }
       }),
