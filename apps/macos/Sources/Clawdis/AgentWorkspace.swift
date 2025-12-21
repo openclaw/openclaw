@@ -9,8 +9,6 @@ enum AgentWorkspace {
     static let userFilename = "USER.md"
     static let bootstrapFilename = "BOOTSTRAP.md"
     private static let templateDirname = "templates"
-    static let identityStartMarker = "<!-- clawdis:identity:start -->"
-    static let identityEndMarker = "<!-- clawdis:identity:end -->"
     enum BootstrapSafety: Equatable {
         case safe
         case unsafe(reason: String)
@@ -92,29 +90,15 @@ enum AgentWorkspace {
         return agentsURL
     }
 
-    static func upsertIdentity(workspaceURL: URL, identity: AgentIdentity) throws {
-        let agentsURL = try self.bootstrap(workspaceURL: workspaceURL)
-        var content = (try? String(contentsOf: agentsURL, encoding: .utf8)) ?? ""
-        let block = self.identityBlock(identity: identity)
-
-        if let start = content.range(of: self.identityStartMarker),
-           let end = content.range(of: self.identityEndMarker),
-           start.lowerBound < end.upperBound
-        {
-            content.replaceSubrange(
-                start.lowerBound..<end.upperBound,
-                with: block.trimmingCharacters(in: .whitespacesAndNewlines))
-        } else if let insert = self.identityInsertRange(in: content) {
-            content.insert(contentsOf: "\n\n## Identity\n\(block)\n", at: insert.upperBound)
-        } else {
-            content = [content.trimmingCharacters(in: .whitespacesAndNewlines), "## Identity\n\(block)"]
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n\n")
-                .appending("\n")
+    static func needsBootstrap(workspaceURL: URL) -> Bool {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        if !fm.fileExists(atPath: workspaceURL.path, isDirectory: &isDir) {
+            return true
         }
-
-        try content.write(to: agentsURL, atomically: true, encoding: .utf8)
-        self.logger.info("Updated identity in \(agentsURL.path, privacy: .public)")
+        guard isDir.boolValue else { return true }
+        let bootstrapURL = workspaceURL.appendingPathComponent(self.bootstrapFilename)
+        return fm.fileExists(atPath: bootstrapURL.path)
     }
 
     static func defaultTemplate() -> String {
@@ -301,25 +285,5 @@ enum AgentWorkspace {
         return trimmed + "\n"
     }
 
-    private static func identityBlock(identity: AgentIdentity) -> String {
-        let name = identity.name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let theme = identity.theme.trimmingCharacters(in: .whitespacesAndNewlines)
-        let emoji = identity.emoji.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        return """
-        \(self.identityStartMarker)
-        - Name: \(name)
-        - Theme: \(theme)
-        - Emoji: \(emoji)
-        \(self.identityEndMarker)
-        """
-    }
-
-    private static func identityInsertRange(in content: String) -> Range<String.Index>? {
-        if let firstHeading = content.range(of: "\n") {
-            // Insert after the first line (usually "# AGENTS.md …")
-            return firstHeading
-        }
-        return nil
-    }
+    // Identity is written by the agent during the bootstrap ritual.
 }

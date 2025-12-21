@@ -86,7 +86,7 @@ This onboarding chat is where the agent:
 - asks how the user wants to talk (web-only / WhatsApp / Telegram)
 - guides linking steps (including showing a QR inline for WhatsApp via the `whatsapp_login` tool)
 
-If the agent identity already exists in `~/.clawdis/clawdis.json`, the onboarding chat step is skipped.
+If the workspace bootstrap is already complete (BOOTSTRAP.md removed), the onboarding chat step is skipped.
 
 Once setup is complete, the user can switch to the normal chat (`main`) via the menu bar panel.
 

@@ -68,12 +68,7 @@ struct OnboardingView: View {
     @State private var anthropicAuthLastPasteboardChangeCount = NSPasteboard.general.changeCount
     @State private var monitoringAuth = false
     @State private var authMonitorTask: Task<Void, Never>?
-    @State private var identityName: String = ""
-    @State private var identityTheme: String = ""
-    @State private var identityEmoji: String = ""
-    @State private var identityStatus: String?
-    @State private var identityApplying = false
-    @State private var hasIdentity = false
+    @State private var needsBootstrap = false
     @State private var didAutoKickoff = false
     @State private var showAdvancedConnection = false
     @State private var preferredGatewayID: String?
@@ -93,22 +88,22 @@ struct OnboardingView: View {
     private let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        hasIdentity: Bool) -> [Int]
+        needsBootstrap: Bool) -> [Int]
     {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            hasIdentity ? [0, 1, 5, 9] : [0, 1, 5, 8, 9]
+            needsBootstrap ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
-            hasIdentity ? [0, 1, 9] : [0, 1, 8, 9]
+            needsBootstrap ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            hasIdentity ? [0, 1, 2, 5, 6, 9] : [0, 1, 2, 5, 6, 8, 9]
+            needsBootstrap ? [0, 1, 2, 5, 6, 8, 9] : [0, 1, 2, 5, 6, 9]
         }
     }
 
     private var pageOrder: [Int] {
-        Self.pageOrder(for: self.state.connectionMode, hasIdentity: self.hasIdentity)
+        Self.pageOrder(for: self.state.connectionMode, needsBootstrap: self.needsBootstrap)
     }
 
     private var pageCount: Int { self.pageOrder.count }
@@ -182,7 +177,7 @@ struct OnboardingView: View {
             self.reconcilePageForModeChange(previousActivePageIndex: oldActive)
             self.updateDiscoveryMonitoring(for: self.activePageIndex)
         }
-        .onChange(of: self.hasIdentity) { _, _ in
+        .onChange(of: self.needsBootstrap) { _, _ in
             if self.currentPage >= self.pageOrder.count {
                 self.currentPage = max(0, self.pageOrder.count - 1)
             }
@@ -198,7 +193,7 @@ struct OnboardingView: View {
             self.loadWorkspaceDefaults()
             self.ensureDefaultWorkspace()
             self.refreshAnthropicOAuthStatus()
-            self.loadIdentityDefaults()
+            self.refreshBootstrapStatus()
             self.preferredGatewayID = BridgeDiscoveryPreferences.preferredStableID()
         }
     }
@@ -230,8 +225,6 @@ struct OnboardingView: View {
             self.connectionPage()
         case 2:
             self.anthropicAuthPage()
-        case 3:
-            self.identityPage()
         case 5:
             self.permissionsPage()
         case 6:
@@ -729,99 +722,6 @@ struct OnboardingView: View {
         let status = PiOAuthStore.anthropicOAuthStatus()
         self.anthropicAuthDetectedStatus = status
         self.anthropicAuthConnected = status.isConnected
-    }
-
-    private func identityPage() -> some View {
-        self.onboardingPage {
-            Text("Identity")
-                .font(.largeTitle.weight(.semibold))
-            Text("Name your agent, pick a vibe, and choose an emoji.")
-                .font(.body)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 520)
-                .fixedSize(horizontal: false, vertical: true)
-
-            self.onboardingCard(spacing: 12, padding: 16) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Agent name")
-                        .font(.headline)
-                    TextField("Clawd", text: self.$identityName)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Theme")
-                        .font(.headline)
-                    TextField("helpful space lobster", text: self.$identityTheme)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("Emoji")
-                        .font(.headline)
-                    HStack(spacing: 12) {
-                        TextField("🦞", text: self.$identityEmoji)
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 120)
-
-                        Button("Suggest") {
-                            let suggested = AgentIdentityEmoji.suggest(theme: self.identityTheme)
-                            self.identityEmoji = suggested
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-
-                Divider().padding(.vertical, 2)
-
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Workspace")
-                        .font(.headline)
-                    Text(self.workspacePath.isEmpty ? AgentWorkspace
-                        .displayPath(for: ClawdisConfigFile.defaultWorkspaceURL()) : self.workspacePath)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.applyIdentity() }
-                    } label: {
-                        if self.identityApplying {
-                            ProgressView()
-                        } else {
-                            Text("Save identity")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.identityApplying || self.identityName.trimmingCharacters(in: .whitespacesAndNewlines)
-                        .isEmpty)
-
-                    Button("Open workspace") {
-                        let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-                        NSWorkspace.shared.open(url)
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.identityApplying)
-                }
-
-                Text(
-                    "This writes your identity to `~/.clawdis/clawdis.json` and into `AGENTS.md` " +
-                        "inside the workspace. " +
-                        "Treat that workspace as the agent’s “memory” and consider making it a private git repo.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                if let status = self.identityStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
     }
 
     private func permissionsPage() -> some View {
@@ -1372,6 +1272,7 @@ struct OnboardingView: View {
         let configured = ClawdisConfigFile.inboundWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
         self.workspacePath = AgentWorkspace.displayPath(for: url)
+        self.refreshBootstrapStatus()
     }
 
     private func ensureDefaultWorkspace() {
@@ -1391,26 +1292,14 @@ struct OnboardingView: View {
         case let .unsafe(reason):
             self.workspaceStatus = "Workspace not touched: \(reason)"
         }
+        self.refreshBootstrapStatus()
     }
 
-    private func loadIdentityDefaults() {
-        if let identity = ClawdisConfigFile.loadIdentity() {
-            self.identityName = identity.name
-            self.identityTheme = identity.theme
-            self.identityEmoji = identity.emoji
-            self.hasIdentity = !identity.isEmpty
-            return
-        }
-
-        self.hasIdentity = false
-        if self.identityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.identityName = "Clawd"
-        }
-        if self.identityTheme.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.identityTheme = "helpful space lobster"
-        }
-        if self.identityEmoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.identityEmoji = AgentIdentityEmoji.suggest(theme: self.identityTheme)
+    private func refreshBootstrapStatus() {
+        let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+        self.needsBootstrap = AgentWorkspace.needsBootstrap(workspaceURL: url)
+        if self.needsBootstrap {
+            self.didAutoKickoff = false
         }
     }
 
@@ -1438,45 +1327,15 @@ struct OnboardingView: View {
             _ = try AgentWorkspace.bootstrap(workspaceURL: url)
             self.workspacePath = AgentWorkspace.displayPath(for: url)
             self.workspaceStatus = "Workspace ready at \(self.workspacePath)"
+            self.refreshBootstrapStatus()
         } catch {
             self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
         }
     }
 
-    private func applyIdentity() async {
-        guard !self.identityApplying else { return }
-        self.identityApplying = true
-        defer { self.identityApplying = false }
-
-        if self.identityName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            self.identityStatus = "Please enter a name first."
-            return
-        }
-
-        var identity = AgentIdentity(
-            name: self.identityName,
-            theme: self.identityTheme,
-            emoji: self.identityEmoji)
-
-        if identity.emoji.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            identity.emoji = AgentIdentityEmoji.suggest(theme: identity.theme)
-            self.identityEmoji = identity.emoji
-        }
-
-        do {
-            let workspaceURL = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-            try AgentWorkspace.upsertIdentity(workspaceURL: workspaceURL, identity: identity)
-            ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: workspaceURL))
-            ClawdisConfigFile.setIdentity(identity)
-            self.identityStatus = "Saved identity to AGENTS.md and ~/.clawdis/clawdis.json"
-        } catch {
-            self.identityStatus = "Failed to save identity: \(error.localizedDescription)"
-        }
-    }
-
     private func maybeKickoffOnboardingChat(for pageIndex: Int) {
         guard pageIndex == self.onboardingChatPageIndex else { return }
-        guard !self.hasIdentity else { return }
+        guard self.needsBootstrap else { return }
         guard !self.didAutoKickoff else { return }
         self.didAutoKickoff = true
 

@@ -80,27 +80,4 @@ enum ClawdisConfigFile {
         self.saveDict(root)
     }
 
-    static func loadIdentity() -> AgentIdentity? {
-        let root = self.loadDict()
-        guard let identity = root["identity"] as? [String: Any] else { return nil }
-        let name = identity["name"] as? String ?? ""
-        let theme = identity["theme"] as? String ?? ""
-        let emoji = identity["emoji"] as? String ?? ""
-        let result = AgentIdentity(name: name, theme: theme, emoji: emoji)
-        return result.isEmpty ? nil : result
-    }
-
-    static func setIdentity(_ identity: AgentIdentity?) {
-        var root = self.loadDict()
-        if let identity, !identity.isEmpty {
-            root["identity"] = [
-                "name": identity.name.trimmingCharacters(in: .whitespacesAndNewlines),
-                "theme": identity.theme.trimmingCharacters(in: .whitespacesAndNewlines),
-                "emoji": identity.emoji.trimmingCharacters(in: .whitespacesAndNewlines),
-            ]
-        } else {
-            root.removeValue(forKey: "identity")
-        }
-        self.saveDict(root)
-    }
 }
