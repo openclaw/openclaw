@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import util from "node:util";
 
-import chalk, { Chalk } from "chalk";
+import { Chalk } from "chalk";
 import { Logger as TsLogger } from "tslog";
 import { type ClawdisConfig, loadConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
@@ -57,14 +57,12 @@ let cachedConsoleSettings: ConsoleSettings | null = null;
 let overrideSettings: LoggerSettings | null = null;
 let consolePatched = false;
 let forceConsoleToStderr = false;
-let rawConsole:
-  | {
-      log: typeof console.log;
-      info: typeof console.info;
-      warn: typeof console.warn;
-      error: typeof console.error;
-    }
-  | null = null;
+let rawConsole: {
+  log: typeof console.log;
+  info: typeof console.info;
+  warn: typeof console.warn;
+  error: typeof console.error;
+} | null = null;
 
 function normalizeLevel(level?: string): Level {
   if (isVerbose()) return "trace";
@@ -95,10 +93,7 @@ function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   return a.level !== b.level || a.file !== b.file;
 }
 
-function consoleSettingsChanged(
-  a: ConsoleSettings | null,
-  b: ConsoleSettings,
-) {
+function consoleSettingsChanged(a: ConsoleSettings | null, b: ConsoleSettings) {
   if (!a) return true;
   return a.level !== b.level || a.style !== b.style;
 }
@@ -169,7 +164,10 @@ export function getLogger(): TsLogger<LogObj> {
 
 export function getConsoleSettings(): ConsoleLoggerSettings {
   const settings = resolveConsoleSettings();
-  if (!cachedConsoleSettings || consoleSettingsChanged(cachedConsoleSettings, settings)) {
+  if (
+    !cachedConsoleSettings ||
+    consoleSettingsChanged(cachedConsoleSettings, settings)
+  ) {
     cachedConsoleSettings = settings;
   }
   return cachedConsoleSettings;
@@ -339,7 +337,9 @@ function shouldLogToConsole(level: Level, settings: ConsoleSettings): boolean {
   return current <= min;
 }
 
-function getColorForConsole(): Chalk {
+type ChalkInstance = InstanceType<typeof Chalk>;
+
+function getColorForConsole(): ChalkInstance {
   if (process.env.NO_COLOR) return new Chalk({ level: 0 });
   const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
   return hasTty ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
@@ -354,7 +354,10 @@ const SUBSYSTEM_COLORS = [
   "red",
 ] as const;
 
-function pickSubsystemColor(color: Chalk, subsystem: string): Chalk {
+function pickSubsystemColor(
+  color: ChalkInstance,
+  subsystem: string,
+): ChalkInstance {
   let hash = 0;
   for (let i = 0; i < subsystem.length; i += 1) {
     hash = (hash * 31 + subsystem.charCodeAt(i)) | 0;
@@ -417,10 +420,16 @@ function logToFile(
   message: string,
   meta?: Record<string, unknown>,
 ) {
+  if (level === "silent") return;
+  const safeLevel = level as Exclude<Level, "silent">;
+  const method = (fileLogger as unknown as Record<string, unknown>)[
+    safeLevel
+  ] as unknown as ((...args: unknown[]) => void) | undefined;
+  if (typeof method !== "function") return;
   if (meta && Object.keys(meta).length > 0) {
-    (fileLogger[level] as (...args: unknown[]) => void)(meta, message);
+    method.call(fileLogger, meta, message);
   } else {
-    (fileLogger[level] as (...args: unknown[]) => void)(message);
+    method.call(fileLogger, message);
   }
 }
 
@@ -430,7 +439,11 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (!fileLogger) fileLogger = getChildLogger({ subsystem });
     return fileLogger;
   };
-  const emit = (level: Level, message: string, meta?: Record<string, unknown>) => {
+  const emit = (
+    level: Level,
+    message: string,
+    meta?: Record<string, unknown>,
+  ) => {
     logToFile(getFileLogger(), level, message, meta);
     const consoleSettings = getConsoleSettings();
     if (!shouldLogToConsole(level, consoleSettings)) return;
