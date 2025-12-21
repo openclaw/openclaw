@@ -318,6 +318,10 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
         self.controller?.errorText = error.localizedDescription
     }
 
+    func webView(_: WKWebView, didFinish _: WKNavigation?) {
+        self.controller?.errorText = nil
+    }
+
     func webView(_: WKWebView, didFail _: WKNavigation?, withError error: any Error) {
         self.controller?.errorText = error.localizedDescription
     }
