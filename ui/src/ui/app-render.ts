@@ -131,7 +131,6 @@ export type AppViewState = {
 };
 
 export function renderApp(state: AppViewState) {
-  const proto = state.settings.gatewayUrl.startsWith("wss://") ? "wss" : "ws";
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -146,13 +145,9 @@ export function renderApp(state: AppViewState) {
         <div class="topbar-status">
           <div class="pill">
             <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span class="mono">${proto}</span>
-            <span class="mono">${state.settings.gatewayUrl}</span>
+            <span>Health</span>
+            <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
-          <button class="btn" @click=${() => state.connect()}>Reconnect</button>
-          <button class="btn danger" @click=${() => state.client?.stop()}>
-            Disconnect
-          </button>
         </div>
       </header>
       <aside class="nav">
