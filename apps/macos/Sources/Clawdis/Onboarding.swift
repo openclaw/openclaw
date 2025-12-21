@@ -243,9 +243,7 @@ struct OnboardingView: View {
             VStack(spacing: 22) {
                 Text("Welcome to Clawdis")
                     .font(.largeTitle.weight(.semibold))
-                Text(
-                    "Your macOS menu bar companion for notifications, screenshots, and agent automation. " +
-                        "Setup takes a few minutes.")
+                Text("Clawdis is a powerful personal AI assistant that can connect to WhatsApp or Telegram.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -735,9 +733,13 @@ struct OnboardingView: View {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard {
+            self.onboardingCard(spacing: 8, padding: 12) {
                 ForEach(Capability.allCases, id: \.self) { cap in
-                    PermissionRow(capability: cap, status: self.permissionMonitor.status[cap] ?? false) {
+                    PermissionRow(
+                        capability: cap,
+                        status: self.permissionMonitor.status[cap] ?? false,
+                        compact: true)
+                    {
                         Task { await self.request(cap) }
                     }
                 }
@@ -1050,7 +1052,7 @@ struct OnboardingView: View {
     }
 
     private func onboardingPage(@ViewBuilder _ content: () -> some View) -> some View {
-        VStack(spacing: 22) {
+        VStack(spacing: 16) {
             content()
             Spacer()
         }

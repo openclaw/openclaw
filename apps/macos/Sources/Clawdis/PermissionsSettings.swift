@@ -58,13 +58,21 @@ struct PermissionStatusList: View {
 struct PermissionRow: View {
     let capability: Capability
     let status: Bool
+    let compact: Bool
     let action: () -> Void
 
+    init(capability: Capability, status: Bool, compact: Bool = false, action: @escaping () -> Void) {
+        self.capability = capability
+        self.status = status
+        self.compact = compact
+        self.action = action
+    }
+
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: self.compact ? 10 : 12) {
             ZStack {
                 Circle().fill(self.status ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
-                    .frame(width: 32, height: 32)
+                    .frame(width: self.iconSize, height: self.iconSize)
                 Image(systemName: self.icon)
                     .foregroundStyle(self.status ? Color.green : Color.secondary)
             }
@@ -81,8 +89,10 @@ struct PermissionRow: View {
                     .buttonStyle(.bordered)
             }
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, self.compact ? 4 : 6)
     }
+
+    private var iconSize: CGFloat { self.compact ? 28 : 32 }
 
     private var title: String {
         switch self.capability {
