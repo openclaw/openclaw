@@ -210,6 +210,44 @@ body::after {
   gap: 10px;
 }
 
+.titlebar__link {
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--panel) 92%, transparent);
+  border: var(--border) solid var(--frame-border);
+  color: var(--text);
+  text-decoration: none;
+  font-family: var(--font-pixel);
+  letter-spacing: 0.12em;
+  font-size: 12px;
+  text-transform: uppercase;
+  box-shadow: 0 6px 0 -3px rgba(0, 0, 0, 0.25);
+}
+
+.titlebar__link:hover {
+  border-color: color-mix(in oklab, var(--accent2) 45%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent2) 30%, transparent);
+}
+
+.titlebar__link:active {
+  transform: translateY(1px);
+  box-shadow: 0 4px 0 -3px rgba(0, 0, 0, 0.25);
+}
+
+.titlebar__link:focus-visible {
+  outline: 3px solid color-mix(in oklab, var(--accent2) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.titlebar__link--accent {
+  background:
+    linear-gradient(120deg, color-mix(in oklab, var(--accent) 18%, transparent), transparent 70%),
+    color-mix(in oklab, var(--panel) 88%, transparent);
+  border-color: color-mix(in oklab, var(--accent) 60%, var(--frame-border));
+}
+
 .theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -391,6 +429,12 @@ body::after {
   border-top: 1px solid color-mix(in oklab, var(--frame-border) 20%, transparent);
   color: var(--muted);
   font-size: 13px;
+}
+
+.footer__actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
 }
 
 .terminal__footer a {
