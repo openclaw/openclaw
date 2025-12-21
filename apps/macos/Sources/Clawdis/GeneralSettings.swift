@@ -126,6 +126,9 @@ struct GeneralSettings: View {
 
             if self.state.connectionMode == .local {
                 self.gatewayInstallerCard
+                TailscaleIntegrationSection(
+                    connectionMode: self.state.connectionMode,
+                    isPaused: self.state.isPaused)
                 self.healthRow
             }
 
@@ -645,6 +648,7 @@ struct GeneralSettings_Previews: PreviewProvider {
     static var previews: some View {
         GeneralSettings(state: .preview)
             .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
+            .environment(TailscaleService.shared)
     }
 }
 #endif

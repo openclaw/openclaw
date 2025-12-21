@@ -30,6 +30,23 @@ enum ClawdisConfigFile {
         } catch {}
     }
 
+    static func loadGatewayDict() -> [String: Any] {
+        let root = self.loadDict()
+        return root["gateway"] as? [String: Any] ?? [:]
+    }
+
+    static func updateGatewayDict(_ mutate: (inout [String: Any]) -> Void) {
+        var root = self.loadDict()
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        mutate(&gateway)
+        if gateway.isEmpty {
+            root.removeValue(forKey: "gateway")
+        } else {
+            root["gateway"] = gateway
+        }
+        self.saveDict(root)
+    }
+
     static func browserControlEnabled(defaultValue: Bool = true) -> Bool {
         let root = self.loadDict()
         let browser = root["browser"] as? [String: Any]

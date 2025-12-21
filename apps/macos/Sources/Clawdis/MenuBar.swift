@@ -16,6 +16,7 @@ struct ClawdisApp: App {
     @State private var isMenuPresented = false
     @State private var isPanelVisible = false
     @State private var menuInjector = MenuContextCardInjector.shared
+    @State private var tailscaleService = TailscaleService.shared
 
     @MainActor
     private func updateStatusHighlight() {
@@ -66,6 +67,7 @@ struct ClawdisApp: App {
         Settings {
             SettingsRootView(state: self.state, updater: self.delegate.updaterController)
                 .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
+                .environment(self.tailscaleService)
         }
         .defaultSize(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight)
         .windowResizability(.contentSize)
