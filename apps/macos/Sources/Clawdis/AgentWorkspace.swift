@@ -11,6 +11,10 @@ enum AgentWorkspace {
     private static let templateDirname = "templates"
     static let identityStartMarker = "<!-- clawdis:identity:start -->"
     static let identityEndMarker = "<!-- clawdis:identity:end -->"
+    enum BootstrapSafety: Equatable {
+        case safe
+        case unsafe(reason: String)
+    }
 
     static func displayPath(for url: URL) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -31,6 +35,31 @@ enum AgentWorkspace {
 
     static func agentsURL(workspaceURL: URL) -> URL {
         workspaceURL.appendingPathComponent(self.agentsFilename)
+    }
+
+    static func bootstrapSafety(for workspaceURL: URL) -> BootstrapSafety {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        if !fm.fileExists(atPath: workspaceURL.path, isDirectory: &isDir) {
+            return .safe
+        }
+        if !isDir.boolValue {
+            return .unsafe(reason: "Workspace path points to a file.")
+        }
+        let agentsURL = self.agentsURL(workspaceURL: workspaceURL)
+        if fm.fileExists(atPath: agentsURL.path) {
+            return .safe
+        }
+        do {
+            let contents = try fm.contentsOfDirectory(atPath: workspaceURL.path)
+            let ignored: Set<String> = [".DS_Store", ".git", ".gitignore"]
+            let filtered = contents.filter { !ignored.contains($0) }
+            return filtered.isEmpty
+                ? .safe
+                : .unsafe(reason: "Folder isn't empty. Choose a new folder or add AGENTS.md first.")
+        } catch {
+            return .unsafe(reason: "Couldn't inspect the workspace folder.")
+        }
     }
 
     static func bootstrap(workspaceURL: URL) throws -> URL {

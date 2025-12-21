@@ -94,7 +94,8 @@ Once setup is complete, the user can switch to the normal chat (`main`) via the 
 
 We no longer collect identity in the onboarding wizard. Instead, the **first agent run** performs a playful bootstrap ritual using files in the workspace:
 
-- Workspace is created implicitly (default `~/.clawdis/workspace`) when local is selected.
+- Workspace is created implicitly (default `~/.clawdis/workspace`) when local is selected,
+  but only if the folder is empty or already contains `AGENTS.md`.
 - Files are seeded: `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`.
 - `BOOTSTRAP.md` tells the agent to keep it conversational:
   - open with a cute hello

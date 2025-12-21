@@ -48,4 +48,40 @@ struct AgentWorkspaceTests {
         let second = try AgentWorkspace.bootstrap(workspaceURL: tmp)
         #expect(second == agentsURL)
     }
+
+    @Test
+    func bootstrapSafetyRejectsNonEmptyFolderWithoutAgents() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdis-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let marker = tmp.appendingPathComponent("notes.txt")
+        try "hello".write(to: marker, atomically: true, encoding: .utf8)
+
+        let result = AgentWorkspace.bootstrapSafety(for: tmp)
+        switch result {
+        case .unsafe:
+            break
+        case .safe:
+            #expect(false, "Expected unsafe bootstrap safety result.")
+        }
+    }
+
+    @Test
+    func bootstrapSafetyAllowsExistingAgentsFile() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdis-ws-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        let agents = tmp.appendingPathComponent(AgentWorkspace.agentsFilename)
+        try "# AGENTS.md".write(to: agents, atomically: true, encoding: .utf8)
+
+        let result = AgentWorkspace.bootstrapSafety(for: tmp)
+        switch result {
+        case .safe:
+            break
+        case .unsafe:
+            #expect(false, "Expected safe bootstrap safety result.")
+        }
+    }
 }

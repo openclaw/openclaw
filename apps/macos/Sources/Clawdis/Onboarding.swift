@@ -1378,13 +1378,18 @@ struct OnboardingView: View {
         guard self.state.connectionMode == .local else { return }
         let configured = ClawdisConfigFile.inboundWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
-        do {
-            _ = try AgentWorkspace.bootstrap(workspaceURL: url)
-            if (configured ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: url))
+        switch AgentWorkspace.bootstrapSafety(for: url) {
+        case .safe:
+            do {
+                _ = try AgentWorkspace.bootstrap(workspaceURL: url)
+                if (configured ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: url))
+                }
+            } catch {
+                self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
             }
-        } catch {
-            self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
+        case let .unsafe(reason):
+            self.workspaceStatus = "Workspace not touched: \(reason)"
         }
     }
 
@@ -1426,6 +1431,10 @@ struct OnboardingView: View {
 
         do {
             let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+            if case let .unsafe(reason) = AgentWorkspace.bootstrapSafety(for: url) {
+                self.workspaceStatus = "Workspace not created: \(reason)"
+                return
+            }
             _ = try AgentWorkspace.bootstrap(workspaceURL: url)
             self.workspacePath = AgentWorkspace.displayPath(for: url)
             self.workspaceStatus = "Workspace ready at \(self.workspacePath)"
