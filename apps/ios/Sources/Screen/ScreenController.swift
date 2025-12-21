@@ -19,6 +19,10 @@ final class ScreenController {
     /// Callback invoked when the user clicks an A2UI action (e.g. button) inside the canvas web UI.
     var onA2UIAction: (([String: Any]) -> Void)?
 
+    private var debugStatusEnabled: Bool = false
+    private var debugStatusTitle: String?
+    private var debugStatusSubtitle: String?
+
     init() {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
@@ -78,6 +82,39 @@ final class ScreenController {
     func showDefaultCanvas() {
         self.urlString = ""
         self.reload()
+    }
+
+    func setDebugStatusEnabled(_ enabled: Bool) {
+        self.debugStatusEnabled = enabled
+        self.applyDebugStatusIfNeeded()
+    }
+
+    func updateDebugStatus(title: String?, subtitle: String?) {
+        self.debugStatusTitle = title
+        self.debugStatusSubtitle = subtitle
+        self.applyDebugStatusIfNeeded()
+    }
+
+    fileprivate func applyDebugStatusIfNeeded() {
+        let enabled = self.debugStatusEnabled
+        let title = self.debugStatusTitle
+        let subtitle = self.debugStatusSubtitle
+        let js = """
+        (() => {
+          try {
+            const api = globalThis.__clawdis;
+            if (!api) return;
+            if (typeof api.setDebugStatusEnabled === 'function') {
+              api.setDebugStatusEnabled(\(enabled ? "true" : "false"));
+            }
+            if (!\(enabled ? "true" : "false")) return;
+            if (typeof api.setStatus === 'function') {
+              api.setStatus(\(Self.jsValue(title)), \(Self.jsValue(subtitle)));
+            }
+          } catch (_) {}
+        })()
+        """
+        self.webView.evaluateJavaScript(js) { _, _ in }
     }
 
     func waitForA2UIReady(timeoutMs: Int) async -> Bool {
@@ -212,6 +249,17 @@ final class ScreenController {
         return false
     }
 
+    private static func jsValue(_ value: String?) -> String {
+        guard let value else { return "null" }
+        if let data = try? JSONSerialization.data(withJSONObject: [value]),
+           let encoded = String(data: data, encoding: .utf8),
+           encoded.count >= 2
+        {
+            return String(encoded.dropFirst().dropLast())
+        }
+        return "null"
+    }
+
     func isLocalNetworkCanvasURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), scheme == "http" || scheme == "https" else {
             return false
@@ -320,6 +368,7 @@ private final class ScreenNavigationDelegate: NSObject, WKNavigationDelegate {
 
     func webView(_: WKWebView, didFinish _: WKNavigation?) {
         self.controller?.errorText = nil
+        self.controller?.applyDebugStatusIfNeeded()
     }
 
     func webView(_: WKWebView, didFail _: WKNavigation?, withError error: any Error) {

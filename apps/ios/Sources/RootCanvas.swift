@@ -8,6 +8,7 @@ struct RootCanvas: View {
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage(VoiceWakePreferences.enabledKey) private var voiceWakeEnabled: Bool = false
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
+    @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @State private var presentedSheet: PresentedSheet?
     @State private var voiceWakeToastText: String?
     @State private var toastDismissTask: Task<Void, Never>?
@@ -56,6 +57,11 @@ struct RootCanvas: View {
         .onAppear { self.updateIdleTimer() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
         .onChange(of: self.scenePhase) { _, _ in self.updateIdleTimer() }
+        .onAppear { self.updateCanvasDebugStatus() }
+        .onChange(of: self.canvasDebugStatusEnabled) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.bridgeStatusText) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.bridgeServerName) { _, _ in self.updateCanvasDebugStatus() }
+        .onChange(of: self.appModel.bridgeRemoteAddress) { _, _ in self.updateCanvasDebugStatus() }
         .onChange(of: self.voiceWake.lastTriggeredCommand) { _, newValue in
             guard let newValue else { return }
             let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -101,6 +107,14 @@ struct RootCanvas: View {
 
     private func updateIdleTimer() {
         UIApplication.shared.isIdleTimerDisabled = (self.scenePhase == .active && self.preventSleep)
+    }
+
+    private func updateCanvasDebugStatus() {
+        self.appModel.screen.setDebugStatusEnabled(self.canvasDebugStatusEnabled)
+        guard self.canvasDebugStatusEnabled else { return }
+        let title = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let subtitle = self.appModel.bridgeServerName ?? self.appModel.bridgeRemoteAddress
+        self.appModel.screen.updateDebugStatus(title: title, subtitle: subtitle)
     }
 }
 

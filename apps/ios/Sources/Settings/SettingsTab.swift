@@ -28,6 +28,7 @@ struct SettingsTab: View {
     @AppStorage("bridge.manual.host") private var manualBridgeHost: String = ""
     @AppStorage("bridge.manual.port") private var manualBridgePort: Int = 18790
     @AppStorage("bridge.discovery.debugLogs") private var discoveryDebugLogsEnabled: Bool = false
+    @AppStorage("canvas.debugStatusEnabled") private var canvasDebugStatusEnabled: Bool = false
     @State private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
@@ -142,6 +143,8 @@ struct SettingsTab: View {
                         NavigationLink("Discovery Logs") {
                             BridgeDiscoveryDebugLogView()
                         }
+
+                        Toggle("Debug Canvas Status", isOn: self.$canvasDebugStatusEnabled)
                     }
                 }
 
