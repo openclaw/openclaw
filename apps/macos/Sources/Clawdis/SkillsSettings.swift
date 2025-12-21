@@ -327,7 +327,7 @@ private struct SkillRow: View {
     private var trailingActions: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if !self.installOptions.isEmpty {
-                ForEach(self.installOptions, id: \.id) { option in
+                ForEach(self.installOptions, id: \.id) { (option: SkillInstallOption) in
                     HStack(spacing: 6) {
                         if self.showGatewayInstall {
                             Button("Install on Gateway") { self.onInstall(option, .gateway) }
