@@ -7,6 +7,32 @@
   "bin": {
     "clawdis": "dist/index.js"
   },
+  "files": [
+    "dist/agents/**",
+    "dist/auto-reply/**",
+    "dist/browser/**",
+    "dist/canvas-host/**",
+    "dist/cli/**",
+    "dist/commands/**",
+    "dist/config/**",
+    "dist/cron/**",
+    "dist/gateway/**",
+    "dist/infra/**",
+    "dist/macos/**",
+    "dist/media/**",
+    "dist/process/**",
+    "dist/providers/**",
+    "dist/telegram/**",
+    "dist/web/**",
+    "dist/*.js",
+    "dist/*.json",
+    "docs/**",
+    "skills/**",
+    "README.md",
+    "README-header.png",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
   "scripts": {
     "dev": "tsx src/index.ts",
     "docs:list": "tsx scripts/docs-list.ts",
