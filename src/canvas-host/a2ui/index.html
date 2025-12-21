@@ -82,7 +82,7 @@
       #clawdis-status {
         position: fixed;
         inset: 0;
-        display: grid;
+        display: none;
         place-items: center;
         pointer-events: none;
         z-index: 3;
@@ -139,6 +139,18 @@
         const statusEl = document.getElementById('clawdis-status');
         const titleEl = document.getElementById('clawdis-status-title');
         const subtitleEl = document.getElementById('clawdis-status-subtitle');
+        const debugStatusEnabledByQuery = (() => {
+          try {
+            const params = new URLSearchParams(window.location.search);
+            const raw = params.get('debugStatus') ?? params.get('debug');
+            if (!raw) return false;
+            const normalized = String(raw).trim().toLowerCase();
+            return normalized === '1' || normalized === 'true' || normalized === 'yes';
+          } catch (_) {
+            return false;
+          }
+        })();
+        let debugStatusEnabled = debugStatusEnabledByQuery;
 
         function resize() {
           const dpr = window.devicePixelRatio || 1;
@@ -152,11 +164,24 @@
         window.addEventListener('resize', resize);
         resize();
 
+        const setDebugStatusEnabled = (enabled) => {
+          debugStatusEnabled = !!enabled;
+          if (!statusEl) return;
+          if (!debugStatusEnabled) {
+            statusEl.style.display = 'none';
+          }
+        };
+
+        if (statusEl && !debugStatusEnabled) {
+          statusEl.style.display = 'none';
+        }
+
         window.__clawdis = {
           canvas,
           ctx,
+          setDebugStatusEnabled,
           setStatus: (title, subtitle) => {
-            if (!statusEl) return;
+            if (!statusEl || !debugStatusEnabled) return;
             if (!title && !subtitle) {
               statusEl.style.display = 'none';
               return;
@@ -164,10 +189,14 @@
             statusEl.style.display = 'grid';
             if (titleEl && typeof title === 'string') titleEl.textContent = title;
             if (subtitleEl && typeof subtitle === 'string') subtitleEl.textContent = subtitle;
-            clearTimeout(window.__statusTimeout);
-            window.__statusTimeout = setTimeout(() => {
-              statusEl.style.display = 'none';
-            }, 3000);
+            if (!debugStatusEnabled) {
+              clearTimeout(window.__statusTimeout);
+              window.__statusTimeout = setTimeout(() => {
+                statusEl.style.display = 'none';
+              }, 3000);
+            } else {
+              clearTimeout(window.__statusTimeout);
+            }
           }
         };
       })();
