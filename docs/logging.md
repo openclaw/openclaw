@@ -75,7 +75,7 @@ Behavior:
 
 - **Subsystem prefixes** on every line (e.g. `[gateway]`, `[canvas]`, `[tailscale]`)
 - **Subsystem colors** (stable per subsystem) plus level coloring
-- **Color modes** (`logging.consoleColor`: `auto`/`always`/`never`; `auto` honors `NO_COLOR` and TTY)
+- **Color only when TTY** (`process.stdout.isTTY`/`process.stderr.isTTY`), respects `NO_COLOR`
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`)
 - **`logRaw()`** for QR/UX output (no prefix, no formatting)
 - **Console styles** (e.g. `pretty | compact | json`)

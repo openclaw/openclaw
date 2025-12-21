@@ -49,7 +49,6 @@ If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
-  - `logging.consoleColor` (`auto` | `always` | `never`)
 
 ```json5
 {
@@ -57,8 +56,7 @@ If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
     level: "info",
     file: "/tmp/clawdis/clawdis.log",
     consoleLevel: "info",
-    consoleStyle: "pretty",
-    consoleColor: "auto"
+    consoleStyle: "pretty"
   }
 }
 ```
