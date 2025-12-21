@@ -294,10 +294,9 @@ struct TailscaleIntegrationSection: View {
         self.statusMessage = nil
 
         let trimmedPassword = self.password.trimmingCharacters(in: .whitespacesAndNewlines)
-        if (self.tailscaleMode == .funnel || (self.tailscaleMode == .serve && self.requireCredentialsForServe)),
-           self.authMode == .password,
-           trimmedPassword.isEmpty
-        {
+        let requiresPassword = self.tailscaleMode == .funnel
+            || (self.tailscaleMode == .serve && self.requireCredentialsForServe)
+        if requiresPassword, self.authMode == .password, trimmedPassword.isEmpty {
             self.validationMessage = "Password required for this mode."
             return
         }
@@ -314,7 +313,7 @@ struct TailscaleIntegrationSection: View {
             guard self.tailscaleMode != .off else { return }
             var auth = gateway["auth"] as? [String: Any] ?? [:]
 
-            if self.tailscaleMode == .serve && !self.requireCredentialsForServe {
+            if self.tailscaleMode == .serve, !self.requireCredentialsForServe {
                 auth["allowTailscale"] = true
                 auth.removeValue(forKey: "mode")
                 auth.removeValue(forKey: "password")
