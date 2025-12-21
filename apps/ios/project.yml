@@ -33,24 +33,29 @@ targets:
     preBuildScripts:
       - name: SwiftFormat (lint)
         basedOnDependencyAnalysis: false
+        inputFileLists:
+          - $(SRCROOT)/SwiftSources.input.xcfilelist
         script: |
           set -euo pipefail
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
           if ! command -v swiftformat >/dev/null 2>&1; then
             echo "error: swiftformat not found (brew install swiftformat)" >&2
             exit 1
           fi
           swiftformat --lint --config "$SRCROOT/../../.swiftformat" \
-            "$SRCROOT/Sources" \
-            "$SRCROOT/../shared/ClawdisKit/Sources"
+            --filelist "$SRCROOT/SwiftSources.input.xcfilelist"
       - name: SwiftLint
         basedOnDependencyAnalysis: false
+        inputFileLists:
+          - $(SRCROOT)/SwiftSources.input.xcfilelist
         script: |
           set -euo pipefail
+          export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
           if ! command -v swiftlint >/dev/null 2>&1; then
             echo "error: swiftlint not found (brew install swiftlint)" >&2
             exit 1
           fi
-          swiftlint lint --config "$SRCROOT/.swiftlint.yml"
+          swiftlint lint --config "$SRCROOT/.swiftlint.yml" --use-script-input-file-lists
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.steipete.clawdis.ios
@@ -66,6 +71,8 @@ targets:
         UIBackgroundModes:
           - audio
         NSLocalNetworkUsageDescription: Clawdis discovers and connects to your Clawdis bridge on the local network.
+        NSAppTransportSecurity:
+          NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
           - _clawdis-bridge._tcp
         NSCameraUsageDescription: Clawdis can capture photos or short video clips when requested via the bridge.

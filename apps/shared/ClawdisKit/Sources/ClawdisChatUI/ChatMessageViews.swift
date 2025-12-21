@@ -27,21 +27,21 @@ private struct ChatBubbleShape: InsettableShape {
     }
 
     func path(in rect: CGRect) -> Path {
-        let rect = rect.insetBy(dx: insetAmount, dy: insetAmount)
-        switch tail {
+        let rect = rect.insetBy(dx: self.insetAmount, dy: self.insetAmount)
+        switch self.tail {
         case .left:
-            return self.leftTailPath(in: rect, radius: cornerRadius)
+            return self.leftTailPath(in: rect, radius: self.cornerRadius)
         case .right:
-            return self.rightTailPath(in: rect, radius: cornerRadius)
+            return self.rightTailPath(in: rect, radius: self.cornerRadius)
         case .none:
-            return Path(roundedRect: rect, cornerRadius: cornerRadius)
+            return Path(roundedRect: rect, cornerRadius: self.cornerRadius)
         }
     }
 
     private func rightTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
         var path = Path()
         let bubbleMinX = rect.minX
-        let bubbleMaxX = rect.maxX - tailWidth
+        let bubbleMaxX = rect.maxX - self.tailWidth
         let bubbleMinY = rect.minY
         let bubbleMaxY = rect.maxY
 
@@ -53,7 +53,7 @@ private struct ChatBubbleShape: InsettableShape {
 
         let baseTop = CGPoint(x: bubbleMaxX, y: baseTopY)
         let baseBottom = CGPoint(x: bubbleMaxX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMaxX + tailWidth, y: midY)
+        let tip = CGPoint(x: bubbleMaxX + self.tailWidth, y: midY)
 
         path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
@@ -63,12 +63,12 @@ private struct ChatBubbleShape: InsettableShape {
         path.addLine(to: baseTop)
         path.addCurve(
             to: tip,
-            control1: CGPoint(x: bubbleMaxX + tailWidth * 0.2, y: baseTopY + baseH * 0.05),
-            control2: CGPoint(x: bubbleMaxX + tailWidth * 0.95, y: midY - baseH * 0.15))
+            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseTopY + baseH * 0.05),
+            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY - baseH * 0.15))
         path.addCurve(
             to: baseBottom,
-            control1: CGPoint(x: bubbleMaxX + tailWidth * 0.95, y: midY + baseH * 0.15),
-            control2: CGPoint(x: bubbleMaxX + tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
+            control1: CGPoint(x: bubbleMaxX + self.tailWidth * 0.95, y: midY + baseH * 0.15),
+            control2: CGPoint(x: bubbleMaxX + self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMaxX - r, y: bubbleMaxY),
             control: CGPoint(x: bubbleMaxX, y: bubbleMaxY))
@@ -86,7 +86,7 @@ private struct ChatBubbleShape: InsettableShape {
 
     private func leftTailPath(in rect: CGRect, radius r: CGFloat) -> Path {
         var path = Path()
-        let bubbleMinX = rect.minX + tailWidth
+        let bubbleMinX = rect.minX + self.tailWidth
         let bubbleMaxX = rect.maxX
         let bubbleMinY = rect.minY
         let bubbleMaxY = rect.maxY
@@ -99,7 +99,7 @@ private struct ChatBubbleShape: InsettableShape {
 
         let baseTop = CGPoint(x: bubbleMinX, y: baseTopY)
         let baseBottom = CGPoint(x: bubbleMinX, y: baseBottomY)
-        let tip = CGPoint(x: bubbleMinX - tailWidth, y: midY)
+        let tip = CGPoint(x: bubbleMinX - self.tailWidth, y: midY)
 
         path.move(to: CGPoint(x: bubbleMinX + r, y: bubbleMinY))
         path.addLine(to: CGPoint(x: bubbleMaxX - r, y: bubbleMinY))
@@ -117,12 +117,12 @@ private struct ChatBubbleShape: InsettableShape {
         path.addLine(to: baseBottom)
         path.addCurve(
             to: tip,
-            control1: CGPoint(x: bubbleMinX - tailWidth * 0.2, y: baseBottomY - baseH * 0.05),
-            control2: CGPoint(x: bubbleMinX - tailWidth * 0.95, y: midY + baseH * 0.15))
+            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseBottomY - baseH * 0.05),
+            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY + baseH * 0.15))
         path.addCurve(
             to: baseTop,
-            control1: CGPoint(x: bubbleMinX - tailWidth * 0.95, y: midY - baseH * 0.15),
-            control2: CGPoint(x: bubbleMinX - tailWidth * 0.2, y: baseTopY + baseH * 0.05))
+            control1: CGPoint(x: bubbleMinX - self.tailWidth * 0.95, y: midY - baseH * 0.15),
+            control2: CGPoint(x: bubbleMinX - self.tailWidth * 0.2, y: baseTopY + baseH * 0.05))
         path.addLine(to: CGPoint(x: bubbleMinX, y: bubbleMinY + r))
         path.addQuadCurve(
             to: CGPoint(x: bubbleMinX + r, y: bubbleMinY),

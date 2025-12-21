@@ -22,6 +22,11 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoadsInWebContent</key>
+		<true/>
+	</dict>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_clawdis-bridge._tcp</string>
@@ -30,11 +35,6 @@
 	<string>Clawdis can capture photos or short video clips when requested via the bridge.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Clawdis discovers and connects to your Clawdis bridge on the local network.</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSAllowsArbitraryLoadsInWebContent</key>
-		<true/>
-	</dict>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Clawdis needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
