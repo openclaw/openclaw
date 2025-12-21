@@ -41,6 +41,10 @@ struct MenuContent: View {
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
+            Divider()
+            Text("Start")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Button("Open Chat") {
                 Task { @MainActor in
                     let sessionKey = await WebChatManager.shared.preferredSessionKey()
@@ -51,15 +55,6 @@ struct MenuContent: View {
                 Task { @MainActor in
                     await self.openDashboard()
                 }
-            }
-            Toggle(
-                isOn: Binding(
-                    get: { self.browserControlEnabled },
-                    set: { enabled in
-                        self.browserControlEnabled = enabled
-                        ClawdisConfigFile.setBrowserControlEnabled(enabled)
-                    })) {
-                Text("Browser Control")
             }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
                 Text("Allow Canvas")
@@ -78,6 +73,16 @@ struct MenuContent: View {
                         _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
                     }
                 }
+            }
+            Divider()
+            Toggle(
+                isOn: Binding(
+                    get: { self.browserControlEnabled },
+                    set: { enabled in
+                        self.browserControlEnabled = enabled
+                        ClawdisConfigFile.setBrowserControlEnabled(enabled)
+                    })) {
+                Text("Browser Control")
             }
             Divider()
             Button("Settings…") { self.open(tab: .general) }
