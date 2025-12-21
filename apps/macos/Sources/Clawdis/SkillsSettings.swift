@@ -334,10 +334,17 @@ private struct SkillRow: View {
                                 .buttonStyle(.borderedProminent)
                                 .disabled(self.isBusy)
                         }
-                        Button("Install on This Mac") { self.onInstall(option, .local) }
-                            .buttonStyle(self.showGatewayInstall ? .bordered : .borderedProminent)
-                            .disabled(self.isBusy)
-                            .help(self.localInstallNeedsSwitch ? "Switches to Local mode to install on this Mac." : "")
+                        if self.showGatewayInstall {
+                            Button("Install on This Mac") { self.onInstall(option, .local) }
+                                .buttonStyle(.bordered)
+                                .disabled(self.isBusy)
+                                .help(self.localInstallNeedsSwitch ? "Switches to Local mode to install on this Mac." : "")
+                        } else {
+                            Button("Install on This Mac") { self.onInstall(option, .local) }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(self.isBusy)
+                                .help(self.localInstallNeedsSwitch ? "Switches to Local mode to install on this Mac." : "")
+                        }
                     }
                 }
             } else {
