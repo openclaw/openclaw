@@ -11,7 +11,7 @@ import {
 
 import { loadConfig } from "../config/config.js";
 import { isVerbose, logVerbose } from "../globals.js";
-import { getChildLogger } from "../logging.js";
+import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
 import {
@@ -57,6 +57,9 @@ export async function monitorWebInbox(options: {
   onMessage: (msg: WebInboundMessage) => Promise<void>;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
+  const inboundConsoleLog = createSubsystemLogger(
+    "gateway/providers/whatsapp",
+  ).child("inbound");
   const sock = await createWaSocket(false, options.verbose);
   await waitForWaConnection(sock);
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
@@ -259,10 +262,22 @@ export async function monitorWebInbox(options: {
           }),
         );
         void task.catch((err) => {
-          console.error("Failed handling inbound web message:", String(err));
+          inboundLogger.error(
+            { error: String(err) },
+            "failed handling inbound web message",
+          );
+          inboundConsoleLog.error(
+            `Failed handling inbound web message: ${String(err)}`,
+          );
         });
       } catch (err) {
-        console.error("Failed handling inbound web message:", String(err));
+        inboundLogger.error(
+          { error: String(err) },
+          "failed handling inbound web message",
+        );
+        inboundConsoleLog.error(
+          `Failed handling inbound web message: ${String(err)}`,
+        );
       }
     }
   });

@@ -12,11 +12,10 @@ import {
   saveSessionStore,
   updateLastRoute,
 } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose, success } from "../globals.js";
+import { isVerbose, logVerbose } from "../globals.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { logInfo } from "../logger.js";
-import { getChildLogger } from "../logging.js";
+import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
@@ -38,6 +37,10 @@ import { formatError, getWebAuthAgeMs, readWebSelfId } from "./session.js";
 
 const WEB_TEXT_LIMIT = 4000;
 const DEFAULT_GROUP_HISTORY_LIMIT = 50;
+const whatsappLog = createSubsystemLogger("gateway/providers/whatsapp");
+const whatsappInboundLog = whatsappLog.child("inbound");
+const whatsappOutboundLog = whatsappLog.child("outbound");
+const whatsappHeartbeatLog = whatsappLog.child("heartbeat");
 
 let heartbeatsEnabled = true;
 export function setHeartbeatsEnabled(enabled: boolean) {
@@ -209,7 +212,6 @@ export async function runWebHeartbeatOnce(opts: {
   to: string;
   verbose?: boolean;
   replyResolver?: typeof getReplyFromConfig;
-  runtime?: RuntimeEnv;
   sender?: typeof sendMessageWhatsApp;
   sessionId?: string;
   overrideBody?: string;
@@ -223,7 +225,6 @@ export async function runWebHeartbeatOnce(opts: {
     overrideBody,
     dryRun = false,
   } = opts;
-  const _runtime = opts.runtime ?? defaultRuntime;
   const replyResolver = opts.replyResolver ?? getReplyFromConfig;
   const sender = opts.sender ?? sendWithIpcFallback;
   const runId = newConnectionId();
@@ -269,10 +270,8 @@ export async function runWebHeartbeatOnce(opts: {
   try {
     if (overrideBody) {
       if (dryRun) {
-        console.log(
-          success(
-            `[dry-run] web send -> ${to}: ${overrideBody.trim()} (manual message)`,
-          ),
+        whatsappHeartbeatLog.info(
+          `[dry-run] web send -> ${to}: ${elide(overrideBody.trim(), 200)} (manual message)`,
         );
         return;
       }
@@ -292,10 +291,8 @@ export async function runWebHeartbeatOnce(opts: {
         },
         "manual heartbeat message sent",
       );
-      console.log(
-        success(
-          `sent manual message to ${to} (web), id ${sendResult.messageId}`,
-        ),
+      whatsappHeartbeatLog.info(
+        `manual heartbeat sent to ${to} (id ${sendResult.messageId})`,
       );
       return;
     }
@@ -328,7 +325,9 @@ export async function runWebHeartbeatOnce(opts: {
         },
         "heartbeat skipped",
       );
-      if (verbose) console.log(success("heartbeat: ok (empty reply)"));
+      if (isVerbose()) {
+        whatsappHeartbeatLog.debug("heartbeat ok (empty reply)");
+      }
       emitHeartbeatEvent({ status: "ok-empty", to });
       return;
     }
@@ -350,7 +349,9 @@ export async function runWebHeartbeatOnce(opts: {
         { to, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
         "heartbeat skipped",
       );
-      console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
+      if (isVerbose()) {
+        whatsappHeartbeatLog.debug("heartbeat ok (HEARTBEAT_OK)");
+      }
       emitHeartbeatEvent({ status: "ok-token", to });
       return;
     }
@@ -368,8 +369,8 @@ export async function runWebHeartbeatOnce(opts: {
         { to, reason: "dry-run", chars: finalText.length },
         "heartbeat dry-run",
       );
-      console.log(
-        success(`[dry-run] heartbeat -> ${to}: ${finalText.slice(0, 200)}`),
+      whatsappHeartbeatLog.info(
+        `[dry-run] heartbeat -> ${to}: ${elide(finalText, 200)}`,
       );
       return;
     }
@@ -390,11 +391,11 @@ export async function runWebHeartbeatOnce(opts: {
       },
       "heartbeat sent",
     );
-    console.log(success(`heartbeat: alert sent to ${to}`));
+    whatsappHeartbeatLog.info(`heartbeat alert sent to ${to}`);
   } catch (err) {
     const reason = String(err);
     heartbeatLogger.warn({ to, error: reason }, "heartbeat failed");
-    console.log(danger(`heartbeat: failed - ${reason}`));
+    whatsappHeartbeatLog.warn(`heartbeat failed (${reason})`);
     emitHeartbeatEvent({ status: "failed", to, reason: String(err) });
     throw err;
   }
@@ -516,7 +517,6 @@ async function deliverWebReply(params: {
   msg: WebInboundMsg;
   maxMediaBytes: number;
   replyLogger: ReturnType<typeof getChildLogger>;
-  runtime: RuntimeEnv;
   connectionId?: string;
   skipLog?: boolean;
 }) {
@@ -525,7 +525,6 @@ async function deliverWebReply(params: {
     msg,
     maxMediaBytes,
     replyLogger,
-    runtime,
     connectionId,
     skipLog,
   } = params;
@@ -576,9 +575,9 @@ async function deliverWebReply(params: {
       await sendWithRetry(() => msg.reply(chunk), "text");
     }
     if (!skipLog) {
-      logInfo(
-        `✅ Sent web reply to ${msg.from} (${(Date.now() - replyStarted).toFixed(0)}ms)`,
-        runtime,
+      const durationMs = Date.now() - replyStarted;
+      whatsappOutboundLog.info(
+        `Sent reply to ${msg.from} (${durationMs.toFixed(0)}ms)`,
       );
     }
     replyLogger.info(
@@ -659,9 +658,8 @@ async function deliverWebReply(params: {
           "media:document",
         );
       }
-      logInfo(
-        `✅ Sent web media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
-        runtime,
+      whatsappOutboundLog.info(
+        `Sent media reply to ${msg.from} (${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB)`,
       );
       replyLogger.info(
         {
@@ -678,8 +676,8 @@ async function deliverWebReply(params: {
         "auto-reply sent (media)",
       );
     } catch (err) {
-      console.error(
-        danger(`Failed sending web media to ${msg.from}: ${String(err)}`),
+      whatsappOutboundLog.error(
+        `Failed sending web media to ${msg.from}: ${String(err)}`,
       );
       replyLogger.warn({ err, mediaUrl }, "failed to send web media reply");
       if (index === 0) {
@@ -693,7 +691,9 @@ async function deliverWebReply(params: {
         ].filter(Boolean);
         const fallbackText = fallbackTextParts.join("\n");
         if (fallbackText) {
-          console.log(`⚠️  Media skipped; sent text-only to ${msg.from}`);
+          whatsappOutboundLog.warn(
+            `Media skipped; sent text-only to ${msg.from}`,
+          );
           await msg.reply(fallbackText);
         }
       }
@@ -892,13 +892,14 @@ export async function monitorWebProvider(
         "inbound web message",
       );
 
-      const tsDisplay = msg.timestamp
-        ? new Date(msg.timestamp).toISOString()
-        : new Date().toISOString();
       const fromDisplay = msg.chatType === "group" ? conversationId : msg.from;
-      console.log(
-        `\n[${tsDisplay}] ${fromDisplay} -> ${msg.to}: ${combinedBody}`,
+      const kindLabel = msg.mediaType ? `, ${msg.mediaType}` : "";
+      whatsappInboundLog.info(
+        `Inbound message ${fromDisplay} -> ${msg.to} (${msg.chatType}${kindLabel}, ${combinedBody.length} chars)`,
       );
+      if (isVerbose()) {
+        whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
+      }
 
       if (msg.chatType !== "group") {
         const sessionCfg = cfg.inbound?.session;
@@ -957,7 +958,6 @@ export async function monitorWebProvider(
               msg,
               maxMediaBytes,
               replyLogger,
-              runtime,
               connectionId,
               skipLog: true,
             });
@@ -970,12 +970,8 @@ export async function monitorWebProvider(
             }
           })
           .catch((err) => {
-            console.error(
-              danger(
-                `Failed sending web tool update to ${msg.from ?? conversationId}: ${String(
-                  err,
-                )}`,
-              ),
+            whatsappOutboundLog.error(
+              `Failed sending web tool update to ${msg.from ?? conversationId}: ${String(err)}`,
             );
           });
       };
@@ -1031,7 +1027,6 @@ export async function monitorWebProvider(
             msg,
             maxMediaBytes,
             replyLogger,
-            runtime,
             connectionId,
           });
 
@@ -1049,24 +1044,24 @@ export async function monitorWebProvider(
 
           const fromDisplay =
             msg.chatType === "group" ? conversationId : (msg.from ?? "unknown");
+          const hasMedia = Boolean(
+            replyPayload.mediaUrl || replyPayload.mediaUrls?.length,
+          );
+          whatsappOutboundLog.info(
+            `Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
+          );
           if (isVerbose()) {
-            console.log(
-              success(
-                `↩️  Auto-replied to ${fromDisplay} (web${replyPayload.mediaUrl || replyPayload.mediaUrls?.length ? ", media" : ""})`,
-              ),
-            );
-          } else {
-            console.log(
-              success(
-                `↩️  ${replyPayload.text ?? "<media>"}${replyPayload.mediaUrl || replyPayload.mediaUrls?.length ? " (media)" : ""}`,
-              ),
+            const preview =
+              replyPayload.text != null
+                ? elide(replyPayload.text, 400)
+                : "<media>";
+            whatsappOutboundLog.debug(
+              `Reply body: ${preview}${hasMedia ? " (media)" : ""}`,
             );
           }
         } catch (err) {
-          console.error(
-            danger(
-              `Failed sending web auto-reply to ${msg.from ?? conversationId}: ${String(err)}`,
-            ),
+          whatsappOutboundLog.error(
+            `Failed sending web auto-reply to ${msg.from ?? conversationId}: ${String(err)}`,
           );
         }
       }
@@ -1090,7 +1085,9 @@ export async function monitorWebProvider(
 
         // Skip if this is a message we just sent (echo detection)
         if (recentlySent.has(msg.body)) {
-          console.log(`⏭️  Skipping echo: detected recently sent message`);
+          whatsappInboundLog.debug(
+            "Skipping echo: detected recently sent message",
+          );
           logVerbose(
             `Skipping auto-reply: detected echo (message matches recently sent text)`,
           );
@@ -1211,8 +1208,8 @@ export async function monitorWebProvider(
               },
               "Message timeout detected - forcing reconnect",
             );
-            console.error(
-              `⚠️  No messages received in ${minutesSinceLastMessage}m - restarting connection`,
+            whatsappHeartbeatLog.warn(
+              `No messages received in ${minutesSinceLastMessage}m - restarting connection`,
             );
             closeListener(); // Trigger reconnect
           }
@@ -1231,7 +1228,9 @@ export async function monitorWebProvider(
           { connectionId, reason: "requests-in-flight", queued },
           "reply heartbeat skipped",
         );
-        console.log(success("heartbeat: skipped (requests in flight)"));
+        if (isVerbose()) {
+          whatsappHeartbeatLog.debug("heartbeat skipped (requests in flight)");
+        }
         return { status: "skipped", reason: "requests-in-flight" };
       }
       if (!replyHeartbeatMinutes) {
@@ -1260,7 +1259,9 @@ export async function monitorWebProvider(
             },
             "reply heartbeat skipped",
           );
-          console.log(success("heartbeat: skipped (no recent inbound)"));
+          if (isVerbose()) {
+            whatsappHeartbeatLog.debug("heartbeat skipped (no recent inbound)");
+          }
           return { status: "skipped", reason: "no-recent-inbound" };
         }
         const snapshot = getSessionSnapshot(cfg, fallbackTo, true);
@@ -1269,7 +1270,11 @@ export async function monitorWebProvider(
             { connectionId, to: fallbackTo, reason: "no-session-for-fallback" },
             "reply heartbeat skipped",
           );
-          console.log(success("heartbeat: skipped (no session to resume)"));
+          if (isVerbose()) {
+            whatsappHeartbeatLog.debug(
+              "heartbeat skipped (no session to resume)",
+            );
+          }
           return { status: "skipped", reason: "no-session-for-fallback" };
         }
         if (isVerbose()) {
@@ -1289,7 +1294,6 @@ export async function monitorWebProvider(
           to: fallbackTo,
           verbose,
           replyResolver,
-          runtime,
           sessionId: snapshot.entry.sessionId,
         });
         heartbeatLogger.info(
@@ -1353,7 +1357,9 @@ export async function monitorWebProvider(
             },
             "reply heartbeat skipped",
           );
-          console.log(success("heartbeat: ok (empty reply)"));
+          if (isVerbose()) {
+            whatsappHeartbeatLog.debug("heartbeat ok (empty reply)");
+          }
           return { status: "ran", durationMs: Date.now() - started };
         }
 
@@ -1371,7 +1377,9 @@ export async function monitorWebProvider(
             },
             "reply heartbeat skipped",
           );
-          console.log(success("heartbeat: ok (HEARTBEAT_OK)"));
+          if (isVerbose()) {
+            whatsappHeartbeatLog.debug("heartbeat ok (HEARTBEAT_OK)");
+          }
           return { status: "ran", durationMs: Date.now() - started };
         }
 
@@ -1396,13 +1404,13 @@ export async function monitorWebProvider(
           msg: heartbeatInboundMsg,
           maxMediaBytes,
           replyLogger,
-          runtime,
           connectionId,
         });
 
         const durationMs = Date.now() - tickStart;
-        const summary = `heartbeat: alert sent (${formatDuration(durationMs)})`;
-        console.log(summary);
+        whatsappHeartbeatLog.info(
+          `heartbeat alert sent (${formatDuration(durationMs)})`,
+        );
         heartbeatLogger.info(
           {
             connectionId,
@@ -1423,8 +1431,8 @@ export async function monitorWebProvider(
           },
           "reply heartbeat failed",
         );
-        console.log(
-          danger(`heartbeat: failed (${formatDuration(durationMs)})`),
+        whatsappHeartbeatLog.warn(
+          `heartbeat failed (${formatDuration(durationMs)})`,
         );
         return { status: "failed", reason: String(err) };
       }
@@ -1443,9 +1451,8 @@ export async function monitorWebProvider(
       }
     }
 
-    logInfo(
-      "📡 Listening for personal WhatsApp Web inbound messages. Leave this running; Ctrl+C to stop.",
-      runtime,
+    whatsappLog.info(
+      "Listening for personal WhatsApp inbound messages. Ctrl+C to stop.",
     );
 
     if (!keepAlive) {
@@ -1516,9 +1523,7 @@ export async function monitorWebProvider(
 
     if (loggedOut) {
       runtime.error(
-        danger(
-          "WhatsApp session logged out. Run `clawdis login --provider web` to relink.",
-        ),
+        "WhatsApp session logged out. Run `clawdis login --provider web` to relink.",
       );
       await closeListener();
       break;
@@ -1541,9 +1546,7 @@ export async function monitorWebProvider(
         "web reconnect: max attempts reached; continuing in degraded mode",
       );
       runtime.error(
-        danger(
-          `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
-        ),
+        `WhatsApp Web reconnect: max attempts reached (${reconnectAttempts}/${reconnectPolicy.maxAttempts}). Stopping web monitoring.`,
       );
       await closeListener();
       break;
@@ -1561,9 +1564,7 @@ export async function monitorWebProvider(
       "web reconnect: scheduling retry",
     );
     runtime.error(
-      danger(
-        `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDuration(delay)}… (${errorStr})`,
-      ),
+      `WhatsApp Web connection closed (status ${statusCode}). Retry ${reconnectAttempts}/${reconnectPolicy.maxAttempts || "∞"} in ${formatDuration(delay)}… (${errorStr})`,
     );
     await closeListener();
     try {

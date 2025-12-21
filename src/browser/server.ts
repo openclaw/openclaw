@@ -63,9 +63,7 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     resolved,
   };
 
-  logServer.info(
-    `🦞 clawd browser control listening on http://127.0.0.1:${port}/`,
-  );
+  logServer.info(`Browser control listening on http://127.0.0.1:${port}/`);
   return state;
 }
 

@@ -253,6 +253,14 @@ export function routeLogsToStderr(): void {
   forceConsoleToStderr = true;
 }
 
+const SUPPRESSED_CONSOLE_PREFIXES = ["Closing session:"] as const;
+
+function shouldSuppressConsoleMessage(message: string): boolean {
+  return SUPPRESSED_CONSOLE_PREFIXES.some((prefix) =>
+    message.startsWith(prefix),
+  );
+}
+
 /**
  * Route console.* calls through pino while still emitting to stdout/stderr.
  * This keeps user-facing output unchanged but guarantees every console call is captured in log files.
@@ -282,6 +290,7 @@ export function enableConsoleCapture(): void {
     (level: Level, orig: (...args: unknown[]) => void) =>
     (...args: unknown[]) => {
       const formatted = util.format(...args);
+      if (shouldSuppressConsoleMessage(formatted)) return;
       try {
         // Map console levels to pino
         if (level === "trace") {
@@ -339,10 +348,18 @@ function shouldLogToConsole(level: Level, settings: ConsoleSettings): boolean {
 
 type ChalkInstance = InstanceType<typeof Chalk>;
 
+function isRichConsoleEnv(): boolean {
+  const term = (process.env.TERM ?? "").toLowerCase();
+  if (process.env.COLORTERM || process.env.TERM_PROGRAM) return true;
+  return term.length > 0 && term !== "dumb";
+}
+
 function getColorForConsole(): ChalkInstance {
   if (process.env.NO_COLOR) return new Chalk({ level: 0 });
   const hasTty = Boolean(process.stdout.isTTY || process.stderr.isTTY);
-  return hasTty ? new Chalk({ level: 1 }) : new Chalk({ level: 0 });
+  return hasTty || isRichConsoleEnv()
+    ? new Chalk({ level: 1 })
+    : new Chalk({ level: 0 });
 }
 
 const SUBSYSTEM_COLORS = [

@@ -1,10 +1,13 @@
 import { randomUUID } from "node:crypto";
 
-import { logInfo } from "../logger.js";
-import { getChildLogger } from "../logging.js";
+import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { toWhatsappJid } from "../utils.js";
 import { getActiveWebListener } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
+
+const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
+  "outbound",
+);
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -13,6 +16,7 @@ export async function sendMessageWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body;
   const correlationId = randomUUID();
+  const startedAt = Date.now();
   const active = getActiveWebListener();
   if (!active) {
     throw new Error(
@@ -47,8 +51,8 @@ export async function sendMessageWhatsApp(
         text = caption ?? "";
       }
     }
-    logInfo(
-      `📤 Sending via web session -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
+    outboundLog.info(
+      `Sending message -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
     );
     logger.info(
       { jid, hasMedia: Boolean(options.mediaUrl) },
@@ -59,8 +63,9 @@ export async function sendMessageWhatsApp(
     const result = await active.sendMessage(to, text, mediaBuffer, mediaType);
     const messageId =
       (result as { messageId?: string })?.messageId ?? "unknown";
-    logInfo(
-      `✅ Sent via web session. Message ID: ${messageId} -> ${jid}${options.mediaUrl ? " (media)" : ""}`,
+    const durationMs = Date.now() - startedAt;
+    outboundLog.info(
+      `Sent message ${messageId} -> ${jid}${options.mediaUrl ? " (media)" : ""} (${durationMs}ms)`,
     );
     logger.info({ jid, messageId }, "sent message");
     return { messageId, toJid: jid };
