@@ -120,16 +120,16 @@ struct SkillsSettings: View {
     }
 
     private var filteredSkills: [SkillStatus] {
-        return self.model.skills.filter { skill in
+        self.model.skills.filter { skill in
             switch self.filter {
             case .all:
-                return true
+                true
             case .ready:
-                return !skill.disabled && skill.eligible
+                !skill.disabled && skill.eligible
             case .needsSetup:
-                return !skill.disabled && !skill.eligible
+                !skill.disabled && !skill.eligible
             case .disabled:
-                return skill.disabled
+                skill.disabled
             }
         }
     }
@@ -338,12 +338,18 @@ private struct SkillRow: View {
                             Button("Install on This Mac") { self.onInstall(option, .local) }
                                 .buttonStyle(.bordered)
                                 .disabled(self.isBusy)
-                                .help(self.localInstallNeedsSwitch ? "Switches to Local mode to install on this Mac." : "")
+                                .help(
+                                    self.localInstallNeedsSwitch
+                                        ? "Switches to Local mode to install on this Mac."
+                                        : "")
                         } else {
                             Button("Install on This Mac") { self.onInstall(option, .local) }
                                 .buttonStyle(.borderedProminent)
                                 .disabled(self.isBusy)
-                                .help(self.localInstallNeedsSwitch ? "Switches to Local mode to install on this Mac." : "")
+                                .help(
+                                    self.localInstallNeedsSwitch
+                                        ? "Switches to Local mode to install on this Mac."
+                                        : "")
                         }
                     }
                 }

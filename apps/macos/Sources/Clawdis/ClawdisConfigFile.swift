@@ -79,5 +79,4 @@ enum ClawdisConfigFile {
         root["inbound"] = inbound
         self.saveDict(root)
     }
-
 }

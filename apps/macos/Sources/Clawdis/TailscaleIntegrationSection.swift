@@ -294,9 +294,9 @@ struct TailscaleIntegrationSection: View {
         self.statusMessage = nil
 
         let trimmedPassword = self.password.trimmingCharacters(in: .whitespacesAndNewlines)
-        if (self.tailscaleMode == .funnel || (self.tailscaleMode == .serve && self.requireCredentialsForServe))
-            && self.authMode == .password
-            && trimmedPassword.isEmpty
+        if (self.tailscaleMode == .funnel || (self.tailscaleMode == .serve && self.requireCredentialsForServe)),
+           self.authMode == .password,
+           trimmedPassword.isEmpty
         {
             self.validationMessage = "Password required for this mode."
             return
