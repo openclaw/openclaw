@@ -1,6 +1,5 @@
 import type { Server } from "node:http";
 
-import type { RuntimeEnv } from "../runtime.js";
 import { createTargetViaCdp } from "./cdp.js";
 import {
   isChromeReachable,
@@ -41,7 +40,6 @@ export type BrowserRouteContext = {
 };
 
 type ContextOptions = {
-  runtime: RuntimeEnv;
   getState: () => BrowserServerState | null;
   setRunning: (running: RunningChrome | null) => void;
 };
@@ -172,7 +170,7 @@ export function createBrowserRouteContext(
       );
     }
 
-    const launched = await launchClawdChrome(current.resolved, opts.runtime);
+    const launched = await launchClawdChrome(current.resolved);
     opts.setRunning(launched);
     launched.proc.on("exit", () => {
       const live = opts.getState();

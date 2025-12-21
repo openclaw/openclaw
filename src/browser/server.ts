@@ -2,8 +2,7 @@ import type { Server } from "node:http";
 import express from "express";
 
 import { loadConfig } from "../config/config.js";
-import { logError, logInfo, logWarn } from "../logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { createSubsystemLogger } from "../logging.js";
 import {
   resolveBrowserConfig,
   shouldStartLocalBrowserServer,
@@ -15,9 +14,10 @@ import {
 } from "./server-context.js";
 
 let state: BrowserServerState | null = null;
+const log = createSubsystemLogger("browser");
+const logServer = log.child("server");
 
 export async function startBrowserControlServerFromConfig(
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<BrowserServerState | null> {
   if (state) return state;
 
@@ -26,9 +26,8 @@ export async function startBrowserControlServerFromConfig(
   if (!resolved.enabled) return null;
 
   if (!shouldStartLocalBrowserServer(resolved)) {
-    logInfo(
+    logServer.info(
       `browser control URL is non-loopback (${resolved.controlUrl}); skipping local server start`,
-      runtime,
     );
     return null;
   }
@@ -37,7 +36,6 @@ export async function startBrowserControlServerFromConfig(
   app.use(express.json({ limit: "1mb" }));
 
   const ctx = createBrowserRouteContext({
-    runtime,
     getState: () => state,
     setRunning: (running) => {
       if (state) state.running = running;
@@ -50,9 +48,8 @@ export async function startBrowserControlServerFromConfig(
     const s = app.listen(port, "127.0.0.1", () => resolve(s));
     s.once("error", reject);
   }).catch((err) => {
-    logError(
+    logServer.error(
       `clawd browser server failed to bind 127.0.0.1:${port}: ${String(err)}`,
-      runtime,
     );
     return null;
   });
@@ -67,21 +64,18 @@ export async function startBrowserControlServerFromConfig(
     resolved,
   };
 
-  logInfo(
+  logServer.info(
     `🦞 clawd browser control listening on http://127.0.0.1:${port}/`,
-    runtime,
   );
   return state;
 }
 
 export async function stopBrowserControlServer(
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const current = state;
   if (!current) return;
 
   const ctx = createBrowserRouteContext({
-    runtime,
     getState: () => state,
     setRunning: (running) => {
       if (state) state.running = running;
@@ -91,7 +85,7 @@ export async function stopBrowserControlServer(
   try {
     await ctx.stopRunningBrowser();
   } catch (err) {
-    logWarn(`clawd browser stop failed: ${String(err)}`, runtime);
+    logServer.warn(`clawd browser stop failed: ${String(err)}`);
   }
 
   await new Promise<void>((resolve) => {

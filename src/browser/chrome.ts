@@ -4,14 +4,15 @@ import os from "node:os";
 import path from "node:path";
 
 import { ensurePortAvailable } from "../infra/ports.js";
-import { logInfo, logWarn } from "../logger.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { createSubsystemLogger } from "../logging.js";
 import { CONFIG_DIR } from "../utils.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import {
   DEFAULT_CLAWD_BROWSER_COLOR,
   DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
 } from "./constants.js";
+
+const log = createSubsystemLogger("browser").child("chrome");
 
 export type BrowserExecutable = {
   kind: "canary" | "chromium" | "chrome";
@@ -321,7 +322,6 @@ export async function isChromeReachable(
 
 export async function launchClawdChrome(
   resolved: ResolvedBrowserConfig,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<RunningChrome> {
   await ensurePortAvailable(resolved.cdpPort);
 
@@ -404,15 +404,9 @@ export async function launchClawdChrome(
   if (needsDecorate) {
     try {
       decorateClawdProfile(userDataDir, { color: resolved.color });
-      logInfo(
-        `🦞 clawd browser profile decorated (${resolved.color})`,
-        runtime,
-      );
+      log.info(`🦞 clawd browser profile decorated (${resolved.color})`);
     } catch (err) {
-      logWarn(
-        `clawd browser profile decoration failed: ${String(err)}`,
-        runtime,
-      );
+      log.warn(`clawd browser profile decoration failed: ${String(err)}`);
     }
   }
 
@@ -434,9 +428,8 @@ export async function launchClawdChrome(
   }
 
   const pid = proc.pid ?? -1;
-  logInfo(
+  log.info(
     `🦞 clawd browser started (${exe.kind}) on 127.0.0.1:${resolved.cdpPort} (pid ${pid})`,
-    runtime,
   );
 
   return {
