@@ -82,8 +82,7 @@ struct SkillsSettings: View {
                     SkillRow(
                         skill: skill,
                         isBusy: self.model.isBusy(skill: skill),
-                        canInstallLocally: self.state.connectionMode == .local,
-                        defaultInstallTarget: self.defaultInstallTarget(for: skill),
+                        connectionMode: self.state.connectionMode,
                         onToggleEnabled: { enabled in
                             Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
                         },
@@ -134,11 +133,6 @@ struct SkillsSettings: View {
             }
         }
     }
-
-    private func defaultInstallTarget(for skill: SkillStatus) -> InstallTarget {
-        let localPreferred = ["imsg", "peekaboo", "spotify-player"]
-        return localPreferred.contains(skill.skillKey) ? .local : .gateway
-    }
 }
 
 private enum SkillsFilter: String, CaseIterable, Identifiable {
@@ -171,11 +165,10 @@ private enum InstallTarget: String, CaseIterable {
 private struct SkillRow: View {
     let skill: SkillStatus
     let isBusy: Bool
-    let canInstallLocally: Bool
+    let connectionMode: AppState.ConnectionMode
     let onToggleEnabled: (Bool) -> Void
     let onInstall: (SkillInstallOption, InstallTarget) -> Void
     let onSetEnv: (String, Bool) -> Void
-    @State private var installTarget: InstallTarget
 
     private var missingBins: [String] { self.skill.missing.bins }
     private var missingEnv: [String] { self.skill.missing.env }
@@ -184,22 +177,17 @@ private struct SkillRow: View {
     init(
         skill: SkillStatus,
         isBusy: Bool,
-        canInstallLocally: Bool,
-        defaultInstallTarget: InstallTarget,
+        connectionMode: AppState.ConnectionMode,
         onToggleEnabled: @escaping (Bool) -> Void,
         onInstall: @escaping (SkillInstallOption, InstallTarget) -> Void,
         onSetEnv: @escaping (String, Bool) -> Void)
     {
         self.skill = skill
         self.isBusy = isBusy
-        self.canInstallLocally = canInstallLocally
+        self.connectionMode = connectionMode
         self.onToggleEnabled = onToggleEnabled
         self.onInstall = onInstall
         self.onSetEnv = onSetEnv
-        let initialTarget: InstallTarget = (defaultInstallTarget == .local && !canInstallLocally)
-            ? .gateway
-            : defaultInstallTarget
-        self._installTarget = State(initialValue: initialTarget)
     }
 
     var body: some View {
@@ -339,28 +327,18 @@ private struct SkillRow: View {
     private var trailingActions: some View {
         VStack(alignment: .trailing, spacing: 8) {
             if !self.installOptions.isEmpty {
-                HStack(spacing: 6) {
-                    Text("Install on")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Picker("Install on", selection: self.$installTarget) {
-                        Text("Gateway")
-                            .tag(InstallTarget.gateway)
-                        Text("This Mac")
-                            .tag(InstallTarget.local)
-                            .disabled(!self.canInstallLocally)
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.segmented)
-                    .frame(width: 160)
-                    .controlSize(.small)
-                    .help(self.canInstallLocally ? "" : "Local install requires a local gateway connection.")
-                }
                 ForEach(self.installOptions) { option in
-                    Button("Install") { self.onInstall(option, self.installTarget) }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(self.isBusy || self.installBlocked)
-                        .help(self.installBlocked ? "Local install requires a local gateway connection." : "")
+                    HStack(spacing: 6) {
+                        if self.showGatewayInstall {
+                            Button("Install on Gateway") { self.onInstall(option, .gateway) }
+                                .buttonStyle(.borderedProminent)
+                                .disabled(self.isBusy)
+                        }
+                        Button("Install on This Mac") { self.onInstall(option, .local) }
+                            .buttonStyle(self.showGatewayInstall ? .bordered : .borderedProminent)
+                            .disabled(self.isBusy)
+                            .help(self.localInstallNeedsSwitch ? "Switches to Local mode to install on this Mac." : "")
+                    }
                 }
             } else {
                 Toggle("", isOn: self.enabledBinding)
@@ -399,8 +377,12 @@ private struct SkillRow: View {
             !self.missingConfig.isEmpty
     }
 
-    private var installBlocked: Bool {
-        self.installTarget == .local && !self.canInstallLocally
+    private var showGatewayInstall: Bool {
+        self.connectionMode == .remote
+    }
+
+    private var localInstallNeedsSwitch: Bool {
+        self.connectionMode != .local
     }
 
     private func formatConfigValue(_ value: AnyCodable?) -> String {
@@ -512,8 +494,8 @@ final class SkillsSettingsModel {
         await self.withBusy(skill.skillKey) {
             do {
                 if target == .local, AppStateStore.shared.connectionMode != .local {
-                    self.statusMessage = "Local install requires a local gateway connection"
-                    return
+                    AppStateStore.shared.connectionMode = .local
+                    self.statusMessage = "Switched to Local mode to install on this Mac"
                 }
                 let result = try await GatewayConnection.shared.skillsInstall(
                     name: skill.name,
