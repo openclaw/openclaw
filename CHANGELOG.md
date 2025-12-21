@@ -17,6 +17,7 @@ Second beta focused on bundled gateway packaging, skills management, onboarding 
 
 ### Canvas & browser control
 - Canvas host served on Gateway port; removed standalone canvasHost port config; restored action bridge; refreshed A2UI bundle + message context; bridge canvas host for nodes.
+- A2UI full-screen gutters + status clearance after successful load to avoid overlay collisions.
 - Browser control API simplified; added MCP tool dispatch + native actions; control server can start without Playwright; hook timeouts extended.
 
 ### macOS UI polish

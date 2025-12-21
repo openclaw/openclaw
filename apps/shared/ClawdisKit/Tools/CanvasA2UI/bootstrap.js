@@ -176,7 +176,11 @@ class ClawdisA2UIHost extends LitElement {
       height: 100%;
       position: relative;
       box-sizing: border-box;
-      padding: 12px;
+      padding:
+        var(--clawdis-a2ui-inset-top, 0px)
+        var(--clawdis-a2ui-inset-right, 0px)
+        var(--clawdis-a2ui-inset-bottom, 0px)
+        var(--clawdis-a2ui-inset-left, 0px);
     }
 
     #surfaces {
@@ -185,14 +189,14 @@ class ClawdisA2UIHost extends LitElement {
       gap: 12px;
       height: 100%;
       overflow: auto;
-      padding-bottom: 24px;
+      padding-bottom: var(--clawdis-a2ui-scroll-pad-bottom, 0px);
     }
 
     .status {
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
-      top: 12px;
+      top: var(--clawdis-a2ui-status-top, 12px);
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -213,7 +217,7 @@ class ClawdisA2UIHost extends LitElement {
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
-      bottom: 12px;
+      bottom: var(--clawdis-a2ui-toast-bottom, 12px);
       display: inline-flex;
       align-items: center;
       gap: 8px;
