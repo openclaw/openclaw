@@ -654,14 +654,12 @@ private final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHan
         let contextJSON = ClawdisCanvasA2UIAction.compactJSON(userAction["context"])
 
         // Token-efficient and unambiguous. The agent should treat this as a UI event and (by default) update Canvas.
-        let text = ClawdisCanvasA2UIAction.formatAgentMessage(
+        let messageContext = ClawdisCanvasA2UIAction.AgentMessageContext(
             actionName: name,
-            sessionKey: self.sessionKey,
-            surfaceId: surfaceId,
-            sourceComponentId: sourceComponentId,
-            host: InstanceIdentity.displayName,
-            instanceId: instanceId,
+            session: .init(key: self.sessionKey, surfaceId: surfaceId),
+            component: .init(id: sourceComponentId, host: InstanceIdentity.displayName, instanceId: instanceId),
             contextJSON: contextJSON)
+        let text = ClawdisCanvasA2UIAction.formatAgentMessage(messageContext)
 
         Task { [weak webView] in
             if AppStateStore.shared.connectionMode == .local {

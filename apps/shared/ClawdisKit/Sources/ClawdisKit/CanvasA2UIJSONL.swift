@@ -27,7 +27,12 @@ public enum ClawdisCanvasA2UIJSONL: Sendable {
     }
 
     public static func validateV0_8(_ items: [ParsedItem]) throws {
-        let allowed = Set(["beginRendering", "surfaceUpdate", "dataModelUpdate", "deleteSurface"])
+        let allowed = Set([
+            "beginRendering",
+            "surfaceUpdate",
+            "dataModelUpdate",
+            "deleteSurface",
+        ])
         for item in items {
             guard let dict = item.message.value as? [String: AnyCodable] else {
                 throw NSError(domain: "A2UI", code: 1, userInfo: [
@@ -39,7 +44,8 @@ public enum ClawdisCanvasA2UIJSONL: Sendable {
                 throw NSError(domain: "A2UI", code: 2, userInfo: [
                     NSLocalizedDescriptionKey: """
                     A2UI JSONL line \(item.lineNumber): looks like A2UI v0.9 (`createSurface`).
-                    Canvas currently supports A2UI v0.8 server→client messages (`beginRendering`, `surfaceUpdate`, `dataModelUpdate`, `deleteSurface`).
+                    Canvas currently supports A2UI v0.8 server→client messages
+                    (`beginRendering`, `surfaceUpdate`, `dataModelUpdate`, `deleteSurface`).
                     """,
                 ])
             }

@@ -17,14 +17,12 @@ import Testing
     }
 
     @Test func formatAgentMessageIsTokenEfficientAndUnambiguous() {
-        let msg = ClawdisCanvasA2UIAction.formatAgentMessage(
+        let messageContext = ClawdisCanvasA2UIAction.AgentMessageContext(
             actionName: "Get Weather",
-            sessionKey: "main",
-            surfaceId: "main",
-            sourceComponentId: "btnWeather",
-            host: "Peter’s iPad",
-            instanceId: "ipad16,6",
+            session: .init(key: "main", surfaceId: "main"),
+            component: .init(id: "btnWeather", host: "Peter’s iPad", instanceId: "ipad16,6"),
             contextJSON: "{\"city\":\"Vienna\"}")
+        let msg = ClawdisCanvasA2UIAction.formatAgentMessage(messageContext)
 
         #expect(msg.contains("CANVAS_A2UI "))
         #expect(msg.contains("action=Get_Weather"))

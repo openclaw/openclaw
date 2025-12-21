@@ -102,14 +102,12 @@ final class NodeAppModel {
         let contextJSON = ClawdisCanvasA2UIAction.compactJSON(userAction["context"])
         let sessionKey = "main"
 
-        let message = ClawdisCanvasA2UIAction.formatAgentMessage(
+        let messageContext = ClawdisCanvasA2UIAction.AgentMessageContext(
             actionName: name,
-            sessionKey: sessionKey,
-            surfaceId: surfaceId,
-            sourceComponentId: sourceComponentId,
-            host: host,
-            instanceId: instanceId,
+            session: .init(key: sessionKey, surfaceId: surfaceId),
+            component: .init(id: sourceComponentId, host: host, instanceId: instanceId),
             contextJSON: contextJSON)
+        let message = ClawdisCanvasA2UIAction.formatAgentMessage(messageContext)
 
         let ok: Bool
         var errorText: String?
