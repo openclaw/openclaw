@@ -104,6 +104,19 @@ cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
     <string>Clawdis uses speech recognition to detect your Voice Wake trigger phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Clawdis needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>100.100.100.100</key>
+            <dict>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+                <key>NSIncludesSubdomains</key>
+                <true/>
+            </dict>
+        </dict>
+    </dict>
 </dict>
 </plist>
 PLIST
