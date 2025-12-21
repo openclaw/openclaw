@@ -75,10 +75,11 @@ Behavior:
 
 - **Subsystem prefixes** on every line (e.g. `[gateway]`, `[canvas]`, `[tailscale]`)
 - **Subsystem colors** (stable per subsystem) plus level coloring
-- **Color only when TTY** (`process.stdout.isTTY`/`process.stderr.isTTY`), respects `NO_COLOR`
+- **Color when output is a TTY or the environment looks like a rich terminal** (`TERM`/`COLORTERM`/`TERM_PROGRAM`), respects `NO_COLOR`
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`)
 - **`logRaw()`** for QR/UX output (no prefix, no formatting)
 - **Console styles** (e.g. `pretty | compact | json`)
 - **Console log level** separate from file log level (file keeps full detail)
+- **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.
