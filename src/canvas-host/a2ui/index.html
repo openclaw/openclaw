@@ -5,15 +5,77 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Clawdis Canvas</title>
     <style>
-      :root { color-scheme: light dark; }
+      :root { color-scheme: dark; }
+      @media (prefers-reduced-motion: reduce) {
+        body::before, body::after { animation: none !important; }
+      }
       html, body { height: 100%; margin: 0; }
       body {
         font: 14px system-ui, -apple-system, BlinkMacSystemFont, "Roboto", sans-serif;
-        background: #0b1020;
+        background:
+          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.18), rgba(0,0,0,0) 55%),
+          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.14), rgba(0,0,0,0) 60%),
+          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.10), rgba(0,0,0,0) 60%),
+          #000;
         color: #e5e7eb;
         overflow: hidden;
       }
-      clawdis-a2ui-host { display: block; height: 100%; }
+      body::before {
+        content:"";
+        position: fixed;
+        inset: -20%;
+        background:
+          repeating-linear-gradient(0deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px,
+                                 transparent 1px, transparent 48px),
+          repeating-linear-gradient(90deg, rgba(255,255,255,0.03) 0, rgba(255,255,255,0.03) 1px,
+                                 transparent 1px, transparent 48px);
+        transform: translate3d(0,0,0) rotate(-7deg);
+        will-change: transform, opacity;
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        opacity: 0.45;
+        pointer-events: none;
+        animation: clawdis-grid-drift 140s ease-in-out infinite alternate;
+      }
+      body::after {
+        content:"";
+        position: fixed;
+        inset: -35%;
+        background:
+          radial-gradient(900px 700px at 30% 30%, rgba(42,113,255,0.16), rgba(0,0,0,0) 60%),
+          radial-gradient(800px 650px at 70% 35%, rgba(255,0,138,0.12), rgba(0,0,0,0) 62%),
+          radial-gradient(900px 800px at 55% 75%, rgba(0,209,255,0.10), rgba(0,0,0,0) 62%);
+        filter: blur(28px);
+        opacity: 0.52;
+        will-change: transform, opacity;
+        -webkit-backface-visibility: hidden;
+        backface-visibility: hidden;
+        transform: translate3d(0,0,0);
+        pointer-events: none;
+        animation: clawdis-glow-drift 110s ease-in-out infinite alternate;
+      }
+      @supports (mix-blend-mode: screen) {
+        body::after { mix-blend-mode: screen; }
+      }
+      @supports not (mix-blend-mode: screen) {
+        body::after { opacity: 0.70; }
+      }
+      @keyframes clawdis-grid-drift {
+        0%   { transform: translate3d(-12px, 8px, 0) rotate(-7deg); opacity: 0.40; }
+        50%  { transform: translate3d( 10px,-7px, 0) rotate(-6.6deg); opacity: 0.56; }
+        100% { transform: translate3d(-8px,  6px, 0) rotate(-7.2deg); opacity: 0.42; }
+      }
+      @keyframes clawdis-glow-drift {
+        0%   { transform: translate3d(-18px, 12px, 0) scale(1.02); opacity: 0.40; }
+        50%  { transform: translate3d( 14px,-10px, 0) scale(1.05); opacity: 0.52; }
+        100% { transform: translate3d(-10px,  8px, 0) scale(1.03); opacity: 0.43; }
+      }
+      clawdis-a2ui-host {
+        display: block;
+        height: 100%;
+        position: relative;
+        z-index: 2;
+      }
     </style>
   </head>
   <body>
