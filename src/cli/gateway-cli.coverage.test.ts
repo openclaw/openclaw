@@ -36,6 +36,7 @@ vi.mock("../gateway/server.js", () => ({
 
 vi.mock("../globals.js", () => ({
   info: (msg: string) => msg,
+  isVerbose: () => false,
   setVerbose: (enabled: boolean) => setVerbose(enabled),
 }));
 

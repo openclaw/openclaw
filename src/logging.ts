@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import util from "node:util";
 
+import chalk, { Chalk } from "chalk";
 import { Logger as TsLogger } from "tslog";
 import { type ClawdisConfig, loadConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
+import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
 // randomized path on macOS which made the “Open log” button a no-op.
@@ -30,6 +32,8 @@ type Level = (typeof ALLOWED_LEVELS)[number];
 export type LoggerSettings = {
   level?: Level;
   file?: string;
+  consoleLevel?: Level;
+  consoleStyle?: ConsoleStyle;
 };
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -40,11 +44,27 @@ type ResolvedSettings = {
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 
+export type ConsoleStyle = "pretty" | "compact" | "json";
+type ConsoleSettings = {
+  level: Level;
+  style: ConsoleStyle;
+};
+export type ConsoleLoggerSettings = ConsoleSettings;
+
 let cachedLogger: TsLogger<LogObj> | null = null;
 let cachedSettings: ResolvedSettings | null = null;
+let cachedConsoleSettings: ConsoleSettings | null = null;
 let overrideSettings: LoggerSettings | null = null;
 let consolePatched = false;
 let forceConsoleToStderr = false;
+let rawConsole:
+  | {
+      log: typeof console.log;
+      info: typeof console.info;
+      warn: typeof console.warn;
+      error: typeof console.error;
+    }
+  | null = null;
 
 function normalizeLevel(level?: string): Level {
   if (isVerbose()) return "trace";
@@ -62,9 +82,25 @@ function resolveSettings(): ResolvedSettings {
   return { level, file };
 }
 
+function resolveConsoleSettings(): ConsoleSettings {
+  const cfg: ClawdisConfig["logging"] | undefined =
+    overrideSettings ?? loadConfig().logging;
+  const level = normalizeConsoleLevel(cfg?.consoleLevel);
+  const style = normalizeConsoleStyle(cfg?.consoleStyle);
+  return { level, style };
+}
+
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) return true;
   return a.level !== b.level || a.file !== b.file;
+}
+
+function consoleSettingsChanged(
+  a: ConsoleSettings | null,
+  b: ConsoleSettings,
+) {
+  if (!a) return true;
+  return a.level !== b.level || a.style !== b.style;
 }
 
 function levelToMinLevel(level: Level): number {
@@ -79,6 +115,22 @@ function levelToMinLevel(level: Level): number {
     silent: Number.POSITIVE_INFINITY,
   };
   return map[level];
+}
+
+function normalizeConsoleLevel(level?: string): Level {
+  if (isVerbose()) return "debug";
+  const candidate = level ?? "info";
+  return ALLOWED_LEVELS.includes(candidate as Level)
+    ? (candidate as Level)
+    : "info";
+}
+
+function normalizeConsoleStyle(style?: string): ConsoleStyle {
+  if (style === "compact" || style === "json" || style === "pretty") {
+    return style;
+  }
+  if (!process.stdout.isTTY) return "compact";
+  return "pretty";
 }
 
 function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
@@ -113,6 +165,14 @@ export function getLogger(): TsLogger<LogObj> {
     cachedSettings = settings;
   }
   return cachedLogger;
+}
+
+export function getConsoleSettings(): ConsoleLoggerSettings {
+  const settings = resolveConsoleSettings();
+  if (!cachedConsoleSettings || consoleSettingsChanged(cachedConsoleSettings, settings)) {
+    cachedConsoleSettings = settings;
+  }
+  return cachedConsoleSettings;
 }
 
 export function getChildLogger(
@@ -171,6 +231,10 @@ export function getResolvedLoggerSettings(): LoggerResolvedSettings {
   return resolveSettings();
 }
 
+export function getResolvedConsoleSettings(): ConsoleLoggerSettings {
+  return getConsoleSettings();
+}
+
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
   overrideSettings = settings;
@@ -181,6 +245,7 @@ export function setLoggerOverride(settings: LoggerSettings | null) {
 export function resetLogger() {
   cachedLogger = null;
   cachedSettings = null;
+  cachedConsoleSettings = null;
   overrideSettings = null;
 }
 
@@ -207,6 +272,12 @@ export function enableConsoleCapture(): void {
     error: console.error,
     debug: console.debug,
     trace: console.trace,
+  };
+  rawConsole = {
+    log: original.log,
+    info: original.info,
+    warn: original.warn,
+    error: original.error,
   };
 
   const forward =
@@ -248,6 +319,147 @@ export function enableConsoleCapture(): void {
   console.error = forward("error", original.error);
   console.debug = forward("debug", original.debug);
   console.trace = forward("trace", original.trace);
+}
+
+type SubsystemLogger = {
+  subsystem: string;
+  trace: (message: string, meta?: Record<string, unknown>) => void;
+  debug: (message: string, meta?: Record<string, unknown>) => void;
+  info: (message: string, meta?: Record<string, unknown>) => void;
+  warn: (message: string, meta?: Record<string, unknown>) => void;
+  error: (message: string, meta?: Record<string, unknown>) => void;
+  fatal: (message: string, meta?: Record<string, unknown>) => void;
+  raw: (message: string) => void;
+  child: (name: string) => SubsystemLogger;
+};
+
+function shouldLogToConsole(level: Level, settings: ConsoleSettings): boolean {
+  const current = levelToMinLevel(level);
+  const min = levelToMinLevel(settings.level);
+  return current <= min;
+}
+
+function getColorForConsole(): Chalk {
+  const supports =
+    process.stdout.isTTY &&
+    !process.env.NO_COLOR &&
+    Boolean(chalk.supportsColor);
+  return supports ? chalk : new Chalk({ level: 0 });
+}
+
+function formatConsoleLine(opts: {
+  level: Level;
+  subsystem: string;
+  message: string;
+  style: ConsoleStyle;
+  meta?: Record<string, unknown>;
+}): string {
+  if (opts.style === "json") {
+    return JSON.stringify({
+      time: new Date().toISOString(),
+      level: opts.level,
+      subsystem: opts.subsystem,
+      message: opts.message,
+      ...opts.meta,
+    });
+  }
+  const color = getColorForConsole();
+  const prefix = `[${opts.subsystem}]`;
+  const levelColor =
+    opts.level === "error" || opts.level === "fatal"
+      ? color.red
+      : opts.level === "warn"
+        ? color.yellow
+        : opts.level === "debug" || opts.level === "trace"
+          ? color.gray
+          : color.cyan;
+  const time =
+    opts.style === "pretty"
+      ? color.gray(new Date().toISOString().slice(11, 19))
+      : "";
+  const prefixToken =
+    opts.style === "pretty" ? color.gray(prefix) : prefix;
+  const head = [time, prefixToken].filter(Boolean).join(" ");
+  return `${head} ${levelColor(opts.message)}`;
+}
+
+function writeConsoleLine(level: Level, line: string) {
+  const sink = rawConsole ?? console;
+  if (forceConsoleToStderr || level === "error" || level === "fatal") {
+    (sink.error ?? console.error)(line);
+  } else if (level === "warn") {
+    (sink.warn ?? console.warn)(line);
+  } else {
+    (sink.log ?? console.log)(line);
+  }
+}
+
+function logToFile(
+  fileLogger: TsLogger<LogObj>,
+  level: Level,
+  message: string,
+  meta?: Record<string, unknown>,
+) {
+  if (meta && Object.keys(meta).length > 0) {
+    (fileLogger[level] as (...args: unknown[]) => void)(meta, message);
+  } else {
+    (fileLogger[level] as (...args: unknown[]) => void)(message);
+  }
+}
+
+export function createSubsystemLogger(subsystem: string): SubsystemLogger {
+  let fileLogger: TsLogger<LogObj> | null = null;
+  const getFileLogger = () => {
+    if (!fileLogger) fileLogger = getChildLogger({ subsystem });
+    return fileLogger;
+  };
+  const emit = (level: Level, message: string, meta?: Record<string, unknown>) => {
+    logToFile(getFileLogger(), level, message, meta);
+    const consoleSettings = getConsoleSettings();
+    if (!shouldLogToConsole(level, consoleSettings)) return;
+    const line = formatConsoleLine({
+      level,
+      subsystem,
+      message,
+      style: consoleSettings.style,
+      meta,
+    });
+    writeConsoleLine(level, line);
+  };
+
+  const logger: SubsystemLogger = {
+    subsystem,
+    trace: (message, meta) => emit("trace", message, meta),
+    debug: (message, meta) => emit("debug", message, meta),
+    info: (message, meta) => emit("info", message, meta),
+    warn: (message, meta) => emit("warn", message, meta),
+    error: (message, meta) => emit("error", message, meta),
+    fatal: (message, meta) => emit("fatal", message, meta),
+    raw: (message) => {
+      logToFile(getFileLogger(), "info", message, { raw: true });
+      writeConsoleLine("info", message);
+    },
+    child: (name) => createSubsystemLogger(`${subsystem}/${name}`),
+  };
+  return logger;
+}
+
+export function runtimeForLogger(
+  logger: SubsystemLogger,
+  exit: RuntimeEnv["exit"] = defaultRuntime.exit,
+): RuntimeEnv {
+  return {
+    log: (message: string) => logger.info(message),
+    error: (message: string) => logger.error(message),
+    exit,
+  };
+}
+
+export function createSubsystemRuntime(
+  subsystem: string,
+  exit: RuntimeEnv["exit"] = defaultRuntime.exit,
+): RuntimeEnv {
+  return runtimeForLogger(createSubsystemLogger(subsystem), exit);
 }
 
 function defaultRollingPathForToday(): string {

@@ -20,6 +20,15 @@ export type SessionConfig = {
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
+  consoleLevel?:
+    | "silent"
+    | "fatal"
+    | "error"
+    | "warn"
+    | "info"
+    | "debug"
+    | "trace";
+  consoleStyle?: "pretty" | "compact" | "json";
 };
 
 export type WebReconnectConfig = {
@@ -246,6 +255,20 @@ const ClawdisSchema = z.object({
         ])
         .optional(),
       file: z.string().optional(),
+      consoleLevel: z
+        .union([
+          z.literal("silent"),
+          z.literal("fatal"),
+          z.literal("error"),
+          z.literal("warn"),
+          z.literal("info"),
+          z.literal("debug"),
+          z.literal("trace"),
+        ])
+        .optional(),
+      consoleStyle: z
+        .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
+        .optional(),
     })
     .optional(),
   browser: z

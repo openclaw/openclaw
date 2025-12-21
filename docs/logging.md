@@ -1,3 +1,10 @@
+---
+summary: "Logging surfaces, file logs, WS log styles, and console formatting"
+read_when:
+  - Changing logging output or formats
+  - Debugging CLI or gateway output
+---
+
 # Logging
 
 Clawdis has two log “surfaces”:
@@ -53,3 +60,24 @@ clawdis gateway --verbose --ws-log compact
 # show all WS traffic (full meta)
 clawdis gateway --verbose --ws-log full
 ```
+
+## Console formatting (subsystem logging)
+
+Clawdis formats console logs via a small wrapper on top of the existing stack:
+
+- **tslog** for structured file logs (`src/logging.ts`)
+- **chalk** for colors (`src/globals.ts`)
+
+The console formatter is **TTY-aware** and prints consistent, prefixed lines.
+Subsystem loggers are created via `createSubsystemLogger("gateway")`.
+
+Behavior:
+
+- **Subsystem prefixes** on every line (e.g. `[gateway]`, `[canvas]`, `[tailscale]`)
+- **Color only when TTY** (`process.stdout.isTTY` + `NO_COLOR` respected)
+- **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`)
+- **`logRaw()`** for QR/UX output (no prefix, no formatting)
+- **Console styles** (e.g. `pretty | compact | json`)
+- **Console log level** separate from file log level (file keeps full detail)
+
+This keeps existing file logs stable while making interactive output scannable.

@@ -46,10 +46,18 @@ If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
 
 - Default log file: `/tmp/clawdis/clawdis-YYYY-MM-DD.log`
 - If you want a stable path, set `logging.file` to `/tmp/clawdis/clawdis.log`.
+- Console output can be tuned separately via:
+  - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
+  - `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
 ```json5
 {
-  logging: { level: "info", file: "/tmp/clawdis/clawdis.log" }
+  logging: {
+    level: "info",
+    file: "/tmp/clawdis/clawdis.log",
+    consoleLevel: "info",
+    consoleStyle: "pretty"
+  }
 }
 ```
 
