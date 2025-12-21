@@ -29,6 +29,7 @@ Reference (Peekaboo submodule): `docs/bridge-host.md`.
 ### Processes
 - **Bridge hosts** (provide TCC-backed automation):
   - **Peekaboo.app** (preferred; also provides visualizations + controls)
+  - **Claude.app** (secondary; lets `peekaboo` reuse Claude Desktop’s granted permissions)
   - **Clawdis.app** (secondary; “thin host” only)
 - **Bridge clients** (trigger single actions):
   - `peekaboo …` (preferred; humans + agents)
@@ -37,13 +38,15 @@ Reference (Peekaboo submodule): `docs/bridge-host.md`.
 ### Host discovery (client-side)
 Order is deliberate:
 1. Peekaboo.app host (full UX)
-2. Clawdis.app host (piggyback on Clawdis permissions)
+2. Claude.app host (piggyback on Claude Desktop permissions)
+3. Clawdis.app host (piggyback on Clawdis permissions)
 
 Socket paths (convention; exact paths must match Peekaboo):
 - Peekaboo: `~/Library/Application Support/Peekaboo/bridge.sock`
+- Claude: `~/Library/Application Support/Claude/bridge.sock`
 - Clawdis: `~/Library/Application Support/clawdis/bridge.sock`
 
-No auto-launch: if a host isn’t reachable, the command fails with a clear error (start Peekaboo.app or Clawdis.app).
+No auto-launch: if a host isn’t reachable, the command fails with a clear error (start Peekaboo.app, Claude.app, or Clawdis.app).
 
 Override (debugging): set `PEEKABOO_BRIDGE_SOCKET=/path/to/bridge.sock`.
 
