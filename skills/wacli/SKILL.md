@@ -8,6 +8,8 @@ metadata: {"clawdis":{"emoji":"📱","requires":{"bins":["wacli"]},"install":[{"
 # wacli
 
 Use `wacli` for WhatsApp sync/search/send via WhatsApp Web protocol.
+Normal operation: the user chats with you via Telegram or WhatsApp and Clawdis handles it automatically.
+Use `wacli` only when you need to talk to other people on WhatsApp (or to debug sync/search).
 
 Auth + sync
 - `wacli auth` (QR login + initial sync)
@@ -25,4 +27,5 @@ Send
 Notes
 - Store dir: `~/.wacli` (override with `--store`).
 - Backfill requires your phone online; results are best-effort.
+- WhatsApp CLI is not needed for routine user chats; it’s for messaging other people.
 - Confirm recipient + message before sending.
