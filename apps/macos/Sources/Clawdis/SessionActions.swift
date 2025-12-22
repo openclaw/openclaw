@@ -34,12 +34,6 @@ enum SessionActions {
         _ = try await ControlChannel.shared.request(method: "sessions.patch", params: params)
     }
 
-    static func createSession(key: String) async throws {
-        _ = try await ControlChannel.shared.request(
-            method: "sessions.patch",
-            params: ["key": AnyHashable(key)])
-    }
-
     static func resetSession(key: String) async throws {
         _ = try await ControlChannel.shared.request(
             method: "sessions.reset",
@@ -67,23 +61,6 @@ enum SessionActions {
         alert.addButton(withTitle: "Cancel")
         alert.alertStyle = .warning
         return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    @MainActor
-    static func promptForSessionKey() -> String? {
-        let alert = NSAlert()
-        alert.messageText = "New Session"
-        alert.informativeText = "Create a new session key (e.g. \"main\", \"group:dev\", \"scratch\")."
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.placeholderString = "session key"
-        alert.accessoryView = field
-        alert.addButton(withTitle: "Create")
-        alert.addButton(withTitle: "Cancel")
-        alert.alertStyle = .informational
-        let result = alert.runModal()
-        guard result == .alertFirstButtonReturn else { return nil }
-        let trimmed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     @MainActor
@@ -130,4 +107,3 @@ enum SessionActions {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 }
-

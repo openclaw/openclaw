@@ -210,23 +210,9 @@ struct MenuContent: View {
                     } label: {
                         MenuHostedItem(
                             width: self.sessionMenuItemWidth,
-                            rootView: AnyView(SessionMenuLabelView(row: row)))
+                            rootView: AnyView(SessionMenuLabelView(row: row, width: self.sessionMenuItemWidth)))
                     }
                 }
-            }
-
-            Button {
-                Task { @MainActor in
-                    guard let key = SessionActions.promptForSessionKey() else { return }
-                    do {
-                        try await SessionActions.createSession(key: key)
-                        await self.reloadSessionMenu()
-                    } catch {
-                        SessionActions.presentError(title: "Create session failed", error: error)
-                    }
-                }
-            } label: {
-                Label("New Session…", systemImage: "plus.circle")
             }
         }
     }

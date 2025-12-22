@@ -2,14 +2,16 @@ import SwiftUI
 
 struct SessionMenuLabelView: View {
     let row: SessionRow
+    let width: CGFloat
+    private let horizontalPadding: CGFloat = 8
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             ContextUsageBar(
                 usedTokens: row.tokens.total,
                 contextTokens: row.tokens.contextTokens,
-                width: nil,
-                height: 3)
+                width: max(1, self.width - (self.horizontalPadding * 2)),
+                height: 4)
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
                 Text(row.key)
@@ -29,7 +31,6 @@ struct SessionMenuLabelView: View {
             }
         }
         .padding(.vertical, 4)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, self.horizontalPadding)
     }
 }
-
