@@ -273,10 +273,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     private func buildSyncingMenu(for row: SessionRow) -> NSMenu {
         let menu = NSMenu()
-        let options: [(title: String, value: String?)] = [
+        let options: [(title: String, value: String)] = [
             ("On", "on"),
             ("Off", "off"),
-            ("Default", nil),
         ]
         for (title, value) in options {
             let item = NSMenuItem(title: title, action: #selector(self.patchSyncing(_:)), keyEquivalent: "")
@@ -286,28 +285,33 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 "value": value as Any,
             ]
             let isSelected: Bool = {
-                switch value {
-                case .none:
-                    return row.syncing == nil
-                case "on":
-                    return row.syncing?.isOn == true
-                case "off":
-                    return row.syncing?.isOff == true
-                default:
-                    return false
-                }
+                if value == "on" { return row.syncing?.isOn == true }
+                return row.syncing?.isOff == true
             }()
             item.state = isSelected ? .on : .off
             menu.addItem(item)
         }
+
+        if let syncing = row.syncing,
+           !syncing.isOn,
+           !syncing.isOff,
+           !syncing.label.isEmpty
+        {
+            menu.addItem(NSMenuItem.separator())
+            let current = NSMenuItem(title: "Sync \(syncing.label)", action: nil, keyEquivalent: "")
+            current.state = .on
+            current.isEnabled = false
+            menu.addItem(current)
+        }
+
         return menu
     }
 
     private func buildThinkingMenu(for row: SessionRow) -> NSMenu {
         let menu = NSMenu()
-        let levels: [String?] = ["off", "minimal", "low", "medium", "high", nil]
+        let levels: [String] = ["off", "minimal", "low", "medium", "high"]
         for level in levels {
-            let title = (level ?? "default").capitalized
+            let title = level.capitalized
             let item = NSMenuItem(title: title, action: #selector(self.patchThinking(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = [
@@ -322,9 +326,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     private func buildVerboseMenu(for row: SessionRow) -> NSMenu {
         let menu = NSMenu()
-        let levels: [String?] = ["on", "off", nil]
+        let levels: [String] = ["on", "off"]
         for level in levels {
-            let title = (level ?? "default").capitalized
+            let title = level.capitalized
             let item = NSMenuItem(title: title, action: #selector(self.patchVerbose(_:)), keyEquivalent: "")
             item.target = self
             item.representedObject = [
