@@ -144,7 +144,7 @@ final class CanvasManager {
             guard let self else { return }
             let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 1)
             for await push in stream {
-                await self.handleGatewayPush(push)
+                self.handleGatewayPush(push)
             }
         }
     }
