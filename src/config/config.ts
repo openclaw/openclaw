@@ -73,7 +73,10 @@ export type TelegramConfig = {
   webhookPath?: string;
 };
 
+export type GroupChatActivationMode = "mention" | "always";
+
 export type GroupChatConfig = {
+  activation?: GroupChatActivationMode;
   requireMention?: boolean;
   mentionPatterns?: string[];
   historyLimit?: number;
@@ -289,6 +292,9 @@ const ClawdisSchema = z.object({
       timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
       groupChat: z
         .object({
+          activation: z
+            .union([z.literal("mention"), z.literal("always")])
+            .optional(),
           requireMention: z.boolean().optional(),
           mentionPatterns: z.array(z.string()).optional(),
           historyLimit: z.number().int().positive().optional(),

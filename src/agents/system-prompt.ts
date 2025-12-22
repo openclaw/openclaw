@@ -29,6 +29,7 @@ export function buildAgentSystemPromptAppend(params: {
     "",
     "## Messaging Safety",
     "Never send streaming/partial replies to external messaging surfaces; only final replies should be delivered there.",
+    "Clawdis handles message transport automatically; respond normally and your reply will be delivered to the current chat.",
     "",
     "## Heartbeats",
     'If you receive a heartbeat poll (a user message containing just "HEARTBEAT"), and there is nothing that needs attention, reply exactly:',

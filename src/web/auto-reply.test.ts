@@ -19,6 +19,7 @@ import * as commandQueue from "../process/command-queue.js";
 import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
+  SILENT_REPLY_TOKEN,
   monitorWebProvider,
   resolveHeartbeatRecipients,
   resolveReplyHeartbeatMinutes,
@@ -1429,6 +1430,81 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("Alice: hello group");
     expect(payload.Body).toContain("@bot ping");
     expect(payload.Body).toContain("[from: Bob (+222)]");
+  });
+
+  it("supports always-on group activation with silent token and preserves history", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi
+      .fn()
+      .mockResolvedValueOnce({ text: SILENT_REPLY_TOKEN })
+      .mockResolvedValueOnce({ text: "ok" });
+
+    setLoadConfigMock(() => ({
+      inbound: {
+        groupChat: { activation: "always", mentionPatterns: ["@clawd"] },
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "first",
+      from: "[redacted-email]",
+      conversationId: "[redacted-email]",
+      chatId: "[redacted-email]",
+      chatType: "group",
+      to: "+2",
+      id: "g-always-1",
+      senderE164: "+111",
+      senderName: "Alice",
+      selfE164: "+999",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(reply).not.toHaveBeenCalled();
+
+    await capturedOnMessage?.({
+      body: "second",
+      from: "[redacted-email]",
+      conversationId: "[redacted-email]",
+      chatId: "[redacted-email]",
+      chatType: "group",
+      to: "+2",
+      id: "g-always-2",
+      senderE164: "+222",
+      senderName: "Bob",
+      selfE164: "+999",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    const payload = resolver.mock.calls[1][0];
+    expect(payload.Body).toContain("Chat messages since your last reply");
+    expect(payload.Body).toContain("Alice: first");
+    expect(payload.Body).toContain("Bob: second");
+    expect(reply).toHaveBeenCalledTimes(1);
+
+    resetLoadConfigMock();
   });
 
   it("ignores JID mentions in self-chat mode (group chats)", async () => {

@@ -26,6 +26,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
+import { resolveGroupChatActivation } from "../config/group-chat.js";
 import { logVerbose } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { triggerClawdisRestart } from "../infra/restart.js";
@@ -43,6 +44,7 @@ import {
 } from "./thinking.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
+import { SILENT_REPLY_TOKEN } from "./tokens.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
@@ -583,6 +585,7 @@ export async function getReplyFromConfig(
   const groupIntro =
     isFirstTurnInSession && sessionCtx.ChatType === "group"
       ? (() => {
+          const activation = resolveGroupChatActivation(cfg);
           const subject = sessionCtx.GroupSubject?.trim();
           const members = sessionCtx.GroupMembers?.trim();
           const subjectLine = subject
@@ -591,7 +594,25 @@ export async function getReplyFromConfig(
           const membersLine = members
             ? `Group members: ${members}.`
             : undefined;
-          return [subjectLine, membersLine]
+          const activationLine =
+            activation === "always"
+              ? "Activation: always-on (you receive every group message)."
+              : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
+          const silenceLine =
+            activation === "always"
+              ? `If no response is needed, reply with exactly "${SILENT_REPLY_TOKEN}" (no other text) so Clawdis stays silent.`
+              : undefined;
+          const cautionLine =
+            activation === "always"
+              ? "Be extremely selective: reply only when you are directly addressed, asked a question, or can add clear value. Otherwise stay silent."
+              : undefined;
+          return [
+            subjectLine,
+            membersLine,
+            activationLine,
+            silenceLine,
+            cautionLine,
+          ]
             .filter(Boolean)
             .join(" ")
             .concat(

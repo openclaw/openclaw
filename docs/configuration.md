@@ -73,19 +73,23 @@ Allowlist of E.164 phone numbers that may trigger auto-replies.
 
 ### `inbound.groupChat`
 
-Group messages default to **require mention** (either metadata mention or regex patterns).
+Group messages default to **require mention** (either metadata mention or regex patterns). You can switch to always-on activation.
 
 ```json5
 {
   inbound: {
     groupChat: {
-      requireMention: true,
+      activation: "mention", // mention | always
       mentionPatterns: ["@clawd", "clawdbot", "clawd"],
       historyLimit: 50
     }
   }
 }
 ```
+
+Notes:
+- `activation` defaults to `mention`.
+- `requireMention` is still supported for backwards compatibility (`false` ≈ `activation: "always"`).
 
 ### `inbound.workspace`
 

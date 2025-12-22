@@ -2,8 +2,13 @@ import { chunkText } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import {
+  HEARTBEAT_TOKEN,
+  SILENT_REPLY_TOKEN,
+} from "../auto-reply/tokens.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
+import { resolveGroupChatActivation } from "../config/group-chat.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
@@ -77,8 +82,8 @@ const formatDuration = (ms: number) =>
   ms >= 1000 ? `${(ms / 1000).toFixed(2)}s` : `${ms}ms`;
 
 const DEFAULT_REPLY_HEARTBEAT_MINUTES = 30;
-export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const HEARTBEAT_PROMPT = "HEARTBEAT";
+export { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN };
 
 export type WebProviderStatus = {
   running: boolean;
@@ -110,7 +115,9 @@ type MentionConfig = {
 
 function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
   const gc = cfg.inbound?.groupChat;
-  const requireMention = gc?.requireMention !== false; // default true
+  const activation = resolveGroupChatActivation(cfg);
+  const requireMention =
+    activation === "always" ? false : gc?.requireMention !== false; // default true
   const mentionRegexes =
     gc?.mentionPatterns
       ?.map((p) => {
@@ -205,6 +212,14 @@ export function stripHeartbeatToken(raw?: string) {
     shouldSkip: withoutToken.length === 0,
     text: withoutToken || trimmed,
   };
+}
+
+function isSilentReply(payload?: ReplyPayload): boolean {
+  if (!payload) return false;
+  const text = payload.text?.trim();
+  if (!text || text !== SILENT_REPLY_TOKEN) return false;
+  if (payload.mediaUrl || payload.mediaUrls?.length) return false;
+  return true;
 }
 
 export async function runWebHeartbeatOnce(opts: {
@@ -760,6 +775,7 @@ export async function monitorWebProvider(
     string,
     Array<{ sender: string; body: string; timestamp?: number }>
   >();
+  const groupMemberNames = new Map<string, Map<string, string>>();
   const sleep =
     tuning.sleep ??
     ((ms: number, signal?: AbortSignal) =>
@@ -772,6 +788,60 @@ export async function monitorWebProvider(
         once: true,
       }),
     );
+
+  const noteGroupMember = (
+    conversationId: string,
+    e164?: string,
+    name?: string,
+  ) => {
+    if (!e164 || !name) return;
+    const normalized = normalizeE164(e164);
+    const key = normalized ?? e164;
+    if (!key) return;
+    let roster = groupMemberNames.get(conversationId);
+    if (!roster) {
+      roster = new Map();
+      groupMemberNames.set(conversationId, roster);
+    }
+    roster.set(key, name);
+  };
+
+  const formatGroupMembers = (
+    participants: string[] | undefined,
+    roster: Map<string, string> | undefined,
+    fallbackE164?: string,
+  ) => {
+    const seen = new Set<string>();
+    const ordered: string[] = [];
+    if (participants?.length) {
+      for (const entry of participants) {
+        if (!entry) continue;
+        const normalized = normalizeE164(entry) ?? entry;
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        ordered.push(normalized);
+      }
+    }
+    if (roster) {
+      for (const entry of roster.keys()) {
+        const normalized = normalizeE164(entry) ?? entry;
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        ordered.push(normalized);
+      }
+    }
+    if (ordered.length === 0 && fallbackE164) {
+      const normalized = normalizeE164(fallbackE164) ?? fallbackE164;
+      if (normalized) ordered.push(normalized);
+    }
+    if (ordered.length === 0) return undefined;
+    return ordered
+      .map((entry) => {
+        const name = roster?.get(entry);
+        return name ? `${name} (${entry})` : entry;
+      })
+      .join(", ");
+  };
 
   // Avoid noisy MaxListenersExceeded warnings in test environments where
   // multiple gateway instances may be constructed.
@@ -843,6 +913,7 @@ export async function monitorWebProvider(
       emitStatus();
       const conversationId = msg.conversationId ?? msg.from;
       let combinedBody = buildLine(msg);
+      let shouldClearGroupHistory = false;
 
       if (msg.chatType === "group") {
         const history = groupHistories.get(conversationId) ?? [];
@@ -867,8 +938,7 @@ export async function monitorWebProvider(
             ? `${msg.senderName} (${msg.senderE164})`
             : (msg.senderName ?? msg.senderE164 ?? "Unknown");
         combinedBody = `${combinedBody}\\n[from: ${senderLabel}]`;
-        // Clear stored history after using it
-        groupHistories.set(conversationId, []);
+        shouldClearGroupHistory = true;
       }
 
       // Echo detection uses combined body so we don't respond twice.
@@ -933,6 +1003,7 @@ export async function monitorWebProvider(
       }
 
       const responsePrefix = cfg.inbound?.responsePrefix;
+      let didSendReply = false;
       let toolSendChain: Promise<void> = Promise.resolve();
       const sendToolResult = (payload: ReplyPayload) => {
         if (
@@ -942,6 +1013,7 @@ export async function monitorWebProvider(
         ) {
           return;
         }
+        if (isSilentReply(payload)) return;
         const toolPayload: ReplyPayload = { ...payload };
         if (
           responsePrefix &&
@@ -961,6 +1033,7 @@ export async function monitorWebProvider(
               connectionId,
               skipLog: true,
             });
+            didSendReply = true;
             if (toolPayload.text) {
               recentlySent.add(toolPayload.text);
               if (recentlySent.size > MAX_RECENT_MESSAGES) {
@@ -987,7 +1060,11 @@ export async function monitorWebProvider(
           MediaType: msg.mediaType,
           ChatType: msg.chatType,
           GroupSubject: msg.groupSubject,
-          GroupMembers: msg.groupParticipants?.join(", "),
+          GroupMembers: formatGroupMembers(
+            msg.groupParticipants,
+            groupMemberNames.get(conversationId),
+            msg.senderE164,
+          ),
           SenderName: msg.senderName,
           SenderE164: msg.senderE164,
           Surface: "whatsapp",
@@ -1004,14 +1081,24 @@ export async function monitorWebProvider(
           : [replyResult]
         : [];
 
-      if (replyList.length === 0) {
-        logVerbose("Skipping auto-reply: no text/media returned from resolver");
+      const sendableReplies = replyList.filter(
+        (payload) => !isSilentReply(payload),
+      );
+
+      if (sendableReplies.length === 0) {
+        await toolSendChain;
+        if (shouldClearGroupHistory && didSendReply) {
+          groupHistories.set(conversationId, []);
+        }
+        logVerbose(
+          "Skipping auto-reply: silent token or no text/media returned from resolver",
+        );
         return;
       }
 
       await toolSendChain;
 
-      for (const replyPayload of replyList) {
+      for (const replyPayload of sendableReplies) {
         if (
           responsePrefix &&
           replyPayload.text &&
@@ -1029,6 +1116,7 @@ export async function monitorWebProvider(
             replyLogger,
             connectionId,
           });
+          didSendReply = true;
 
           if (replyPayload.text) {
             recentlySent.add(replyPayload.text);
@@ -1065,6 +1153,10 @@ export async function monitorWebProvider(
           );
         }
       }
+
+      if (shouldClearGroupHistory && didSendReply) {
+        groupHistories.set(conversationId, []);
+      }
     };
 
     const listener = await (listenerFactory ?? monitorWebInbox)({
@@ -1096,6 +1188,7 @@ export async function monitorWebProvider(
         }
 
         if (msg.chatType === "group") {
+          noteGroupMember(conversationId, msg.senderE164, msg.senderName);
           const history =
             groupHistories.get(conversationId) ??
             ([] as Array<{ sender: string; body: string; timestamp?: number }>);
