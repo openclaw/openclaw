@@ -411,6 +411,16 @@ struct MenuContent: View {
         self.sessionLoading = true
         self.sessionErrorText = nil
 
+        if case .connected = self.controlChannel.state {
+            // ok
+        } else {
+            self.sessionStorePath = nil
+            self.sessionMenu = []
+            self.sessionErrorText = "No connection to gateway"
+            self.sessionLoading = false
+            return
+        }
+
         do {
             let snapshot = try await SessionLoader.loadSnapshot(limit: 32)
             self.sessionStorePath = snapshot.storePath
@@ -426,7 +436,8 @@ struct MenuContent: View {
                 return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
             }
         } catch {
-            // Keep the previous snapshot (if any) so the menu doesn't go empty while the gateway is flaky.
+            self.sessionStorePath = nil
+            self.sessionMenu = []
             self.sessionErrorText = self.compactSessionError(error)
         }
 
@@ -437,12 +448,12 @@ struct MenuContent: View {
         if let loadError = error as? SessionLoadError {
             switch loadError {
             case .gatewayUnavailable:
-                return "Sessions unavailable — gateway unreachable"
+                return "No connection to gateway"
             case .decodeFailed:
-                return "Sessions unavailable — invalid payload"
+                return "Sessions unavailable"
             }
         }
-        return "Sessions unavailable"
+        return "No connection to gateway"
     }
 
     private func open(tab: SettingsTab) {

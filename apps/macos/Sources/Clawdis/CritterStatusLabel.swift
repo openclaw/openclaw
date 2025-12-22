@@ -137,7 +137,7 @@ struct CritterStatusLabel: View {
         }
 
         if self.isSleeping {
-            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, badge: nil))
+            return Image(nsImage: CritterIconRenderer.makeIcon(blink: 1, eyesClosedLines: true, badge: nil))
         }
 
         return Image(nsImage: CritterIconRenderer.makeIcon(
@@ -268,6 +268,7 @@ enum CritterIconRenderer {
         earWiggle: CGFloat = 0,
         earScale: CGFloat = 1,
         earHoles: Bool = false,
+        eyesClosedLines: Bool = false,
         badge: Badge? = nil) -> NSImage
     {
         // Force a 36×36px backing store (2× for the 18pt logical canvas) so the menu bar icon stays crisp on Retina.
@@ -333,9 +334,7 @@ enum CritterIconRenderer {
             let legLift = snapY(legH * 0.35 * legWiggle)
             let legYBase = snapY(bodyY - legH + h * 0.05)
 
-            let eyeOpen = max(0.05, 1 - blink)
             let eyeW = snapX(bodyW * 0.2)
-            let eyeH = snapY(bodyH * 0.26 * eyeOpen)
             let eyeY = snapY(bodyY + bodyH * 0.56)
             let eyeOffset = snapX(bodyW * 0.24)
 
@@ -405,20 +404,50 @@ enum CritterIconRenderer {
                     transform: nil))
             }
 
-            let left = CGMutablePath()
-            left.move(to: CGPoint(x: snapX(leftCenter.x - eyeW / 2), y: snapY(leftCenter.y - eyeH)))
-            left.addLine(to: CGPoint(x: snapX(leftCenter.x + eyeW / 2), y: snapY(leftCenter.y)))
-            left.addLine(to: CGPoint(x: snapX(leftCenter.x - eyeW / 2), y: snapY(leftCenter.y + eyeH)))
-            left.closeSubpath()
+            if eyesClosedLines {
+                let lineW = snapX(eyeW * 0.95)
+                let lineH = snapY(max(stepY * 2, bodyH * 0.06))
+                let corner = snapX(lineH * 0.6)
+                let leftRect = CGRect(
+                    x: snapX(leftCenter.x - lineW / 2),
+                    y: snapY(leftCenter.y - lineH / 2),
+                    width: lineW,
+                    height: lineH)
+                let rightRect = CGRect(
+                    x: snapX(rightCenter.x - lineW / 2),
+                    y: snapY(rightCenter.y - lineH / 2),
+                    width: lineW,
+                    height: lineH)
+                context.cgContext.addPath(CGPath(
+                    roundedRect: leftRect,
+                    cornerWidth: corner,
+                    cornerHeight: corner,
+                    transform: nil))
+                context.cgContext.addPath(CGPath(
+                    roundedRect: rightRect,
+                    cornerWidth: corner,
+                    cornerHeight: corner,
+                    transform: nil))
+            } else {
+                let eyeOpen = max(0.05, 1 - blink)
+                let eyeH = snapY(bodyH * 0.26 * eyeOpen)
 
-            let right = CGMutablePath()
-            right.move(to: CGPoint(x: snapX(rightCenter.x + eyeW / 2), y: snapY(rightCenter.y - eyeH)))
-            right.addLine(to: CGPoint(x: snapX(rightCenter.x - eyeW / 2), y: snapY(rightCenter.y)))
-            right.addLine(to: CGPoint(x: snapX(rightCenter.x + eyeW / 2), y: snapY(rightCenter.y + eyeH)))
-            right.closeSubpath()
+                let left = CGMutablePath()
+                left.move(to: CGPoint(x: snapX(leftCenter.x - eyeW / 2), y: snapY(leftCenter.y - eyeH)))
+                left.addLine(to: CGPoint(x: snapX(leftCenter.x + eyeW / 2), y: snapY(leftCenter.y)))
+                left.addLine(to: CGPoint(x: snapX(leftCenter.x - eyeW / 2), y: snapY(leftCenter.y + eyeH)))
+                left.closeSubpath()
 
-            context.cgContext.addPath(left)
-            context.cgContext.addPath(right)
+                let right = CGMutablePath()
+                right.move(to: CGPoint(x: snapX(rightCenter.x + eyeW / 2), y: snapY(rightCenter.y - eyeH)))
+                right.addLine(to: CGPoint(x: snapX(rightCenter.x - eyeW / 2), y: snapY(rightCenter.y)))
+                right.addLine(to: CGPoint(x: snapX(rightCenter.x + eyeW / 2), y: snapY(rightCenter.y + eyeH)))
+                right.closeSubpath()
+
+                context.cgContext.addPath(left)
+                context.cgContext.addPath(right)
+            }
+
             context.cgContext.fillPath()
             context.cgContext.restoreGState()
 
