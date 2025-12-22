@@ -370,6 +370,8 @@ const SUBSYSTEM_COLORS = [
   "magenta",
   "red",
 ] as const;
+const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "providers"] as const;
+const SUBSYSTEM_MAX_SEGMENTS = 2;
 
 function pickSubsystemColor(
   color: ChalkInstance,
@@ -384,6 +386,24 @@ function pickSubsystemColor(
   return color[name];
 }
 
+function formatSubsystemForConsole(subsystem: string): string {
+  const parts = subsystem.split("/").filter(Boolean);
+  const original = parts.join("/") || subsystem;
+  while (
+    parts.length > 0 &&
+    SUBSYSTEM_PREFIXES_TO_DROP.includes(
+      parts[0] as (typeof SUBSYSTEM_PREFIXES_TO_DROP)[number],
+    )
+  ) {
+    parts.shift();
+  }
+  if (parts.length === 0) return original;
+  if (parts.length > SUBSYSTEM_MAX_SEGMENTS) {
+    return parts.slice(-SUBSYSTEM_MAX_SEGMENTS).join("/");
+  }
+  return parts.join("/");
+}
+
 function formatConsoleLine(opts: {
   level: Level;
   subsystem: string;
@@ -391,18 +411,22 @@ function formatConsoleLine(opts: {
   style: ConsoleStyle;
   meta?: Record<string, unknown>;
 }): string {
+  const displaySubsystem =
+    opts.style === "json"
+      ? opts.subsystem
+      : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
     return JSON.stringify({
       time: new Date().toISOString(),
       level: opts.level,
-      subsystem: opts.subsystem,
+      subsystem: displaySubsystem,
       message: opts.message,
       ...opts.meta,
     });
   }
   const color = getColorForConsole();
-  const prefix = `[${opts.subsystem}]`;
-  const prefixColor = pickSubsystemColor(color, opts.subsystem);
+  const prefix = `[${displaySubsystem}]`;
+  const prefixColor = pickSubsystemColor(color, displaySubsystem);
   const levelColor =
     opts.level === "error" || opts.level === "fatal"
       ? color.red
