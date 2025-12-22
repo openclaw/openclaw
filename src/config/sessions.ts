@@ -25,8 +25,6 @@ export type SessionEntry = {
   contextTokens?: number;
   lastChannel?: "whatsapp" | "telegram" | "webchat";
   lastTo?: string;
-  // Optional flag to mirror Mac app UI and future sync states.
-  syncing?: boolean | string;
   skillsSnapshot?: SessionSkillSnapshot;
 };
 
@@ -134,7 +132,6 @@ export async function updateLastRoute(params: {
     totalTokens: existing?.totalTokens,
     model: existing?.model,
     contextTokens: existing?.contextTokens,
-    syncing: existing?.syncing,
     skillsSnapshot: existing?.skillsSnapshot,
     lastChannel: channel,
     lastTo: to?.trim() ? to.trim() : undefined,

@@ -1,65 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum SessionSyncingValue: Codable, Equatable {
-    case bool(Bool)
-    case string(String)
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.singleValueContainer()
-        if let value = try? container.decode(Bool.self) {
-            self = .bool(value)
-            return
-        }
-        if let value = try? container.decode(String.self) {
-            self = .string(value)
-            return
-        }
-        throw DecodingError.typeMismatch(
-            SessionSyncingValue.self,
-            DecodingError.Context(
-                codingPath: decoder.codingPath,
-                debugDescription: "Expected Bool or String"))
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.singleValueContainer()
-        switch self {
-        case let .bool(value):
-            try container.encode(value)
-        case let .string(value):
-            try container.encode(value)
-        }
-    }
-
-    var isOn: Bool {
-        switch self {
-        case let .bool(value):
-            value
-        case let .string(value):
-            value.lowercased() == "on"
-        }
-    }
-
-    var isOff: Bool {
-        switch self {
-        case let .bool(value):
-            !value
-        case let .string(value):
-            value.lowercased() == "off"
-        }
-    }
-
-    var label: String {
-        switch self {
-        case let .bool(value):
-            value ? "on" : "off"
-        case let .string(value):
-            value
-        }
-    }
-}
-
 struct GatewaySessionDefaultsRecord: Codable {
     let model: String?
     let contextTokens: Int?
@@ -73,7 +14,6 @@ struct GatewaySessionEntryRecord: Codable {
     let abortedLastRun: Bool?
     let thinkingLevel: String?
     let verboseLevel: String?
-    let syncing: SessionSyncingValue?
     let inputTokens: Int?
     let outputTokens: Int?
     let totalTokens: Int?
@@ -129,7 +69,6 @@ struct SessionRow: Identifiable {
     let sessionId: String?
     let thinkingLevel: String?
     let verboseLevel: String?
-    let syncing: SessionSyncingValue?
     let systemSent: Bool
     let abortedLastRun: Bool
     let tokens: SessionTokenStats
@@ -141,13 +80,6 @@ struct SessionRow: Identifiable {
         var flags: [String] = []
         if let thinkingLevel { flags.append("think \(thinkingLevel)") }
         if let verboseLevel { flags.append("verbose \(verboseLevel)") }
-        if let syncing {
-            if syncing.isOn {
-                flags.append("syncing")
-            } else if !syncing.label.isEmpty {
-                flags.append("sync \(syncing.label)")
-            }
-        }
         if self.systemSent { flags.append("system sent") }
         if self.abortedLastRun { flags.append("aborted") }
         return flags
@@ -199,7 +131,6 @@ extension SessionRow {
                 sessionId: "sess-direct-1234",
                 thinkingLevel: "low",
                 verboseLevel: "info",
-                syncing: .bool(true),
                 systemSent: false,
                 abortedLastRun: false,
                 tokens: SessionTokenStats(input: 320, output: 680, total: 1000, contextTokens: 200_000),
@@ -212,7 +143,6 @@ extension SessionRow {
                 sessionId: "sess-group-4321",
                 thinkingLevel: "medium",
                 verboseLevel: nil,
-                syncing: nil,
                 systemSent: true,
                 abortedLastRun: true,
                 tokens: SessionTokenStats(input: 5000, output: 1200, total: 6200, contextTokens: 200_000),
@@ -225,7 +155,6 @@ extension SessionRow {
                 sessionId: nil,
                 thinkingLevel: nil,
                 verboseLevel: nil,
-                syncing: nil,
                 systemSent: false,
                 abortedLastRun: false,
                 tokens: SessionTokenStats(input: 150, output: 220, total: 370, contextTokens: 200_000),
@@ -344,7 +273,6 @@ enum SessionLoader {
                 sessionId: entry.sessionId,
                 thinkingLevel: entry.thinkingLevel,
                 verboseLevel: entry.verboseLevel,
-                syncing: entry.syncing,
                 systemSent: entry.systemSent ?? false,
                 abortedLastRun: entry.abortedLastRun ?? false,
                 tokens: SessionTokenStats(

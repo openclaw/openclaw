@@ -5,8 +5,7 @@ enum SessionActions {
     static func patchSession(
         key: String,
         thinking: String?? = nil,
-        verbose: String?? = nil,
-        syncing: SessionSyncingValue?? = nil) async throws
+        verbose: String?? = nil) async throws
     {
         var params: [String: AnyHashable] = ["key": AnyHashable(key)]
 
@@ -15,20 +14,6 @@ enum SessionActions {
         }
         if let verbose {
             params["verboseLevel"] = verbose.map(AnyHashable.init) ?? AnyHashable(NSNull())
-        }
-        if let syncing {
-            let payload: AnyHashable = {
-                switch syncing {
-                case .none:
-                    AnyHashable(NSNull())
-                case let .some(value):
-                    switch value {
-                    case let .bool(v): AnyHashable(v)
-                    case let .string(v): AnyHashable(v)
-                    }
-                }
-            }()
-            params["syncing"] = payload
         }
 
         _ = try await ControlChannel.shared.request(method: "sessions.patch", params: params)

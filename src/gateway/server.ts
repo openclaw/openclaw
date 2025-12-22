@@ -364,7 +364,6 @@ type GatewaySessionRow = {
   totalTokens?: number;
   model?: string;
   contextTokens?: number;
-  syncing?: boolean | string;
 };
 
 type SessionsListResult = {
@@ -843,7 +842,6 @@ function listSessionsFromStore(params: {
         totalTokens: total,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
-        syncing: entry?.syncing,
       } satisfies GatewaySessionRow;
     })
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
@@ -2014,15 +2012,6 @@ export async function startGatewayServer(
             }
           }
 
-          if ("syncing" in p) {
-            const raw = p.syncing;
-            if (raw === null) {
-              delete next.syncing;
-            } else if (raw !== undefined) {
-              next.syncing = raw as boolean | string;
-            }
-          }
-
           store[key] = next;
           await saveSessionStore(storePath, store);
           const payload: SessionsPatchResult = {
@@ -2066,7 +2055,6 @@ export async function startGatewayServer(
             abortedLastRun: false,
             thinkingLevel: entry?.thinkingLevel,
             verboseLevel: entry?.verboseLevel,
-            syncing: entry?.syncing,
             model: entry?.model,
             contextTokens: entry?.contextTokens,
             lastChannel: entry?.lastChannel,
@@ -4321,15 +4309,6 @@ export async function startGatewayServer(
                 }
               }
 
-              if ("syncing" in p) {
-                const raw = p.syncing;
-                if (raw === null) {
-                  delete next.syncing;
-                } else if (raw !== undefined) {
-                  next.syncing = raw as boolean | string;
-                }
-              }
-
               store[key] = next;
               await saveSessionStore(storePath, store);
               const result: SessionsPatchResult = {
@@ -4374,7 +4353,6 @@ export async function startGatewayServer(
                 abortedLastRun: false,
                 thinkingLevel: entry?.thinkingLevel,
                 verboseLevel: entry?.verboseLevel,
-                syncing: entry?.syncing,
                 model: entry?.model,
                 contextTokens: entry?.contextTokens,
                 lastChannel: entry?.lastChannel,

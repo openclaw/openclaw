@@ -3506,20 +3506,6 @@ describe("gateway server", () => {
     expect(main2?.thinkingLevel).toBe("medium");
     expect(main2?.verboseLevel).toBeUndefined();
 
-    const syncPatched = await rpcReq<{ ok: true; key: string }>(
-      ws,
-      "sessions.patch",
-      { key: "main", syncing: true },
-    );
-    expect(syncPatched.ok).toBe(true);
-
-    const list3 = await rpcReq<{
-      sessions: Array<{ key: string; syncing?: boolean | string }>;
-    }>(ws, "sessions.list", {});
-    expect(list3.ok).toBe(true);
-    const main3 = list3.payload?.sessions.find((s) => s.key === "main");
-    expect(main3?.syncing).toBe(true);
-
     const compacted = await rpcReq<{ ok: true; compacted: boolean }>(
       ws,
       "sessions.compact",

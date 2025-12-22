@@ -298,9 +298,6 @@ export const SessionsPatchParamsSchema = Type.Object(
         Type.Null(),
       ]),
     ),
-    syncing: Type.Optional(
-      Type.Union([Type.Boolean(), NonEmptyString, Type.Null()]),
-    ),
   },
   { additionalProperties: false },
 );

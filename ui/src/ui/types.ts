@@ -111,7 +111,6 @@ export type GatewaySessionRow = {
   totalTokens?: number;
   model?: string;
   contextTokens?: number;
-  syncing?: boolean | string;
 };
 
 export type SessionsListResult = {
@@ -131,7 +130,6 @@ export type SessionsPatchResult = {
     updatedAt?: number;
     thinkingLevel?: string;
     verboseLevel?: string;
-    syncing?: boolean | string;
   };
 };
 
@@ -248,4 +246,3 @@ export type SkillStatusReport = {
 export type StatusSummary = Record<string, unknown>;
 
 export type HealthSnapshot = Record<string, unknown>;
-

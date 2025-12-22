@@ -133,7 +133,6 @@ function resolveCronSession(params: {
     contextTokens: entry?.contextTokens,
     lastChannel: entry?.lastChannel,
     lastTo: entry?.lastTo,
-    syncing: entry?.syncing,
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession: !fresh };
 }

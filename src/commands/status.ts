@@ -29,7 +29,6 @@ export type SessionStatus = {
   verboseLevel?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
-  syncing?: boolean | string;
   inputTokens?: number;
   outputTokens?: number;
   totalTokens: number | null;
@@ -101,7 +100,6 @@ export async function getStatusSummary(): Promise<StatusSummary> {
         verboseLevel: entry?.verboseLevel,
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
-        syncing: entry?.syncing,
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: total ?? null,
@@ -178,10 +176,6 @@ const buildFlags = (entry: SessionEntry): string[] => {
     flags.push(`verbose:${verbose}`);
   if (entry?.systemSent) flags.push("system");
   if (entry?.abortedLastRun) flags.push("aborted");
-  const syncing = entry?.syncing as unknown;
-  if (syncing === true || syncing === "on") flags.push("syncing");
-  else if (typeof syncing === "string" && syncing)
-    flags.push(`sync:${syncing}`);
   const sessionId = entry?.sessionId as unknown;
   if (typeof sessionId === "string" && sessionId.length > 0)
     flags.push(`id:${sessionId}`);
