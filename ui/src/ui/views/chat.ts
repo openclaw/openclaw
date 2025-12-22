@@ -37,7 +37,7 @@ export function renderChat(props: ChatProps) {
         </div>
       </div>
 
-      <div class="messages" style="margin-top: 12px;">
+      <div class="messages chat-messages">
         ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
         ${props.messages.map((m) => renderMessage(m))}
         ${props.stream
@@ -48,8 +48,8 @@ export function renderChat(props: ChatProps) {
           : nothing}
       </div>
 
-      <div class="compose" style="margin-top: 12px;">
-        <label class="field">
+      <div class="compose chat-compose">
+        <label class="field chat-compose__field">
           <span>Message</span>
           <textarea
             .value=${props.draft}
@@ -58,7 +58,7 @@ export function renderChat(props: ChatProps) {
             placeholder="Ask the model…"
           ></textarea>
         </label>
-        <div class="row" style="justify-content: flex-end;">
+        <div class="row chat-compose__actions">
           <button
             class="btn primary"
             ?disabled=${props.sending || !props.connected}

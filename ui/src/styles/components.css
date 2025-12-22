@@ -304,6 +304,11 @@
   background: rgba(0, 0, 0, 0.2);
 }
 
+.chat-messages {
+  margin-top: 8px;
+  padding: 6px;
+}
+
 .msg {
   border: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.2);
@@ -339,6 +344,33 @@
 .compose {
   display: grid;
   gap: 10px;
+}
+
+.chat-compose {
+  margin-top: 8px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.chat-compose__field {
+  gap: 4px;
+}
+
+.chat-compose__field textarea {
+  min-height: 120px;
+  padding: 8px 10px;
+}
+
+.chat-compose__actions {
+  justify-content: flex-end;
+  align-self: end;
+}
+
+@media (max-width: 900px) {
+  .chat-compose {
+    grid-template-columns: 1fr;
+  }
 }
 
 .qr-wrap {
