@@ -44,7 +44,7 @@ public struct ClawdisChatView: View {
 
     public var body: some View {
         ZStack {
-            ClawdisChatTheme.surface
+            ClawdisChatTheme.background
                 .ignoresSafeArea()
 
             VStack(spacing: Layout.stackSpacing) {

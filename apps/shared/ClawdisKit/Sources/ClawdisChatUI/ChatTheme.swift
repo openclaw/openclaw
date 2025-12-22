@@ -15,6 +15,40 @@ enum ClawdisChatTheme {
         #endif
     }
 
+    @ViewBuilder
+    static var background: some View {
+        #if os(macOS)
+        ZStack {
+            LinearGradient(
+                colors: [
+                    Color(nsColor: .windowBackgroundColor).opacity(0.85),
+                    Color.black.opacity(0.92)
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+            RadialGradient(
+                colors: [
+                    Color(nsColor: .systemOrange).opacity(0.18),
+                    .clear
+                ],
+                center: .topLeading,
+                startRadius: 40,
+                endRadius: 320)
+            RadialGradient(
+                colors: [
+                    Color(nsColor: .systemTeal).opacity(0.16),
+                    .clear
+                ],
+                center: .topTrailing,
+                startRadius: 40,
+                endRadius: 280)
+            Color.black.opacity(0.12)
+        }
+        #else
+        Color(uiColor: .systemBackground)
+        #endif
+    }
+
     static var card: Color {
         #if os(macOS)
         Color(nsColor: .textBackgroundColor)
@@ -23,11 +57,11 @@ enum ClawdisChatTheme {
         #endif
     }
 
-    static var subtleCard: Color {
+    static var subtleCard: AnyShapeStyle {
         #if os(macOS)
-        Color(nsColor: .textBackgroundColor).opacity(0.55)
+        AnyShapeStyle(.ultraThinMaterial)
         #else
-        Color(uiColor: .secondarySystemBackground).opacity(0.9)
+        AnyShapeStyle(Color(uiColor: .secondarySystemBackground).opacity(0.9))
         #endif
     }
 
@@ -41,7 +75,9 @@ enum ClawdisChatTheme {
 
     static var assistantBubble: Color {
         #if os(macOS)
-        Color(nsColor: .controlBackgroundColor)
+        let base = NSColor.controlBackgroundColor
+        let blended = base.blended(withFraction: 0.18, of: .white) ?? base
+        return Color(nsColor: blended).opacity(0.88)
         #else
         Color(uiColor: .secondarySystemBackground)
         #endif
@@ -75,24 +111,24 @@ enum ClawdisChatTheme {
         #endif
     }
 
-    static var composerBackground: Color {
+    static var composerBackground: AnyShapeStyle {
         #if os(macOS)
-        Color(nsColor: .windowBackgroundColor)
+        AnyShapeStyle(.ultraThinMaterial)
         #else
-        Color(uiColor: .systemBackground)
+        AnyShapeStyle(Color(uiColor: .systemBackground))
         #endif
     }
 
-    static var composerField: Color {
+    static var composerField: AnyShapeStyle {
         #if os(macOS)
-        Color(nsColor: .textBackgroundColor)
+        AnyShapeStyle(.thinMaterial)
         #else
-        Color(uiColor: .secondarySystemBackground)
+        AnyShapeStyle(Color(uiColor: .secondarySystemBackground))
         #endif
     }
 
     static var composerBorder: Color {
-        Color.secondary.opacity(0.2)
+        Color.white.opacity(0.12)
     }
 
     static var divider: Color {

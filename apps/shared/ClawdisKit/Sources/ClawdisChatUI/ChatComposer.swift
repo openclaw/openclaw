@@ -45,7 +45,10 @@ struct ClawdisChatComposer: View {
         .background(
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(ClawdisChatTheme.composerBackground)
-                .shadow(color: .black.opacity(0.08), radius: 10, y: 4))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(ClawdisChatTheme.composerBorder, lineWidth: 1))
+                .shadow(color: .black.opacity(0.12), radius: 12, y: 6))
         #if os(macOS)
             .onDrop(of: [.fileURL], isTargeted: nil) { providers in
                 self.handleDrop(providers)

@@ -238,7 +238,7 @@ private struct ChatMessageBody: View {
         if self.style == .onboarding {
             return ClawdisChatTheme.onboardingAssistantBorder
         }
-        return Color.black.opacity(0.08)
+        return Color.white.opacity(0.08)
     }
 
     private var bubbleBorderWidth: CGFloat {
@@ -321,7 +321,7 @@ struct ChatTypingIndicatorBubble: View {
                 .fill(ClawdisChatTheme.assistantBubble))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
         .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
     }
 }
@@ -340,7 +340,7 @@ struct ChatStreamingAssistantBubble: View {
                 .fill(ClawdisChatTheme.assistantBubble))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
         .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
     }
 }
@@ -374,7 +374,7 @@ struct ChatPendingToolsBubble: View {
                 .fill(ClawdisChatTheme.assistantBubble))
         .overlay(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .strokeBorder(Color.black.opacity(0.08), lineWidth: 1))
+                .strokeBorder(Color.white.opacity(0.08), lineWidth: 1))
         .frame(maxWidth: ChatUIConstants.bubbleMaxWidth, alignment: .leading)
     }
 }
