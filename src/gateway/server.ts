@@ -14,6 +14,7 @@ import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
+import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
@@ -1993,6 +1994,25 @@ export async function startGatewayServer(
                 };
               }
               next.verboseLevel = normalized;
+            }
+          }
+
+          if ("groupActivation" in p) {
+            const raw = p.groupActivation;
+            if (raw === null) {
+              delete next.groupActivation;
+            } else if (raw !== undefined) {
+              const normalized = normalizeGroupActivation(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid groupActivation: ${String(raw)}`,
+                  },
+                };
+              }
+              next.groupActivation = normalized;
             }
           }
 
@@ -4277,6 +4297,27 @@ export async function startGatewayServer(
                   }
                   if (normalized === "off") delete next.verboseLevel;
                   else next.verboseLevel = normalized;
+                }
+              }
+
+              if ("groupActivation" in p) {
+                const raw = p.groupActivation;
+                if (raw === null) {
+                  delete next.groupActivation;
+                } else if (raw !== undefined) {
+                  const normalized = normalizeGroupActivation(String(raw));
+                  if (!normalized) {
+                    respond(
+                      false,
+                      undefined,
+                      errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        'invalid groupActivation (use "mention"|"always")',
+                      ),
+                    );
+                    break;
+                  }
+                  next.groupActivation = normalized;
                 }
               }
 

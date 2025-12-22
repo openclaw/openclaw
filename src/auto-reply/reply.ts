@@ -18,7 +18,7 @@ import {
 import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
-  DEFAULT_RESET_TRIGGER,
+  DEFAULT_RESET_TRIGGERS,
   loadSessionStore,
   resolveSessionKey,
   resolveSessionTranscriptPath,
@@ -26,14 +26,18 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
-import { resolveGroupChatActivation } from "../config/group-chat.js";
 import { logVerbose } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { triggerClawdisRestart } from "../infra/restart.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeE164 } from "../utils.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
+import {
+  parseActivationCommand,
+  normalizeGroupActivation,
+} from "./group-activation.js";
 import { buildStatusMessage } from "./status.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
@@ -53,7 +57,7 @@ const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
 
 const BARE_SESSION_RESET_PROMPT =
-  "A new session was started via /new. Say hi briefly and ask what the user wants to do next.";
+  "A new session was started via /new or /reset. Say hi briefly and ask what the user wants to do next.";
 
 export function extractThinkDirective(body?: string): {
   cleaned: string;
@@ -219,7 +223,7 @@ export async function getReplyFromConfig(
   const mainKey = sessionCfg?.mainKey ?? "main";
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
-    : [DEFAULT_RESET_TRIGGER];
+    : DEFAULT_RESET_TRIGGERS;
   const idleMinutes = Math.max(
     sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
     1,
@@ -502,6 +506,20 @@ export async function getReplyFromConfig(
       : defaultAllowFrom;
   const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
+  const commandBodyNormalized = isGroup
+    ? stripMentions(rawBodyNormalized, ctx, cfg)
+    : rawBodyNormalized;
+  const activationCommand = parseActivationCommand(commandBodyNormalized);
+  const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
+  const ownerCandidates = (allowFrom ?? []).filter(
+    (entry) => entry && entry !== "*",
+  );
+  if (ownerCandidates.length === 0 && to) ownerCandidates.push(to);
+  const ownerList = ownerCandidates
+    .map((entry) => normalizeE164(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  const isOwnerSender =
+    Boolean(senderE164) && ownerList.includes(senderE164 ?? "");
 
   if (!sessionEntry && abortKey) {
     abortedLastRun = ABORT_MEMORY.get(abortKey) ?? false;
@@ -521,11 +539,46 @@ export async function getReplyFromConfig(
     }
   }
 
+  if (activationCommand.hasCommand) {
+    if (!isGroup) {
+      cleanupTyping();
+      return { text: "⚙️ Group activation only applies to group chats." };
+    }
+    if (!isOwnerSender) {
+      logVerbose(
+        `Ignoring /activation from non-owner in group: ${senderE164 || "<unknown>"}`,
+      );
+      cleanupTyping();
+      return undefined;
+    }
+    if (!activationCommand.mode) {
+      cleanupTyping();
+      return { text: "⚙️ Usage: /activation mention|always" };
+    }
+    if (sessionEntry && sessionStore && sessionKey) {
+      sessionEntry.groupActivation = activationCommand.mode;
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    }
+    cleanupTyping();
+    return {
+      text: `⚙️ Group activation set to ${activationCommand.mode}.`,
+    };
+  }
+
   if (
-    rawBodyNormalized === "/restart" ||
-    rawBodyNormalized === "restart" ||
-    rawBodyNormalized.startsWith("/restart ")
+    commandBodyNormalized === "/restart" ||
+    commandBodyNormalized === "restart" ||
+    commandBodyNormalized.startsWith("/restart ")
   ) {
+    if (isGroup && !isOwnerSender) {
+      logVerbose(
+        `Ignoring /restart from non-owner in group: ${senderE164 || "<unknown>"}`,
+      );
+      cleanupTyping();
+      return undefined;
+    }
     triggerClawdisRestart();
     cleanupTyping();
     return {
@@ -534,10 +587,17 @@ export async function getReplyFromConfig(
   }
 
   if (
-    rawBodyNormalized === "/status" ||
-    rawBodyNormalized === "status" ||
-    rawBodyNormalized.startsWith("/status ")
+    commandBodyNormalized === "/status" ||
+    commandBodyNormalized === "status" ||
+    commandBodyNormalized.startsWith("/status ")
   ) {
+    if (isGroup && !isOwnerSender) {
+      logVerbose(
+        `Ignoring /status from non-owner in group: ${senderE164 || "<unknown>"}`,
+      );
+      cleanupTyping();
+      return undefined;
+    }
     const webLinked = await webAuthExists();
     const webAuthAgeMs = getWebAuthAgeMs();
     const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
@@ -585,7 +645,9 @@ export async function getReplyFromConfig(
   const groupIntro =
     isFirstTurnInSession && sessionCtx.ChatType === "group"
       ? (() => {
-          const activation = resolveGroupChatActivation(cfg);
+          const activation =
+            normalizeGroupActivation(sessionEntry?.groupActivation) ??
+            "mention";
           const subject = sessionCtx.GroupSubject?.trim();
           const members = sessionCtx.GroupMembers?.trim();
           const subjectLine = subject

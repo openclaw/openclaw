@@ -181,6 +181,11 @@ export function buildStatusMessage(args: StatusArgs): string {
     .filter(Boolean)
     .join(" • ");
 
+  const groupActivationLine =
+    args.sessionKey?.startsWith("group:")
+      ? `Group activation: ${entry?.groupActivation ?? "mention"}`
+      : undefined;
+
   const contextLine = `Context: ${formatTokens(
     totalTokens,
     contextTokens ?? null,
@@ -209,6 +214,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     workspaceLine,
     contextLine,
     sessionLine,
+    groupActivationLine,
     optionsLine,
     helpersLine,
   ].join("\n");

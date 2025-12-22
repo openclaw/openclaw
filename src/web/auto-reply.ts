@@ -3,12 +3,15 @@ import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
+  normalizeGroupActivation,
+  parseActivationCommand,
+} from "../auto-reply/group-activation.js";
+import {
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
 } from "../auto-reply/tokens.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
-import { resolveGroupChatActivation } from "../config/group-chat.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
@@ -108,16 +111,12 @@ function elide(text?: string, limit = 400) {
 }
 
 type MentionConfig = {
-  requireMention: boolean;
   mentionRegexes: RegExp[];
   allowFrom?: Array<string | number>;
 };
 
 function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
   const gc = cfg.inbound?.groupChat;
-  const activation = resolveGroupChatActivation(cfg);
-  const requireMention =
-    activation === "always" ? false : gc?.requireMention !== false; // default true
   const mentionRegexes =
     gc?.mentionPatterns
       ?.map((p) => {
@@ -128,7 +127,7 @@ function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
         }
       })
       .filter((r): r is RegExp => Boolean(r)) ?? [];
-  return { requireMention, mentionRegexes, allowFrom: cfg.inbound?.allowFrom };
+  return { mentionRegexes, allowFrom: cfg.inbound?.allowFrom };
 }
 
 function isBotMentioned(
@@ -769,6 +768,7 @@ export async function monitorWebProvider(
   );
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const mentionConfig = buildMentionConfig(cfg);
+  const sessionStorePath = resolveStorePath(cfg.inbound?.session?.store);
   const groupHistoryLimit =
     cfg.inbound?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
@@ -841,6 +841,61 @@ export async function monitorWebProvider(
         return name ? `${name} (${entry})` : entry;
       })
       .join(", ");
+  };
+
+  const resolveGroupActivationFor = (conversationId: string) => {
+    const key = conversationId.startsWith("group:")
+      ? conversationId
+      : `group:${conversationId}`;
+    const store = loadSessionStore(sessionStorePath);
+    const entry = store[key];
+    return normalizeGroupActivation(entry?.groupActivation) ?? "mention";
+  };
+
+  const resolveOwnerList = (selfE164?: string | null) => {
+    const allowFrom = mentionConfig.allowFrom;
+    const raw =
+      Array.isArray(allowFrom) && allowFrom.length > 0
+        ? allowFrom
+        : selfE164
+          ? [selfE164]
+          : [];
+    return raw
+      .filter((entry): entry is string => Boolean(entry && entry !== "*"))
+      .map((entry) => normalizeE164(entry))
+      .filter((entry): entry is string => Boolean(entry));
+  };
+
+  const isOwnerSender = (msg: WebInboundMsg) => {
+    const sender = normalizeE164(msg.senderE164 ?? "");
+    if (!sender) return false;
+    const owners = resolveOwnerList(msg.selfE164 ?? undefined);
+    return owners.includes(sender);
+  };
+
+  const isStatusCommand = (body: string) => {
+    const trimmed = body.trim().toLowerCase();
+    if (!trimmed) return false;
+    return (
+      trimmed === "/status" ||
+      trimmed === "status" ||
+      trimmed.startsWith("/status ")
+    );
+  };
+
+  const stripMentionsForCommand = (text: string, selfE164?: string | null) => {
+    let result = text;
+    for (const re of mentionConfig.mentionRegexes) {
+      result = result.replace(re, " ");
+    }
+    if (selfE164) {
+      const digits = selfE164.replace(/\D/g, "");
+      if (digits) {
+        const pattern = new RegExp(`\\+?${digits}`, "g");
+        result = result.replace(pattern, " ");
+      }
+    }
+    return result.replace(/\s+/g, " ").trim();
   };
 
   // Avoid noisy MaxListenersExceeded warnings in test environments where
@@ -1189,16 +1244,39 @@ export async function monitorWebProvider(
 
         if (msg.chatType === "group") {
           noteGroupMember(conversationId, msg.senderE164, msg.senderName);
-          const history =
-            groupHistories.get(conversationId) ??
-            ([] as Array<{ sender: string; body: string; timestamp?: number }>);
-          history.push({
-            sender: msg.senderName ?? msg.senderE164 ?? "Unknown",
-            body: msg.body,
-            timestamp: msg.timestamp,
-          });
-          while (history.length > groupHistoryLimit) history.shift();
-          groupHistories.set(conversationId, history);
+          const commandBody = stripMentionsForCommand(
+            msg.body,
+            msg.selfE164,
+          );
+          const activationCommand = parseActivationCommand(commandBody);
+          const isOwner = isOwnerSender(msg);
+          const statusCommand = isStatusCommand(commandBody);
+          const shouldBypassMention =
+            isOwner && (activationCommand.hasCommand || statusCommand);
+
+          if (activationCommand.hasCommand && !isOwner) {
+            logVerbose(
+              `Ignoring /activation from non-owner in group ${conversationId}`,
+            );
+            return;
+          }
+
+          if (!shouldBypassMention) {
+            const history =
+              groupHistories.get(conversationId) ??
+              ([] as Array<{
+                sender: string;
+                body: string;
+                timestamp?: number;
+              }>);
+            history.push({
+              sender: msg.senderName ?? msg.senderE164 ?? "Unknown",
+              body: msg.body,
+              timestamp: msg.timestamp,
+            });
+            while (history.length > groupHistoryLimit) history.shift();
+            groupHistories.set(conversationId, history);
+          }
 
           const mentionDebug = debugMention(msg, mentionConfig);
           replyLogger.debug(
@@ -1210,7 +1288,9 @@ export async function monitorWebProvider(
             "group mention debug",
           );
           const wasMentioned = mentionDebug.wasMentioned;
-          if (mentionConfig.requireMention && !wasMentioned) {
+          const activation = resolveGroupActivationFor(conversationId);
+          const requireMention = activation !== "always";
+          if (!shouldBypassMention && requireMention && !wasMentioned) {
             logVerbose(
               `Group message stored for context (no mention detected) in ${conversationId}: ${msg.body}`,
             );

@@ -53,6 +53,22 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Web: not linked");
   });
 
+  it("includes group activation for group sessions", () => {
+    const text = buildStatusMessage({
+      agent: {},
+      sessionEntry: {
+        sessionId: "g1",
+        updatedAt: 0,
+        groupActivation: "always",
+      },
+      sessionKey: "group:[redacted-email]",
+      sessionScope: "per-sender",
+      webLinked: true,
+    });
+
+    expect(text).toContain("Group activation: always");
+  });
+
   it("prefers cached prompt tokens from the session log", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-status-"));
     const previousHome = process.env.HOME;

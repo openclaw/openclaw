@@ -99,6 +99,49 @@ describe("trigger handling", () => {
     });
   });
 
+  it("updates group activation when the owner sends /activation", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(
+        {
+          Body: "/activation always",
+          From: "[redacted-email]",
+          To: "+2000",
+          ChatType: "group",
+          SenderE164: "+2000",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Group activation set to always");
+      const store = JSON.parse(
+        await fs.readFile(cfg.inbound.session.store, "utf-8"),
+      ) as Record<string, { groupActivation?: string }>;
+      expect(store["group:[redacted-email]"]?.groupActivation).toBe("always");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("ignores /activation from non-owners in groups", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(
+        {
+          Body: "/activation mention",
+          From: "[redacted-email]",
+          To: "+2000",
+          ChatType: "group",
+          SenderE164: "+999",
+        },
+        {},
+        cfg,
+      );
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("runs a greeting prompt for a bare /new", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
@@ -132,7 +175,44 @@ describe("trigger handling", () => {
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const prompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).toContain("A new session was started via /new");
+      expect(prompt).toContain("A new session was started via /new or /reset");
+    });
+  });
+
+  it("runs a greeting prompt for a bare /reset", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "hello" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/reset",
+          From: "+1003",
+          To: "+2000",
+        },
+        {},
+        {
+          inbound: {
+            allowFrom: ["*"],
+            workspace: join(home, "clawd"),
+            agent: { provider: "anthropic", model: "claude-opus-4-5" },
+            session: {
+              store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
+            },
+          },
+        },
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("hello");
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain("A new session was started via /new or /reset");
     });
   });
 

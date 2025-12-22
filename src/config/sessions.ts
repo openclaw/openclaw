@@ -17,6 +17,7 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  groupActivation?: "mention" | "always";
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -43,6 +44,7 @@ export function resolveDefaultSessionStorePath(): string {
   return path.join(resolveSessionTranscriptsDir(), "sessions.json");
 }
 export const DEFAULT_RESET_TRIGGER = "/new";
+export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 60;
 
 export function resolveSessionTranscriptPath(sessionId: string): string {

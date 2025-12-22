@@ -1441,9 +1441,18 @@ describe("web auto-reply", () => {
       .mockResolvedValueOnce({ text: SILENT_REPLY_TOKEN })
       .mockResolvedValueOnce({ text: "ok" });
 
+    const { storePath, cleanup } = await makeSessionStore({
+      "group:[redacted-email]": {
+        sessionId: "g-1",
+        updatedAt: Date.now(),
+        groupActivation: "always",
+      },
+    });
+
     setLoadConfigMock(() => ({
       inbound: {
-        groupChat: { activation: "always", mentionPatterns: ["@clawd"] },
+        groupChat: { mentionPatterns: ["@clawd"] },
+        session: { store: storePath },
       },
     }));
 
@@ -1504,6 +1513,7 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("Bob: second");
     expect(reply).toHaveBeenCalledTimes(1);
 
+    await cleanup();
     resetLoadConfigMock();
   });
 
