@@ -271,9 +271,9 @@ import {
   formatValidationErrors,
   PROTOCOL_VERSION,
   type RequestFrame,
-  type SessionsListParams,
   type SessionsCompactParams,
   type SessionsDeleteParams,
+  type SessionsListParams,
   type SessionsPatchParams,
   type SessionsResetParams,
   type Snapshot,
@@ -303,9 +303,9 @@ import {
   validateProvidersStatusParams,
   validateRequestFrame,
   validateSendParams,
-  validateSessionsListParams,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
+  validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsResetParams,
   validateSkillsInstallParams,
@@ -718,7 +718,6 @@ function readSessionMessages(
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
-      // pi/tau logs either raw message or wrapper { message }
       if (parsed?.message) {
         messages.push(parsed.message);
       } else if (parsed?.role && parsed?.content) {
@@ -2183,8 +2182,10 @@ export async function startGatewayServer(
             };
           }
 
-          const filePath = resolveSessionTranscriptCandidates(sessionId, storePath)
-            .find((candidate) => fs.existsSync(candidate));
+          const filePath = resolveSessionTranscriptCandidates(
+            sessionId,
+            storePath,
+          ).find((candidate) => fs.existsSync(candidate));
           if (!filePath) {
             return {
               ok: true,

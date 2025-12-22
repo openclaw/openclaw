@@ -3390,14 +3390,16 @@ describe("gateway server", () => {
 
     await fs.writeFile(
       path.join(dir, "sess-main.jsonl"),
-      Array.from({ length: 10 })
-        .map((_, idx) => JSON.stringify({ role: "user", content: `line ${idx}` }))
-        .join("\n") + "\n",
+      `${Array.from({ length: 10 })
+        .map((_, idx) =>
+          JSON.stringify({ role: "user", content: `line ${idx}` }),
+        )
+        .join("\n")}\n`,
       "utf-8",
     );
     await fs.writeFile(
       path.join(dir, "sess-group.jsonl"),
-      JSON.stringify({ role: "user", content: "group line 0" }) + "\n",
+      `${JSON.stringify({ role: "user", content: "group line 0" })}\n`,
       "utf-8",
     );
 
@@ -3532,8 +3534,9 @@ describe("gateway server", () => {
       .filter((l) => l.trim().length > 0);
     expect(compactedLines).toHaveLength(3);
     const filesAfterCompact = await fs.readdir(dir);
-    expect(filesAfterCompact.some((f) => f.startsWith("sess-main.jsonl.bak.")))
-      .toBe(true);
+    expect(
+      filesAfterCompact.some((f) => f.startsWith("sess-main.jsonl.bak.")),
+    ).toBe(true);
 
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(
       ws,
@@ -3546,17 +3549,19 @@ describe("gateway server", () => {
       sessions: Array<{ key: string }>;
     }>(ws, "sessions.list", {});
     expect(listAfterDelete.ok).toBe(true);
-    expect(listAfterDelete.payload?.sessions.some((s) => s.key === "group:dev"))
-      .toBe(false);
+    expect(
+      listAfterDelete.payload?.sessions.some((s) => s.key === "group:dev"),
+    ).toBe(false);
     const filesAfterDelete = await fs.readdir(dir);
-    expect(filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted.")))
-      .toBe(true);
+    expect(
+      filesAfterDelete.some((f) => f.startsWith("sess-group.jsonl.deleted.")),
+    ).toBe(true);
 
-    const reset = await rpcReq<{ ok: true; key: string; entry: { sessionId: string } }>(
-      ws,
-      "sessions.reset",
-      { key: "main" },
-    );
+    const reset = await rpcReq<{
+      ok: true;
+      key: string;
+      entry: { sessionId: string };
+    }>(ws, "sessions.reset", { key: "main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");

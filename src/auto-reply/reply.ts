@@ -35,8 +35,8 @@ import { normalizeE164 } from "../utils.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
 import {
-  parseActivationCommand,
   normalizeGroupActivation,
+  parseActivationCommand,
 } from "./group-activation.js";
 import { buildStatusMessage } from "./status.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
@@ -46,9 +46,9 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
+import { SILENT_REPLY_TOKEN } from "./tokens.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
-import { SILENT_REPLY_TOKEN } from "./tokens.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
 

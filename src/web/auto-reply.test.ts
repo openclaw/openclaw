@@ -19,11 +19,11 @@ import * as commandQueue from "../process/command-queue.js";
 import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
   monitorWebProvider,
   resolveHeartbeatRecipients,
   resolveReplyHeartbeatMinutes,
   runWebHeartbeatOnce,
+  SILENT_REPLY_TOKEN,
   stripHeartbeatToken,
 } from "./auto-reply.js";
 import type { sendMessageWhatsApp } from "./outbound.js";

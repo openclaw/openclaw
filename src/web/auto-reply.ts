@@ -1,15 +1,12 @@
 import { chunkText } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "../auto-reply/group-activation.js";
-import {
-  HEARTBEAT_TOKEN,
-  SILENT_REPLY_TOKEN,
-} from "../auto-reply/tokens.js";
+import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -1244,10 +1241,7 @@ export async function monitorWebProvider(
 
         if (msg.chatType === "group") {
           noteGroupMember(conversationId, msg.senderE164, msg.senderName);
-          const commandBody = stripMentionsForCommand(
-            msg.body,
-            msg.selfE164,
-          );
+          const commandBody = stripMentionsForCommand(msg.body, msg.selfE164);
           const activationCommand = parseActivationCommand(commandBody);
           const isOwner = isOwnerSender(msg);
           const statusCommand = isStatusCommand(commandBody);
