@@ -83,8 +83,6 @@ enum SessionActions {
             }
             let home = FileManager.default.homeDirectoryForCurrentUser
             urls.append(home.appendingPathComponent(".clawdis/sessions/\(sessionId).jsonl"))
-            urls.append(home.appendingPathComponent(".pi/agent/sessions/\(sessionId).jsonl"))
-            urls.append(home.appendingPathComponent(".tau/agent/sessions/clawdis/\(sessionId).jsonl"))
             return urls
         }()
 

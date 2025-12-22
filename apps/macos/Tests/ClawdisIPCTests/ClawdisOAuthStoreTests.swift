@@ -3,18 +3,18 @@ import Testing
 @testable import Clawdis
 
 @Suite
-struct PiOAuthStoreTests {
+struct ClawdisOAuthStoreTests {
     @Test
     func returnsMissingWhenFileAbsent() {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("clawdis-oauth-\(UUID().uuidString)")
             .appendingPathComponent("oauth.json")
-        #expect(PiOAuthStore.anthropicOAuthStatus(at: url) == .missingFile)
+        #expect(ClawdisOAuthStore.anthropicOAuthStatus(at: url) == .missingFile)
     }
 
     @Test
-    func usesEnvOverrideForPiAgentDir() throws {
-        let key = "PI_CODING_AGENT_DIR"
+    func usesEnvOverrideForClawdisOAuthDir() throws {
+        let key = "CLAWDIS_OAUTH_DIR"
         let previous = ProcessInfo.processInfo.environment[key]
         defer {
             if let previous {
@@ -25,10 +25,10 @@ struct PiOAuthStoreTests {
         }
 
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clawdis-pi-agent-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("clawdis-oauth-\(UUID().uuidString)", isDirectory: true)
         setenv(key, dir.path, 1)
 
-        #expect(PiOAuthStore.oauthDir().standardizedFileURL == dir.standardizedFileURL)
+        #expect(ClawdisOAuthStore.oauthDir().standardizedFileURL == dir.standardizedFileURL)
     }
 
     @Test
@@ -42,7 +42,7 @@ struct PiOAuthStoreTests {
             ],
         ])
 
-        #expect(PiOAuthStore.anthropicOAuthStatus(at: url).isConnected)
+        #expect(ClawdisOAuthStore.anthropicOAuthStatus(at: url).isConnected)
     }
 
     @Test
@@ -55,7 +55,7 @@ struct PiOAuthStoreTests {
             ],
         ])
 
-        #expect(PiOAuthStore.anthropicOAuthStatus(at: url).isConnected)
+        #expect(ClawdisOAuthStore.anthropicOAuthStatus(at: url).isConnected)
     }
 
     @Test
@@ -68,7 +68,7 @@ struct PiOAuthStoreTests {
             ],
         ])
 
-        #expect(PiOAuthStore.anthropicOAuthStatus(at: url) == .missingProviderEntry)
+        #expect(ClawdisOAuthStore.anthropicOAuthStatus(at: url) == .missingProviderEntry)
     }
 
     @Test
@@ -81,7 +81,7 @@ struct PiOAuthStoreTests {
             ],
         ])
 
-        #expect(PiOAuthStore.anthropicOAuthStatus(at: url) == .missingTokens)
+        #expect(ClawdisOAuthStore.anthropicOAuthStatus(at: url) == .missingTokens)
     }
 
     private func writeOAuthFile(_ json: [String: Any]) throws -> URL {

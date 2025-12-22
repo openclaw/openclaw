@@ -20,13 +20,13 @@ App bundle layout:
     - `clawdis …` (CLI)
     - `clawdis gateway-daemon …` (LaunchAgent daemon)
 - `Clawdis.app/Contents/Resources/Relay/package.json`
-  - tiny “Pi compatibility” file (see below)
+  - tiny “p runtime compatibility” file (see below)
 - `Clawdis.app/Contents/Resources/Relay/theme/`
-  - Pi TUI theme payload (optional, but strongly recommended)
+  - p TUI theme payload (optional, but strongly recommended)
 
 Why the sidecar files matter:
-- `@mariozechner/pi-coding-agent` detects “bun binary mode” and then looks for `package.json` + `theme/` **next to `process.execPath`** (i.e. next to `clawdis`).
-- So even if bun can embed assets, Pi currently expects filesystem paths. Keep the sidecar files.
+- The embedded p runtime detects “bun binary mode” and then looks for `package.json` + `theme/` **next to `process.execPath`** (i.e. next to `clawdis`).
+- So even if bun can embed assets, the runtime expects filesystem paths. Keep the sidecar files.
 
 ## Build pipeline
 

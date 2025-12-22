@@ -62,7 +62,7 @@ struct OnboardingView: View {
     @State private var anthropicAuthStatus: String?
     @State private var anthropicAuthBusy = false
     @State private var anthropicAuthConnected = false
-    @State private var anthropicAuthDetectedStatus: PiOAuthStore.AnthropicOAuthStatus = .missingFile
+    @State private var anthropicAuthDetectedStatus: ClawdisOAuthStore.AnthropicOAuthStatus = .missingFile
     @State private var anthropicAuthAutoDetectClipboard = true
     @State private var anthropicAuthAutoConnectClipboard = true
     @State private var anthropicAuthLastPasteboardChangeCount = NSPasteboard.general.changeCount
@@ -530,7 +530,7 @@ struct OnboardingView: View {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Pi supports any model — we strongly recommend Opus 4.5 for the best experience.")
+            Text("Clawdis supports any model — we strongly recommend Opus 4.5 for the best experience.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -555,14 +555,14 @@ struct OnboardingView: View {
                 }
 
                 Text(
-                    "This lets Pi use Claude immediately. Credentials are stored at " +
-                        "`~/.pi/agent/oauth.json` (owner-only). You can redo this anytime.")
+                    "This lets Clawdis use Claude immediately. Credentials are stored at " +
+                        "`~/.clawdis/credentials/oauth.json` (owner-only). You can redo this anytime.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
                 HStack(spacing: 12) {
-                    Text(PiOAuthStore.oauthURL().path)
+                    Text(ClawdisOAuthStore.oauthURL().path)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
@@ -571,7 +571,7 @@ struct OnboardingView: View {
                     Spacer()
 
                     Button("Reveal") {
-                        NSWorkspace.shared.activateFileViewerSelecting([PiOAuthStore.oauthURL()])
+                        NSWorkspace.shared.activateFileViewerSelecting([ClawdisOAuthStore.oauthURL()])
                     }
                     .buttonStyle(.bordered)
 
@@ -683,9 +683,9 @@ struct OnboardingView: View {
                 code: parsed.code,
                 state: parsed.state,
                 verifier: pkce.verifier)
-            try PiOAuthStore.saveAnthropicOAuth(creds)
+            try ClawdisOAuthStore.saveAnthropicOAuth(creds)
             self.refreshAnthropicOAuthStatus()
-            self.anthropicAuthStatus = "Connected. Pi can now use Claude."
+            self.anthropicAuthStatus = "Connected. Clawdis can now use Claude."
         } catch {
             self.anthropicAuthStatus = "OAuth failed: \(error.localizedDescription)"
         }
@@ -717,7 +717,8 @@ struct OnboardingView: View {
     }
 
     private func refreshAnthropicOAuthStatus() {
-        let status = PiOAuthStore.anthropicOAuthStatus()
+        _ = ClawdisOAuthStore.importLegacyAnthropicOAuthIfNeeded()
+        let status = ClawdisOAuthStore.anthropicOAuthStatus()
         self.anthropicAuthDetectedStatus = status
         self.anthropicAuthConnected = status.isConnected
     }
@@ -947,8 +948,8 @@ struct OnboardingView: View {
                     self.featureRow(
                         title: "Remote gateway checklist",
                         subtitle: """
-                        On your gateway host: install/update the `clawdis` package and make sure Pi has credentials
-                        (typically `~/.pi/agent/oauth.json`). Then connect again if needed.
+                        On your gateway host: install/update the `clawdis` package and make sure credentials exist
+                        (typically `~/.clawdis/credentials/oauth.json`). Then connect again if needed.
                         """,
                         systemImage: "network")
                     Divider()

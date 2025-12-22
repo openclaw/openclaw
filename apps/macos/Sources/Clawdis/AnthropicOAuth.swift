@@ -18,7 +18,7 @@ enum AnthropicAuthMode: Equatable {
 
     var shortLabel: String {
         switch self {
-        case .oauthFile: "OAuth (Pi token file)"
+        case .oauthFile: "OAuth (Clawdis token file)"
         case .oauthEnv: "OAuth (env var)"
         case .apiKeyEnv: "API key (env var)"
         case .missing: "Missing credentials"
@@ -36,7 +36,8 @@ enum AnthropicAuthMode: Equatable {
 enum AnthropicAuthResolver {
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        oauthStatus: PiOAuthStore.AnthropicOAuthStatus = PiOAuthStore.anthropicOAuthStatus()) -> AnthropicAuthMode
+        oauthStatus: ClawdisOAuthStore.AnthropicOAuthStatus = ClawdisOAuthStore.anthropicOAuthStatus()
+    ) -> AnthropicAuthMode
     {
         if oauthStatus.isConnected { return .oauthFile }
 
@@ -92,7 +93,7 @@ enum AnthropicOAuth {
             URLQueryItem(name: "scope", value: self.scopes),
             URLQueryItem(name: "code_challenge", value: pkce.challenge),
             URLQueryItem(name: "code_challenge_method", value: "S256"),
-            // Match Pi: state is the verifier.
+            // Match legacy flow: state is the verifier.
             URLQueryItem(name: "state", value: pkce.verifier),
         ]
         return components.url!
@@ -140,7 +141,7 @@ enum AnthropicOAuth {
             ])
         }
 
-        // Match Pi: expiresAt = now + expires_in - 5 minutes.
+        // Match legacy flow: expiresAt = now + expires_in - 5 minutes.
         let expiresAtMs = Int64(Date().timeIntervalSince1970 * 1000)
             + Int64(expiresIn * 1000)
             - Int64(5 * 60 * 1000)
@@ -150,10 +151,11 @@ enum AnthropicOAuth {
     }
 }
 
-enum PiOAuthStore {
+enum ClawdisOAuthStore {
     static let oauthFilename = "oauth.json"
     private static let providerKey = "anthropic"
-    private static let piAgentDirEnv = "PI_CODING_AGENT_DIR"
+    private static let clawdisOAuthDirEnv = "CLAWDIS_OAUTH_DIR"
+    private static let legacyPiDirEnv = "PI_CODING_AGENT_DIR"
 
     enum AnthropicOAuthStatus: Equatable {
         case missingFile
@@ -170,18 +172,18 @@ enum PiOAuthStore {
 
         var shortDescription: String {
             switch self {
-            case .missingFile: "Pi OAuth token file not found"
-            case .unreadableFile: "Pi OAuth token file not readable"
-            case .invalidJSON: "Pi OAuth token file invalid"
-            case .missingProviderEntry: "No Anthropic entry in Pi OAuth token file"
+            case .missingFile: "Clawdis OAuth token file not found"
+            case .unreadableFile: "Clawdis OAuth token file not readable"
+            case .invalidJSON: "Clawdis OAuth token file invalid"
+            case .missingProviderEntry: "No Anthropic entry in Clawdis OAuth token file"
             case .missingTokens: "Anthropic entry missing tokens"
-            case .connected: "Pi OAuth credentials found"
+            case .connected: "Clawdis OAuth credentials found"
             }
         }
     }
 
     static func oauthDir() -> URL {
-        if let override = ProcessInfo.processInfo.environment[self.piAgentDirEnv]?
+        if let override = ProcessInfo.processInfo.environment[self.clawdisOAuthDirEnv]?
             .trimmingCharacters(in: .whitespacesAndNewlines),
             !override.isEmpty
         {
@@ -190,12 +192,56 @@ enum PiOAuthStore {
         }
 
         return FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".pi", isDirectory: true)
-            .appendingPathComponent("agent", isDirectory: true)
+            .appendingPathComponent(".clawdis", isDirectory: true)
+            .appendingPathComponent("credentials", isDirectory: true)
     }
 
     static func oauthURL() -> URL {
         self.oauthDir().appendingPathComponent(self.oauthFilename)
+    }
+
+    static func legacyOAuthURLs() -> [URL] {
+        var urls: [URL] = []
+        let env = ProcessInfo.processInfo.environment
+        if let override = env[self.legacyPiDirEnv]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty
+        {
+            let expanded = NSString(string: override).expandingTildeInPath
+            urls.append(URL(fileURLWithPath: expanded, isDirectory: true).appendingPathComponent(self.oauthFilename))
+        }
+
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        urls.append(home.appendingPathComponent(".pi/agent/\(self.oauthFilename)"))
+        urls.append(home.appendingPathComponent(".claude/\(self.oauthFilename)"))
+        urls.append(home.appendingPathComponent(".config/claude/\(self.oauthFilename)"))
+        urls.append(home.appendingPathComponent(".config/anthropic/\(self.oauthFilename)"))
+
+        var seen = Set<String>()
+        return urls.filter { url in
+            let path = url.standardizedFileURL.path
+            if seen.contains(path) { return false }
+            seen.insert(path)
+            return true
+        }
+    }
+
+    static func importLegacyAnthropicOAuthIfNeeded() -> URL? {
+        let dest = self.oauthURL()
+        guard !FileManager.default.fileExists(atPath: dest.path) else { return nil }
+
+        for url in self.legacyOAuthURLs() {
+            guard FileManager.default.fileExists(atPath: url.path) else { continue }
+            guard self.anthropicOAuthStatus(at: url).isConnected else { continue }
+            guard let storage = self.loadStorage(at: url) else { continue }
+            do {
+                try self.saveStorage(storage)
+                return url
+            } catch {
+                continue
+            }
+        }
+
+        return nil
     }
 
     static func anthropicOAuthStatus() -> AnthropicOAuthStatus {
@@ -240,17 +286,15 @@ enum PiOAuthStore {
         return nil
     }
 
+    private static func loadStorage(at url: URL) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let json = try? JSONSerialization.jsonObject(with: data, options: []) else { return nil }
+        return json as? [String: Any]
+    }
+
     static func saveAnthropicOAuth(_ creds: AnthropicOAuthCredentials) throws {
         let url = self.oauthURL()
-        let existing: [String: Any] = if FileManager.default.fileExists(atPath: url.path),
-                                         let data = try? Data(contentsOf: url),
-                                         let json = try? JSONSerialization.jsonObject(with: data, options: []),
-                                         let dict = json as? [String: Any]
-        {
-            dict
-        } else {
-            [:]
-        }
+        let existing: [String: Any] = self.loadStorage(at: url) ?? [:]
 
         var updated = existing
         updated[self.providerKey] = [

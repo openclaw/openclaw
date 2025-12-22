@@ -6,7 +6,7 @@ import Testing
 struct AnthropicAuthResolverTests {
     @Test
     func prefersOAuthFileOverEnv() throws {
-        let key = "PI_CODING_AGENT_DIR"
+        let key = "CLAWDIS_OAUTH_DIR"
         let previous = ProcessInfo.processInfo.environment[key]
         defer {
             if let previous {
@@ -61,4 +61,3 @@ struct AnthropicAuthResolverTests {
         #expect(mode == .missing)
     }
 }
-

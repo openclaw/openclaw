@@ -1,12 +1,12 @@
 ---
-summary: "Agent runtime (embedded Pi), workspace contract, and session bootstrap"
+summary: "Agent runtime (embedded p-mono), workspace contract, and session bootstrap"
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
 ---
 <!-- {% raw %} -->
 # Agent Runtime 🤖
 
-CLAWDIS runs a single agent runtime: **Pi (embedded, in-process)**.
+CLAWDIS runs a single embedded agent runtime derived from **p-mono** (internal name: **p**).
 
 ## Workspace (required)
 
@@ -30,7 +30,7 @@ If a file is missing, CLAWDIS injects a single “missing file” marker line (a
 
 ## Built-in tools (internal)
 
-Pi’s embedded core tools (read/bash/edit/write and related internals) are defined in code and always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
+p’s embedded core tools (read/bash/edit/write and related internals) are defined in code and always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
 
 ## Skills
 
@@ -41,11 +41,12 @@ Clawdis loads skills from three locations (workspace wins on name conflict):
 
 Skills can be gated by config/env (see `skills.*` in `docs/configuration.md`).
 
-## SDK integration
+## p-mono integration
 
-The embedded agent uses the `@mariozechner/pi-coding-agent` SDK for sessions and discovery.
-- Hooks, custom tools, and slash commands are discovered via the SDK (from `~/.pi/agent` and `<workspace>/.pi` settings).
-- Bootstrap files are injected as SDK project context (see “Project Context” in the system prompt).
+Clawdis reuses pieces of the p-mono codebase (models/tools), but **session management, discovery, and tool wiring are Clawdis-owned**.
+
+- No p-coding agent runtime.
+- No `~/.pi/agent` or `<workspace>/.pi` settings are consulted.
 
 ## Peter @ steipete (only)
 
@@ -65,6 +66,7 @@ Session transcripts are stored as JSONL at:
 - `~/.clawdis/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by CLAWDIS.
+Legacy Pi/Tau session folders are **not** read.
 
 ## Steering while streaming
 

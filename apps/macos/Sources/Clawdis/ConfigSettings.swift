@@ -152,7 +152,7 @@ struct ConfigSettings: View {
     }
 
     private var anthropicAuthHelpText: String {
-        "Determined from Pi OAuth token file (~/.pi/agent/oauth.json) " +
+        "Determined from Clawdis OAuth token file (~/.clawdis/credentials/oauth.json) " +
             "or environment variables (ANTHROPIC_OAUTH_TOKEN / ANTHROPIC_API_KEY)."
     }
 

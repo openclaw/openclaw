@@ -720,8 +720,6 @@ function readSessionMessages(
       const parsed = JSON.parse(line);
       if (parsed?.message) {
         messages.push(parsed.message);
-      } else if (parsed?.role && parsed?.content) {
-        messages.push(parsed);
       }
     } catch {
       // ignore bad lines
@@ -741,19 +739,6 @@ function resolveSessionTranscriptCandidates(
   }
   candidates.push(
     path.join(os.homedir(), ".clawdis", "sessions", `${sessionId}.jsonl`),
-  );
-  candidates.push(
-    path.join(os.homedir(), ".pi", "agent", "sessions", `${sessionId}.jsonl`),
-  );
-  candidates.push(
-    path.join(
-      os.homedir(),
-      ".tau",
-      "agent",
-      "sessions",
-      "clawdis",
-      `${sessionId}.jsonl`,
-    ),
   );
   return candidates;
 }
@@ -1516,7 +1501,21 @@ export async function startGatewayServer(
       );
       return;
     }
-    logTelegram.info("starting provider");
+    let telegramBotLabel = "";
+    try {
+      const probe = await probeTelegram(
+        telegramToken.trim(),
+        2500,
+        cfg.telegram?.proxy,
+      );
+      const username = probe.ok ? probe.bot?.username?.trim() : null;
+      if (username) telegramBotLabel = ` (@${username})`;
+    } catch (err) {
+      if (isVerbose()) {
+        logTelegram.debug(`bot probe failed: ${String(err)}`);
+      }
+    }
+    logTelegram.info(`starting provider${telegramBotLabel}`);
     telegramAbort = new AbortController();
     telegramRuntime = {
       ...telegramRuntime,

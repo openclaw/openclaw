@@ -18,6 +18,7 @@ All session state is **owned by the gateway** (the “master” Clawdis). UI cli
   - Store file: `~/.clawdis/sessions/sessions.json` (legacy: `~/.clawdis/sessions.json`).
   - Transcripts: `~/.clawdis/sessions/<SessionId>.jsonl` (one file per session id).
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
+- Clawdis does **not** read legacy Pi/Tau session folders.
 
 ## Mapping transports → session keys
 - Direct chats (WhatsApp, Telegram, desktop Web Chat) all collapse to the **primary key** so they share context.

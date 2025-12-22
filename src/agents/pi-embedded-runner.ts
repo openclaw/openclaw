@@ -1,9 +1,16 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import type { AppMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
+import {
+  setOAuthStorage,
+  type Api,
+  type AssistantMessage,
+  type Model,
+  type OAuthStorage,
+} from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
   createAgentSession,
@@ -18,7 +25,7 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdisConfig } from "../config/config.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { enqueueCommand } from "../process/command-queue.js";
-import { resolveUserPath } from "../utils.js";
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
   buildBootstrapContextFiles,
@@ -75,6 +82,109 @@ type EmbeddedPiQueueHandle = {
 
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 
+const OAUTH_FILENAME = "oauth.json";
+const DEFAULT_OAUTH_DIR = path.join(CONFIG_DIR, "credentials");
+const DEFAULT_AGENT_DIR = path.join(CONFIG_DIR, "agent");
+let oauthStorageConfigured = false;
+let cachedDefaultApiKey: ReturnType<typeof defaultGetApiKey> | null = null;
+
+function resolveClawdisOAuthPath(): string {
+  const overrideDir =
+    process.env.CLAWDIS_OAUTH_DIR?.trim() || DEFAULT_OAUTH_DIR;
+  return path.join(resolveUserPath(overrideDir), OAUTH_FILENAME);
+}
+
+function resolveAgentDir(): string {
+  const override =
+    process.env.CLAWDIS_AGENT_DIR?.trim() ||
+    process.env.PI_CODING_AGENT_DIR?.trim() ||
+    DEFAULT_AGENT_DIR;
+  return resolveUserPath(override);
+}
+
+function loadOAuthStorageAt(pathname: string): OAuthStorage | null {
+  if (!fsSync.existsSync(pathname)) return null;
+  try {
+    const content = fsSync.readFileSync(pathname, "utf8");
+    const json = JSON.parse(content) as OAuthStorage;
+    if (!json || typeof json !== "object") return null;
+    return json;
+  } catch {
+    return null;
+  }
+}
+
+function hasAnthropicOAuth(storage: OAuthStorage): boolean {
+  const entry = storage.anthropic as
+    | {
+        refresh?: string;
+        refresh_token?: string;
+        refreshToken?: string;
+        access?: string;
+        access_token?: string;
+        accessToken?: string;
+      }
+    | undefined;
+  if (!entry) return false;
+  const refresh =
+    entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
+  const access = entry.access ?? entry.access_token ?? entry.accessToken ?? "";
+  return Boolean(refresh.trim() && access.trim());
+}
+
+function saveOAuthStorageAt(pathname: string, storage: OAuthStorage): void {
+  const dir = path.dirname(pathname);
+  fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fsSync.writeFileSync(
+    pathname,
+    `${JSON.stringify(storage, null, 2)}\n`,
+    "utf8",
+  );
+  fsSync.chmodSync(pathname, 0o600);
+}
+
+function legacyOAuthPaths(): string[] {
+  const paths: string[] = [];
+  const piOverride = process.env.PI_CODING_AGENT_DIR?.trim();
+  if (piOverride) {
+    paths.push(path.join(resolveUserPath(piOverride), OAUTH_FILENAME));
+  }
+  paths.push(path.join(os.homedir(), ".pi", "agent", OAUTH_FILENAME));
+  paths.push(path.join(os.homedir(), ".claude", OAUTH_FILENAME));
+  paths.push(path.join(os.homedir(), ".config", "claude", OAUTH_FILENAME));
+  paths.push(path.join(os.homedir(), ".config", "anthropic", OAUTH_FILENAME));
+  return Array.from(new Set(paths));
+}
+
+function importLegacyOAuthIfNeeded(destPath: string): void {
+  if (fsSync.existsSync(destPath)) return;
+  for (const legacyPath of legacyOAuthPaths()) {
+    const storage = loadOAuthStorageAt(legacyPath);
+    if (!storage || !hasAnthropicOAuth(storage)) continue;
+    saveOAuthStorageAt(destPath, storage);
+    return;
+  }
+}
+
+function ensureOAuthStorage(): void {
+  if (oauthStorageConfigured) return;
+  oauthStorageConfigured = true;
+  const oauthPath = resolveClawdisOAuthPath();
+  importLegacyOAuthIfNeeded(oauthPath);
+  setOAuthStorage({
+    load: () => loadOAuthStorageAt(oauthPath) ?? {},
+    save: (storage) => saveOAuthStorageAt(oauthPath, storage),
+  });
+}
+
+function getDefaultApiKey() {
+  if (!cachedDefaultApiKey) {
+    ensureOAuthStorage();
+    cachedDefaultApiKey = defaultGetApiKey();
+  }
+  return cachedDefaultApiKey;
+}
+
 export function queueEmbeddedPiMessage(
   sessionId: string,
   text: string,
@@ -106,14 +216,13 @@ function resolveModel(
   return { model };
 }
 
-const defaultApiKey = defaultGetApiKey();
-
 async function getApiKeyForModel(model: Model<Api>): Promise<string> {
+  ensureOAuthStorage();
   if (model.provider === "anthropic") {
     const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
     if (oauthEnv?.trim()) return oauthEnv.trim();
   }
-  const key = await defaultApiKey(model);
+  const key = await getDefaultApiKey()(model);
   if (key) return key;
   throw new Error(`No API key found for provider "${model.provider}"`);
 }
@@ -175,9 +284,10 @@ export async function runEmbeddedPiAgent(params: {
     const provider =
       (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
     const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-    const agentDir =
-      process.env.PI_CODING_AGENT_DIR ??
-      path.join(os.homedir(), ".pi", "agent");
+    const agentDir = resolveAgentDir();
+    if (!process.env.PI_CODING_AGENT_DIR) {
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+    }
     const { model, error } = resolveModel(provider, modelId, agentDir);
     if (!model) {
       throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
