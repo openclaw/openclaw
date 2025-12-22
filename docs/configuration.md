@@ -73,23 +73,18 @@ Allowlist of E.164 phone numbers that may trigger auto-replies.
 
 ### `inbound.groupChat`
 
-Group messages default to **require mention** (either metadata mention or regex patterns). You can switch to always-on activation.
+Group messages default to **require mention** (either metadata mention or regex patterns).
 
 ```json5
 {
   inbound: {
     groupChat: {
-      activation: "mention", // mention | always
       mentionPatterns: ["@clawd", "clawdbot", "clawd"],
       historyLimit: 50
     }
   }
 }
 ```
-
-Notes:
-- `activation` defaults to `mention`.
-- `requireMention` is still supported for backwards compatibility (`false` ≈ `activation: "always"`).
 
 ### `inbound.workspace`
 
@@ -135,7 +130,7 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     session: {
       scope: "per-sender",
       idleMinutes: 60,
-      resetTriggers: ["/new"],
+      resetTriggers: ["/new", "/reset"],
       store: "~/.clawdis/sessions/sessions.json",
       mainKey: "main"
     }

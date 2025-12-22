@@ -62,7 +62,7 @@ Most operations flow through the **Gateway** (`clawdis gateway`), a single long-
 - ✈️ **Telegram Bot** — DMs + groups via grammY
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
 - 💬 **Sessions** — Direct chats collapse into shared `main` (default); groups are isolated
-- 👥 **Group Chat Support** — Mention-based triggering in group chats
+- 👥 **Group Chat Support** — Mention-based by default; owner can toggle `/activation always|mention`
 - 📎 **Media Support** — Send and receive images, audio, documents
 - 🎤 **Voice notes** — Optional transcription hook
 - 🖥️ **WebChat + macOS app** — Local UI + menu bar companion for ops and voice wake

@@ -62,7 +62,7 @@ ls -la ~/.clawdis/sessions/
 }
 ```
 
-**Check 3:** Did someone send `/new` or a reset trigger?
+**Check 3:** Did someone send `/new`, `/reset`, or a reset trigger?
 
 ### Agent Timing Out
 

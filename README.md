@@ -43,6 +43,7 @@ Your surfaces
 - **Canvas** — a live visual workspace you can drive from the agent.
 - **Automation-ready** — browser control, media handling, and tool streaming.
 - **Local-first control plane** — the Gateway owns state, everything else connects.
+- **Group chats** — mention-based by default, `/activation always|mention` per group (owner-only).
 
 ## How it works (short)
 
@@ -74,6 +75,17 @@ pnpm clawdis agent --message "Ship checklist" --thinking high
 ```
 
 If you run from source, prefer `pnpm clawdis …` (not global `clawdis`).
+
+## Chat commands
+
+Send these in WhatsApp/Telegram/WebChat (group commands are owner-only):
+
+- `/status` — health + session info (group shows activation mode)
+- `/new` or `/reset` — reset the session
+- `/think <level>` — off|minimal|low|medium|high
+- `/verbose on|off`
+- `/restart` — restart the gateway (owner-only in groups)
+- `/activation mention|always` — group activation toggle (groups only)
 
 ## Architecture
 
@@ -171,6 +183,7 @@ Browser control (optional):
 
 - [`docs/index.md`](docs/index.md) (overview)
 - [`docs/configuration.md`](docs/configuration.md)
+- [`docs/group-messages.md`](docs/group-messages.md)
 - [`docs/gateway.md`](docs/gateway.md)
 - [`docs/web.md`](docs/web.md)
 - [`docs/discovery.md`](docs/discovery.md)
