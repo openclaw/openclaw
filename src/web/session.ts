@@ -307,6 +307,8 @@ export function formatError(err: unknown): string {
 }
 
 export async function webAuthExists() {
+  const sessionLogger = getChildLogger({ module: "web-session" });
+  maybeRestoreCredsFromBackup(sessionLogger);
   try {
     await fs.access(WA_WEB_AUTH_DIR);
   } catch {
