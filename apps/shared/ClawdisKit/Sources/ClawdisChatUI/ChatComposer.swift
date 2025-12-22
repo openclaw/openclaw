@@ -18,9 +18,9 @@ struct ClawdisChatComposer: View {
     #endif
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 4) {
             if self.showsToolbar {
-                HStack(spacing: 8) {
+                HStack(spacing: 6) {
                     self.thinkingPicker
                     Spacer()
                     self.refreshButton
@@ -134,9 +134,9 @@ struct ClawdisChatComposer: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(ClawdisChatTheme.composerField))
             .overlay {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     self.editorOverlay
-                    HStack(alignment: .bottom, spacing: 8) {
+                    HStack(alignment: .bottom, spacing: 6) {
                         if self.showsConnectionPill {
                             self.connectionPill
                         }
@@ -163,8 +163,8 @@ struct ClawdisChatComposer: View {
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
         .background(ClawdisChatTheme.subtleCard)
         .clipShape(Capsule())
     }
@@ -174,8 +174,8 @@ struct ClawdisChatComposer: View {
             if self.viewModel.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text("Message Clawd…")
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 5)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 4)
             }
 
             #if os(macOS)
@@ -183,14 +183,14 @@ struct ClawdisChatComposer: View {
                 self.viewModel.send()
             }
             .frame(minHeight: self.textMinHeight, idealHeight: self.textMinHeight, maxHeight: self.textMaxHeight)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 3)
             #else
             TextEditor(text: self.$viewModel.input)
                 .font(.system(size: 15))
                 .scrollContentBackground(.hidden)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 4)
                 .focused(self.$isFocused)
             #endif
         }
@@ -211,7 +211,7 @@ struct ClawdisChatComposer: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                .padding(8)
+                .padding(6)
                 .background(Circle().fill(Color.red))
                 .disabled(self.viewModel.isAborting)
             } else {
@@ -227,7 +227,7 @@ struct ClawdisChatComposer: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.white)
-                .padding(8)
+                .padding(6)
                 .background(Circle().fill(Color.accentColor))
                 .disabled(!self.viewModel.canSend)
             }
@@ -258,27 +258,27 @@ struct ClawdisChatComposer: View {
     }
 
     private var composerPadding: CGFloat {
-        self.style == .onboarding ? 6 : 8
+        self.style == .onboarding ? 5 : 6
     }
 
     private var editorPadding: CGFloat {
-        self.style == .onboarding ? 6 : 8
+        self.style == .onboarding ? 5 : 6
     }
 
     private var editorMinHeight: CGFloat {
-        self.style == .onboarding ? 38 : 44
+        self.style == .onboarding ? 34 : 40
     }
 
     private var editorMaxHeight: CGFloat {
-        self.style == .onboarding ? 72 : 96
+        self.style == .onboarding ? 60 : 84
     }
 
     private var textMinHeight: CGFloat {
-        self.style == .onboarding ? 28 : 32
+        self.style == .onboarding ? 24 : 28
     }
 
     private var textMaxHeight: CGFloat {
-        self.style == .onboarding ? 60 : 72
+        self.style == .onboarding ? 52 : 64
     }
 
     #if os(macOS)
@@ -350,7 +350,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         textView.font = .systemFont(ofSize: 14, weight: .regular)
         textView.textContainer?.lineBreakMode = .byWordWrapping
         textView.textContainer?.lineFragmentPadding = 0
-        textView.textContainerInset = NSSize(width: 2, height: 6)
+        textView.textContainerInset = NSSize(width: 2, height: 4)
         textView.focusRingType = .none
 
         textView.minSize = .zero
