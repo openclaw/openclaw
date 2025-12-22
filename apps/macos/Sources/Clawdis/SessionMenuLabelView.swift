@@ -15,9 +15,9 @@ struct SessionMenuLabelView: View {
     let row: SessionRow
     let width: CGFloat
     @Environment(\.menuItemHighlighted) private var isHighlighted
-    private let paddingLeading: CGFloat = 18
-    private let paddingTrailing: CGFloat = 12
-    private let barHeight: CGFloat = 3
+    private let paddingLeading: CGFloat = 22
+    private let paddingTrailing: CGFloat = 14
+    private let barHeight: CGFloat = 5
 
     private var primaryTextColor: Color {
         self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
@@ -28,7 +28,7 @@ struct SessionMenuLabelView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 6) {
             ContextUsageBar(
                 usedTokens: row.tokens.total,
                 contextTokens: row.tokens.contextTokens,
@@ -58,7 +58,7 @@ struct SessionMenuLabelView: View {
                     .padding(.leading, 2)
             }
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 6)
         .padding(.leading, self.paddingLeading)
         .padding(.trailing, self.paddingTrailing)
     }
