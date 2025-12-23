@@ -21,7 +21,7 @@ CLAWDIS is now **web-only** (Baileys). This document captures the current media 
 ## Web Provider Behavior
 - Input: local file path **or** HTTP(S) URL.
 - Flow: load into a Buffer, detect media kind, and build the correct payload:
-  - **Images:** resize & recompress to JPEG (max side 2048px) targeting `inbound.agent.mediaMaxMb` (default 5 MB), capped at 6 MB.
+  - **Images:** resize & recompress to JPEG (max side 2048px) targeting `agent.mediaMaxMb` (default 5 MB), capped at 6 MB.
   - **Audio/Voice/Video:** pass-through up to 16 MB; audio is sent as a voice note (`ptt: true`).
   - **Documents:** anything else, up to 100 MB, with filename preserved when available.
 - MIME detection prefers magic bytes, then headers, then file extension.

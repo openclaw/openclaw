@@ -10,13 +10,13 @@ CLAWDIS runs a single embedded agent runtime derived from **p-mono** (internal n
 
 ## Workspace (required)
 
-You must set an agent home directory via `inbound.workspace`. CLAWDIS uses this as the agent’s **only** working directory (`cwd`) for tools and context.
+You must set an agent home directory via `agent.workspace`. CLAWDIS uses this as the agent’s **only** working directory (`cwd`) for tools and context.
 
 Recommended: use `clawdis setup` to create `~/.clawdis/clawdis.json` if missing and initialize the workspace files.
 
 ## Bootstrap files (injected)
 
-Inside `inbound.workspace`, CLAWDIS expects these user-editable files:
+Inside `agent.workspace`, CLAWDIS expects these user-editable files:
 - `AGENTS.md` — operating instructions + “memory”
 - `SOUL.md` — persona, boundaries, tone
 - `TOOLS.md` — user-maintained tool notes (e.g. `imsg`, `sag`, conventions)
@@ -75,7 +75,7 @@ Incoming user messages are queued while the agent is streaming. The queue is che
 ## Configuration (minimal)
 
 At minimum, set:
-- `inbound.workspace`
+- `agent.workspace`
 - `inbound.allowFrom` (strongly recommended)
 
 ---

@@ -133,7 +133,7 @@ Runbook: `docs/ios/connect.md`.
 
 ## Agent workspace + skills
 
-- Workspace root: `~/clawd` (configurable via `inbound.workspace`).
+- Workspace root: `~/clawd` (configurable via `agent.workspace`).
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
 - Skills: `~/clawd/skills/<skill>/SKILL.md`.
 

@@ -80,13 +80,13 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 
 ## Media limits + optimization
 - Default cap: 5 MB (per media item).
-- Override: `inbound.agent.mediaMaxMb`.
+- Override: `agent.mediaMaxMb`.
 - Images are auto-optimized to JPEG under cap (resize + quality sweep).
 - Oversize media => error; media reply falls back to text warning.
 
 ## Heartbeats
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
-- **Reply heartbeat** asks agent on a timer (`inbound.agent.heartbeatMinutes`).
+- **Reply heartbeat** asks agent on a timer (`agent.heartbeatMinutes`).
   - Uses `HEARTBEAT` prompt + `HEARTBEAT_TOKEN` skip behavior.
   - Skips if queue busy or last inbound was a group.
   - Falls back to last direct recipient if needed.
@@ -103,8 +103,8 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 - `inbound.groupChat.historyLimit`
 - `inbound.messagePrefix` (inbound prefix)
 - `inbound.responsePrefix` (outbound prefix)
-- `inbound.agent.mediaMaxMb`
-- `inbound.agent.heartbeatMinutes`
+- `agent.mediaMaxMb`
+- `agent.heartbeatMinutes`
 - `inbound.session.*` (scope, idle, store, mainKey)
 - `web.heartbeatSeconds`
 - `web.reconnect.*`
@@ -118,4 +118,3 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 - `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)
 - `src/web/monitor-inbox.test.ts` (inbound parsing + reply context)
 - `src/web/outbound.test.ts` (send mapping + media)
-

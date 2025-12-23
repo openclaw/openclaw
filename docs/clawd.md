@@ -94,7 +94,7 @@ Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideal
 clawdis setup
 ```
 
-Optional: choose a different workspace with `inbound.workspace` (supports `~`).
+Optional: choose a different workspace with `agent.workspace` (supports `~`).
 
 ```json5
 {
@@ -149,7 +149,7 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-When `inbound.agent.heartbeatMinutes > 0`, CLAWDIS periodically runs a heartbeat prompt (default: `HEARTBEAT`).
+When `agent.heartbeatMinutes > 0`, CLAWDIS periodically runs a heartbeat prompt (default: `HEARTBEAT`).
 
 - If the agent replies with `HEARTBEAT_OK` (exact token), CLAWDIS suppresses outbound delivery for that heartbeat.
 

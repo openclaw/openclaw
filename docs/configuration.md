@@ -11,18 +11,16 @@ CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comme
 If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`inbound.allowFrom`)
 - tune group mention behavior (`inbound.groupChat`)
-- set the agent’s workspace (`inbound.workspace`)
-- tune the embedded agent (`inbound.agent`) and session behavior (`inbound.session`)
+- set the agent’s workspace (`agent.workspace`)
+- tune the embedded agent (`agent`) and session behavior (`inbound.session`)
 - set the agent’s identity (`identity`)
 
 ## Minimal config (recommended starting point)
 
 ```json5
 {
-  inbound: {
-    allowFrom: ["+15555550123"],
-    workspace: "~/clawd"
-  }
+  agent: { workspace: "~/clawd" },
+  inbound: { allowFrom: ["+15555550123"] }
 }
 ```
 
@@ -86,7 +84,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-### `inbound.workspace`
+### `agent.workspace`
 
 Sets the **single global workspace directory** used by the agent for file operations.
 
@@ -94,29 +92,33 @@ Default: `~/clawd`.
 
 ```json5
 {
-  inbound: { workspace: "~/clawd" }
+  agent: { workspace: "~/clawd" }
 }
 ```
 
-### `inbound.agent`
+### `agent`
 
 Controls the embedded agent runtime (provider/model/thinking/verbose/timeouts).
+`allowedModels` lets `/model` list/filter and enforce a per-session allowlist
+(omit to show the full catalog).
 
 ```json5
 {
-  inbound: {
-    workspace: "~/clawd",
-    agent: {
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      thinkingDefault: "low",
-      verboseDefault: "off",
-      timeoutSeconds: 600,
-      mediaMaxMb: 5,
-      heartbeatMinutes: 30,
-      contextTokens: 200000
-    }
-  }
+  agent: {
+    provider: "anthropic",
+    model: "claude-opus-4-5",
+    allowedModels: [
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-1"
+    ],
+    thinkingDefault: "low",
+    verboseDefault: "off",
+    timeoutSeconds: 600,
+    mediaMaxMb: 5,
+    heartbeatMinutes: 30,
+    contextTokens: 200000
+  },
+  inbound: { workspace: "~/clawd" }
 }
 ```
 
@@ -132,7 +134,7 @@ When `models.providers` is present, Clawdis writes/merges a `models.json` into
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
 
-Select the model via `inbound.agent.provider` + `inbound.agent.model`.
+Select the model via `agent.provider` + `agent.model`.
 
 ```json5
 {

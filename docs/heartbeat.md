@@ -12,7 +12,7 @@ Goal: add a simple heartbeat poll for the embedded agent that only notifies user
 - Keep existing WhatsApp length guidance; forbid burying the sentinel inside alerts.
 
 ## Config & defaults
-- New config key: `inbound.agent.heartbeatMinutes` (number of minutes; `0` disables).
+- New config key: `agent.heartbeatMinutes` (number of minutes; `0` disables).
 - Default: 30 minutes.
 - New optional idle override for heartbeats: `inbound.session.heartbeatIdleMinutes` (defaults to `idleMinutes`). Heartbeat skips do **not** update the session `updatedAt` so idle expiry still works.
 

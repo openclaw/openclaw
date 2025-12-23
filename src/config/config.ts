@@ -227,10 +227,30 @@ export type ClawdisConfig = {
   skillsLoad?: SkillsLoadConfig;
   skillsInstall?: SkillsInstallConfig;
   models?: ModelsConfig;
-  inbound?: {
-    allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
+  agent?: {
+    /** Provider id, e.g. "anthropic" or "openai" (pi-ai catalog). */
+    provider?: string;
+    /** Model id within provider, e.g. "claude-opus-4-5". */
+    model?: string;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
+    /** Optional allowlist for /model (provider/model or model-only). */
+    allowedModels?: string[];
+    /** Optional display-only context window override (used for % in status UIs). */
+    contextTokens?: number;
+    /** Default thinking level when no /think directive is present. */
+    thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
+    /** Default verbose level when no /verbose directive is present. */
+    verboseDefault?: "off" | "on";
+    timeoutSeconds?: number;
+    /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
+    mediaMaxMb?: number;
+    typingIntervalSeconds?: number;
+    /** Periodic background heartbeat runs (minutes). 0 disables. */
+    heartbeatMinutes?: number;
+  };
+  inbound?: {
+    allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
     messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
     responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
     timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
@@ -240,24 +260,6 @@ export type ClawdisConfig = {
       timeoutSeconds?: number;
     };
     groupChat?: GroupChatConfig;
-    agent?: {
-      /** Provider id, e.g. "anthropic" or "openai" (pi-ai catalog). */
-      provider?: string;
-      /** Model id within provider, e.g. "claude-opus-4-5". */
-      model?: string;
-      /** Optional display-only context window override (used for % in status UIs). */
-      contextTokens?: number;
-      /** Default thinking level when no /think directive is present. */
-      thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
-      /** Default verbose level when no /verbose directive is present. */
-      verboseDefault?: "off" | "on";
-      timeoutSeconds?: number;
-      /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
-      mediaMaxMb?: number;
-      typingIntervalSeconds?: number;
-      /** Periodic background heartbeat runs (minutes). 0 disables. */
-      heartbeatMinutes?: number;
-    };
     session?: SessionConfig;
   };
   web?: WebConfig;
@@ -377,10 +379,32 @@ const ClawdisSchema = z.object({
     })
     .optional(),
   models: ModelsConfigSchema,
+  agent: z
+    .object({
+      provider: z.string().optional(),
+      model: z.string().optional(),
+      workspace: z.string().optional(),
+      allowedModels: z.array(z.string()).optional(),
+      contextTokens: z.number().int().positive().optional(),
+      thinkingDefault: z
+        .union([
+          z.literal("off"),
+          z.literal("minimal"),
+          z.literal("low"),
+          z.literal("medium"),
+          z.literal("high"),
+        ])
+        .optional(),
+      verboseDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+      timeoutSeconds: z.number().int().positive().optional(),
+      mediaMaxMb: z.number().positive().optional(),
+      typingIntervalSeconds: z.number().int().positive().optional(),
+      heartbeatMinutes: z.number().nonnegative().optional(),
+    })
+    .optional(),
   inbound: z
     .object({
       allowFrom: z.array(z.string()).optional(),
-      workspace: z.string().optional(),
       messagePrefix: z.string().optional(),
       responsePrefix: z.string().optional(),
       timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
@@ -395,29 +419,6 @@ const ClawdisSchema = z.object({
         .object({
           command: z.array(z.string()),
           timeoutSeconds: z.number().int().positive().optional(),
-        })
-        .optional(),
-      agent: z
-        .object({
-          provider: z.string().optional(),
-          model: z.string().optional(),
-          contextTokens: z.number().int().positive().optional(),
-          thinkingDefault: z
-            .union([
-              z.literal("off"),
-              z.literal("minimal"),
-              z.literal("low"),
-              z.literal("medium"),
-              z.literal("high"),
-            ])
-            .optional(),
-          verboseDefault: z
-            .union([z.literal("off"), z.literal("on")])
-            .optional(),
-          timeoutSeconds: z.number().int().positive().optional(),
-          mediaMaxMb: z.number().positive().optional(),
-          typingIntervalSeconds: z.number().int().positive().optional(),
-          heartbeatMinutes: z.number().nonnegative().optional(),
         })
         .optional(),
       session: z

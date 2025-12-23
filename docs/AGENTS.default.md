@@ -30,11 +30,11 @@ cp docs/templates/TOOLS.md ~/.clawdis/workspace/TOOLS.md
 cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
 ```
 
-4) Optional: choose a different workspace by setting `inbound.workspace` (supports `~`):
+4) Optional: choose a different workspace by setting `agent.workspace` (supports `~`):
 
 ```json5
 {
-  inbound: {
+  agent: {
     workspace: "~/clawd"
   }
 }

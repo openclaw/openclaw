@@ -5,6 +5,8 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
+import { buildAllowedModelSet, modelKey } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
@@ -140,8 +142,8 @@ export async function agentCommand(
   }
 
   const cfg = loadConfig();
-  const agentCfg = cfg.inbound?.agent;
-  const workspaceDirRaw = cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const agentCfg = cfg.agent;
+  const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: true,
@@ -245,8 +247,53 @@ export async function agentCommand(
     await saveSessionStore(storePath, sessionStore);
   }
 
-  const provider = agentCfg?.provider?.trim() || DEFAULT_PROVIDER;
-  const model = agentCfg?.model?.trim() || DEFAULT_MODEL;
+  const defaultProvider = agentCfg?.provider?.trim() || DEFAULT_PROVIDER;
+  const defaultModel = agentCfg?.model?.trim() || DEFAULT_MODEL;
+  let provider = defaultProvider;
+  let model = defaultModel;
+  const hasAllowlist = (agentCfg?.allowedModels?.length ?? 0) > 0;
+  const hasStoredOverride = Boolean(
+    sessionEntry?.modelOverride || sessionEntry?.providerOverride,
+  );
+  const needsModelCatalog = hasAllowlist || hasStoredOverride;
+  let allowedModelKeys = new Set<string>();
+
+  if (needsModelCatalog) {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const allowed = buildAllowedModelSet({
+      cfg,
+      catalog,
+      defaultProvider,
+    });
+    allowedModelKeys = allowed.allowedKeys;
+  }
+
+  if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
+    const overrideProvider =
+      sessionEntry.providerOverride?.trim() || defaultProvider;
+    const overrideModel = sessionEntry.modelOverride?.trim();
+    if (overrideModel) {
+      const key = modelKey(overrideProvider, overrideModel);
+      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+        delete sessionEntry.providerOverride;
+        delete sessionEntry.modelOverride;
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        await saveSessionStore(storePath, sessionStore);
+      }
+    }
+  }
+
+  const storedProviderOverride = sessionEntry?.providerOverride?.trim();
+  const storedModelOverride = sessionEntry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const candidateProvider = storedProviderOverride || defaultProvider;
+    const key = modelKey(candidateProvider, storedModelOverride);
+    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+      provider = candidateProvider;
+      model = storedModelOverride;
+    }
+  }
   const sessionFile = resolveSessionTranscriptPath(sessionId);
 
   const startedAt = Date.now();

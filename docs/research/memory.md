@@ -8,7 +8,7 @@ read_when:
 
 # Workspace Memory v2 (offline): proposal + research
 
-Target: Clawd-style workspace (`inbound.workspace`, default `~/clawd`) where “memory” is stored as one Markdown file per day (`memory/YYYY-MM-DD.md`) plus a small set of stable files (e.g. `memory.md`, `SOUL.md`).
+Target: Clawd-style workspace (`agent.workspace`, default `~/clawd`) where “memory” is stored as one Markdown file per day (`memory/YYYY-MM-DD.md`) plus a small set of stable files (e.g. `memory.md`, `SOUL.md`).
 
 This doc proposes an **offline-first** memory architecture that keeps Markdown as the canonical, reviewable source of truth, but adds **structured recall** (search, entity summaries, confidence updates) via a derived index.
 
@@ -159,7 +159,7 @@ Recommendation: **deep integration in Clawdis**, but keep a separable core libra
 
 ### Why integrate into Clawdis?
 - Clawdis already knows:
-  - the workspace path (`inbound.workspace`)
+  - the workspace path (`agent.workspace`)
   - the session model + heartbeats
   - logging + troubleshooting patterns
 - You want the agent itself to call the tools:
@@ -225,4 +225,3 @@ Open question:
 - Letta / MemGPT concepts: “core memory blocks” + “archival memory” + tool-driven self-editing memory.
 - Hindsight Technical Report: “retain / recall / reflect”, four-network memory, narrative fact extraction, opinion confidence evolution.
 - SuCo: arXiv 2411.14754 (2024): “Subspace Collision” approximate nearest neighbor retrieval.
-

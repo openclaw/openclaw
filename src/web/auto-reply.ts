@@ -192,7 +192,7 @@ export function resolveReplyHeartbeatMinutes(
   cfg: ReturnType<typeof loadConfig>,
   overrideMinutes?: number,
 ) {
-  const raw = overrideMinutes ?? cfg.inbound?.agent?.heartbeatMinutes;
+  const raw = overrideMinutes ?? cfg.agent?.heartbeatMinutes;
   if (raw === 0) return null;
   if (typeof raw === "number" && raw > 0) return raw;
   return DEFAULT_REPLY_HEARTBEAT_MINUTES;
@@ -758,7 +758,7 @@ export async function monitorWebProvider(
   };
   emitStatus();
   const cfg = loadConfig();
-  const configuredMaxMb = cfg.inbound?.agent?.mediaMaxMb;
+  const configuredMaxMb = cfg.agent?.mediaMaxMb;
   const maxMediaBytes =
     typeof configuredMaxMb === "number" && configuredMaxMb > 0
       ? configuredMaxMb * 1024 * 1024

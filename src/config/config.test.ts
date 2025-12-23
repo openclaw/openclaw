@@ -88,7 +88,7 @@ describe("config identity defaults", () => {
     });
   });
 
-  it("does not synthesize inbound.agent/session when absent", async () => {
+  it("does not synthesize agent/session when absent", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdis");
       await fs.mkdir(configDir, { recursive: true });
@@ -113,7 +113,7 @@ describe("config identity defaults", () => {
       expect(cfg.inbound?.groupChat?.mentionPatterns).toEqual([
         "\\b@?Samantha\\b",
       ]);
-      expect(cfg.inbound?.agent).toBeUndefined();
+      expect(cfg.agent).toBeUndefined();
       expect(cfg.inbound?.session).toBeUndefined();
     });
   });

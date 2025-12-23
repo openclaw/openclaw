@@ -34,10 +34,13 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 
 function makeCfg(home: string) {
   return {
+    agent: {
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      workspace: join(home, "clawd"),
+    },
     inbound: {
       allowFrom: ["*"],
-      workspace: join(home, "clawd"),
-      agent: { provider: "anthropic", model: "claude-opus-4-5" },
       session: { store: join(home, "sessions.json") },
     },
   };
@@ -164,10 +167,13 @@ describe("trigger handling", () => {
         },
         {},
         {
+          agent: {
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
           inbound: {
             allowFrom: ["*"],
-            workspace: join(home, "clawd"),
-            agent: { provider: "anthropic", model: "claude-opus-4-5" },
             session: { store: join(home, "sessions.json") },
             groupChat: { requireMention: false },
           },
@@ -203,10 +209,13 @@ describe("trigger handling", () => {
         },
         {},
         {
+          agent: {
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
           inbound: {
             allowFrom: ["*"],
-            workspace: join(home, "clawd"),
-            agent: { provider: "anthropic", model: "claude-opus-4-5" },
             session: {
               store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
             },
@@ -240,10 +249,13 @@ describe("trigger handling", () => {
         },
         {},
         {
+          agent: {
+            provider: "anthropic",
+            model: "claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
           inbound: {
             allowFrom: ["*"],
-            workspace: join(home, "clawd"),
-            agent: { provider: "anthropic", model: "claude-opus-4-5" },
             session: {
               store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
             },

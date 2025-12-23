@@ -164,12 +164,12 @@ describe("heartbeat helpers", () => {
     expect(resolveReplyHeartbeatMinutes(cfgBase)).toBe(30);
     expect(
       resolveReplyHeartbeatMinutes({
-        inbound: { agent: { heartbeatMinutes: 5 } },
+        agent: { heartbeatMinutes: 5 },
       }),
     ).toBe(5);
     expect(
       resolveReplyHeartbeatMinutes({
-        inbound: { agent: { heartbeatMinutes: 0 } },
+        agent: { heartbeatMinutes: 0 },
       }),
     ).toBeNull();
     expect(resolveReplyHeartbeatMinutes(cfgBase, 7)).toBe(7);
@@ -508,9 +508,9 @@ describe("runWebHeartbeatOnce", () => {
     );
 
     setLoadConfigMock(() => ({
+      agent: { heartbeatMinutes: 0.001 },
       inbound: {
         allowFrom: ["+4367"],
-        agent: { heartbeatMinutes: 0.001 },
         session: { store: storePath, idleMinutes: 60 },
       },
     }));
@@ -1198,7 +1198,7 @@ describe("web auto-reply", () => {
 
       for (const fmt of formats) {
         // Force a small cap to ensure compression is exercised for every format.
-        setLoadConfigMock(() => ({ inbound: { agent: { mediaMaxMb: 1 } } }));
+        setLoadConfigMock(() => ({ agent: { mediaMaxMb: 1 } }));
         const sendMedia = vi.fn();
         const reply = vi.fn().mockResolvedValue(undefined);
         const sendComposing = vi.fn();
@@ -1263,7 +1263,7 @@ describe("web auto-reply", () => {
   );
 
   it("honors mediaMaxMb from config", async () => {
-    setLoadConfigMock(() => ({ inbound: { agent: { mediaMaxMb: 1 } } }));
+    setLoadConfigMock(() => ({ agent: { mediaMaxMb: 1 } }));
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn();

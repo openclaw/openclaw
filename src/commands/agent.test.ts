@@ -49,9 +49,12 @@ function mockConfig(
   inboundOverrides?: Partial<NonNullable<ClawdisConfig["inbound"]>>,
 ) {
   configSpy.mockReturnValue({
-    inbound: {
+    agent: {
+      provider: "anthropic",
+      model: "claude-opus-4-5",
       workspace: path.join(home, "clawd"),
-      agent: { provider: "anthropic", model: "claude-opus-4-5" },
+    },
+    inbound: {
       session: { store: storePath, mainKey: "main" },
       ...inboundOverrides,
     },

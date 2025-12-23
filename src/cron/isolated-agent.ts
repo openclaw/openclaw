@@ -145,10 +145,10 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const agentCfg = params.cfg.inbound?.agent;
+  const agentCfg = params.cfg.agent;
   void params.lane;
   const workspaceDirRaw =
-    params.cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+    params.cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: true,

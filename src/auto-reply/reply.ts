@@ -6,6 +6,12 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
+import {
+  buildAllowedModelSet,
+  modelKey,
+  parseModelRef,
+} from "../agents/model-selection.js";
 import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
@@ -46,6 +52,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
+import { extractModelDirective } from "./model.js";
 import { SILENT_REPLY_TOKEN } from "./tokens.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
@@ -57,7 +64,7 @@ const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
 
 const BARE_SESSION_RESET_PROMPT =
-  "A new session was started via /new or /reset. Say hi briefly and ask what the user wants to do next.";
+  "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
 
 export function extractThinkDirective(body?: string): {
   cleaned: string;
@@ -157,13 +164,15 @@ export async function getReplyFromConfig(
   configOverride?: ClawdisConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const cfg = configOverride ?? loadConfig();
-  const workspaceDirRaw = cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const agentCfg = cfg.inbound?.agent;
+  const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const agentCfg = cfg.agent;
   const sessionCfg = cfg.inbound?.session;
 
-  const provider = agentCfg?.provider?.trim() || DEFAULT_PROVIDER;
-  const model = agentCfg?.model?.trim() || DEFAULT_MODEL;
-  const contextTokens =
+  const defaultProvider = agentCfg?.provider?.trim() || DEFAULT_PROVIDER;
+  const defaultModel = agentCfg?.model?.trim() || DEFAULT_MODEL;
+  let provider = defaultProvider;
+  let model = defaultModel;
+  let contextTokens =
     agentCfg?.contextTokens ??
     lookupContextTokens(model) ??
     DEFAULT_CONTEXT_TOKENS;
@@ -251,6 +260,8 @@ export async function getReplyFromConfig(
 
   let persistedThinking: string | undefined;
   let persistedVerbose: string | undefined;
+  let persistedModelOverride: string | undefined;
+  let persistedProviderOverride: string | undefined;
 
   const isGroup =
     typeof ctx.From === "string" &&
@@ -297,6 +308,8 @@ export async function getReplyFromConfig(
     abortedLastRun = entry.abortedLastRun ?? false;
     persistedThinking = entry.thinkingLevel;
     persistedVerbose = entry.verboseLevel;
+    persistedModelOverride = entry.modelOverride;
+    persistedProviderOverride = entry.providerOverride;
   } else {
     sessionId = crypto.randomUUID();
     isNewSession = true;
@@ -314,6 +327,8 @@ export async function getReplyFromConfig(
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
+    modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
+    providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
   };
   sessionStore[sessionKey] = sessionEntry;
   await saveSessionStore(storePath, sessionStore);
@@ -337,8 +352,13 @@ export async function getReplyFromConfig(
     rawLevel: rawVerboseLevel,
     hasDirective: hasVerboseDirective,
   } = extractVerboseDirective(thinkCleaned);
-  sessionCtx.Body = verboseCleaned;
-  sessionCtx.BodyStripped = verboseCleaned;
+  const {
+    cleaned: modelCleaned,
+    rawModel: rawModelDirective,
+    hasDirective: hasModelDirective,
+  } = extractModelDirective(verboseCleaned);
+  sessionCtx.Body = modelCleaned;
+  sessionCtx.BodyStripped = modelCleaned;
 
   const defaultGroupActivation = () => {
     const requireMention = cfg.inbound?.groupChat?.requireMention;
@@ -369,117 +389,178 @@ export async function getReplyFromConfig(
     return resolvedVerboseLevel === "on";
   };
 
-  const combinedDirectiveOnly =
-    hasThinkDirective &&
-    hasVerboseDirective &&
-    (() => {
-      const stripped = stripStructuralPrefixes(verboseCleaned ?? "");
-      const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
-      return noMentions.length === 0;
-    })();
+  const hasAllowlist = (agentCfg?.allowedModels?.length ?? 0) > 0;
+  const hasStoredOverride = Boolean(
+    sessionEntry?.modelOverride || sessionEntry?.providerOverride,
+  );
+  const needsModelCatalog = hasModelDirective || hasAllowlist || hasStoredOverride;
+  let allowedModelKeys = new Set<string>();
+  let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
+  let resetModelOverride = false;
+
+  if (needsModelCatalog) {
+    const catalog = await loadModelCatalog({ config: cfg });
+    const allowed = buildAllowedModelSet({
+      cfg,
+      catalog,
+      defaultProvider,
+    });
+    allowedModelCatalog = allowed.allowedCatalog;
+    allowedModelKeys = allowed.allowedKeys;
+  }
+
+  if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
+    const overrideProvider =
+      sessionEntry.providerOverride?.trim() || defaultProvider;
+    const overrideModel = sessionEntry.modelOverride?.trim();
+    if (overrideModel) {
+      const key = modelKey(overrideProvider, overrideModel);
+      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+        delete sessionEntry.providerOverride;
+        delete sessionEntry.modelOverride;
+        sessionEntry.updatedAt = Date.now();
+        sessionStore[sessionKey] = sessionEntry;
+        await saveSessionStore(storePath, sessionStore);
+        resetModelOverride = true;
+      }
+    }
+  }
+
+  const storedProviderOverride = sessionEntry?.providerOverride?.trim();
+  const storedModelOverride = sessionEntry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    const candidateProvider = storedProviderOverride || defaultProvider;
+    const key = modelKey(candidateProvider, storedModelOverride);
+    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+      provider = candidateProvider;
+      model = storedModelOverride;
+    }
+  }
+  contextTokens =
+    agentCfg?.contextTokens ??
+    lookupContextTokens(model) ??
+    DEFAULT_CONTEXT_TOKENS;
 
   const directiveOnly = (() => {
-    if (!hasThinkDirective) return false;
-    if (!thinkCleaned) return true;
-    // Check after stripping both think and verbose so combined directives count.
-    const stripped = stripStructuralPrefixes(verboseCleaned);
+    if (!hasThinkDirective && !hasVerboseDirective && !hasModelDirective)
+      return false;
+    const stripped = stripStructuralPrefixes(modelCleaned ?? "");
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
     return noMentions.length === 0;
   })();
 
-  // Directive-only message => persist session thinking level and return ack
-  if (directiveOnly || combinedDirectiveOnly) {
-    if (!inlineThink) {
+  if (directiveOnly) {
+    if (hasModelDirective && !rawModelDirective) {
+      if (allowedModelCatalog.length === 0) {
+        cleanupTyping();
+        return { text: "No models available." };
+      }
+      const current = `${provider}/${model}`;
+      const defaultLabel = `${defaultProvider}/${defaultModel}`;
+      const header =
+        current === defaultLabel
+          ? `Models (current: ${current}):`
+          : `Models (current: ${current}, default: ${defaultLabel}):`;
+      const lines = [header];
+      if (resetModelOverride) {
+        lines.push(`(previous selection reset to default)`);
+      }
+      for (const entry of allowedModelCatalog) {
+        const label = `${entry.provider}/${entry.id}`;
+        const suffix = entry.name && entry.name !== entry.id ? ` — ${entry.name}` : "";
+        lines.push(`- ${label}${suffix}`);
+      }
+      cleanupTyping();
+      return { text: lines.join("\n") };
+    }
+    if (hasThinkDirective && !inlineThink) {
       cleanupTyping();
       return {
         text: `Unrecognized thinking level "${rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
       };
     }
-    if (sessionEntry && sessionStore && sessionKey) {
-      if (inlineThink === "off") {
-        delete sessionEntry.thinkingLevel;
-      } else {
-        sessionEntry.thinkingLevel = inlineThink;
-      }
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      await saveSessionStore(storePath, sessionStore);
-    }
-    // If verbose directive is also present, persist it too.
-    if (
-      hasVerboseDirective &&
-      inlineVerbose &&
-      sessionEntry &&
-      sessionStore &&
-      sessionKey
-    ) {
-      if (inlineVerbose === "off") {
-        delete sessionEntry.verboseLevel;
-      } else {
-        sessionEntry.verboseLevel = inlineVerbose;
-      }
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
-      await saveSessionStore(storePath, sessionStore);
-    }
-    const parts: string[] = [];
-    if (inlineThink === "off") {
-      parts.push("Thinking disabled.");
-    } else {
-      parts.push(`Thinking level set to ${inlineThink}.`);
-    }
-    if (hasVerboseDirective) {
-      if (!inlineVerbose) {
-        parts.push(
-          `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
-        );
-      } else {
-        parts.push(
-          inlineVerbose === "off"
-            ? "Verbose logging disabled."
-            : "Verbose logging enabled.",
-        );
-      }
-    }
-    const ack = parts.join(" ");
-    cleanupTyping();
-    return { text: ack };
-  }
-
-  const verboseDirectiveOnly = (() => {
-    if (!hasVerboseDirective) return false;
-    if (!verboseCleaned) return true;
-    const stripped = stripStructuralPrefixes(verboseCleaned);
-    const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
-    return noMentions.length === 0;
-  })();
-
-  if (verboseDirectiveOnly) {
-    if (!inlineVerbose) {
+    if (hasVerboseDirective && !inlineVerbose) {
       cleanupTyping();
       return {
         text: `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
       };
     }
+
+    let modelSelection:
+      | { provider: string; model: string; isDefault: boolean }
+      | undefined;
+    if (hasModelDirective && rawModelDirective) {
+      const parsed = parseModelRef(rawModelDirective, defaultProvider);
+      if (!parsed) {
+        cleanupTyping();
+        return {
+          text: `Unrecognized model "${rawModelDirective}". Use /model to list available models.`,
+        };
+      }
+      const key = modelKey(parsed.provider, parsed.model);
+      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+        cleanupTyping();
+        return {
+          text: `Model "${parsed.provider}/${parsed.model}" is not allowed. Use /model to list available models.`,
+        };
+      }
+      const isDefault =
+        parsed.provider === defaultProvider && parsed.model === defaultModel;
+      modelSelection = { ...parsed, isDefault };
+    }
+
     if (sessionEntry && sessionStore && sessionKey) {
-      if (inlineVerbose === "off") {
-        delete sessionEntry.verboseLevel;
-      } else {
-        sessionEntry.verboseLevel = inlineVerbose;
+      if (hasThinkDirective && inlineThink) {
+        if (inlineThink === "off") delete sessionEntry.thinkingLevel;
+        else sessionEntry.thinkingLevel = inlineThink;
+      }
+      if (hasVerboseDirective && inlineVerbose) {
+        if (inlineVerbose === "off") delete sessionEntry.verboseLevel;
+        else sessionEntry.verboseLevel = inlineVerbose;
+      }
+      if (modelSelection) {
+        if (modelSelection.isDefault) {
+          delete sessionEntry.providerOverride;
+          delete sessionEntry.modelOverride;
+        } else {
+          sessionEntry.providerOverride = modelSelection.provider;
+          sessionEntry.modelOverride = modelSelection.model;
+        }
       }
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       await saveSessionStore(storePath, sessionStore);
     }
-    const ack =
-      inlineVerbose === "off"
-        ? `${SYSTEM_MARK} Verbose logging disabled.`
-        : `${SYSTEM_MARK} Verbose logging enabled.`;
+
+    const parts: string[] = [];
+    if (hasThinkDirective && inlineThink) {
+      parts.push(
+        inlineThink === "off"
+          ? "Thinking disabled."
+          : `Thinking level set to ${inlineThink}.`,
+      );
+    }
+    if (hasVerboseDirective && inlineVerbose) {
+      parts.push(
+        inlineVerbose === "off"
+          ? `${SYSTEM_MARK} Verbose logging disabled.`
+          : `${SYSTEM_MARK} Verbose logging enabled.`,
+      );
+    }
+    if (modelSelection) {
+      const label = `${modelSelection.provider}/${modelSelection.model}`;
+      parts.push(
+        modelSelection.isDefault
+          ? `Model reset to default (${label}).`
+          : `Model set to ${label}.`,
+      );
+    }
+    const ack = parts.join(" ").trim();
     cleanupTyping();
-    return { text: ack };
+    return { text: ack || "OK." };
   }
 
-  // Persist inline think/verbose settings even when additional content follows.
+  // Persist inline think/verbose/model settings even when additional content follows.
   if (sessionEntry && sessionStore && sessionKey) {
     let updated = false;
     if (hasThinkDirective && inlineThink) {
@@ -497,6 +578,30 @@ export async function getReplyFromConfig(
         sessionEntry.verboseLevel = inlineVerbose;
       }
       updated = true;
+    }
+    if (hasModelDirective && rawModelDirective) {
+      const parsed = parseModelRef(rawModelDirective, defaultProvider);
+      if (parsed) {
+        const key = modelKey(parsed.provider, parsed.model);
+        if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+          const isDefault =
+            parsed.provider === defaultProvider && parsed.model === defaultModel;
+          if (isDefault) {
+            delete sessionEntry.providerOverride;
+            delete sessionEntry.modelOverride;
+          } else {
+            sessionEntry.providerOverride = parsed.provider;
+            sessionEntry.modelOverride = parsed.model;
+          }
+          provider = parsed.provider;
+          model = parsed.model;
+          contextTokens =
+            agentCfg?.contextTokens ??
+            lookupContextTokens(model) ??
+            DEFAULT_CONTEXT_TOKENS;
+          updated = true;
+        }
+      }
     }
     if (updated) {
       sessionEntry.updatedAt = Date.now();
@@ -889,6 +994,8 @@ export async function getReplyFromConfig(
       prompt: commandBody,
       extraSystemPrompt: groupIntro || undefined,
       ownerNumbers: ownerList.length > 0 ? ownerList : undefined,
+      enforceFinalTag:
+        provider === "lmstudio" || provider === "ollama" ? true : undefined,
       provider,
       model,
       thinkLevel: resolvedThinkLevel,

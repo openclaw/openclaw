@@ -60,9 +60,9 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const providerSummary = await buildProviderSummary(cfg);
   const queuedSystemEvents = peekSystemEvents();
 
-  const configModel = cfg.inbound?.agent?.model ?? DEFAULT_MODEL;
+  const configModel = cfg.agent?.model ?? DEFAULT_MODEL;
   const configContextTokens =
-    cfg.inbound?.agent?.contextTokens ??
+    cfg.agent?.contextTokens ??
     lookupContextTokens(configModel) ??
     DEFAULT_CONTEXT_TOKENS;
 

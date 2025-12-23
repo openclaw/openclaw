@@ -46,24 +46,25 @@ export async function setupCommand(
   const existingRaw = await readConfigFileRaw();
   const cfg = existingRaw.parsed;
   const inbound = cfg.inbound ?? {};
+  const agent = cfg.agent ?? {};
 
   const workspace =
-    desiredWorkspace ?? inbound.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+    desiredWorkspace ?? agent.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
 
   const next: ClawdisConfig = {
     ...cfg,
-    inbound: {
-      ...inbound,
+    agent: {
+      ...agent,
       workspace,
     },
   };
 
-  if (!existingRaw.exists || inbound.workspace !== workspace) {
+  if (!existingRaw.exists || agent.workspace !== workspace) {
     await writeConfigFile(next);
     runtime.log(
       !existingRaw.exists
         ? `Wrote ${CONFIG_PATH_CLAWDIS}`
-        : `Updated ${CONFIG_PATH_CLAWDIS} (set inbound.workspace)`,
+        : `Updated ${CONFIG_PATH_CLAWDIS} (set agent.workspace)`,
     );
   } else {
     runtime.log(`Config OK: ${CONFIG_PATH_CLAWDIS}`);

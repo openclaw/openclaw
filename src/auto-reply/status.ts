@@ -190,7 +190,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     contextTokens ?? null,
   )}${entry?.abortedLastRun ? " • last run aborted" : ""}`;
 
-  const optionsLine = `Options: thinking=${thinkLevel} | verbose=${verboseLevel} (set with /think <level>, /verbose on|off)`;
+  const optionsLine = `Options: thinking=${thinkLevel} | verbose=${verboseLevel} (set with /think <level>, /verbose on|off, /model <id>)`;
 
   const modelLabel = args.agent?.provider?.trim()
     ? `${args.agent.provider}/${args.agent?.model ?? model}`

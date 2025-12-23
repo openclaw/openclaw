@@ -9,10 +9,17 @@ import os from "node:os";
 import path from "node:path";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
-import { resolveClawdisAgentDir } from "../agents/agent-paths.js";
 import { lookupContextTokens } from "../agents/context.js";
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL } from "../agents/defaults.js";
-import { ensureClawdisModelsJson } from "../agents/models-config.js";
+import {
+  DEFAULT_CONTEXT_TOKENS,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+} from "../agents/defaults.js";
+import {
+  loadModelCatalog,
+  resetModelCatalogCacheForTest,
+  type ModelCatalogEntry,
+} from "../agents/model-catalog.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
@@ -200,71 +207,17 @@ async function startBrowserControlServerIfEnabled(): Promise<void> {
   await mod.startBrowserControlServerFromConfig();
 }
 
-type GatewayModelChoice = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-};
-
-let modelCatalogPromise: Promise<GatewayModelChoice[]> | null = null;
+type GatewayModelChoice = ModelCatalogEntry;
 
 // Test-only escape hatch: model catalog is cached at module scope for the
 // process lifetime, which is fine for the real gateway daemon, but makes
 // isolated unit tests harder. Keep this intentionally obscure.
 export function __resetModelCatalogCacheForTest() {
-  modelCatalogPromise = null;
+  resetModelCatalogCacheForTest();
 }
 
 async function loadGatewayModelCatalog(): Promise<GatewayModelChoice[]> {
-  if (modelCatalogPromise) return modelCatalogPromise;
-
-  modelCatalogPromise = (async () => {
-    const piSdk = (await import("@mariozechner/pi-coding-agent")) as {
-      discoverModels: (agentDir?: string) => Array<{
-        id: string;
-        name?: string;
-        provider: string;
-        contextWindow?: number;
-      }>;
-    };
-
-    let entries: Array<{
-      id: string;
-      name?: string;
-      provider: string;
-      contextWindow?: number;
-    }> = [];
-    try {
-      const cfg = loadConfig();
-      await ensureClawdisModelsJson(cfg);
-      entries = piSdk.discoverModels(resolveClawdisAgentDir());
-    } catch {
-      entries = [];
-    }
-
-    const models: GatewayModelChoice[] = [];
-    for (const entry of entries) {
-      const id = String(entry?.id ?? "").trim();
-      if (!id) continue;
-      const provider = String(entry?.provider ?? "").trim();
-      if (!provider) continue;
-      const name = String(entry?.name ?? id).trim() || id;
-      const contextWindow =
-        typeof entry?.contextWindow === "number" && entry.contextWindow > 0
-          ? entry.contextWindow
-          : undefined;
-      models.push({ id, name, provider, contextWindow });
-    }
-
-    return models.sort((a, b) => {
-      const p = a.provider.localeCompare(b.provider);
-      if (p !== 0) return p;
-      return a.name.localeCompare(b.name);
-    });
-  })();
-
-  return modelCatalogPromise;
+  return await loadModelCatalog({ config: loadConfig() });
 }
 
 import {
@@ -796,9 +749,9 @@ function classifySessionKey(key: string): GatewaySessionRow["kind"] {
 }
 
 function getSessionDefaults(cfg: ClawdisConfig): GatewaySessionsDefaults {
-  const model = cfg.inbound?.agent?.model ?? DEFAULT_MODEL;
+  const model = cfg.agent?.model ?? DEFAULT_MODEL;
   const contextTokens =
-    cfg.inbound?.agent?.contextTokens ??
+    cfg.agent?.contextTokens ??
     lookupContextTokens(model) ??
     DEFAULT_CONTEXT_TOKENS;
   return { model: model ?? null, contextTokens: contextTokens ?? null };
@@ -2277,7 +2230,7 @@ export async function startGatewayServer(
           ).items;
           const thinkingLevel =
             entry?.thinkingLevel ??
-            loadConfig().inbound?.agent?.thinkingDefault ??
+            loadConfig().agent?.thinkingDefault ??
             "off";
           return {
             ok: true,
@@ -3486,7 +3439,7 @@ export async function startGatewayServer(
               ).items;
               const thinkingLevel =
                 entry?.thinkingLevel ??
-                loadConfig().inbound?.agent?.thinkingDefault ??
+                loadConfig().agent?.thinkingDefault ??
                 "off";
               respond(true, {
                 sessionKey,
@@ -4119,7 +4072,7 @@ export async function startGatewayServer(
               }
               const cfg = loadConfig();
               const workspaceDirRaw =
-                cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+                cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
               const workspaceDir = resolveUserPath(workspaceDirRaw);
               const report = buildWorkspaceSkillStatus(workspaceDir, {
                 config: cfg,
@@ -4147,7 +4100,7 @@ export async function startGatewayServer(
               };
               const cfg = loadConfig();
               const workspaceDirRaw =
-                cfg.inbound?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+                cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
               const result = await installSkill({
                 workspaceDir: workspaceDirRaw,
                 skillName: p.name,
@@ -5495,6 +5448,9 @@ export async function startGatewayServer(
     });
   });
 
+  const agentProvider = cfgAtStart.agent?.provider?.trim() || DEFAULT_PROVIDER;
+  const agentModel = cfgAtStart.agent?.model?.trim() || DEFAULT_MODEL;
+  log.info(`agent model: ${agentProvider}/${agentModel}`);
   log.info(`listening on ws://${bindHost}:${port} (PID ${process.pid})`);
   log.info(`log file: ${getResolvedLoggerSettings().file}`);
   let tailscaleCleanup: (() => Promise<void>) | null = null;

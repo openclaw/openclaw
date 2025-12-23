@@ -152,10 +152,10 @@ export async function sessionsCommand(
 ) {
   const cfg = loadConfig();
   const configContextTokens =
-    cfg.inbound?.agent?.contextTokens ??
-    lookupContextTokens(cfg.inbound?.agent?.model) ??
+    cfg.agent?.contextTokens ??
+    lookupContextTokens(cfg.agent?.model) ??
     DEFAULT_CONTEXT_TOKENS;
-  const configModel = cfg.inbound?.agent?.model ?? DEFAULT_MODEL;
+  const configModel = cfg.agent?.model ?? DEFAULT_MODEL;
   const storePath = resolveStorePath(opts.store ?? cfg.inbound?.session?.store);
   const store = loadSessionStore(storePath);
 

@@ -102,7 +102,7 @@ export function buildProgram() {
     .description("Initialize ~/.clawdis/clawdis.json and the agent workspace")
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/clawd; stored as inbound.workspace)",
+      "Agent workspace directory (default: ~/clawd; stored as agent.workspace)",
     )
     .action(async (opts) => {
       try {
@@ -338,7 +338,7 @@ Examples:
   clawdis sessions --json          # machine-readable output
   clawdis sessions --store ./tmp/sessions.json
 
-Shows token usage per session when the agent reports it; set inbound.agent.contextTokens to see % of your model window.`,
+Shows token usage per session when the agent reports it; set agent.contextTokens to see % of your model window.`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));

@@ -17,6 +17,8 @@ export type SessionEntry = {
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  providerOverride?: string;
+  modelOverride?: string;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   inputTokens?: number;
@@ -128,6 +130,8 @@ export async function updateLastRoute(params: {
     abortedLastRun: existing?.abortedLastRun,
     thinkingLevel: existing?.thinkingLevel,
     verboseLevel: existing?.verboseLevel,
+    providerOverride: existing?.providerOverride,
+    modelOverride: existing?.modelOverride,
     inputTokens: existing?.inputTokens,
     outputTokens: existing?.outputTokens,
     totalTokens: existing?.totalTokens,

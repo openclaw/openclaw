@@ -182,10 +182,13 @@ vi.mock("../config/config.js", () => {
   return {
     CONFIG_PATH_CLAWDIS: resolveConfigPath(),
     loadConfig: () => ({
+      agent: {
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
+      },
       inbound: {
         allowFrom: testAllowFrom,
-        workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
-        agent: { provider: "anthropic", model: "claude-opus-4-5" },
         session: { mainKey: "main", store: testSessionStorePath },
       },
       gateway: (() => {
