@@ -8,6 +8,7 @@ import SwiftUI
 struct MenuContent: View {
     @Bindable var state: AppState
     let updater: UpdaterProviding?
+    @Bindable private var updateStatus: UpdateStatus
     private let gatewayManager = GatewayProcessManager.shared
     private let healthStore = HealthStore.shared
     private let heartbeatStore = HeartbeatStore.shared
@@ -17,6 +18,12 @@ struct MenuContent: View {
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var browserControlEnabled = true
+
+    init(state: AppState, updater: UpdaterProviding?) {
+        self._state = Bindable(wrappedValue: state)
+        self.updater = updater
+        self._updateStatus = Bindable(wrappedValue: updater?.updateStatus ?? UpdateStatus.disabled)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -86,8 +93,8 @@ struct MenuContent: View {
                 .keyboardShortcut(",", modifiers: [.command])
             self.debugMenu
             Button("About Clawdis") { self.open(tab: .about) }
-            if let updater, updater.isAvailable {
-                Button("Check for Updates…") { updater.checkForUpdates(nil) }
+            if let updater, updater.isAvailable, self.updateStatus.isUpdateReady {
+                Button("Update ready, restart now?") { updater.checkForUpdates(nil) }
             }
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }

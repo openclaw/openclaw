@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import MenuBarExtraAccess
+import Observation
 import OSLog
 import Security
 import SwiftUI
@@ -306,27 +307,94 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @MainActor
 protocol UpdaterProviding: AnyObject {
     var automaticallyChecksForUpdates: Bool { get set }
+    var automaticallyDownloadsUpdates: Bool { get set }
     var isAvailable: Bool { get }
+    var updateStatus: UpdateStatus { get }
     func checkForUpdates(_ sender: Any?)
 }
 
 // No-op updater used for debug/dev runs to suppress Sparkle dialogs.
 final class DisabledUpdaterController: UpdaterProviding {
     var automaticallyChecksForUpdates: Bool = false
+    var automaticallyDownloadsUpdates: Bool = false
     let isAvailable: Bool = false
+    let updateStatus = UpdateStatus()
     func checkForUpdates(_: Any?) {}
+}
+
+@MainActor
+@Observable
+final class UpdateStatus {
+    static let disabled = UpdateStatus()
+    var isUpdateReady: Bool
+
+    init(isUpdateReady: Bool = false) {
+        self.isUpdateReady = isUpdateReady
+    }
 }
 
 #if canImport(Sparkle)
 import Sparkle
 
-extension SPUStandardUpdaterController: UpdaterProviding {
+@MainActor
+final class SparkleUpdaterController: NSObject, UpdaterProviding, SPUUpdaterDelegate {
+    private lazy var controller = SPUStandardUpdaterController(
+        startingUpdater: false,
+        updaterDelegate: self,
+        userDriverDelegate: nil)
+    let updateStatus = UpdateStatus()
+
+    init(savedAutoUpdate: Bool) {
+        super.init()
+        let updater = self.controller.updater
+        updater.automaticallyChecksForUpdates = savedAutoUpdate
+        updater.automaticallyDownloadsUpdates = savedAutoUpdate
+        self.controller.startUpdater()
+    }
+
     var automaticallyChecksForUpdates: Bool {
-        get { self.updater.automaticallyChecksForUpdates }
-        set { self.updater.automaticallyChecksForUpdates = newValue }
+        get { self.controller.updater.automaticallyChecksForUpdates }
+        set { self.controller.updater.automaticallyChecksForUpdates = newValue }
+    }
+
+    var automaticallyDownloadsUpdates: Bool {
+        get { self.controller.updater.automaticallyDownloadsUpdates }
+        set { self.controller.updater.automaticallyDownloadsUpdates = newValue }
     }
 
     var isAvailable: Bool { true }
+
+    func checkForUpdates(_ sender: Any?) {
+        self.controller.checkForUpdates(sender)
+    }
+
+    func updater(_ updater: SPUUpdater, didDownloadUpdate item: SUAppcastItem) {
+        self.updateStatus.isUpdateReady = true
+    }
+
+    func updater(_ updater: SPUUpdater, failedToDownloadUpdate item: SUAppcastItem, error: Error) {
+        self.updateStatus.isUpdateReady = false
+    }
+
+    func userDidCancelDownload(_ updater: SPUUpdater) {
+        self.updateStatus.isUpdateReady = false
+    }
+
+    func updater(
+        _ updater: SPUUpdater,
+        userDidMakeChoice choice: SPUUserUpdateChoice,
+        forUpdate updateItem: SUAppcastItem,
+        state: SPUUserUpdateState
+    ) {
+        switch choice {
+        case .install, .skip:
+            self.updateStatus.isUpdateReady = false
+        case .dismiss:
+            self.updateStatus.isUpdateReady = (state.stage == .downloaded)
+        @unknown default:
+            self.updateStatus.isUpdateReady = false
+        }
+    }
 }
 
 private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
@@ -359,14 +427,7 @@ private func makeUpdaterController() -> UpdaterProviding {
     let autoUpdateKey = "autoUpdateEnabled"
     // Default to true; honor the user's last choice otherwise.
     let savedAutoUpdate = (defaults.object(forKey: autoUpdateKey) as? Bool) ?? true
-
-    let controller = SPUStandardUpdaterController(
-        startingUpdater: false,
-        updaterDelegate: nil,
-        userDriverDelegate: nil)
-    controller.updater.automaticallyChecksForUpdates = savedAutoUpdate
-    controller.startUpdater()
-    return controller
+    return SparkleUpdaterController(savedAutoUpdate: savedAutoUpdate)
 }
 #else
 private func makeUpdaterController() -> UpdaterProviding {
