@@ -1,10 +1,43 @@
 # Changelog
 
-## Unreleased — 2025-12-23
+## 2.0.0-beta3 — Unreleased (2025-12-23)
+
+### Highlights
+- First-class Clawdis tools (browser, canvas, nodes, cron) replace the old `clawdis-*` skills; tool schemas are now injected directly into the agent runtime.
+- Custom model providers: `models.providers` merges into `~/.clawdis/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
+- Group chat activation modes: per-group `/activation mention|always` command with status visibility.
 
 ### Fixes
 - Telegram/WhatsApp: native replies now target the original inbound message; reply context is appended to `Body` and captured in `ReplyTo*` fields. (Thanks @joshp123 for the PR and follow-up question.)
-- Embedded agent: custom model providers now load from `models.providers` (merged into `~/.clawdis/agent/models.json`), enabling proxy/base URL setups.
+- WhatsApp web creds persistence hardened; credentials are restored before auth checks and QR login auto-restarts if it stalls.
+- Canvas defaults/A2UI auto-nav aligned; debug status overlay centered; redundant await removed in `CanvasManager`.
+- Gateway launchd loop fixed by removing redundant `kickstart -k`.
+- CLI now hints when Peekaboo is unauthorized.
+
+### macOS app
+- Update-ready state surfaced in the menu; menu sections regrouped with session submenus.
+- Session list polish: sleeping/disconnected/error states, usage bar restored, padding + bar sizing tuned, syncing menu removed, header hidden when disconnected.
+- Chat UI polish: glass background, tighter composer spacing, visual effect host tweaks.
+- OAuth storage moved; legacy session syncing metadata removed.
+
+### Nodes & Canvas
+- Debug status overlay gated and toggleable on macOS/iOS/Android nodes.
+- Android scaffold asset cleanup; iOS canvas/voice wake adjustments.
+
+### Logging & Observability
+- New subsystem console formatter with color modes, shortened prefixes, and TTY detection; browser/gateway logs route through the subsystem logger.
+- WhatsApp console output streamlined; chalk/tslog typing fixes.
+
+### Web UI
+- Chat is now the dashboard landing view; health status simplified; initial scroll animation removed.
+
+### Build, Dev, Docs
+- Notarization flow added for macOS release artifacts; packaging scripts updated.
+- Added type-aware oxlint; docs list resolves from cwd; formatting/lint cleanup and dependency bumps (Peekaboo).
+- Docs refreshed for tools, custom model providers, group activation commands, logging, restart semantics, release notes, GitHub pages CTAs, and npm pitfalls.
+
+### Tests
+- Coverage added for models config merging, WhatsApp reply context, QR login flows, auto-reply behavior, and gateway SIGTERM timeouts.
 
 ## 2.0.0-beta2 — 2025-12-21
 
