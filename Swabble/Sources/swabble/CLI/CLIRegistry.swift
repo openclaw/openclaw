@@ -1,6 +1,7 @@
 import Commander
 import Foundation
 
+@available(macOS 26.0, *)
 @MainActor
 enum CLIRegistry {
     static var descriptors: [CommandDescriptor] {

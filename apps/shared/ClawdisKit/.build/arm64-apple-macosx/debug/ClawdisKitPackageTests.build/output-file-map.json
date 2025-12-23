@@ -1,0 +1,12 @@
+{
+  "": {
+    "swift-dependencies": "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/master.swiftdeps"
+  },
+  "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift": {
+    "dependencies": "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.d",
+    "object": "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.swift.o",
+    "swiftmodule": "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner~partial.swiftmodule",
+    "swift-dependencies": "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.swiftdeps",
+    "diagnostics": "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.dia"
+  }
+}

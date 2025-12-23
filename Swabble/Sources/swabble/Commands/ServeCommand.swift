@@ -1,7 +1,9 @@
 import Commander
 import Foundation
 import Swabble
+import SwabbleKit
 
+@available(macOS 26.0, *)
 @MainActor
 struct ServeCommand: ParsableCommand {
     @Option(name: .long("config"), help: "Path to config JSON") var configPath: String?
@@ -68,17 +70,12 @@ struct ServeCommand: ParsableCommand {
     }
 
     private static func matchesWake(text: String, cfg: SwabbleConfig) -> Bool {
-        let lowered = text.lowercased()
-        if lowered.contains(cfg.wake.word.lowercased()) { return true }
-        return cfg.wake.aliases.contains(where: { lowered.contains($0.lowercased()) })
+        let triggers = [cfg.wake.word] + cfg.wake.aliases
+        return WakeWordGate.matchesTextOnly(text: text, triggers: triggers)
     }
 
     private static func stripWake(text: String, cfg: SwabbleConfig) -> String {
-        var out = text
-        out = out.replacingOccurrences(of: cfg.wake.word, with: "", options: [.caseInsensitive])
-        for alias in cfg.wake.aliases {
-            out = out.replacingOccurrences(of: alias, with: "", options: [.caseInsensitive])
-        }
-        return out.trimmingCharacters(in: .whitespacesAndNewlines)
+        let triggers = [cfg.wake.word] + cfg.wake.aliases
+        return WakeWordGate.stripWake(text: text, triggers: triggers)
     }
 }

@@ -8,6 +8,8 @@ options:
 packages:
   ClawdisKit:
     path: ../shared/ClawdisKit
+  Swabble:
+    path: ../../Swabble
 
 schemes:
   Clawdis:
@@ -29,6 +31,8 @@ targets:
       - package: ClawdisKit
       - package: ClawdisKit
         product: ClawdisChatUI
+      - package: Swabble
+        product: SwabbleKit
       - sdk: AppIntents.framework
     preBuildScripts:
       - name: SwiftFormat (lint)
@@ -86,6 +90,8 @@ targets:
       - path: Tests
     dependencies:
       - target: Clawdis
+      - package: Swabble
+        product: SwabbleKit
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.steipete.clawdis.ios.tests

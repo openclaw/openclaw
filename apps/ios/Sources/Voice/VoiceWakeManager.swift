@@ -2,6 +2,7 @@ import AVFAudio
 import Foundation
 import Observation
 import Speech
+import SwabbleKit
 
 private func makeAudioTapEnqueueCallback(queue: AudioBufferQueue) -> @Sendable (AVAudioPCMBuffer, AVAudioTime) -> Void {
     { buffer, _ in
@@ -289,15 +290,18 @@ final class VoiceWakeManager: NSObject {
     private nonisolated func makeRecognitionResultHandler() -> @Sendable (SFSpeechRecognitionResult?, Error?) -> Void {
         { [weak self] result, error in
             let transcript = result?.bestTranscription.formattedString
+            let segments = result.flatMap { result in
+                transcript.map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
+            } ?? []
             let errorText = error?.localizedDescription
 
             Task { @MainActor in
-                self?.handleRecognitionCallback(transcript: transcript, errorText: errorText)
+                self?.handleRecognitionCallback(transcript: transcript, segments: segments, errorText: errorText)
             }
         }
     }
 
-    private func handleRecognitionCallback(transcript: String?, errorText: String?) {
+    private func handleRecognitionCallback(transcript: String?, segments: [WakeWordSegment], errorText: String?) {
         if let errorText {
             self.statusText = "Recognizer error: \(errorText)"
             self.isListening = false
@@ -313,7 +317,7 @@ final class VoiceWakeManager: NSObject {
         }
 
         guard let transcript else { return }
-        guard let cmd = self.extractCommand(from: transcript) else { return }
+        guard let cmd = self.extractCommand(from: transcript, segments: segments) else { return }
 
         if cmd == self.lastDispatched { return }
         self.lastDispatched = cmd
@@ -334,30 +338,18 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    private func extractCommand(from transcript: String) -> String? {
-        Self.extractCommand(from: transcript, triggers: self.activeTriggerWords)
+    private func extractCommand(from transcript: String, segments: [WakeWordSegment]) -> String? {
+        Self.extractCommand(from: transcript, segments: segments, triggers: self.activeTriggerWords)
     }
 
-    nonisolated static func extractCommand(from transcript: String, triggers: [String]) -> String? {
-        var bestRange: Range<String.Index>?
-        for trigger in triggers {
-            let token = trigger.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !token.isEmpty else { continue }
-            guard let range = transcript.range(of: token, options: [.caseInsensitive, .backwards]) else { continue }
-            if let currentBest = bestRange {
-                if range.lowerBound > currentBest.lowerBound {
-                    bestRange = range
-                }
-            } else {
-                bestRange = range
-            }
-        }
-
-        guard let bestRange else { return nil }
-        let after = transcript[bestRange.upperBound...]
-        let trimmed = after.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        return String(trimmed)
+    nonisolated static func extractCommand(
+        from transcript: String,
+        segments: [WakeWordSegment],
+        triggers: [String],
+        minPostTriggerGap: TimeInterval = 0.45) -> String?
+    {
+        let config = WakeWordGateConfig(triggers: triggers, minPostTriggerGap: minPostTriggerGap)
+        return WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command
     }
 
     private static func configureAudioSession() throws {

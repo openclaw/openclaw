@@ -2,11 +2,13 @@ import AVFoundation
 import Foundation
 import Speech
 
+@available(macOS 26.0, iOS 26.0, *)
 public struct SpeechSegment: Sendable {
     public let text: String
     public let isFinal: Bool
 }
 
+@available(macOS 26.0, iOS 26.0, *)
 public enum SpeechPipelineError: Error {
     case authorizationDenied
     case analyzerFormatUnavailable
@@ -14,6 +16,7 @@ public enum SpeechPipelineError: Error {
 }
 
 /// Live microphone → SpeechAnalyzer → SpeechTranscriber pipeline.
+@available(macOS 26.0, iOS 26.0, *)
 public actor SpeechPipeline {
     private struct UnsafeBuffer: @unchecked Sendable { let buffer: AVAudioPCMBuffer }
 

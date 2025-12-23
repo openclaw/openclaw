@@ -17,6 +17,7 @@ let package = Package(
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.1.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
         .package(path: "../shared/ClawdisKit"),
+        .package(path: "../../Swabble"),
         .package(path: "../../Peekaboo/Core/PeekabooCore"),
         .package(path: "../../Peekaboo/Core/PeekabooAutomationKit"),
     ],
@@ -41,6 +42,7 @@ let package = Package(
                 "ClawdisProtocol",
                 .product(name: "ClawdisKit", package: "ClawdisKit"),
                 .product(name: "ClawdisChatUI", package: "ClawdisKit"),
+                .product(name: "SwabbleKit", package: "swabble"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
                 .product(name: "Sparkle", package: "Sparkle"),
@@ -56,7 +58,12 @@ let package = Package(
             ]),
         .testTarget(
             name: "ClawdisIPCTests",
-            dependencies: ["ClawdisIPC", "Clawdis", "ClawdisProtocol"],
+            dependencies: [
+                "ClawdisIPC",
+                "Clawdis",
+                "ClawdisProtocol",
+                .product(name: "SwabbleKit", package: "swabble"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
                 .enableExperimentalFeature("SwiftTesting"),

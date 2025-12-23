@@ -1,23 +1,9 @@
+import Foundation
 import Testing
+import SwabbleKit
 @testable import Clawdis
 
 @Suite struct VoiceWakeRuntimeTests {
-    @Test func matchesIsCaseInsensitive() {
-        let triggers = ["ClAwD", "buddy"]
-        #expect(VoiceWakeRuntime._testMatches(text: "hey clawd are you there", triggers: triggers))
-        #expect(!VoiceWakeRuntime._testMatches(text: "nothing to see", triggers: triggers))
-    }
-
-    @Test func matchesIgnoresWhitespace() {
-        let triggers = ["  claude  "]
-        #expect(VoiceWakeRuntime._testMatches(text: "hello claude!", triggers: triggers))
-    }
-
-    @Test func matchesSkipsEmptyTriggers() {
-        let triggers = ["   ", ""]
-        #expect(!VoiceWakeRuntime._testMatches(text: "hello", triggers: triggers))
-    }
-
     @Test func trimsAfterTriggerKeepsPostSpeech() {
         let triggers = ["claude", "clawd"]
         let text = "hey Claude how are you"
@@ -48,4 +34,46 @@ import Testing
         let text = "claude write a note"
         #expect(VoiceWakeRuntime._testHasContentAfterTrigger(text, triggers: triggers))
     }
+
+    @Test func gateRequiresGapBetweenTriggerAndCommand() {
+        let transcript = "hey clawd do thing"
+        let segments = makeSegments(
+            transcript: transcript,
+            words: [
+                ("hey", 0.0, 0.1),
+                ("clawd", 0.2, 0.1),
+                ("do", 0.35, 0.1),
+                ("thing", 0.5, 0.1),
+            ])
+        let config = WakeWordGateConfig(triggers: ["clawd"], minPostTriggerGap: 0.3)
+        #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config) == nil)
+    }
+
+    @Test func gateAcceptsGapAndExtractsCommand() {
+        let transcript = "hey clawd do thing"
+        let segments = makeSegments(
+            transcript: transcript,
+            words: [
+                ("hey", 0.0, 0.1),
+                ("clawd", 0.2, 0.1),
+                ("do", 0.9, 0.1),
+                ("thing", 1.1, 0.1),
+            ])
+        let config = WakeWordGateConfig(triggers: ["clawd"], minPostTriggerGap: 0.3)
+        #expect(WakeWordGate.match(transcript: transcript, segments: segments, config: config)?.command == "do thing")
+    }
+}
+
+private func makeSegments(
+    transcript: String,
+    words: [(String, TimeInterval, TimeInterval)])
+-> [WakeWordSegment] {
+    var searchStart = transcript.startIndex
+    var output: [WakeWordSegment] = []
+    for (word, start, duration) in words {
+        let range = transcript.range(of: word, range: searchStart..<transcript.endIndex)
+        output.append(WakeWordSegment(text: word, start: start, duration: duration, range: range))
+        if let range { searchStart = range.upperBound }
+    }
+    return output
 }

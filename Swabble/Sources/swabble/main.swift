@@ -1,6 +1,7 @@
 import Commander
 import Foundation
 
+@available(macOS 26.0, *)
 @MainActor
 private func runCLI() async -> Int32 {
     do {
@@ -15,6 +16,7 @@ private func runCLI() async -> Int32 {
     }
 }
 
+@available(macOS 26.0, *)
 @MainActor
 private func dispatch(invocation: CommandInvocation) async throws {
     let parsed = invocation.parsedValues
@@ -95,5 +97,10 @@ private func dispatch(invocation: CommandInvocation) async throws {
     }
 }
 
-let exitCode = await runCLI()
-exit(exitCode)
+if #available(macOS 26.0, *) {
+    let exitCode = await runCLI()
+    exit(exitCode)
+} else {
+    fputs("error: swabble requires macOS 26 or newer\n", stderr)
+    exit(1)
+}

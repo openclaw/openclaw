@@ -54,3 +54,4 @@ Sources/Voice/VoiceWakePreferences.swift
 ../shared/ClawdisKit/Sources/ClawdisKit/ScreenCommands.swift
 ../shared/ClawdisKit/Sources/ClawdisKit/StoragePaths.swift
 ../shared/ClawdisKit/Sources/ClawdisKit/SystemCommands.swift
+../../Swabble/Sources/SwabbleKit/WakeWordGate.swift

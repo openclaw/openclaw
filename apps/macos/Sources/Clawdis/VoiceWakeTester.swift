@@ -2,6 +2,7 @@ import AVFoundation
 import Foundation
 import OSLog
 import Speech
+import SwabbleKit
 
 enum VoiceWakeTestState: Equatable {
     case idle
@@ -93,14 +94,16 @@ final class VoiceWakeTester {
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self, !self.isStopping else { return }
             let text = result?.bestTranscription.formattedString ?? ""
-            let matched = Self.matches(text: text, triggers: triggers)
+            let segments = result.map { WakeWordSpeechSegments.from(transcription: $0.bestTranscription, transcript: text) } ?? []
+            let gateConfig = WakeWordGateConfig(triggers: triggers)
+            let match = WakeWordGate.match(transcript: text, segments: segments, config: gateConfig)
             let isFinal = result?.isFinal ?? false
             let errorMessage = error?.localizedDescription
 
             Task { [weak self] in
                 guard let self, !self.isStopping else { return }
                 await self.handleResult(
-                    matched: matched,
+                    match: match,
                     text: text,
                     isFinal: isFinal,
                     errorMessage: errorMessage,
@@ -120,7 +123,7 @@ final class VoiceWakeTester {
     }
 
     private func handleResult(
-        matched: Bool,
+        match: WakeWordGateMatch?,
         text: String,
         isFinal: Bool,
         errorMessage: String?,
@@ -129,15 +132,15 @@ final class VoiceWakeTester {
         if !text.isEmpty {
             self.lastHeard = Date()
         }
-        if matched, !text.isEmpty {
+        if let match, !match.command.isEmpty {
             self.holdingAfterDetect = true
-            self.detectedText = text
-            self.logger.info("voice wake detected; forwarding (len=\(text.count))")
+            self.detectedText = match.command
+            self.logger.info("voice wake detected; forwarding (len=\(match.command.count))")
             await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
             Task.detached {
-                await VoiceWakeForwarder.forward(transcript: text)
+                await VoiceWakeForwarder.forward(transcript: match.command)
             }
-            Task { @MainActor in onUpdate(.detected(text)) }
+            Task { @MainActor in onUpdate(.detected(match.command)) }
             self.holdUntilSilence(onUpdate: onUpdate)
             return
         }
@@ -185,15 +188,6 @@ final class VoiceWakeTester {
 
     private func configureSession(preferredMicID: String?) {
         _ = preferredMicID
-    }
-
-    private static func matches(text: String, triggers: [String]) -> Bool {
-        let lowered = text.lowercased()
-        return triggers.contains { lowered.contains($0.lowercased()) }
-    }
-
-    static func _testMatches(text: String, triggers: [String]) -> Bool {
-        self.matches(text: text, triggers: triggers)
     }
 
     private nonisolated static func ensurePermissions() async throws -> Bool {

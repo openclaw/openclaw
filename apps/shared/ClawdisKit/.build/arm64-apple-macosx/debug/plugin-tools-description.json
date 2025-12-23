@@ -1,0 +1,1492 @@
+{
+  "builtTestProducts" : [
+    {
+      "binaryPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.xctest/Contents/MacOS/ClawdisKitPackageTests",
+      "packagePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit",
+      "productName" : "ClawdisKitPackageTests"
+    }
+  ],
+  "copyCommands" : {
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit_ClawdisKit.bundle/scaffold.html" : {
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/Resources/CanvasScaffold/scaffold.html"
+        }
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit_ClawdisKit.bundle/scaffold.html"
+        }
+      ]
+    }
+  },
+  "explicitTargetDependencyImportCheckingMode" : {
+    "none" : {
+
+    }
+  },
+  "generatedSourceTargetSet" : [
+
+  ],
+  "pluginDescriptions" : [
+
+  ],
+  "swiftCommands" : {
+    "C.ClawdisChatUI-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/sources",
+      "importPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatComposer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMarkdownSplitter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMessageViews.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatModels.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatPayloadDecoding.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSessions.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSheets.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTheme.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTransport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatViewModel.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "ClawdisChatUI",
+      "moduleOutputPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisChatUI.swiftmodule",
+      "objects" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatComposer.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatMarkdownSplitter.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatMessageViews.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatModels.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatPayloadDecoding.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatSessions.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatSheets.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatTheme.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatTransport.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatView.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatViewModel.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx15.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j16",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/include/ClawdisChatUI-Swift.h",
+        "-swift-version",
+        "6",
+        "-enable-upcoming-feature",
+        "StrictConcurrency",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "clawdiskit"
+      ],
+      "outputFileMapPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatComposer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatMarkdownSplitter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatMessageViews.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatModels.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatPayloadDecoding.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatSessions.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatSheets.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatTheme.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatTransport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatViewModel.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisChatUI.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatComposer.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMarkdownSplitter.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMessageViews.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatModels.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatPayloadDecoding.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSessions.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSheets.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTheme.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTransport.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatView.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatViewModel.swift"
+      ],
+      "tempsPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.ClawdisKit-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/sources",
+      "importPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/AnyCodable.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourEscapes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BridgeFrames.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CameraCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIAction.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UICommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIJSONL.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommandParams.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/Capabilities.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ClawdisKitResources.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/DeepLinks.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/JPEGTranscoder.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/NodeError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ScreenCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/StoragePaths.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/SystemCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DerivedSources/resource_bundle_accessor.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "virtual",
+          "name" : "<ClawdisKit-arm64-apple-macosx26.0-debug.module-resources>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "ClawdisKit",
+      "moduleOutputPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKit.swiftmodule",
+      "objects" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/AnyCodable.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BonjourEscapes.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BonjourTypes.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BridgeFrames.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CameraCommands.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UIAction.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UICommands.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UIJSONL.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasCommandParams.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasCommands.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/Capabilities.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/ClawdisKitResources.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DeepLinks.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/JPEGTranscoder.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/NodeError.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/ScreenCommands.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/StoragePaths.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/SystemCommands.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/resource_bundle_accessor.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx15.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-j16",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+        "-module-cache-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/include/ClawdisKit-Swift.h",
+        "-swift-version",
+        "6",
+        "-enable-upcoming-feature",
+        "StrictConcurrency",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "clawdiskit"
+      ],
+      "outputFileMapPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/AnyCodable.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BonjourEscapes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BonjourTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BridgeFrames.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CameraCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UIAction.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UICommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UIJSONL.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasCommandParams.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/Capabilities.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/ClawdisKitResources.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DeepLinks.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/JPEGTranscoder.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/NodeError.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/ScreenCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/StoragePaths.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/SystemCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKit.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/AnyCodable.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourEscapes.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourTypes.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BridgeFrames.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CameraCommands.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIAction.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UICommands.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIJSONL.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommandParams.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommands.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/Capabilities.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ClawdisKitResources.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/DeepLinks.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/JPEGTranscoder.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/NodeError.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ScreenCommands.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/StoragePaths.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/SystemCommands.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DerivedSources/resource_bundle_accessor.swift"
+      ],
+      "tempsPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.ClawdisKitPackageTests-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/sources",
+      "importPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKitTests.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "ClawdisKitPackageTests",
+      "moduleOutputPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKitPackageTests.swiftmodule",
+      "objects" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx15.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j16",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-emit-objc-header",
+        "-emit-objc-header-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/include/ClawdisKitPackageTests-Swift.h",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "clawdiskit"
+      ],
+      "outputFileMapPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKitPackageTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift"
+      ],
+      "tempsPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build",
+      "wholeModuleOptimization" : false
+    },
+    "C.ClawdisKitTests-arm64-apple-macosx26.0-debug.module" : {
+      "executable" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "fileList" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/sources",
+      "importPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "inputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/BonjourEscapesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UIActionTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UITests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasSnapshotFormatTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/ChatViewModelTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/JPEGTranscoderTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKit.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisChatUI.swiftmodule"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/sources"
+        }
+      ],
+      "isLibrary" : true,
+      "moduleName" : "ClawdisKitTests",
+      "moduleOutputPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKitTests.swiftmodule",
+      "objects" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/BonjourEscapesTests.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasA2UIActionTests.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasA2UITests.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasSnapshotFormatTests.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/ChatViewModelTests.swift.o",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/JPEGTranscoderTests.swift.o"
+      ],
+      "otherArguments" : [
+        "-target",
+        "arm64-apple-macosx15.0",
+        "-incremental",
+        "-enable-batch-mode",
+        "-serialize-diagnostics",
+        "-index-store-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+        "-Onone",
+        "-enable-testing",
+        "-Xfrontend",
+        "-enable-cross-import-overlays",
+        "-j16",
+        "-DSWIFT_PACKAGE",
+        "-DDEBUG",
+        "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+        "-module-cache-path",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+        "-parseable-output",
+        "-parse-as-library",
+        "-swift-version",
+        "6",
+        "-enable-upcoming-feature",
+        "StrictConcurrency",
+        "-enable-experimental-feature",
+        "SwiftTesting",
+        "-plugin-path",
+        "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+        "-sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-F",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-I",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-L",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+        "-g",
+        "-Xcc",
+        "-isysroot",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+        "-Xcc",
+        "-F",
+        "-Xcc",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+        "-Xcc",
+        "-fPIC",
+        "-Xcc",
+        "-g",
+        "-package-name",
+        "clawdiskit"
+      ],
+      "outputFileMapPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/output-file-map.json",
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/BonjourEscapesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasA2UIActionTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasA2UITests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasSnapshotFormatTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/ChatViewModelTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/JPEGTranscoderTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules/ClawdisKitTests.swiftmodule"
+        }
+      ],
+      "prepareForIndexing" : false,
+      "sources" : [
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/BonjourEscapesTests.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UIActionTests.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UITests.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasSnapshotFormatTests.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/ChatViewModelTests.swift",
+        "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/JPEGTranscoderTests.swift"
+      ],
+      "tempsPath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build",
+      "wholeModuleOptimization" : false
+    }
+  },
+  "swiftFrontendCommands" : {
+
+  },
+  "swiftTargetScanArgs" : {
+    "ClawdisChatUI" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "ClawdisChatUI",
+      "-package-name",
+      "clawdiskit",
+      "-c",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatComposer.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMarkdownSplitter.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMessageViews.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatModels.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatPayloadDecoding.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSessions.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSheets.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTheme.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTransport.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatView.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatViewModel.swift",
+      "-I",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx15.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j16",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/include/ClawdisChatUI-Swift.h",
+      "-swift-version",
+      "6",
+      "-enable-upcoming-feature",
+      "StrictConcurrency",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "clawdiskit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "ClawdisKit" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "ClawdisKit",
+      "-package-name",
+      "clawdiskit",
+      "-c",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/AnyCodable.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourEscapes.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourTypes.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BridgeFrames.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CameraCommands.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIAction.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UICommands.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIJSONL.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommandParams.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommands.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/Capabilities.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ClawdisKitResources.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/DeepLinks.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/JPEGTranscoder.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/NodeError.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ScreenCommands.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/StoragePaths.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/SystemCommands.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DerivedSources/resource_bundle_accessor.swift",
+      "-I",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx15.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-j16",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_AVAILABLE",
+      "-module-cache-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/include/ClawdisKit-Swift.h",
+      "-swift-version",
+      "6",
+      "-enable-upcoming-feature",
+      "StrictConcurrency",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "clawdiskit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "ClawdisKitPackageTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "ClawdisKitPackageTests",
+      "-package-name",
+      "clawdiskit",
+      "-c",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift",
+      "-I",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx15.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j16",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-emit-objc-header",
+      "-emit-objc-header-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/include/ClawdisKitPackageTests-Swift.h",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "clawdiskit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ],
+    "ClawdisKitTests" : [
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc",
+      "-module-name",
+      "ClawdisKitTests",
+      "-package-name",
+      "clawdiskit",
+      "-c",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/BonjourEscapesTests.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UIActionTests.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UITests.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasSnapshotFormatTests.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/ChatViewModelTests.swift",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/JPEGTranscoderTests.swift",
+      "-I",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/Modules",
+      "-target",
+      "arm64-apple-macosx15.0",
+      "-incremental",
+      "-enable-batch-mode",
+      "-serialize-diagnostics",
+      "-index-store-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/index/store",
+      "-Onone",
+      "-enable-testing",
+      "-Xfrontend",
+      "-enable-cross-import-overlays",
+      "-j16",
+      "-DSWIFT_PACKAGE",
+      "-DDEBUG",
+      "-DSWIFT_MODULE_RESOURCE_BUNDLE_UNAVAILABLE",
+      "-module-cache-path",
+      "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ModuleCache",
+      "-parseable-output",
+      "-parse-as-library",
+      "-swift-version",
+      "6",
+      "-enable-upcoming-feature",
+      "StrictConcurrency",
+      "-enable-experimental-feature",
+      "SwiftTesting",
+      "-plugin-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing",
+      "-sdk",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-F",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-I",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-L",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib",
+      "-g",
+      "-Xcc",
+      "-isysroot",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks",
+      "-Xcc",
+      "-F",
+      "-Xcc",
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/PrivateFrameworks",
+      "-Xcc",
+      "-fPIC",
+      "-Xcc",
+      "-g",
+      "-package-name",
+      "clawdiskit",
+      "-driver-use-frontend-path",
+      "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+    ]
+  },
+  "targetDependencyMap" : {
+    "ClawdisChatUI" : [
+      "ClawdisKit"
+    ],
+    "ClawdisKit" : [
+
+    ],
+    "ClawdisKitPackageTests" : [
+      "ClawdisKitTests",
+      "ClawdisChatUI",
+      "ClawdisKit"
+    ],
+    "ClawdisKitTests" : [
+      "ClawdisChatUI",
+      "ClawdisKit"
+    ]
+  },
+  "testDiscoveryCommands" : {
+
+  },
+  "testEntryPointCommands" : {
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift" : {
+      "inputs" : [
+
+      ],
+      "outputs" : [
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift"
+        }
+      ]
+    }
+  },
+  "traitConfiguration" : {
+    "default" : {
+
+    }
+  },
+  "writeCommands" : {
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatComposer.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMarkdownSplitter.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatMessageViews.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatModels.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatPayloadDecoding.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSessions.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatSheets.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTheme.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatTransport.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatView.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisChatUI/ChatViewModel.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/sources"
+    },
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/AnyCodable.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourEscapes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BonjourTypes.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/BridgeFrames.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CameraCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIAction.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UICommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasA2UIJSONL.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommandParams.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/CanvasCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/Capabilities.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ClawdisKitResources.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/DeepLinks.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/JPEGTranscoder.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/NodeError.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/ScreenCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/StoragePaths.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Sources/ClawdisKit/SystemCommands.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DerivedSources/resource_bundle_accessor.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/sources"
+    },
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.derived/runner.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/sources"
+    },
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.product/Objects.LinkFileList" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<link-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatComposer.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatMarkdownSplitter.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatMessageViews.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatModels.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatPayloadDecoding.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatSessions.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatSheets.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatTheme.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatTransport.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatView.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisChatUI.build/ChatViewModel.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/AnyCodable.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BonjourEscapes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BonjourTypes.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/BridgeFrames.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CameraCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UIAction.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UICommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasA2UIJSONL.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasCommandParams.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/CanvasCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/Capabilities.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/ClawdisKitResources.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/DeepLinks.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/JPEGTranscoder.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/NodeError.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/ScreenCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/StoragePaths.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/SystemCommands.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKit.build/resource_bundle_accessor.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.build/runner.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/BonjourEscapesTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasA2UIActionTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasA2UITests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/CanvasSnapshotFormatTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/ChatViewModelTests.swift.o"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/JPEGTranscoderTests.swift.o"
+        }
+      ],
+      "outputFilePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.product/Objects.LinkFileList"
+    },
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/sources" : {
+      "alwaysOutOfDate" : false,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<sources-file-list>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/BonjourEscapesTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UIActionTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasA2UITests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/CanvasSnapshotFormatTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/ChatViewModelTests.swift"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/Tests/ClawdisKitTests/JPEGTranscoderTests.swift"
+        }
+      ],
+      "outputFilePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitTests.build/sources"
+    },
+    "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt" : {
+      "alwaysOutOfDate" : true,
+      "inputs" : [
+        {
+          "kind" : "virtual",
+          "name" : "<swift-get-version>"
+        },
+        {
+          "kind" : "file",
+          "name" : "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+        }
+      ],
+      "outputFilePath" : "/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/swift-version--58304C5D6DBC2206.txt"
+    }
+  }
+}
