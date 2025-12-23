@@ -164,8 +164,7 @@ enum DebugActions {
             let data = try? Data(contentsOf: configURL),
             let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let inbound = parsed["inbound"] as? [String: Any],
-            let reply = inbound["reply"] as? [String: Any],
-            let session = reply["session"] as? [String: Any],
+            let session = inbound["session"] as? [String: Any],
             let path = session["store"] as? String,
             !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         else {

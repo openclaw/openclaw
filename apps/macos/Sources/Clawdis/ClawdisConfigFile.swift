@@ -61,22 +61,22 @@ enum ClawdisConfigFile {
         self.saveDict(root)
     }
 
-    static func inboundWorkspace() -> String? {
+    static func agentWorkspace() -> String? {
         let root = self.loadDict()
-        let inbound = root["inbound"] as? [String: Any]
-        return inbound?["workspace"] as? String
+        let agent = root["agent"] as? [String: Any]
+        return agent?["workspace"] as? String
     }
 
-    static func setInboundWorkspace(_ workspace: String?) {
+    static func setAgentWorkspace(_ workspace: String?) {
         var root = self.loadDict()
-        var inbound = root["inbound"] as? [String: Any] ?? [:]
+        var agent = root["agent"] as? [String: Any] ?? [:]
         let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
-            inbound.removeValue(forKey: "workspace")
+            agent.removeValue(forKey: "workspace")
         } else {
-            inbound["workspace"] = trimmed
+            agent["workspace"] = trimmed
         }
-        root["inbound"] = inbound
+        root["agent"] = agent
         self.saveDict(root)
     }
 }

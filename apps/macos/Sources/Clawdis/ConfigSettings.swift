@@ -66,7 +66,7 @@ struct ConfigSettings: View {
     private var header: some View {
         Text("Clawdis CLI config")
             .font(.title3.weight(.semibold))
-        Text("Edit ~/.clawdis/clawdis.json (inbound.agent / inbound.session).")
+        Text("Edit ~/.clawdis/clawdis.json (agent / inbound.session).")
             .font(.callout)
             .foregroundStyle(.secondary)
     }
@@ -274,11 +274,9 @@ struct ConfigSettings: View {
 
     private func loadConfig() {
         let parsed = self.loadConfigDict()
-        let inbound = parsed["inbound"] as? [String: Any]
-        let reply = inbound?["reply"] as? [String: Any]
-        let agent = reply?["agent"] as? [String: Any]
-        let heartbeatMinutes = reply?["heartbeatMinutes"] as? Int
-        let heartbeatBody = reply?["heartbeatBody"] as? String
+        let agent = parsed["agent"] as? [String: Any]
+        let heartbeatMinutes = agent?["heartbeatMinutes"] as? Int
+        let heartbeatBody = agent?["heartbeatBody"] as? String
         let browser = parsed["browser"] as? [String: Any]
 
         let loadedModel = (agent?["model"] as? String) ?? ""
@@ -312,9 +310,7 @@ struct ConfigSettings: View {
         defer { self.configSaving = false }
 
         var root = self.loadConfigDict()
-        var inbound = root["inbound"] as? [String: Any] ?? [:]
-        var reply = inbound["reply"] as? [String: Any] ?? [:]
-        var agent = reply["agent"] as? [String: Any] ?? [:]
+        var agent = root["agent"] as? [String: Any] ?? [:]
         var browser = root["browser"] as? [String: Any] ?? [:]
 
         let chosenModel = (self.configModel == "__custom__" ? self.customModel : self.configModel)
@@ -322,19 +318,16 @@ struct ConfigSettings: View {
         let trimmedModel = chosenModel
         if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
 
-        reply["agent"] = agent
-
         if let heartbeatMinutes {
-            reply["heartbeatMinutes"] = heartbeatMinutes
+            agent["heartbeatMinutes"] = heartbeatMinutes
         }
 
         let trimmedBody = self.heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedBody.isEmpty {
-            reply["heartbeatBody"] = trimmedBody
+            agent["heartbeatBody"] = trimmedBody
         }
 
-        inbound["reply"] = reply
-        root["inbound"] = inbound
+        root["agent"] = agent
 
         browser["enabled"] = self.browserEnabled
         let trimmedUrl = self.browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)

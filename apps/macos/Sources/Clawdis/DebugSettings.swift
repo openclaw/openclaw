@@ -682,8 +682,7 @@ struct DebugSettings: View {
             let data = try? Data(contentsOf: url),
             let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let inbound = parsed["inbound"] as? [String: Any],
-            let reply = inbound["reply"] as? [String: Any],
-            let session = reply["session"] as? [String: Any],
+            let session = inbound["session"] as? [String: Any],
             let path = session["store"] as? String
         else {
             self.sessionStorePath = SessionLoader.defaultStorePath
@@ -703,11 +702,9 @@ struct DebugSettings: View {
         }
 
         var inbound = root["inbound"] as? [String: Any] ?? [:]
-        var reply = inbound["reply"] as? [String: Any] ?? [:]
-        var session = reply["session"] as? [String: Any] ?? [:]
+        var session = inbound["session"] as? [String: Any] ?? [:]
         session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
-        reply["session"] = session
-        inbound["reply"] = reply
+        inbound["session"] = session
         root["inbound"] = inbound
 
         do {

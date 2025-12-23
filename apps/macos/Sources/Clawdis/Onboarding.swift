@@ -881,8 +881,8 @@ struct OnboardingView: View {
 
                             Button("Save in config") {
                                 let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-                                ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: url))
-                                self.workspaceStatus = "Saved to ~/.clawdis/clawdis.json (inbound.workspace)"
+                                ClawdisConfigFile.setAgentWorkspace(AgentWorkspace.displayPath(for: url))
+                                self.workspaceStatus = "Saved to ~/.clawdis/clawdis.json (agent.workspace)"
                             }
                             .buttonStyle(.bordered)
                             .disabled(self.workspaceApplying)
@@ -1268,7 +1268,7 @@ struct OnboardingView: View {
 
     private func loadWorkspaceDefaults() {
         guard self.workspacePath.isEmpty else { return }
-        let configured = ClawdisConfigFile.inboundWorkspace()
+        let configured = ClawdisConfigFile.agentWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
         self.workspacePath = AgentWorkspace.displayPath(for: url)
         self.refreshBootstrapStatus()
@@ -1276,14 +1276,14 @@ struct OnboardingView: View {
 
     private func ensureDefaultWorkspace() {
         guard self.state.connectionMode == .local else { return }
-        let configured = ClawdisConfigFile.inboundWorkspace()
+        let configured = ClawdisConfigFile.agentWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
         switch AgentWorkspace.bootstrapSafety(for: url) {
         case .safe:
             do {
                 _ = try AgentWorkspace.bootstrap(workspaceURL: url)
                 if (configured ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    ClawdisConfigFile.setInboundWorkspace(AgentWorkspace.displayPath(for: url))
+                    ClawdisConfigFile.setAgentWorkspace(AgentWorkspace.displayPath(for: url))
                 }
             } catch {
                 self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
