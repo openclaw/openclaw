@@ -99,6 +99,26 @@ async function normalizeReadImageResult(
 
 type AnyAgentTool = AgentTool<TSchema, unknown>;
 
+function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object"
+      ? (tool.parameters as Record<string, unknown>)
+      : undefined;
+  if (!schema) return tool;
+  if ("type" in schema && "properties" in schema) return tool;
+  if (!Array.isArray(schema.anyOf)) return tool;
+  return {
+    ...tool,
+    parameters: {
+      ...schema,
+      type: "object",
+      properties: schema.properties ?? {},
+      additionalProperties:
+        "additionalProperties" in schema ? schema.additionalProperties : true,
+    } as TSchema,
+  };
+}
+
 function createWhatsAppLoginTool(): AnyAgentTool {
   return {
     label: "WhatsApp Login",
@@ -206,5 +226,7 @@ export function createClawdisCodingTools(): AnyAgentTool[] {
         ? createClawdisBashTool(tool)
         : (tool as AnyAgentTool),
   );
-  return [...base, createWhatsAppLoginTool(), ...createClawdisTools()];
+  return [...base, createWhatsAppLoginTool(), ...createClawdisTools()].map(
+    normalizeToolParameters,
+  );
 }
