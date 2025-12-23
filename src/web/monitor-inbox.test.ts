@@ -110,7 +110,11 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith(
       "[redacted-email]",
       { text: "pong" },
-      { quoted: expect.objectContaining({ key: { id: "abc" } }) },
+      {
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({ id: "abc" }),
+        }),
+      },
     );
 
     await listener.close();
@@ -194,7 +198,11 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith(
       "[redacted-email]",
       { text: "pong" },
-      { quoted: expect.objectContaining({ key: { id: "abc" } }) },
+      {
+        quoted: expect.objectContaining({
+          key: expect.objectContaining({ id: "abc" }),
+        }),
+      },
     );
 
     await listener.close();
