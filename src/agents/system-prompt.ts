@@ -4,6 +4,7 @@ export function buildAgentSystemPromptAppend(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
+  ownerNumbers?: string[];
   runtimeInfo?: {
     host?: string;
     os?: string;
@@ -18,6 +19,13 @@ export function buildAgentSystemPromptAppend(params: {
       : "Default thinking level: off.";
 
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const ownerNumbers = (params.ownerNumbers ?? [])
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const ownerLine =
+    ownerNumbers.length > 0
+      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user (Peter).`
+      : undefined;
   const runtimeInfo = params.runtimeInfo;
   const runtimeLines: string[] = [];
   if (runtimeInfo?.host) runtimeLines.push(`Host: ${runtimeInfo.host}`);
@@ -49,6 +57,9 @@ export function buildAgentSystemPromptAppend(params: {
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
     "",
+    ownerLine ? "## User Identity" : "",
+    ownerLine ?? "",
+    ownerLine ? "" : "",
     "## Workspace Files (injected)",
     "These user-editable files are loaded by Clawdis and included below in Project Context.",
     "",

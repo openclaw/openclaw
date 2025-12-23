@@ -885,6 +885,7 @@ export async function getReplyFromConfig(
       skillsSnapshot,
       prompt: commandBody,
       extraSystemPrompt: groupIntro || undefined,
+      ownerNumbers: ownerList.length > 0 ? ownerList : undefined,
       provider,
       model,
       thinkLevel: resolvedThinkLevel,
