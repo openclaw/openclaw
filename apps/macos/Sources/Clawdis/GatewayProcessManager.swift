@@ -166,38 +166,95 @@ final class GatewayProcessManager {
     /// If successful, mark status as attached and skip spawning a new process.
     private func attachExistingGatewayIfAvailable() async -> Bool {
         let port = GatewayEnvironment.gatewayPort()
-        do {
-            let data = try await GatewayConnection.shared.requestRaw(method: .health, timeoutMs: 2000)
-            let snap = decodeHealthSnapshot(from: data)
+        let instance = await PortGuardian.shared.describe(port: port)
+        let instanceText = instance.map { describe(instance: $0) }
+        let hasListener = instance != nil
 
-            let instance = await PortGuardian.shared.describe(port: port)
-            let instanceText: String
-            if let instance {
-                let path = instance.executablePath ?? "path unknown"
-                instanceText = "pid \(instance.pid) \(instance.command) @ \(path)"
-            } else {
-                instanceText = "pid unknown"
-            }
-
-            let details: String
-            if let snap {
-                let linked = snap.web.linked ? "linked" : "not linked"
-                let authAge = snap.web.authAgeMs.flatMap(msToAge) ?? "unknown age"
-                details = "port \(port), \(linked), auth \(authAge), \(instanceText)"
-            } else {
-                details = "port \(port), health probe succeeded, \(instanceText)"
-            }
-
-            self.existingGatewayDetails = details
-            self.status = .attachedExisting(details: details)
-            self.appendLog("[gateway] using existing instance: \(details)\n")
-            self.refreshLog()
-            return true
-        } catch {
-            // No reachable gateway (or token mismatch) — fall through to spawn.
-            self.existingGatewayDetails = nil
-            return false
+        let attemptAttach = {
+            try await GatewayConnection.shared.requestRaw(method: .health, timeoutMs: 2000)
         }
+
+        for attempt in 0..<(hasListener ? 3 : 1) {
+            do {
+                let data = try await attemptAttach()
+                let snap = decodeHealthSnapshot(from: data)
+                let details = describe(details: instanceText, port: port, snap: snap)
+                self.existingGatewayDetails = details
+                self.status = .attachedExisting(details: details)
+                self.appendLog("[gateway] using existing instance: \(details)\n")
+                self.refreshLog()
+                return true
+            } catch {
+                if attempt < 2 && hasListener {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    continue
+                }
+
+                if hasListener {
+                    let reason = describeAttachFailure(error, port: port, instance: instance)
+                    self.existingGatewayDetails = instanceText
+                    self.status = .failed(reason)
+                    self.lastFailureReason = reason
+                    self.appendLog("[gateway] existing listener on port \(port) but attach failed: \(reason)\n")
+                    return true
+                }
+
+                // No reachable gateway (and no listener) — fall through to spawn.
+                self.existingGatewayDetails = nil
+                return false
+            }
+        }
+
+        self.existingGatewayDetails = nil
+        return false
+    }
+
+    private func describe(details instance: String?, port: Int, snap: HealthSnapshot?) -> String {
+        let instanceText = instance ?? "pid unknown"
+        if let snap {
+            let linked = snap.web.linked ? "linked" : "not linked"
+            let authAge = snap.web.authAgeMs.flatMap(msToAge) ?? "unknown age"
+            return "port \(port), \(linked), auth \(authAge), \(instanceText)"
+        }
+        return "port \(port), health probe succeeded, \(instanceText)"
+    }
+
+    private func describe(instance: PortGuardian.Descriptor) -> String {
+        let path = instance.executablePath ?? "path unknown"
+        return "pid \(instance.pid) \(instance.command) @ \(path)"
+    }
+
+    private func describeAttachFailure(_ error: Error, port: Int, instance: PortGuardian.Descriptor?) -> String {
+        let ns = error as NSError
+        let message = ns.localizedDescription.isEmpty ? "unknown error" : ns.localizedDescription
+        let lower = message.lowercased()
+        if isGatewayAuthFailure(error) {
+            return """
+            Gateway on port \(port) rejected auth. Set CLAWDIS_GATEWAY_TOKEN in the app \
+            to match the running gateway (or clear it on the gateway) and retry.
+            """
+        }
+        if lower.contains("protocol mismatch") {
+            return "Gateway on port \(port) is incompatible (protocol mismatch). Update the app/gateway."
+        }
+        if lower.contains("unexpected response") || lower.contains("invalid response") {
+            return "Port \(port) returned non-gateway data; another process is using it."
+        }
+        if let instance {
+            let instanceText = describe(instance: instance)
+            return "Gateway listener found on port \(port) (\(instanceText)) but health check failed: \(message)"
+        }
+        return "Gateway listener found on port \(port) but health check failed: \(message)"
+    }
+
+    private func isGatewayAuthFailure(_ error: Error) -> Bool {
+        if let urlError = error as? URLError, urlError.code == .dataNotAllowed {
+            return true
+        }
+        let ns = error as NSError
+        if ns.domain == "Gateway", ns.code == 1008 { return true }
+        let lower = ns.localizedDescription.lowercased()
+        return lower.contains("unauthorized") || lower.contains("auth")
     }
 
     private func enableLaunchdGateway() async {
