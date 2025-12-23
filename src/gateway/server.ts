@@ -1446,7 +1446,13 @@ export async function startGatewayServer(
       logWhatsApp.info("skipping provider start (no linked session)");
       return;
     }
-    logWhatsApp.info("starting provider");
+    const { e164, jid } = readWebSelfId();
+    const identity = e164
+      ? e164
+      : jid
+        ? `jid ${jid}`
+        : "unknown";
+    logWhatsApp.info(`starting provider (${identity})`);
     whatsappAbort = new AbortController();
     whatsappRuntime = {
       ...whatsappRuntime,
