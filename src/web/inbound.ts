@@ -473,7 +473,9 @@ function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   const body = extractText(quoted) ?? extractMediaPlaceholder(quoted);
   if (!body) return null;
   const senderJid = contextInfo?.participant ?? undefined;
-  const senderE164 = senderJid ? jidToE164(senderJid) ?? senderJid : undefined;
+  const senderE164 = senderJid
+    ? (jidToE164(senderJid) ?? senderJid)
+    : undefined;
   const sender = senderE164 ?? "unknown sender";
   return {
     id: contextInfo?.stanzaId ? String(contextInfo.stanzaId) : undefined,

@@ -27,8 +27,8 @@ import { splitMediaFromOutput } from "../media/parse.js";
 import { enqueueCommand } from "../process/command-queue.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveClawdisAgentDir } from "./agent-paths.js";
-import { ensureClawdisModelsJson } from "./models-config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { ensureClawdisModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
   ensureSessionHeader,

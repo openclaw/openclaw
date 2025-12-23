@@ -60,10 +60,7 @@ describe("models config", () => {
 
       await ensureClawdisModelsJson(MODELS_CONFIG);
 
-      const modelPath = path.join(
-        resolveClawdisAgentDir(),
-        "models.json",
-      );
+      const modelPath = path.join(resolveClawdisAgentDir(), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<string, { baseUrl?: string }>;

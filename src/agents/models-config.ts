@@ -1,8 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { loadConfig, type ClawdisConfig } from "../config/config.js";
-import { ensureClawdisAgentEnv, resolveClawdisAgentDir } from "./agent-paths.js";
+import { type ClawdisConfig, loadConfig } from "../config/config.js";
+import {
+  ensureClawdisAgentEnv,
+  resolveClawdisAgentDir,
+} from "./agent-paths.js";
 
 type ModelsConfig = NonNullable<ClawdisConfig["models"]>;
 
