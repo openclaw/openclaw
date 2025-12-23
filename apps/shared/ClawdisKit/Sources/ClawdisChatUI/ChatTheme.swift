@@ -22,14 +22,14 @@ enum ClawdisChatTheme {
             LinearGradient(
                 colors: [
                     Color(nsColor: .windowBackgroundColor).opacity(0.85),
-                    Color.black.opacity(0.92)
+                    Color.black.opacity(0.92),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
             RadialGradient(
                 colors: [
                     Color(nsColor: .systemOrange).opacity(0.18),
-                    .clear
+                    .clear,
                 ],
                 center: .topLeading,
                 startRadius: 40,
@@ -37,7 +37,7 @@ enum ClawdisChatTheme {
             RadialGradient(
                 colors: [
                     Color(nsColor: .systemTeal).opacity(0.16),
-                    .clear
+                    .clear,
                 ],
                 center: .topTrailing,
                 startRadius: 40,
