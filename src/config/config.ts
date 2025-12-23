@@ -311,7 +311,7 @@ const ModelDefinitionSchema = z.object({
   }),
   contextWindow: z.number().positive(),
   maxTokens: z.number().positive(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   compat: ModelCompatSchema,
 });
 
@@ -319,7 +319,7 @@ const ModelProviderSchema = z.object({
   baseUrl: z.string().min(1),
   apiKey: z.string().min(1),
   api: ModelApiSchema.optional(),
-  headers: z.record(z.string()).optional(),
+  headers: z.record(z.string(), z.string()).optional(),
   authHeader: z.boolean().optional(),
   models: z.array(ModelDefinitionSchema),
 });
@@ -327,7 +327,7 @@ const ModelProviderSchema = z.object({
 const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
-    providers: z.record(ModelProviderSchema).optional(),
+    providers: z.record(z.string(), ModelProviderSchema).optional(),
   })
   .optional();
 
