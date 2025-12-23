@@ -1,3 +1,7 @@
+packages:
+  - "."
+  - "ui"
+
 onlyBuiltDependencies:
   - '@whiskeysockets/baileys'
   - authenticate-pam

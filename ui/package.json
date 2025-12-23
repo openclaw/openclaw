@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "pnpm dlx vite@8.0.0-beta.3",
-    "build": "pnpm dlx vite@8.0.0-beta.3 build",
-    "preview": "pnpm dlx vite@8.0.0-beta.3 preview"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
   },
   "dependencies": {
     "lit": "^3.3.1"
