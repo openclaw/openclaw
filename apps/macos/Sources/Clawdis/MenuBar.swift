@@ -228,6 +228,7 @@ private final class StatusItemMouseHandlerView: NSView {
     }
 }
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
     private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "Chat")
@@ -418,6 +419,7 @@ private func isDeveloperIDSigned(bundleURL: URL) -> Bool {
     return false
 }
 
+@MainActor
 private func makeUpdaterController() -> UpdaterProviding {
     let bundleURL = Bundle.main.bundleURL
     let isBundledApp = bundleURL.pathExtension == "app"
@@ -430,6 +432,7 @@ private func makeUpdaterController() -> UpdaterProviding {
     return SparkleUpdaterController(savedAutoUpdate: savedAutoUpdate)
 }
 #else
+@MainActor
 private func makeUpdaterController() -> UpdaterProviding {
     DisabledUpdaterController()
 }
