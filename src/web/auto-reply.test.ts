@@ -134,6 +134,29 @@ describe("heartbeat helpers", () => {
     });
   });
 
+  it("strips repeated OK tails after heartbeat token", () => {
+    expect(stripHeartbeatToken("HEARTBEAT_OK_OK_OK")).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+    expect(stripHeartbeatToken("HEARTBEAT_OK_OK")).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+    expect(stripHeartbeatToken("HEARTBEAT_OK _OK")).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+    expect(stripHeartbeatToken("HEARTBEAT_OK OK")).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+    expect(stripHeartbeatToken("ALERT HEARTBEAT_OK_OK")).toEqual({
+      shouldSkip: false,
+      text: "ALERT",
+    });
+  });
+
   it("resolves heartbeat minutes with default and overrides", () => {
     const cfgBase: ClawdisConfig = {
       inbound: {},
