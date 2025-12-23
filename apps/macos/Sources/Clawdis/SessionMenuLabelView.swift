@@ -30,14 +30,14 @@ struct SessionMenuLabelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ContextUsageBar(
-                usedTokens: row.tokens.total,
-                contextTokens: row.tokens.contextTokens,
+                usedTokens: self.row.tokens.total,
+                contextTokens: self.row.tokens.contextTokens,
                 width: max(1, self.width - (self.paddingLeading + self.paddingTrailing)),
                 height: self.barHeight)
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(row.key)
-                    .font(.caption.weight(row.key == "main" ? .semibold : .regular))
+                Text(self.row.key)
+                    .font(.caption.weight(self.row.key == "main" ? .semibold : .regular))
                     .foregroundStyle(self.primaryTextColor)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -45,7 +45,7 @@ struct SessionMenuLabelView: View {
 
                 Spacer(minLength: 8)
 
-                Text(row.tokens.contextSummaryShort)
+                Text(self.row.tokens.contextSummaryShort)
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(self.secondaryTextColor)
                     .lineLimit(1)

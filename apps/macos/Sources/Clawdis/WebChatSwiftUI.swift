@@ -314,12 +314,11 @@ final class WebChatSwiftUIWindowController {
         effectView.autoresizingMask = [.width, .height]
         effectView.wantsLayer = true
         effectView.layer?.cornerCurve = .continuous
-        let cornerRadius: CGFloat
-        switch presentation {
+        let cornerRadius: CGFloat = switch presentation {
         case .panel:
-            cornerRadius = 16
+            16
         case .window:
-            cornerRadius = 12
+            12
         }
         effectView.layer?.cornerRadius = cornerRadius
         effectView.layer?.masksToBounds = true
@@ -336,7 +335,7 @@ final class WebChatSwiftUIWindowController {
             hosting.view.leadingAnchor.constraint(equalTo: effectView.leadingAnchor),
             hosting.view.trailingAnchor.constraint(equalTo: effectView.trailingAnchor),
             hosting.view.topAnchor.constraint(equalTo: effectView.topAnchor),
-            hosting.view.bottomAnchor.constraint(equalTo: effectView.bottomAnchor)
+            hosting.view.bottomAnchor.constraint(equalTo: effectView.bottomAnchor),
         ])
 
         return controller

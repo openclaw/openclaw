@@ -36,8 +36,8 @@ enum AnthropicAuthMode: Equatable {
 enum AnthropicAuthResolver {
     static func resolve(
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        oauthStatus: ClawdisOAuthStore.AnthropicOAuthStatus = ClawdisOAuthStore.anthropicOAuthStatus()
-    ) -> AnthropicAuthMode
+        oauthStatus: ClawdisOAuthStore.AnthropicOAuthStatus = ClawdisOAuthStore
+            .anthropicOAuthStatus()) -> AnthropicAuthMode
     {
         if oauthStatus.isConnected { return .oauthFile }
 

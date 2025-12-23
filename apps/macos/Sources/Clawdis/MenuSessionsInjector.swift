@@ -131,7 +131,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         var cursor = insertIndex + 1
         if rows.isEmpty {
-            menu.insertItem(self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width), at: cursor)
+            menu.insertItem(
+                self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
+                at: cursor)
             return
         }
 
@@ -234,7 +236,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
            !sessionId.isEmpty
         {
             menu.addItem(NSMenuItem.separator())
-            let openLog = NSMenuItem(title: "Open Session Log", action: #selector(self.openSessionLog(_:)), keyEquivalent: "")
+            let openLog = NSMenuItem(
+                title: "Open Session Log",
+                action: #selector(self.openSessionLog(_:)),
+                keyEquivalent: "")
             openLog.target = self
             openLog.representedObject = [
                 "sessionId": sessionId,
@@ -250,7 +255,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         reset.representedObject = row.key
         menu.addItem(reset)
 
-        let compact = NSMenuItem(title: "Compact Session Log", action: #selector(self.compactSession(_:)), keyEquivalent: "")
+        let compact = NSMenuItem(
+            title: "Compact Session Log",
+            action: #selector(self.compactSession(_:)),
+            keyEquivalent: "")
         compact.target = self
         compact.representedObject = row.key
         menu.addItem(compact)

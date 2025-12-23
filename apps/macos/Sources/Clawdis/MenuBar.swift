@@ -384,8 +384,8 @@ final class SparkleUpdaterController: NSObject, UpdaterProviding, SPUUpdaterDele
         _ updater: SPUUpdater,
         userDidMakeChoice choice: SPUUserUpdateChoice,
         forUpdate updateItem: SUAppcastItem,
-        state: SPUUserUpdateState
-    ) {
+        state: SPUUserUpdateState)
+    {
         switch choice {
         case .install, .skip:
             self.updateStatus.isUpdateReady = false

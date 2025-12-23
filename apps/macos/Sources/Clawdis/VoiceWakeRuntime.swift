@@ -150,7 +150,8 @@ actor VoiceWakeRuntime {
                 guard let self else { return }
                 let transcript = result?.bestTranscription.formattedString
                 let segments = result.flatMap { result in
-                    transcript.map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
+                    transcript
+                        .map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
                 } ?? []
                 let isFinal = result?.isFinal ?? false
                 Task { await self.handleRecognition(
@@ -477,13 +478,13 @@ actor VoiceWakeRuntime {
         triggers: [String]) -> String
     {
         guard let triggerEndTime else {
-            return trimmedAfterTrigger(transcript, triggers: triggers)
+            return self.trimmedAfterTrigger(transcript, triggers: triggers)
         }
         let trimmed = WakeWordGate.commandText(
             transcript: transcript,
             segments: segments,
             triggerEndTime: triggerEndTime)
-        return trimmed.isEmpty ? trimmedAfterTrigger(transcript, triggers: triggers) : trimmed
+        return trimmed.isEmpty ? self.trimmedAfterTrigger(transcript, triggers: triggers) : trimmed
     }
 
     #if DEBUG
