@@ -272,6 +272,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.showsStateColumn = true
         let levels: [String] = ["off", "minimal", "low", "medium", "high"]
+        let current = levels.contains(row.thinkingLevel ?? "") ? row.thinkingLevel ?? "off" : "off"
         for level in levels {
             let title = level.capitalized
             let item = NSMenuItem(title: title, action: #selector(self.patchThinking(_:)), keyEquivalent: "")
@@ -280,7 +281,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 "key": row.key,
                 "value": level as Any,
             ]
-            item.state = (row.thinkingLevel == level) ? .on : .off
+            item.state = (current == level) ? .on : .off
             menu.addItem(item)
         }
         return menu
@@ -291,6 +292,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         menu.autoenablesItems = false
         menu.showsStateColumn = true
         let levels: [String] = ["on", "off"]
+        let current = levels.contains(row.verboseLevel ?? "") ? row.verboseLevel ?? "off" : "off"
         for level in levels {
             let title = level.capitalized
             let item = NSMenuItem(title: title, action: #selector(self.patchVerbose(_:)), keyEquivalent: "")
@@ -299,7 +301,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 "key": row.key,
                 "value": level as Any,
             ]
-            item.state = (row.verboseLevel == level) ? .on : .off
+            item.state = (current == level) ? .on : .off
             menu.addItem(item)
         }
         return menu
