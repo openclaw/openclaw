@@ -187,10 +187,13 @@ export async function getReplyFromConfig(
     await triggerTyping();
   };
   let typingTimer: NodeJS.Timeout | undefined;
-  const typingIntervalMs =
-    (agentCfg?.typingIntervalSeconds ??
-      sessionCfg?.typingIntervalSeconds ??
-      8) * 1000;
+  const configuredTypingSeconds =
+    agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
+  const typingIntervalSeconds =
+    typeof configuredTypingSeconds === "number"
+      ? configuredTypingSeconds
+      : 6;
+  const typingIntervalMs = typingIntervalSeconds * 1000;
   const cleanupTyping = () => {
     if (typingTimer) {
       clearInterval(typingTimer);
@@ -656,9 +659,6 @@ export async function getReplyFromConfig(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const shouldEagerType = !isGroupChat || wasMentioned;
-  if (shouldEagerType) {
-    await startTypingLoop();
-  }
   const shouldInjectGroupIntro =
     isGroupChat &&
     (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro);
@@ -876,6 +876,9 @@ export async function getReplyFromConfig(
   }
 
   try {
+    if (shouldEagerType) {
+      await startTypingLoop();
+    }
     const runId = crypto.randomUUID();
     const runResult = await runEmbeddedPiAgent({
       sessionId: sessionIdFinal,
@@ -936,7 +939,7 @@ export async function getReplyFromConfig(
       return false;
     });
     if (shouldSignalTyping) {
-      await onReplyStart();
+      await startTypingLoop();
     }
 
     if (sessionStore && sessionKey) {
