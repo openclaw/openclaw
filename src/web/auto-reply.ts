@@ -852,7 +852,11 @@ export async function monitorWebProvider(
       : `group:${conversationId}`;
     const store = loadSessionStore(sessionStorePath);
     const entry = store[key];
-    return normalizeGroupActivation(entry?.groupActivation) ?? "mention";
+    const requireMention = cfg.inbound?.groupChat?.requireMention;
+    const defaultActivation = requireMention === false ? "always" : "mention";
+    return (
+      normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation
+    );
   };
 
   const resolveOwnerList = (selfE164?: string | null) => {

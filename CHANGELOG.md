@@ -12,6 +12,7 @@
 - WhatsApp send now preserves existing JIDs (including group `@g.us`) instead of coercing to `@s.whatsapp.net`. (Thanks @arun-8687.)
 - Telegram/WhatsApp: native replies now target the original inbound message; reply context is appended to `Body` and captured in `ReplyTo*` fields. (Thanks @joshp123 for the PR and follow-up question.)
 - WhatsApp web creds persistence hardened; credentials are restored before auth checks and QR login auto-restarts if it stalls.
+- Group chats now honor `inbound.groupChat.requireMention=false` as the default activation when no per-group override exists.
 - Canvas defaults/A2UI auto-nav aligned; debug status overlay centered; redundant await removed in `CanvasManager`.
 - Gateway launchd loop fixed by removing redundant `kickstart -k`.
 - CLI now hints when Peekaboo is unauthorized.

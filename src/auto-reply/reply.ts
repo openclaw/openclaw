@@ -326,6 +326,11 @@ export async function getReplyFromConfig(
   sessionCtx.Body = verboseCleaned;
   sessionCtx.BodyStripped = verboseCleaned;
 
+  const defaultGroupActivation = () => {
+    const requireMention = cfg.inbound?.groupChat?.requireMention;
+    return requireMention === false ? "always" : "mention";
+  };
+
   const isGroup =
     typeof ctx.From === "string" &&
     (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
@@ -647,7 +652,7 @@ export async function getReplyFromConfig(
       ? (() => {
           const activation =
             normalizeGroupActivation(sessionEntry?.groupActivation) ??
-            "mention";
+            defaultGroupActivation();
           const subject = sessionCtx.GroupSubject?.trim();
           const members = sessionCtx.GroupMembers?.trim();
           const subjectLine = subject
