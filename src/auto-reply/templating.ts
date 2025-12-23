@@ -3,6 +3,9 @@ export type MsgContext = {
   From?: string;
   To?: string;
   MessageSid?: string;
+  ReplyToId?: string;
+  ReplyToBody?: string;
+  ReplyToSender?: string;
   MediaPath?: string;
   MediaUrl?: string;
   MediaType?: string;

@@ -6,13 +6,16 @@ const useSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
 const sendChatActionSpy = vi.fn();
+const sendMessageSpy = vi.fn(async () => ({ message_id: 77 }));
 type ApiStub = {
   config: { use: (arg: unknown) => void };
   sendChatAction: typeof sendChatActionSpy;
+  sendMessage: typeof sendMessageSpy;
 };
 const apiStub: ApiStub = {
   config: { use: useSpy },
   sendChatAction: sendChatActionSpy,
+  sendMessage: sendMessageSpy,
 };
 
 vi.mock("grammy", () => ({
@@ -106,5 +109,71 @@ describe("createTelegramBot", () => {
     });
 
     expect(sendChatActionSpy).toHaveBeenCalledWith(42, "typing");
+  });
+
+  it("includes reply-to context when a Telegram reply is received", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Sure, see below",
+        date: 1736380800,
+        reply_to_message: {
+          message_id: 9001,
+          text: "Can you summarize this?",
+          from: { first_name: "Ada" },
+        },
+      },
+      me: { username: "clawdis_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).not.toContain("Reply to Ada: Can you summarize this?");
+    expect(payload.ReplyToId).toBe("9001");
+    expect(payload.ReplyToBody).toBe("Can you summarize this?");
+    expect(payload.ReplyToSender).toBe("Ada");
+  });
+
+  it("sends replies as native replies without chaining", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockResolvedValue({ text: "a".repeat(4500) });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: 5, type: "private" },
+        text: "hi",
+        date: 1736380800,
+        message_id: 101,
+      },
+      me: { username: "clawdis_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
+    for (const call of sendMessageSpy.mock.calls) {
+      expect(call[2]?.reply_to_message_id).toBe(101);
+    }
   });
 });

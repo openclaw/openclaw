@@ -11,8 +11,7 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, logVerbose } from "../globals.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { danger, isVerbose, logVerbose } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { detectMime } from "../media/mime.js";
@@ -117,6 +116,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         opts.token,
         opts.proxyFetch,
       );
+      const replyTarget = describeReplyTarget(msg);
       const rawBody = (
         msg.text ??
         msg.caption ??
@@ -124,7 +124,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ""
       ).trim();
       if (!rawBody) return;
-
       const body = formatAgentEnvelope({
         surface: "Telegram",
         from: isGroup
@@ -143,11 +142,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         SenderName: buildSenderName(msg),
         Surface: "telegram",
         MessageSid: String(msg.message_id),
+        ReplyToId: replyTarget?.id,
+        ReplyToBody: replyTarget?.body,
+        ReplyToSender: replyTarget?.sender,
         Timestamp: msg.date ? msg.date * 1000 : undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
       };
+
+      if (replyTarget && isVerbose()) {
+        const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);
+        logVerbose(
+          `telegram reply-context: replyToId=${replyTarget.id} replyToSender=${replyTarget.sender} replyToBody="${preview}"`,
+        );
+      }
 
       if (!isGroup) {
         const sessionCfg = cfg.inbound?.session;
@@ -161,7 +170,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         });
       }
 
-      if (logVerbose()) {
+      if (isVerbose()) {
         const preview = body.slice(0, 200).replace(/\n/g, "\\n");
         logVerbose(
           `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
@@ -186,6 +195,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         token: opts.token,
         runtime,
         bot,
+        replyToMessageId: msg.message_id,
       });
     } catch (err) {
       runtime.error?.(danger(`Telegram handler failed: ${String(err)}`));
@@ -208,8 +218,10 @@ async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
+  replyToMessageId?: number;
 }) {
   const { replies, chatId, runtime, bot } = params;
+  const replyTarget = params.replyToMessageId;
   for (const reply of replies) {
     if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
       runtime.error?.(danger("Telegram reply missing text/media"));
@@ -220,9 +232,14 @@ async function deliverReplies(params: {
       : reply.mediaUrl
         ? [reply.mediaUrl]
         : [];
+    if (replyTarget && isVerbose()) {
+      logVerbose(
+        `telegram reply-send: chatId=${chatId} replyToMessageId=${replyTarget} kind=${mediaList.length ? "media" : "text"}`,
+      );
+    }
     if (mediaList.length === 0) {
       for (const chunk of chunkText(reply.text || "", 4000)) {
-        await sendTelegramText(bot, chatId, chunk, runtime);
+        await sendTelegramText(bot, chatId, chunk, runtime, replyTarget);
       }
       continue;
     }
@@ -234,14 +251,18 @@ async function deliverReplies(params: {
       const file = new InputFile(media.buffer, media.fileName ?? "file");
       const caption = first ? (reply.text ?? undefined) : undefined;
       first = false;
+      const replyOpts = replyTarget ? { reply_to_message_id: replyTarget } : {};
       if (kind === "image") {
-        await bot.api.sendPhoto(chatId, file, { caption });
+        await bot.api.sendPhoto(chatId, file, { caption, ...replyOpts });
       } else if (kind === "video") {
-        await bot.api.sendVideo(chatId, file, { caption });
+        await bot.api.sendVideo(chatId, file, { caption, ...replyOpts });
       } else if (kind === "audio") {
-        await bot.api.sendAudio(chatId, file, { caption });
+        await bot.api.sendAudio(chatId, file, { caption, ...replyOpts });
       } else {
-        await bot.api.sendDocument(chatId, file, { caption });
+        await bot.api.sendDocument(chatId, file, {
+          caption,
+          ...replyOpts,
+        });
       }
     }
   }
@@ -338,18 +359,47 @@ async function sendTelegramText(
   chatId: string,
   text: string,
   runtime: RuntimeEnv,
-) {
+  replyToMessageId?: number,
+): Promise<number | undefined> {
   try {
-    await bot.api.sendMessage(chatId, text, { parse_mode: "Markdown" });
+    const res = await bot.api.sendMessage(chatId, text, {
+      parse_mode: "Markdown",
+      reply_to_message_id: replyToMessageId,
+    });
+    return res.message_id;
   } catch (err) {
-    const errText = formatErrorMessage(err);
-    if (PARSE_ERR_RE.test(errText)) {
+    if (PARSE_ERR_RE.test(String(err ?? ""))) {
       runtime.log?.(
-        `telegram markdown parse failed; retrying without formatting: ${errText}`,
+        `telegram markdown parse failed; retrying without formatting: ${String(
+          err,
+        )}`,
       );
-      await bot.api.sendMessage(chatId, text);
-      return;
+      const res = await bot.api.sendMessage(chatId, text, {
+        reply_to_message_id: replyToMessageId,
+      });
+      return res.message_id;
     }
     throw err;
   }
+}
+
+function describeReplyTarget(msg: TelegramMessage) {
+  const reply = msg.reply_to_message as TelegramMessage | undefined;
+  if (!reply) return null;
+  const replyBody = (reply.text ?? reply.caption ?? "").trim();
+  let body = replyBody;
+  if (!body) {
+    if (reply.photo) body = "<media:image>";
+    else if (reply.video) body = "<media:video>";
+    else if (reply.audio || reply.voice) body = "<media:audio>";
+    else if (reply.document) body = "<media:document>";
+  }
+  if (!body) return null;
+  const sender = buildSenderName(reply);
+  const senderLabel = sender ? `${sender}` : "unknown sender";
+  return {
+    id: reply.message_id ? String(reply.message_id) : undefined,
+    sender: senderLabel,
+    body,
+  };
 }
