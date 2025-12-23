@@ -23,6 +23,7 @@ import {
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdisConfig } from "../config/config.js";
+import { getMachineDisplayName } from "../infra/machine-name.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { enqueueCommand } from "../process/command-queue.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -323,11 +324,20 @@ export async function runEmbeddedPiAgent(params: {
       const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
       const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
       const tools = createClawdisCodingTools();
+      const machineName = await getMachineDisplayName();
+      const runtimeInfo = {
+        host: machineName,
+        os: `${os.type()} ${os.release()}`,
+        arch: os.arch(),
+        node: process.version,
+        model: `${provider}/${modelId}`,
+      };
       const systemPrompt = buildSystemPrompt({
         appendPrompt: buildAgentSystemPromptAppend({
           workspaceDir: resolvedWorkspace,
           defaultThinkLevel: params.thinkLevel,
           extraSystemPrompt: params.extraSystemPrompt,
+          runtimeInfo,
         }),
         contextFiles,
         skills: promptSkills,

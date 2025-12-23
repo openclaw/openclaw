@@ -4,6 +4,13 @@ export function buildAgentSystemPromptAppend(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
+  runtimeInfo?: {
+    host?: string;
+    os?: string;
+    arch?: string;
+    node?: string;
+    model?: string;
+  };
 }) {
   const thinkHint =
     params.defaultThinkLevel && params.defaultThinkLevel !== "off"
@@ -11,6 +18,17 @@ export function buildAgentSystemPromptAppend(params: {
       : "Default thinking level: off.";
 
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
+  const runtimeInfo = params.runtimeInfo;
+  const runtimeLines: string[] = [];
+  if (runtimeInfo?.host) runtimeLines.push(`Host: ${runtimeInfo.host}`);
+  if (runtimeInfo?.os) {
+    const archSuffix = runtimeInfo.arch ? ` (${runtimeInfo.arch})` : "";
+    runtimeLines.push(`OS: ${runtimeInfo.os}${archSuffix}`);
+  } else if (runtimeInfo?.arch) {
+    runtimeLines.push(`Arch: ${runtimeInfo.arch}`);
+  }
+  if (runtimeInfo?.node) runtimeLines.push(`Node: ${runtimeInfo.node}`);
+  if (runtimeInfo?.model) runtimeLines.push(`Model: ${runtimeInfo.model}`);
 
   const lines = [
     "You are Clawd, a personal assistant running inside Clawdis.",
@@ -51,6 +69,7 @@ export function buildAgentSystemPromptAppend(params: {
     'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
     "",
     "## Runtime",
+    ...runtimeLines,
     thinkHint,
   );
 
