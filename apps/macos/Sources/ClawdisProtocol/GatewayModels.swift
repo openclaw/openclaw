@@ -588,20 +588,71 @@ public struct SessionsPatchParams: Codable {
     public let key: String
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
+    public let groupactivation: AnyCodable?
 
     public init(
         key: String,
         thinkinglevel: AnyCodable?,
-        verboselevel: AnyCodable?
+        verboselevel: AnyCodable?,
+        groupactivation: AnyCodable?
     ) {
         self.key = key
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
+        self.groupactivation = groupactivation
     }
     private enum CodingKeys: String, CodingKey {
         case key
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
+        case groupactivation = "groupActivation"
+    }
+}
+
+public struct SessionsResetParams: Codable {
+    public let key: String
+
+    public init(
+        key: String
+    ) {
+        self.key = key
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+    }
+}
+
+public struct SessionsDeleteParams: Codable {
+    public let key: String
+    public let deletetranscript: Bool?
+
+    public init(
+        key: String,
+        deletetranscript: Bool?
+    ) {
+        self.key = key
+        self.deletetranscript = deletetranscript
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case deletetranscript = "deleteTranscript"
+    }
+}
+
+public struct SessionsCompactParams: Codable {
+    public let key: String
+    public let maxlines: Int?
+
+    public init(
+        key: String,
+        maxlines: Int?
+    ) {
+        self.key = key
+        self.maxlines = maxlines
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case maxlines = "maxLines"
     }
 }
 
