@@ -1,5 +1,0 @@
----
-triple:          'arm64-apple-darwin'
-binary-path:     '/Users/steipete/Projects/clawdis/apps/shared/ClawdisKit/.build/arm64-apple-macosx/debug/ClawdisKitPackageTests.xctest/Contents/MacOS/ClawdisKitPackageTests'
-relocations:     []
-...
