@@ -167,7 +167,7 @@ final class GatewayProcessManager {
     private func attachExistingGatewayIfAvailable() async -> Bool {
         let port = GatewayEnvironment.gatewayPort()
         let instance = await PortGuardian.shared.describe(port: port)
-        let instanceText = instance.map { describe(instance: $0) }
+        let instanceText = instance.map { self.describe(instance: $0) }
         let hasListener = instance != nil
 
         let attemptAttach = {
@@ -178,20 +178,20 @@ final class GatewayProcessManager {
             do {
                 let data = try await attemptAttach()
                 let snap = decodeHealthSnapshot(from: data)
-                let details = describe(details: instanceText, port: port, snap: snap)
+                let details = self.describe(details: instanceText, port: port, snap: snap)
                 self.existingGatewayDetails = details
                 self.status = .attachedExisting(details: details)
                 self.appendLog("[gateway] using existing instance: \(details)\n")
                 self.refreshLog()
                 return true
             } catch {
-                if attempt < 2 && hasListener {
+                if attempt < 2, hasListener {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     continue
                 }
 
                 if hasListener {
-                    let reason = describeAttachFailure(error, port: port, instance: instance)
+                    let reason = self.describeAttachFailure(error, port: port, instance: instance)
                     self.existingGatewayDetails = instanceText
                     self.status = .failed(reason)
                     self.lastFailureReason = reason
@@ -228,7 +228,7 @@ final class GatewayProcessManager {
         let ns = error as NSError
         let message = ns.localizedDescription.isEmpty ? "unknown error" : ns.localizedDescription
         let lower = message.lowercased()
-        if isGatewayAuthFailure(error) {
+        if self.isGatewayAuthFailure(error) {
             return """
             Gateway on port \(port) rejected auth. Set CLAWDIS_GATEWAY_TOKEN in the app \
             to match the running gateway (or clear it on the gateway) and retry.
@@ -241,7 +241,7 @@ final class GatewayProcessManager {
             return "Port \(port) returned non-gateway data; another process is using it."
         }
         if let instance {
-            let instanceText = describe(instance: instance)
+            let instanceText = self.describe(instance: instance)
             return "Gateway listener found on port \(port) (\(instanceText)) but health check failed: \(message)"
         }
         return "Gateway listener found on port \(port) but health check failed: \(message)"
