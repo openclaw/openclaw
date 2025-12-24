@@ -84,7 +84,14 @@ struct OnboardingView: View {
     private let anthropicAuthPageIndex = 2
     private let onboardingChatPageIndex = 8
 
-    private static let clipboardPoll = Timer.publish(every: 0.4, on: .main, in: .common).autoconnect()
+    private static let clipboardPoll: AnyPublisher<Date, Never> = {
+        if ProcessInfo.processInfo.isRunningTests {
+            return Empty(completeImmediately: false).eraseToAnyPublisher()
+        }
+        return Timer.publish(every: 0.4, on: .main, in: .common)
+            .autoconnect()
+            .eraseToAnyPublisher()
+    }()
     private let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
@@ -1418,3 +1425,85 @@ private struct GlowingClawdisIcon: View {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+extension OnboardingView {
+    static func exerciseForTesting() {
+        let state = AppState(preview: true)
+        let discovery = GatewayDiscoveryModel()
+        discovery.statusText = "Searching..."
+        let gateway = GatewayDiscoveryModel.DiscoveredGateway(
+            displayName: "Test Bridge",
+            lanHost: "bridge.local",
+            tailnetDns: "bridge.ts.net",
+            sshPort: 2222,
+            cliPath: "/usr/local/bin/clawdis",
+            stableID: "bridge-1",
+            debugID: "bridge-1",
+            isLocal: false)
+        discovery.gateways = [gateway]
+
+        var view = OnboardingView(
+            state: state,
+            permissionMonitor: PermissionMonitor.shared,
+            discoveryModel: discovery)
+        view.needsBootstrap = true
+        view.localGatewayProbe = LocalGatewayProbe(
+            port: 18789,
+            pid: 123,
+            command: "clawdis-gateway",
+            expected: true)
+        view.showAdvancedConnection = true
+        view.preferredGatewayID = gateway.stableID
+        view.cliInstalled = true
+        view.cliInstallLocation = "/usr/local/bin/clawdis"
+        view.cliStatus = "Installed"
+        view.workspacePath = "/tmp/clawdis"
+        view.workspaceStatus = "Saved workspace"
+        view.anthropicAuthPKCE = AnthropicOAuth.PKCE(verifier: "verifier", challenge: "challenge")
+        view.anthropicAuthCode = "code#state"
+        view.anthropicAuthStatus = "Connected"
+        view.anthropicAuthDetectedStatus = .connected(expiresAtMs: 1_700_000_000_000)
+        view.anthropicAuthConnected = true
+        view.anthropicAuthAutoDetectClipboard = false
+        view.anthropicAuthAutoConnectClipboard = false
+
+        view.state.connectionMode = .local
+        _ = view.welcomePage()
+        _ = view.connectionPage()
+        _ = view.anthropicAuthPage()
+        _ = view.permissionsPage()
+        _ = view.cliPage()
+        _ = view.workspacePage()
+        _ = view.onboardingChatPage()
+        _ = view.readyPage()
+
+        view.selectLocalGateway()
+        view.selectRemoteGateway(gateway)
+        view.selectUnconfiguredGateway()
+
+        view.state.connectionMode = .remote
+        _ = view.connectionPage()
+        _ = view.workspacePage()
+
+        view.state.connectionMode = .unconfigured
+        _ = view.connectionPage()
+
+        view.currentPage = 0
+        view.handleNext()
+        view.handleBack()
+
+        _ = view.onboardingPage { Text("Test") }
+        _ = view.onboardingCard { Text("Card") }
+        _ = view.featureRow(title: "Feature", subtitle: "Subtitle", systemImage: "sparkles")
+        _ = view.featureActionRow(
+            title: "Action",
+            subtitle: "Action subtitle",
+            systemImage: "gearshape",
+            action: {})
+        _ = view.gatewaySubtitle(for: gateway)
+        _ = view.isSelectedGateway(gateway)
+    }
+}
+#endif
