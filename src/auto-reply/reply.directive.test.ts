@@ -106,10 +106,10 @@ describe("directive parsing", () => {
             model: "claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: { store: path.join(home, "sessions.json") },
           },
+          session: { store: path.join(home, "sessions.json") },
         },
       );
 
@@ -134,9 +134,7 @@ describe("directive parsing", () => {
             model: "claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          inbound: {
-            session: { store: path.join(home, "sessions.json") },
-          },
+          session: { store: path.join(home, "sessions.json") },
         },
       );
 
@@ -189,10 +187,10 @@ describe("directive parsing", () => {
             model: "claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: { store: storePath },
           },
+          session: { store: storePath },
         },
       );
 
@@ -251,10 +249,10 @@ describe("directive parsing", () => {
             model: "claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: { store: storePath },
           },
+          session: { store: storePath },
         },
       );
 
@@ -284,9 +282,7 @@ describe("directive parsing", () => {
               "openai/gpt-4.1-mini",
             ],
           },
-          inbound: {
-            session: { store: storePath },
-          },
+          session: { store: storePath },
         },
       );
 
@@ -313,9 +309,7 @@ describe("directive parsing", () => {
             workspace: path.join(home, "clawd"),
             allowedModels: ["openai/gpt-4.1-mini"],
           },
-          inbound: {
-            session: { store: storePath },
-          },
+          session: { store: storePath },
         },
       );
 
@@ -354,10 +348,10 @@ describe("directive parsing", () => {
             workspace: path.join(home, "clawd"),
             allowedModels: ["openai/gpt-4.1-mini"],
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: { store: storePath },
           },
+          session: { store: storePath },
         },
       );
 

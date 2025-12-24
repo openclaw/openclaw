@@ -32,7 +32,7 @@ describe("getHealthSnapshot", () => {
   });
 
   it("skips telegram probe when not configured", async () => {
-    testConfig = { inbound: { reply: { session: { store: "/tmp/x" } } } };
+    testConfig = { session: { store: "/tmp/x" } };
     testStore = {
       global: { updatedAt: Date.now() },
       unknown: { updatedAt: Date.now() },

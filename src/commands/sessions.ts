@@ -156,7 +156,7 @@ export async function sessionsCommand(
     lookupContextTokens(cfg.agent?.model) ??
     DEFAULT_CONTEXT_TOKENS;
   const configModel = cfg.agent?.model ?? DEFAULT_MODEL;
-  const storePath = resolveStorePath(opts.store ?? cfg.inbound?.session?.store);
+  const storePath = resolveStorePath(opts.store ?? cfg.session?.store);
   const store = loadSessionStore(storePath);
 
   let activeMinutes: number | undefined;

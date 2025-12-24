@@ -66,7 +66,7 @@ struct ConfigSettings: View {
     private var header: some View {
         Text("Clawdis CLI config")
             .font(.title3.weight(.semibold))
-        Text("Edit ~/.clawdis/clawdis.json (agent / inbound.session).")
+        Text("Edit ~/.clawdis/clawdis.json (agent / session / routing / messages).")
             .font(.callout)
             .foregroundStyle(.secondary)
     }

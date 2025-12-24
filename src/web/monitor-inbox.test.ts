@@ -10,8 +10,10 @@ vi.mock("../media/store.js", () => ({
 }));
 
 const mockLoadConfig = vi.fn().mockReturnValue({
-  inbound: {
+  routing: {
     allowFrom: ["*"], // Allow all in tests by default
+  },
+  messages: {
     messagePrefix: undefined,
     responsePrefix: undefined,
     timestampPrefix: false,
@@ -411,8 +413,10 @@ describe("web monitor inbox", () => {
 
   it("still forwards group messages (with sender info) even when allowFrom is restrictive", async () => {
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["+111"], // does not include +777
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -465,8 +469,10 @@ describe("web monitor inbox", () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["+111"], // Only allow +111
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -503,8 +509,10 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -516,9 +524,11 @@ describe("web monitor inbox", () => {
 
   it("skips read receipts in self-chat mode", async () => {
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         // Self-chat heuristic: allowFrom includes selfE164 (+123).
         allowFrom: ["+123"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -551,8 +561,10 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -564,8 +576,10 @@ describe("web monitor inbox", () => {
 
   it("lets group messages through even when sender not in allowFrom", async () => {
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["+1234"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -604,8 +618,10 @@ describe("web monitor inbox", () => {
 
   it("allows messages from senders in allowFrom list", async () => {
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["+111", "+999"], // Allow +999
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -637,8 +653,10 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -652,8 +670,10 @@ describe("web monitor inbox", () => {
     // Same-phone mode: when from === selfJid, should always be allowed
     // This allows users to message themselves even with restrictive allowFrom
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["+111"], // Only allow +111, but self is +123
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -686,8 +706,10 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -751,8 +773,10 @@ it("defaults to self-only when no config is present", async () => {
 
   // Reset mock for other tests
   mockLoadConfig.mockReturnValue({
-    inbound: {
+    routing: {
       allowFrom: ["*"],
+    },
+    messages: {
       messagePrefix: undefined,
       responsePrefix: undefined,
       timestampPrefix: false,

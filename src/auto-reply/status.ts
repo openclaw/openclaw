@@ -16,7 +16,7 @@ import {
 } from "../config/sessions.js";
 import type { ThinkLevel, VerboseLevel } from "./thinking.js";
 
-type AgentConfig = NonNullable<ClawdisConfig["inbound"]>["agent"];
+type AgentConfig = NonNullable<ClawdisConfig["agent"]>;
 
 type StatusArgs = {
   agent: AgentConfig;

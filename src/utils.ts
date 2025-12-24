@@ -33,7 +33,7 @@ export function normalizeE164(number: string): string {
 
 /**
  * "Self-chat mode" heuristic (single phone): the gateway is logged in as the owner's own WhatsApp account,
- * and `inbound.allowFrom` includes that same number. Used to avoid side-effects that make no sense when the
+ * and `routing.allowFrom` includes that same number. Used to avoid side-effects that make no sense when the
  * "bot" and the human are the same WhatsApp identity (e.g. auto read receipts, @mention JID triggers).
  */
 export function isSelfChatMode(

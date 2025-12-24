@@ -46,7 +46,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 function mockConfig(
   home: string,
   storePath: string,
-  inboundOverrides?: Partial<NonNullable<ClawdisConfig["inbound"]>>,
+  routingOverrides?: Partial<NonNullable<ClawdisConfig["routing"]>>,
 ) {
   configSpy.mockReturnValue({
     agent: {
@@ -54,10 +54,8 @@ function mockConfig(
       model: "claude-opus-4-5",
       workspace: path.join(home, "clawd"),
     },
-    inbound: {
-      session: { store: storePath, mainKey: "main" },
-      ...inboundOverrides,
-    },
+    session: { store: storePath, mainKey: "main" },
+    routing: routingOverrides ? { ...routingOverrides } : undefined,
   });
 }
 

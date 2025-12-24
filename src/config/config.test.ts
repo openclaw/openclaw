@@ -36,7 +36,8 @@ describe("config identity defaults", () => {
         JSON.stringify(
           {
             identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" },
-            inbound: {},
+            messages: {},
+            routing: {},
           },
           null,
           2,
@@ -48,8 +49,8 @@ describe("config identity defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.inbound?.responsePrefix).toBe("🦥");
-      expect(cfg.inbound?.groupChat?.mentionPatterns).toEqual([
+      expect(cfg.messages?.responsePrefix).toBe("🦥");
+      expect(cfg.routing?.groupChat?.mentionPatterns).toEqual([
         "\\b@?Samantha\\b",
       ]);
     });
@@ -68,8 +69,10 @@ describe("config identity defaults", () => {
               theme: "space lobster",
               emoji: "🦞",
             },
-            inbound: {
+            messages: {
               responsePrefix: "✅",
+            },
+            routing: {
               groupChat: { mentionPatterns: ["@clawd"] },
             },
           },
@@ -83,8 +86,8 @@ describe("config identity defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.inbound?.responsePrefix).toBe("✅");
-      expect(cfg.inbound?.groupChat?.mentionPatterns).toEqual(["@clawd"]);
+      expect(cfg.messages?.responsePrefix).toBe("✅");
+      expect(cfg.routing?.groupChat?.mentionPatterns).toEqual(["@clawd"]);
     });
   });
 
@@ -97,7 +100,8 @@ describe("config identity defaults", () => {
         JSON.stringify(
           {
             identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" },
-            inbound: {},
+            messages: {},
+            routing: {},
           },
           null,
           2,
@@ -109,12 +113,12 @@ describe("config identity defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.inbound?.responsePrefix).toBe("🦥");
-      expect(cfg.inbound?.groupChat?.mentionPatterns).toEqual([
+      expect(cfg.messages?.responsePrefix).toBe("🦥");
+      expect(cfg.routing?.groupChat?.mentionPatterns).toEqual([
         "\\b@?Samantha\\b",
       ]);
       expect(cfg.agent).toBeUndefined();
-      expect(cfg.inbound?.session).toBeUndefined();
+      expect(cfg.session).toBeUndefined();
     });
   });
 });

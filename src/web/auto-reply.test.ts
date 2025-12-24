@@ -158,9 +158,7 @@ describe("heartbeat helpers", () => {
   });
 
   it("resolves heartbeat minutes with default and overrides", () => {
-    const cfgBase: ClawdisConfig = {
-      inbound: {},
-    };
+    const cfgBase: ClawdisConfig = {};
     expect(resolveReplyHeartbeatMinutes(cfgBase)).toBe(30);
     expect(
       resolveReplyHeartbeatMinutes({
@@ -183,10 +181,10 @@ describe("resolveHeartbeatRecipients", () => {
       main: { updatedAt: now, lastChannel: "whatsapp", lastTo: "+1000" },
     });
     const cfg: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["+1999"],
-        session: { store: store.storePath },
       },
+      session: { store: store.storePath },
     };
     const result = resolveHeartbeatRecipients(cfg);
     expect(result.source).toBe("session-single");
@@ -201,10 +199,10 @@ describe("resolveHeartbeatRecipients", () => {
       alt: { updatedAt: now - 10, lastChannel: "whatsapp", lastTo: "+2000" },
     });
     const cfg: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["+1999"],
-        session: { store: store.storePath },
       },
+      session: { store: store.storePath },
     };
     const result = resolveHeartbeatRecipients(cfg);
     expect(result.source).toBe("session-ambiguous");
@@ -215,10 +213,10 @@ describe("resolveHeartbeatRecipients", () => {
   it("filters wildcard allowFrom when no sessions exist", async () => {
     const store = await makeSessionStore({});
     const cfg: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["*"],
-        session: { store: store.storePath },
       },
+      session: { store: store.storePath },
     };
     const result = resolveHeartbeatRecipients(cfg);
     expect(result.recipients).toHaveLength(0);
@@ -232,10 +230,10 @@ describe("resolveHeartbeatRecipients", () => {
       main: { updatedAt: now, lastChannel: "whatsapp", lastTo: "+1000" },
     });
     const cfg: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["+1999"],
-        session: { store: store.storePath },
       },
+      session: { store: store.storePath },
     };
     const result = resolveHeartbeatRecipients(cfg, { all: true });
     expect(result.source).toBe("all");
@@ -253,7 +251,7 @@ describe("partial reply gating", () => {
     const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
 
     const mockConfig: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["*"],
       },
     };
@@ -300,10 +298,10 @@ describe("partial reply gating", () => {
     const replyResolver = vi.fn().mockResolvedValue(undefined);
 
     const mockConfig: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["*"],
-        session: { store: store.storePath, mainKey: "main" },
       },
+      session: { store: store.storePath, mainKey: "main" },
     };
 
     setLoadConfigMock(mockConfig);
@@ -391,10 +389,10 @@ describe("runWebHeartbeatOnce", () => {
     const resolver = vi.fn(async () => ({ text: HEARTBEAT_TOKEN }));
     await runWebHeartbeatOnce({
       cfg: {
-        inbound: {
+        routing: {
           allowFrom: ["+1555"],
-          session: { store: store.storePath },
         },
+        session: { store: store.storePath },
       },
       to: "+1555",
       verbose: false,
@@ -414,10 +412,10 @@ describe("runWebHeartbeatOnce", () => {
     const resolver = vi.fn(async () => ({ text: "ALERT" }));
     await runWebHeartbeatOnce({
       cfg: {
-        inbound: {
+        routing: {
           allowFrom: ["+1555"],
-          session: { store: store.storePath },
         },
+        session: { store: store.storePath },
       },
       to: "+1555",
       verbose: false,
@@ -443,10 +441,10 @@ describe("runWebHeartbeatOnce", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionEntries));
     await runWebHeartbeatOnce({
       cfg: {
-        inbound: {
+        routing: {
           allowFrom: ["+1999"],
-          session: { store: storePath },
         },
+        session: { store: storePath },
       },
       to: "+1999",
       verbose: false,
@@ -472,13 +470,13 @@ describe("runWebHeartbeatOnce", () => {
     const sender: typeof sendMessageWhatsApp = vi.fn();
     const resolver = vi.fn(async () => ({ text: HEARTBEAT_TOKEN }));
     setLoadConfigMock({
-      inbound: {
+      routing: {
         allowFrom: ["+1555"],
-        session: {
-          store: storePath,
-          idleMinutes: 60,
-          heartbeatIdleMinutes: 10,
-        },
+      },
+      session: {
+        store: storePath,
+        idleMinutes: 60,
+        heartbeatIdleMinutes: 10,
       },
     });
 
@@ -509,19 +507,19 @@ describe("runWebHeartbeatOnce", () => {
 
     setLoadConfigMock(() => ({
       agent: { heartbeatMinutes: 0.001 },
-      inbound: {
+      routing: {
         allowFrom: ["+4367"],
-        session: { store: storePath, idleMinutes: 60 },
       },
+      session: { store: storePath, idleMinutes: 60 },
     }));
 
     const replyResolver = vi.fn().mockResolvedValue({ text: HEARTBEAT_TOKEN });
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never;
     const cfg: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["+4367"],
-        session: { store: storePath, idleMinutes: 60 },
       },
+      session: { store: storePath, idleMinutes: 60 },
     };
 
     await runWebHeartbeatOnce({
@@ -547,18 +545,18 @@ describe("runWebHeartbeatOnce", () => {
 
     const sessionId = "override-123";
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["+1999"],
-        session: { store: storePath, idleMinutes: 60 },
       },
+      session: { store: storePath, idleMinutes: 60 },
     }));
 
     const resolver = vi.fn(async () => ({ text: HEARTBEAT_TOKEN }));
     const cfg: ClawdisConfig = {
-      inbound: {
+      routing: {
         allowFrom: ["+1999"],
-        session: { store: storePath, idleMinutes: 60 },
       },
+      session: { store: storePath, idleMinutes: 60 },
     };
     await runWebHeartbeatOnce({
       cfg,
@@ -586,10 +584,10 @@ describe("runWebHeartbeatOnce", () => {
     const resolver = vi.fn();
     await runWebHeartbeatOnce({
       cfg: {
-        inbound: {
+        routing: {
           allowFrom: ["+1555"],
-          session: { store: store.storePath },
         },
+        session: { store: store.storePath },
       },
       to: "+1555",
       verbose: false,
@@ -610,10 +608,10 @@ describe("runWebHeartbeatOnce", () => {
     const resolver = vi.fn();
     await runWebHeartbeatOnce({
       cfg: {
-        inbound: {
+        routing: {
           allowFrom: ["+1555"],
-          session: { store: store.storePath },
         },
+        session: { store: store.storePath },
       },
       to: "+1555",
       verbose: false,
@@ -762,10 +760,10 @@ describe("web auto-reply", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never;
 
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["+1555"],
-        session: { store: storePath },
       },
+      session: { store: storePath },
     }));
 
     const controller = new AbortController();
@@ -820,11 +818,11 @@ describe("web auto-reply", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as never;
 
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["+1555"],
         groupChat: { requireMention: true, mentionPatterns: ["@clawd"] },
-        session: { store: store.storePath },
       },
+      session: { store: store.storePath },
     }));
 
     const controller = new AbortController();
@@ -921,10 +919,10 @@ describe("web auto-reply", () => {
       };
 
       setLoadConfigMock(() => ({
-        inbound: {
+        messages: {
           timestampPrefix: "UTC",
-          session: { store: store.storePath },
         },
+        session: { store: store.storePath },
       }));
 
       await monitorWebProvider(false, listenerFactory, false, resolver);
@@ -1473,10 +1471,10 @@ describe("web auto-reply", () => {
     });
 
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         groupChat: { mentionPatterns: ["@clawd"] },
-        session: { store: storePath },
       },
+      session: { store: storePath },
     }));
 
     let capturedOnMessage:
@@ -1547,7 +1545,7 @@ describe("web auto-reply", () => {
     const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         // Self-chat heuristic: allowFrom includes selfE164.
         allowFrom: ["+999"],
         groupChat: {
@@ -1697,8 +1695,10 @@ describe("web auto-reply", () => {
   it("prefixes body with same-phone marker when from === to", async () => {
     // Enable messagePrefix for same-phone mode testing
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: "[same-phone]",
         responsePrefix: undefined,
         timestampPrefix: false,
@@ -1820,8 +1820,10 @@ describe("web auto-reply", () => {
 
   it("applies responsePrefix to regular replies", async () => {
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
         timestampPrefix: false,
@@ -1863,8 +1865,10 @@ describe("web auto-reply", () => {
 
   it("skips responsePrefix for HEARTBEAT_OK responses", async () => {
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
         timestampPrefix: false,
@@ -1907,8 +1911,10 @@ describe("web auto-reply", () => {
 
   it("does not double-prefix if responsePrefix already present", async () => {
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
         timestampPrefix: false,
@@ -1951,8 +1957,10 @@ describe("web auto-reply", () => {
 
   it("sends tool summaries immediately with responsePrefix", async () => {
     setLoadConfigMock(() => ({
-      inbound: {
+      routing: {
         allowFrom: ["*"],
+      },
+      messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
         timestampPrefix: false,

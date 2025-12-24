@@ -45,7 +45,6 @@ export async function setupCommand(
 
   const existingRaw = await readConfigFileRaw();
   const cfg = existingRaw.parsed;
-  const inbound = cfg.inbound ?? {};
   const agent = cfg.agent ?? {};
 
   const workspace =

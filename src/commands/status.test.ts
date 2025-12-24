@@ -32,7 +32,7 @@ vi.mock("../web/session.js", () => ({
   logWebSelfId: mocks.logWebSelfId,
 }));
 vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({ inbound: { reply: { session: {} } } }),
+  loadConfig: () => ({ session: {} }),
 }));
 
 import { statusCommand } from "./status.js";

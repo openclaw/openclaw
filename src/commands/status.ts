@@ -66,7 +66,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
     lookupContextTokens(configModel) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  const storePath = resolveStorePath(cfg.inbound?.session?.store);
+  const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const now = Date.now();
   const sessions = Object.entries(store)

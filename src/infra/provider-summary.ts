@@ -33,8 +33,8 @@ export async function buildProviderSummary(
       : chalk.cyan("Telegram: not configured"),
   );
 
-  const allowFrom = effective.inbound?.allowFrom?.length
-    ? effective.inbound.allowFrom.map(normalizeE164).filter(Boolean)
+  const allowFrom = effective.routing?.allowFrom?.length
+    ? effective.routing.allowFrom.map(normalizeE164).filter(Boolean)
     : [];
   if (allowFrom.length) {
     lines.push(chalk.cyan(`AllowFrom: ${allowFrom.join(", ")}`));

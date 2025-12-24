@@ -7,8 +7,10 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({
-    inbound: {
+    routing: {
       allowFrom: ["*"], // Allow all in tests
+    },
+    messages: {
       messagePrefix: undefined,
       responsePrefix: undefined,
       timestampPrefix: false,

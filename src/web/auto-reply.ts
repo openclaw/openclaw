@@ -113,7 +113,7 @@ type MentionConfig = {
 };
 
 function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
-  const gc = cfg.inbound?.groupChat;
+  const gc = cfg.routing?.groupChat;
   const mentionRegexes =
     gc?.mentionPatterns
       ?.map((p) => {
@@ -124,7 +124,7 @@ function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
         }
       })
       .filter((r): r is RegExp => Boolean(r)) ?? [];
-  return { mentionRegexes, allowFrom: cfg.inbound?.allowFrom };
+  return { mentionRegexes, allowFrom: cfg.routing?.allowFrom };
 }
 
 function isBotMentioned(
@@ -252,12 +252,12 @@ export async function runWebHeartbeatOnce(opts: {
   });
 
   const cfg = cfgOverride ?? loadConfig();
-  const sessionCfg = cfg.inbound?.session;
+  const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const mainKey = sessionCfg?.mainKey;
   const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
   if (sessionId) {
-    const storePath = resolveStorePath(cfg.inbound?.session?.store);
+    const storePath = resolveStorePath(cfg.session?.store);
     const store = loadSessionStore(storePath);
     const current = store[sessionKey] ?? {};
     store[sessionKey] = {
@@ -356,7 +356,7 @@ export async function runWebHeartbeatOnce(opts: {
     const stripped = stripHeartbeatToken(replyPayload.text);
     if (stripped.shouldSkip && !hasMedia) {
       // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.
-      const storePath = resolveStorePath(cfg.inbound?.session?.store);
+      const storePath = resolveStorePath(cfg.session?.store);
       const store = loadSessionStore(storePath);
       if (sessionSnapshot.entry && store[sessionSnapshot.key]) {
         store[sessionSnapshot.key].updatedAt = sessionSnapshot.entry.updatedAt;
@@ -420,7 +420,7 @@ export async function runWebHeartbeatOnce(opts: {
 }
 
 function getFallbackRecipient(cfg: ReturnType<typeof loadConfig>) {
-  const sessionCfg = cfg.inbound?.session;
+  const sessionCfg = cfg.session;
   const storePath = resolveStorePath(sessionCfg?.store);
   const store = loadSessionStore(storePath);
   const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
@@ -433,18 +433,18 @@ function getFallbackRecipient(cfg: ReturnType<typeof loadConfig>) {
   }
 
   const allowFrom =
-    Array.isArray(cfg.inbound?.allowFrom) && cfg.inbound.allowFrom.length > 0
-      ? cfg.inbound.allowFrom.filter((v) => v !== "*")
+    Array.isArray(cfg.routing?.allowFrom) && cfg.routing.allowFrom.length > 0
+      ? cfg.routing.allowFrom.filter((v) => v !== "*")
       : [];
   if (allowFrom.length === 0) return null;
   return allowFrom[0] ? normalizeE164(allowFrom[0]) : null;
 }
 
 function getSessionRecipients(cfg: ReturnType<typeof loadConfig>) {
-  const sessionCfg = cfg.inbound?.session;
+  const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   if (scope === "global") return [];
-  const storePath = resolveStorePath(cfg.inbound?.session?.store);
+  const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
     key.startsWith("group:") || key.includes("@g.us");
@@ -480,8 +480,8 @@ export function resolveHeartbeatRecipients(
 
   const sessionRecipients = getSessionRecipients(cfg);
   const allowFrom =
-    Array.isArray(cfg.inbound?.allowFrom) && cfg.inbound.allowFrom.length > 0
-      ? cfg.inbound.allowFrom.filter((v) => v !== "*").map(normalizeE164)
+    Array.isArray(cfg.routing?.allowFrom) && cfg.routing.allowFrom.length > 0
+      ? cfg.routing.allowFrom.filter((v) => v !== "*").map(normalizeE164)
       : [];
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
@@ -509,7 +509,7 @@ function getSessionSnapshot(
   from: string,
   isHeartbeat = false,
 ) {
-  const sessionCfg = cfg.inbound?.session;
+  const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const key = resolveSessionKey(
     scope,
@@ -773,9 +773,9 @@ export async function monitorWebProvider(
   );
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const mentionConfig = buildMentionConfig(cfg);
-  const sessionStorePath = resolveStorePath(cfg.inbound?.session?.store);
+  const sessionStorePath = resolveStorePath(cfg.session?.store);
   const groupHistoryLimit =
-    cfg.inbound?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    cfg.routing?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
     string,
     Array<{ sender: string; body: string; timestamp?: number }>
@@ -854,7 +854,7 @@ export async function monitorWebProvider(
       : `group:${conversationId}`;
     const store = loadSessionStore(sessionStorePath);
     const entry = store[key];
-    const requireMention = cfg.inbound?.groupChat?.requireMention;
+    const requireMention = cfg.routing?.groupChat?.requireMention;
     const defaultActivation = requireMention === false ? "always" : "mention";
     return (
       normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation
@@ -953,9 +953,9 @@ export async function monitorWebProvider(
 
     const buildLine = (msg: WebInboundMsg) => {
       // Build message prefix: explicit config > default based on allowFrom
-      let messagePrefix = cfg.inbound?.messagePrefix;
+      let messagePrefix = cfg.messages?.messagePrefix;
       if (messagePrefix === undefined) {
-        const hasAllowFrom = (cfg.inbound?.allowFrom?.length ?? 0) > 0;
+        const hasAllowFrom = (cfg.routing?.allowFrom?.length ?? 0) > 0;
         messagePrefix = hasAllowFrom ? "" : "[clawdis]";
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
@@ -1045,7 +1045,7 @@ export async function monitorWebProvider(
       }
 
       if (msg.chatType !== "group") {
-        const sessionCfg = cfg.inbound?.session;
+        const sessionCfg = cfg.session;
         const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
         const storePath = resolveStorePath(sessionCfg?.store);
         const to = (() => {
@@ -1075,7 +1075,7 @@ export async function monitorWebProvider(
         }
       }
 
-      const responsePrefix = cfg.inbound?.responsePrefix;
+      const responsePrefix = cfg.messages?.responsePrefix;
       let didSendReply = false;
       let toolSendChain: Promise<void> = Promise.resolve();
       const sendToolResult = (payload: ReplyPayload) => {
@@ -1580,7 +1580,7 @@ export async function monitorWebProvider(
 
         // Apply response prefix if configured (same as regular messages)
         let finalText = stripped.text;
-        const responsePrefix = cfg.inbound?.responsePrefix;
+        const responsePrefix = cfg.messages?.responsePrefix;
         if (
           responsePrefix &&
           finalText &&

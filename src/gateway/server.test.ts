@@ -187,10 +187,10 @@ vi.mock("../config/config.js", () => {
         model: "claude-opus-4-5",
         workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
       },
-      inbound: {
+      routing: {
         allowFrom: testAllowFrom,
-        session: { mainKey: "main", store: testSessionStorePath },
       },
+      session: { mainKey: "main", store: testSessionStorePath },
       gateway: (() => {
         const gateway: Record<string, unknown> = {};
         if (testGatewayBind) gateway.bind = testGatewayBind;

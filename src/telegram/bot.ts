@@ -162,7 +162,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
 
       if (!isGroup) {
-        const sessionCfg = cfg.inbound?.session;
+        const sessionCfg = cfg.session;
         const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
         const storePath = resolveStorePath(sessionCfg?.store);
         await updateLastRoute({

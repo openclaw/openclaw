@@ -57,9 +57,7 @@ function makeCfg(home: string, storePath: string): ClawdisConfig {
       model: "claude-opus-4-5",
       workspace: path.join(home, "clawd"),
     },
-    inbound: {
-      session: { store: storePath, mainKey: "main" },
-    },
+    session: { store: storePath, mainKey: "main" },
   } as ClawdisConfig;
 }
 

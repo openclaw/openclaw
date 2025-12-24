@@ -6,9 +6,11 @@ import { createMockBaileys } from "../../test/mocks/baileys.js";
 // Use globalThis to store the mock config so it survives vi.mock hoisting
 const CONFIG_KEY = Symbol.for("clawdis:testConfigMock");
 const DEFAULT_CONFIG = {
-  inbound: {
+  routing: {
     // Tests can override; default remains open to avoid surprising fixtures
     allowFrom: ["*"],
+  },
+  messages: {
     messagePrefix: undefined,
     responsePrefix: undefined,
     timestampPrefix: false,

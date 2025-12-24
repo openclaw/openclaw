@@ -27,7 +27,7 @@ import Testing
           "raw": null,
           "parsed": {},
           "valid": true,
-          "config": { "inbound": { "session": { "mainKey": "  primary  " } } },
+          "config": { "session": { "mainKey": "  primary  " } },
           "issues": []
         }
         """
@@ -38,7 +38,7 @@ import Testing
     @Test func configGetSnapshotMainKeyFallsBackWhenEmptyOrWhitespace() throws {
         let json = """
         {
-          "config": { "inbound": { "session": { "mainKey": "   " } } }
+          "config": { "session": { "mainKey": "   " } }
         }
         """
         let key = try GatewayConnection.mainSessionKey(fromConfigGetData: Data(json.utf8))

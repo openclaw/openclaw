@@ -63,7 +63,7 @@ function resolveDeliveryTarget(
       ? jobPayload.to.trim()
       : undefined;
 
-  const sessionCfg = cfg.inbound?.session;
+  const sessionCfg = cfg.session;
   const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
   const storePath = resolveStorePath(sessionCfg?.store);
   const store = loadSessionStore(storePath);
@@ -88,7 +88,7 @@ function resolveDeliveryTarget(
 
   const sanitizedWhatsappTo = (() => {
     if (channel !== "whatsapp") return to;
-    const rawAllow = cfg.inbound?.allowFrom ?? [];
+    const rawAllow = cfg.routing?.allowFrom ?? [];
     if (rawAllow.includes("*")) return to;
     const allowFrom = rawAllow
       .map((val) => normalizeE164(val))
@@ -111,7 +111,7 @@ function resolveCronSession(params: {
   sessionKey: string;
   nowMs: number;
 }) {
-  const sessionCfg = params.cfg.inbound?.session;
+  const sessionCfg = params.cfg.session;
   const idleMinutes = Math.max(
     sessionCfg?.idleMinutes ?? DEFAULT_IDLE_MINUTES,
     1,

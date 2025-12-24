@@ -39,10 +39,10 @@ function makeCfg(home: string) {
       model: "claude-opus-4-5",
       workspace: join(home, "clawd"),
     },
-    inbound: {
+    routing: {
       allowFrom: ["*"],
-      session: { store: join(home, "sessions.json") },
     },
+    session: { store: join(home, "sessions.json") },
   };
 }
 
@@ -119,7 +119,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Group activation set to always");
       const store = JSON.parse(
-        await fs.readFile(cfg.inbound.session.store, "utf-8"),
+        await fs.readFile(cfg.session.store, "utf-8"),
       ) as Record<string, { groupActivation?: string }>;
       expect(store["group:[redacted-email]"]?.groupActivation).toBe("always");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -172,11 +172,11 @@ describe("trigger handling", () => {
             model: "claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: { store: join(home, "sessions.json") },
             groupChat: { requireMention: false },
           },
+          session: { store: join(home, "sessions.json") },
         },
       );
 
@@ -214,11 +214,11 @@ describe("trigger handling", () => {
             model: "claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: {
-              store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
-            },
+          },
+          session: {
+            store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
           },
         },
       );
@@ -254,11 +254,11 @@ describe("trigger handling", () => {
             model: "claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          inbound: {
+          routing: {
             allowFrom: ["*"],
-            session: {
-              store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
-            },
+          },
+          session: {
+            store: join(tmpdir(), `clawdis-session-test-${Date.now()}.json`),
           },
         },
       );

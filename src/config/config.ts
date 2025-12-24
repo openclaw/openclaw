@@ -79,6 +79,22 @@ export type GroupChatConfig = {
   historyLimit?: number;
 };
 
+export type RoutingConfig = {
+  allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
+  transcribeAudio?: {
+    // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
+    command: string[];
+    timeoutSeconds?: number;
+  };
+  groupChat?: GroupChatConfig;
+};
+
+export type MessagesConfig = {
+  messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
+  responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
+  timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
+};
+
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
 
 export type BridgeConfig = {
@@ -249,19 +265,9 @@ export type ClawdisConfig = {
     /** Periodic background heartbeat runs (minutes). 0 disables. */
     heartbeatMinutes?: number;
   };
-  inbound?: {
-    allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
-    messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
-    responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
-    timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
-    transcribeAudio?: {
-      // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
-      command: string[];
-      timeoutSeconds?: number;
-    };
-    groupChat?: GroupChatConfig;
-    session?: SessionConfig;
-  };
+  routing?: RoutingConfig;
+  messages?: MessagesConfig;
+  session?: SessionConfig;
   web?: WebConfig;
   telegram?: TelegramConfig;
   cron?: CronConfig;
@@ -328,6 +334,49 @@ const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: z.record(z.string(), ModelProviderSchema).optional(),
+  })
+  .optional();
+
+const GroupChatSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+    mentionPatterns: z.array(z.string()).optional(),
+    historyLimit: z.number().int().positive().optional(),
+  })
+  .optional();
+
+const TranscribeAudioSchema = z
+  .object({
+    command: z.array(z.string()),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .optional();
+
+const SessionSchema = z
+  .object({
+    scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
+    resetTriggers: z.array(z.string()).optional(),
+    idleMinutes: z.number().int().positive().optional(),
+    heartbeatIdleMinutes: z.number().int().positive().optional(),
+    store: z.string().optional(),
+    typingIntervalSeconds: z.number().int().positive().optional(),
+    mainKey: z.string().optional(),
+  })
+  .optional();
+
+const MessagesSchema = z
+  .object({
+    messagePrefix: z.string().optional(),
+    responsePrefix: z.string().optional(),
+    timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
+  })
+  .optional();
+
+const RoutingSchema = z
+  .object({
+    allowFrom: z.array(z.string()).optional(),
+    groupChat: GroupChatSchema,
+    transcribeAudio: TranscribeAudioSchema,
   })
   .optional();
 
@@ -402,40 +451,9 @@ const ClawdisSchema = z.object({
       heartbeatMinutes: z.number().nonnegative().optional(),
     })
     .optional(),
-  inbound: z
-    .object({
-      allowFrom: z.array(z.string()).optional(),
-      messagePrefix: z.string().optional(),
-      responsePrefix: z.string().optional(),
-      timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
-      groupChat: z
-        .object({
-          requireMention: z.boolean().optional(),
-          mentionPatterns: z.array(z.string()).optional(),
-          historyLimit: z.number().int().positive().optional(),
-        })
-        .optional(),
-      transcribeAudio: z
-        .object({
-          command: z.array(z.string()),
-          timeoutSeconds: z.number().int().positive().optional(),
-        })
-        .optional(),
-      session: z
-        .object({
-          scope: z
-            .union([z.literal("per-sender"), z.literal("global")])
-            .optional(),
-          resetTriggers: z.array(z.string()).optional(),
-          idleMinutes: z.number().int().positive().optional(),
-          heartbeatIdleMinutes: z.number().int().positive().optional(),
-          store: z.string().optional(),
-          typingIntervalSeconds: z.number().int().positive().optional(),
-          mainKey: z.string().optional(),
-        })
-        .optional(),
-    })
-    .optional(),
+  routing: RoutingSchema,
+  messages: MessagesSchema,
+  session: SessionSchema,
   cron: z
     .object({
       enabled: z.boolean().optional(),
@@ -590,14 +608,15 @@ function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
   const emoji = identity.emoji?.trim();
   const name = identity.name?.trim();
 
-  const inbound = cfg.inbound ?? {};
-  const groupChat = inbound.groupChat ?? {};
+  const messages = cfg.messages ?? {};
+  const routing = cfg.routing ?? {};
+  const groupChat = routing.groupChat ?? {};
 
   let mutated = false;
   const next: ClawdisConfig = { ...cfg };
 
-  if (emoji && !inbound.responsePrefix) {
-    next.inbound = { ...inbound, responsePrefix: emoji };
+  if (emoji && !messages.responsePrefix) {
+    next.messages = { ...(next.messages ?? messages), responsePrefix: emoji };
     mutated = true;
   }
 
@@ -605,8 +624,8 @@ function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join("\\s+") : escapeRegExp(name);
     const pattern = `\\b@?${re}\\b`;
-    next.inbound = {
-      ...(next.inbound ?? inbound),
+    next.routing = {
+      ...(next.routing ?? routing),
       groupChat: { ...groupChat, mentionPatterns: [pattern] },
     };
     mutated = true;

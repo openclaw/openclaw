@@ -18,7 +18,7 @@ export async function transcribeInboundAudio(
   ctx: MsgContext,
   runtime: RuntimeEnv,
 ): Promise<{ text: string } | undefined> {
-  const transcriber = cfg.inbound?.transcribeAudio;
+  const transcriber = cfg.routing?.transcribeAudio;
   if (!transcriber?.command?.length) return undefined;
 
   const timeoutMs = Math.max((transcriber.timeoutSeconds ?? 45) * 1000, 1_000);

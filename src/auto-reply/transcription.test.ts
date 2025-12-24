@@ -38,7 +38,7 @@ describe("transcribeInboundAudio", () => {
     global.fetch = fetchMock;
 
     const cfg = {
-      inbound: {
+      routing: {
         transcribeAudio: {
           command: ["echo", "{{MediaPath}}"],
           timeoutSeconds: 5,
@@ -58,7 +58,7 @@ describe("transcribeInboundAudio", () => {
 
   it("returns undefined when no transcription command", async () => {
     const res = await transcribeInboundAudio(
-      { inbound: {} } as never,
+      { routing: {} } as never,
       {} as never,
       runtime as never,
     );

@@ -55,7 +55,7 @@ export async function getHealthSnapshot(
   const linked = await webAuthExists();
   const authAgeMs = getWebAuthAgeMs();
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
-  const storePath = resolveStorePath(cfg.inbound?.session?.store);
+  const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const sessions = Object.entries(store)
     .filter(([key]) => key !== "global" && key !== "unknown")

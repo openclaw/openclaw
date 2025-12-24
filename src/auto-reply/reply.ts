@@ -137,7 +137,7 @@ function stripMentions(
   cfg: ClawdisConfig | undefined,
 ): string {
   let result = text;
-  const patterns = cfg?.inbound?.groupChat?.mentionPatterns ?? [];
+  const patterns = cfg?.routing?.groupChat?.mentionPatterns ?? [];
   for (const p of patterns) {
     try {
       const re = new RegExp(p, "gi");
@@ -166,7 +166,7 @@ export async function getReplyFromConfig(
   const cfg = configOverride ?? loadConfig();
   const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const agentCfg = cfg.agent;
-  const sessionCfg = cfg.inbound?.session;
+  const sessionCfg = cfg.session;
 
   const defaultProvider = agentCfg?.provider?.trim() || DEFAULT_PROVIDER;
   const defaultModel = agentCfg?.model?.trim() || DEFAULT_MODEL;
@@ -227,7 +227,7 @@ export async function getReplyFromConfig(
   let transcribedText: string | undefined;
 
   // Optional audio transcription before templating/session handling.
-  if (cfg.inbound?.transcribeAudio && isAudio(ctx.MediaType)) {
+  if (cfg.routing?.transcribeAudio && isAudio(ctx.MediaType)) {
     const transcribed = await transcribeInboundAudio(cfg, ctx, defaultRuntime);
     if (transcribed?.text) {
       transcribedText = transcribed.text;
@@ -361,7 +361,7 @@ export async function getReplyFromConfig(
   sessionCtx.BodyStripped = modelCleaned;
 
   const defaultGroupActivation = () => {
-    const requireMention = cfg.inbound?.groupChat?.requireMention;
+    const requireMention = cfg.routing?.groupChat?.requireMention;
     return requireMention === false ? "always" : "mention";
   };
 
@@ -611,7 +611,7 @@ export async function getReplyFromConfig(
   }
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)
-  const configuredAllowFrom = cfg.inbound?.allowFrom;
+  const configuredAllowFrom = cfg.routing?.allowFrom;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const isSamePhone = from && to && from === to;

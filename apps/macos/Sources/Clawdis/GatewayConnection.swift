@@ -287,15 +287,11 @@ actor GatewayConnection {
 extension GatewayConnection {
     struct ConfigGetSnapshot: Decodable, Sendable {
         struct SnapshotConfig: Decodable, Sendable {
-            struct Inbound: Decodable, Sendable {
-                struct Session: Decodable, Sendable {
-                    let mainKey: String?
-                }
-
-                let session: Session?
+            struct Session: Decodable, Sendable {
+                let mainKey: String?
             }
 
-            let inbound: Inbound?
+            let session: Session?
         }
 
         let config: SnapshotConfig?
@@ -303,7 +299,7 @@ extension GatewayConnection {
 
     static func mainSessionKey(fromConfigGetData data: Data) throws -> String {
         let snapshot = try JSONDecoder().decode(ConfigGetSnapshot.self, from: data)
-        let raw = snapshot.config?.inbound?.session?.mainKey
+        let raw = snapshot.config?.session?.mainKey
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "main" : trimmed
     }
