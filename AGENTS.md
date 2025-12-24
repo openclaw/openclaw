@@ -16,7 +16,7 @@
 - Language: TypeScript (ESM). Prefer strict typing; avoid `any`.
 - Formatting/linting via Biome; run `pnpm lint` before commits.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
-- Keep every file ≤ 500 LOC; refactor or split before exceeding and check frequently.
+- Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
 
 ## Testing Guidelines
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
