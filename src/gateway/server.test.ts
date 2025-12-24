@@ -3711,4 +3711,83 @@ describe("gateway server", () => {
     expect(peekSystemEvents().length).toBe(0);
     await server.close();
   });
+
+  test("hooks wake accepts x-clawdis-token header", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-clawdis-token": "hook-secret",
+      },
+      body: JSON.stringify({ text: "Header auth" }),
+    });
+    expect(res.status).toBe(200);
+    const events = await waitForSystemEvent();
+    expect(events.some((e) => e.includes("Header auth"))).toBe(true);
+    drainSystemEvents();
+    await server.close();
+  });
+
+  test("hooks rejects non-post", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+      method: "GET",
+      headers: { Authorization: "Bearer hook-secret" },
+    });
+    expect(res.status).toBe(405);
+    await server.close();
+  });
+
+  test("hooks wake requires text", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: JSON.stringify({ text: " " }),
+    });
+    expect(res.status).toBe(400);
+    await server.close();
+  });
+
+  test("hooks agent requires message", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: JSON.stringify({ message: " " }),
+    });
+    expect(res.status).toBe(400);
+    await server.close();
+  });
+
+  test("hooks rejects invalid json", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: "{",
+    });
+    expect(res.status).toBe(400);
+    await server.close();
+  });
 });
