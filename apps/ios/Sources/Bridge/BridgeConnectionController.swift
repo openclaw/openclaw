@@ -231,3 +231,39 @@ final class BridgeConnectionController {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
     }
 }
+
+#if DEBUG
+extension BridgeConnectionController {
+    func _test_makeHello(token: String) -> BridgeHello {
+        self.makeHello(token: token)
+    }
+
+    func _test_resolvedDisplayName(defaults: UserDefaults) -> String {
+        self.resolvedDisplayName(defaults: defaults)
+    }
+
+    func _test_currentCaps() -> [String] {
+        self.currentCaps()
+    }
+
+    func _test_currentCommands() -> [String] {
+        self.currentCommands()
+    }
+
+    func _test_platformString() -> String {
+        self.platformString()
+    }
+
+    func _test_deviceFamily() -> String {
+        self.deviceFamily()
+    }
+
+    func _test_modelIdentifier() -> String {
+        self.modelIdentifier()
+    }
+
+    func _test_appVersion() -> String {
+        self.appVersion()
+    }
+}
+#endif
