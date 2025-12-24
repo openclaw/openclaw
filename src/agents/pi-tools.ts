@@ -99,6 +99,41 @@ async function normalizeReadImageResult(
 
 type AnyAgentTool = AgentTool<TSchema, unknown>;
 
+function extractEnumValues(schema: unknown): unknown[] | undefined {
+  if (!schema || typeof schema !== "object") return undefined;
+  const record = schema as Record<string, unknown>;
+  if (Array.isArray(record.enum)) return record.enum;
+  if ("const" in record) return [record.const];
+  return undefined;
+}
+
+function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
+  if (!existing) return incoming;
+  if (!incoming) return existing;
+
+  const existingEnum = extractEnumValues(existing);
+  const incomingEnum = extractEnumValues(incoming);
+  if (existingEnum || incomingEnum) {
+    const values = Array.from(
+      new Set([...(existingEnum ?? []), ...(incomingEnum ?? [])]),
+    );
+    const merged: Record<string, unknown> = {};
+    for (const source of [existing, incoming]) {
+      if (!source || typeof source !== "object") continue;
+      const record = source as Record<string, unknown>;
+      for (const key of ["title", "description", "default"]) {
+        if (!(key in merged) && key in record) merged[key] = record[key];
+      }
+    }
+    const types = new Set(values.map((value) => typeof value));
+    if (types.size === 1) merged.type = Array.from(types)[0];
+    merged.enum = values;
+    return merged;
+  }
+
+  return existing;
+}
+
 function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
   const schema =
     tool.parameters && typeof tool.parameters === "object"
@@ -119,7 +154,14 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
     for (const [key, value] of Object.entries(
       props as Record<string, unknown>,
     )) {
-      if (!(key in mergedProperties)) mergedProperties[key] = value;
+      if (!(key in mergedProperties)) {
+        mergedProperties[key] = value;
+        continue;
+      }
+      mergedProperties[key] = mergePropertySchemas(
+        mergedProperties[key],
+        value,
+      );
     }
     const required = Array.isArray((entry as { required?: unknown }).required)
       ? (entry as { required: unknown[] }).required
