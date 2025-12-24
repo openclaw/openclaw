@@ -12,6 +12,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, isVerbose, logVerbose } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { detectMime } from "../media/mime.js";
@@ -371,11 +372,10 @@ async function sendTelegramText(
     });
     return res.message_id;
   } catch (err) {
-    if (PARSE_ERR_RE.test(String(err ?? ""))) {
+    const errText = formatErrorMessage(err);
+    if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(
-        `telegram markdown parse failed; retrying without formatting: ${String(
-          err,
-        )}`,
+        `telegram markdown parse failed; retrying without formatting: ${errText}`,
       );
       const res = await bot.api.sendMessage(chatId, text, {
         reply_to_message_id: replyToMessageId,
@@ -387,7 +387,7 @@ async function sendTelegramText(
 }
 
 function describeReplyTarget(msg: TelegramMessage) {
-  const reply = msg.reply_to_message as TelegramMessage | undefined;
+  const reply = msg.reply_to_message;
   if (!reply) return null;
   const replyBody = (reply.text ?? reply.caption ?? "").trim();
   let body = replyBody;
