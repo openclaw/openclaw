@@ -19,16 +19,19 @@ enum ClawdisChatTheme {
     static var background: some View {
         #if os(macOS)
         ZStack {
+            Rectangle()
+                .fill(.ultraThinMaterial)
             LinearGradient(
                 colors: [
-                    Color(nsColor: .windowBackgroundColor).opacity(0.85),
-                    Color.black.opacity(0.92),
+                    Color.white.opacity(0.12),
+                    Color(nsColor: .windowBackgroundColor).opacity(0.35),
+                    Color.black.opacity(0.35),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
             RadialGradient(
                 colors: [
-                    Color(nsColor: .systemOrange).opacity(0.18),
+                    Color(nsColor: .systemOrange).opacity(0.14),
                     .clear,
                 ],
                 center: .topLeading,
@@ -36,13 +39,13 @@ enum ClawdisChatTheme {
                 endRadius: 320)
             RadialGradient(
                 colors: [
-                    Color(nsColor: .systemTeal).opacity(0.16),
+                    Color(nsColor: .systemTeal).opacity(0.12),
                     .clear,
                 ],
                 center: .topTrailing,
                 startRadius: 40,
                 endRadius: 280)
-            Color.black.opacity(0.12)
+            Color.black.opacity(0.08)
         }
         #else
         Color(uiColor: .systemBackground)

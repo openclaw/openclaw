@@ -141,6 +141,7 @@ public struct ClawdisChatMessage: Codable, Identifiable, Sendable {
     public let content: [ClawdisChatMessageContent]
     public let timestamp: Double?
     public let toolCallId: String?
+    public let toolName: String?
     public let usage: ClawdisChatUsage?
     public let stopReason: String?
 
@@ -150,6 +151,8 @@ public struct ClawdisChatMessage: Codable, Identifiable, Sendable {
         case timestamp
         case toolCallId
         case tool_call_id
+        case toolName
+        case tool_name
         case usage
         case stopReason
     }
@@ -160,6 +163,7 @@ public struct ClawdisChatMessage: Codable, Identifiable, Sendable {
         content: [ClawdisChatMessageContent],
         timestamp: Double?,
         toolCallId: String? = nil,
+        toolName: String? = nil,
         usage: ClawdisChatUsage? = nil,
         stopReason: String? = nil)
     {
@@ -168,6 +172,7 @@ public struct ClawdisChatMessage: Codable, Identifiable, Sendable {
         self.content = content
         self.timestamp = timestamp
         self.toolCallId = toolCallId
+        self.toolName = toolName
         self.usage = usage
         self.stopReason = stopReason
     }
@@ -179,6 +184,9 @@ public struct ClawdisChatMessage: Codable, Identifiable, Sendable {
         self.toolCallId =
             try container.decodeIfPresent(String.self, forKey: .toolCallId) ??
             container.decodeIfPresent(String.self, forKey: .tool_call_id)
+        self.toolName =
+            try container.decodeIfPresent(String.self, forKey: .toolName) ??
+            container.decodeIfPresent(String.self, forKey: .tool_name)
         self.usage = try container.decodeIfPresent(ClawdisChatUsage.self, forKey: .usage)
         self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
 
@@ -213,6 +221,7 @@ public struct ClawdisChatMessage: Codable, Identifiable, Sendable {
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.timestamp, forKey: .timestamp)
         try container.encodeIfPresent(self.toolCallId, forKey: .toolCallId)
+        try container.encodeIfPresent(self.toolName, forKey: .toolName)
         try container.encodeIfPresent(self.usage, forKey: .usage)
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
         try container.encode(self.content, forKey: .content)

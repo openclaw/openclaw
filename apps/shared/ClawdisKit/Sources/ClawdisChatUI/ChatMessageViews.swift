@@ -159,12 +159,21 @@ private struct ChatMessageBody: View {
         let textColor = self.isUser ? ClawdisChatTheme.userText : ClawdisChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
-            ForEach(split.blocks) { block in
-                switch block.kind {
-                case .text:
-                    MarkdownTextView(text: block.text, textColor: textColor)
-                case let .code(language):
-                    CodeBlockView(code: block.text, language: language, isUser: self.isUser)
+            if self.isToolResultMessage {
+                if !text.isEmpty {
+                    ToolResultCard(
+                        title: self.toolResultTitle,
+                        text: text,
+                        isUser: self.isUser)
+                }
+            } else {
+                ForEach(split.blocks) { block in
+                    switch block.kind {
+                    case .text:
+                        MarkdownTextView(text: block.text, textColor: textColor)
+                    case let .code(language):
+                        CodeBlockView(code: block.text, language: language, isUser: self.isUser)
+                    }
                 }
             }
 
@@ -195,6 +204,14 @@ private struct ChatMessageBody: View {
                     AttachmentRow(att: self.inlineAttachments[idx], isUser: self.isUser)
                 }
             }
+
+            if !self.toolCalls.isEmpty {
+                ForEach(self.toolCalls.indices, id: \.self) { idx in
+                    ToolCallCard(
+                        content: self.toolCalls[idx],
+                        isUser: self.isUser)
+                }
+            }
         }
         .textSelection(.enabled)
         .padding(.vertical, 10)
@@ -214,7 +231,36 @@ private struct ChatMessageBody: View {
     }
 
     private var inlineAttachments: [ClawdisChatMessageContent] {
-        self.message.content.filter { ($0.type ?? "text") != "text" }
+        self.message.content.filter { content in
+            switch content.type ?? "text" {
+            case "file", "attachment":
+                return true
+            default:
+                return false
+            }
+        }
+    }
+
+    private var toolCalls: [ClawdisChatMessageContent] {
+        self.message.content.filter { content in
+            let kind = (content.type ?? "").lowercased()
+            if ["toolcall", "tool_call", "tooluse", "tool_use"].contains(kind) {
+                return true
+            }
+            return content.name != nil && content.arguments != nil
+        }
+    }
+
+    private var isToolResultMessage: Bool {
+        let role = self.message.role.lowercased()
+        return role == "toolresult" || role == "tool_result"
+    }
+
+    private var toolResultTitle: String {
+        if let name = self.message.toolName, !name.isEmpty {
+            return name
+        }
+        return "Tool result"
     }
 
     private var bubbleFillColor: Color {
@@ -297,6 +343,139 @@ private struct AttachmentRow: View {
         .padding(10)
         .background(self.isUser ? Color.white.opacity(0.2) : Color.black.opacity(0.04))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct ToolCallCard: View {
+    let content: ClawdisChatMessageContent
+    let isUser: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "hammer")
+                    .imageScale(.small)
+                Text(self.toolName)
+                    .font(.footnote.weight(.semibold))
+                Spacer(minLength: 0)
+            }
+
+            if let summary = self.summary, !summary.isEmpty {
+                Text(summary)
+                    .font(.footnote.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(ClawdisChatTheme.subtleCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private var toolName: String {
+        self.content.name?.isEmpty == false ? (self.content.name ?? "Tool") : "Tool"
+    }
+
+    private var summary: String? {
+        guard let args = self.content.arguments else { return nil }
+        if let dict = args.value as? [String: AnyCodable] {
+            if let command = dict["command"]?.value as? String { return command }
+            if let path = dict["path"]?.value as? String { return path }
+            if let pattern = dict["pattern"]?.value as? String { return pattern }
+            if let query = dict["query"]?.value as? String { return query }
+            if let url = dict["url"]?.value as? String { return url }
+            return Self.renderArgs(dict)
+        }
+        return Self.renderValue(args)
+    }
+
+    private static func renderArgs(_ dict: [String: AnyCodable]) -> String? {
+        let keys = dict.keys.sorted()
+        let pairs = keys.prefix(6).compactMap { key -> String? in
+            guard let value = dict[key] else { return nil }
+            return "\(key)=\(renderValue(value) ?? "…")"
+        }
+        guard !pairs.isEmpty else { return nil }
+        return pairs.joined(separator: " ")
+    }
+
+    private static func renderValue(_ value: AnyCodable) -> String? {
+        switch value.value {
+        case let str as String:
+            return str
+        case let num as Int:
+            return String(num)
+        case let num as Double:
+            return String(num)
+        case let bool as Bool:
+            return bool ? "true" : "false"
+        default:
+            if let data = try? JSONEncoder().encode(value),
+               let string = String(data: data, encoding: .utf8)
+            {
+                return string
+            }
+            return nil
+        }
+    }
+}
+
+private struct ToolResultCard: View {
+    let title: String
+    let text: String
+    let isUser: Bool
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "terminal")
+                    .imageScale(.small)
+                Text(self.title)
+                    .font(.footnote.weight(.semibold))
+                Spacer(minLength: 0)
+            }
+
+            Text(self.displayText)
+                .font(.footnote.monospaced())
+                .foregroundStyle(self.isUser ? ClawdisChatTheme.userText : ClawdisChatTheme.assistantText)
+                .lineLimit(self.expanded ? nil : Self.previewLineLimit)
+
+            if self.shouldShowToggle {
+                Button(self.expanded ? "Show less" : "Show full output") {
+                    self.expanded.toggle()
+                }
+                .buttonStyle(.plain)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+        .padding(10)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(ClawdisChatTheme.subtleCard)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private static let previewLineLimit = 8
+
+    private var lines: [Substring] {
+        self.text.components(separatedBy: .newlines).map { Substring($0) }
+    }
+
+    private var displayText: String {
+        guard !self.expanded, self.lines.count > Self.previewLineLimit else { return self.text }
+        return self.lines.prefix(Self.previewLineLimit).joined(separator: "\n") + "\n…"
+    }
+
+    private var shouldShowToggle: Bool {
+        self.lines.count > Self.previewLineLimit
     }
 }
 
