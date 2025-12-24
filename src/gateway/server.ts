@@ -1363,10 +1363,8 @@ export async function startGatewayServer(
       typeof body.value === "object" && body.value !== null ? body.value : {};
 
     if (subPath === "wake") {
-      const text =
-        typeof (payload as { text?: unknown }).text === "string"
-          ? (payload as { text?: string }).text.trim()
-          : "";
+      const textRaw = (payload as { text?: unknown }).text;
+      const text = typeof textRaw === "string" ? textRaw.trim() : "";
       if (!text) {
         sendJson(res, 400, { ok: false, error: "text required" });
         return true;
@@ -1382,10 +1380,8 @@ export async function startGatewayServer(
     }
 
     if (subPath === "agent") {
-      const message =
-        typeof (payload as { message?: unknown }).message === "string"
-          ? (payload as { message?: string }).message.trim()
-          : "";
+      const messageRaw = (payload as { message?: unknown }).message;
+      const message = typeof messageRaw === "string" ? messageRaw.trim() : "";
       if (!message) {
         sendJson(res, 400, { ok: false, error: "message required" });
         return true;
@@ -1486,7 +1482,7 @@ export async function startGatewayServer(
             requestReplyHeartbeatNow({ reason: `hook:${jobId}` });
           }
         } catch (err) {
-          logHooks.warn({ err: String(err) }, "hook agent failed");
+          logHooks.warn("hook agent failed", { err: String(err) });
           enqueueSystemEvent(`Hook ${name} (error): ${String(err)}`);
           if (wakeMode === "now") {
             requestReplyHeartbeatNow({ reason: `hook:${jobId}:error` });
