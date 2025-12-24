@@ -16,7 +16,8 @@ function resolveLocator(
   page: LocatorPage,
   opts: { ref?: string; selector?: string },
 ) {
-  const selector = typeof opts.selector === "string" ? opts.selector.trim() : "";
+  const selector =
+    typeof opts.selector === "string" ? opts.selector.trim() : "";
   if (selector) return page.locator(selector);
   const ref = typeof opts.ref === "string" ? opts.ref.trim() : "";
   if (ref) return refLocator(page, ref);
