@@ -6,6 +6,7 @@
 - First-class Clawdis tools (browser, canvas, nodes, cron) replace the old `clawdis-*` skills; tool schemas are now injected directly into the agent runtime.
 - Custom model providers: `models.providers` merges into `~/.clawdis/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
 - Group chat activation modes: per-group `/activation mention|always` command with status visibility.
+- Gateway webhooks: external `wake` and isolated `agent` hooks with dedicated token auth.
 
 ### Breaking
 - Config refactor: `inbound.*` removed; use top-level `routing` (allowlists + group rules + transcription), `messages` (prefixes/timestamps), and `session` (scoping/store/mainKey). No legacy keys read.

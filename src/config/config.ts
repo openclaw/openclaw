@@ -62,6 +62,12 @@ export type CronConfig = {
   maxConcurrentRuns?: number;
 };
 
+export type HooksConfig = {
+  enabled?: boolean;
+  path?: string;
+  token?: string;
+};
+
 export type TelegramConfig = {
   botToken?: string;
   requireMention?: boolean;
@@ -271,6 +277,7 @@ export type ClawdisConfig = {
   web?: WebConfig;
   telegram?: TelegramConfig;
   cron?: CronConfig;
+  hooks?: HooksConfig;
   bridge?: BridgeConfig;
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;
@@ -459,6 +466,13 @@ const ClawdisSchema = z.object({
       enabled: z.boolean().optional(),
       store: z.string().optional(),
       maxConcurrentRuns: z.number().int().positive().optional(),
+    })
+    .optional(),
+  hooks: z
+    .object({
+      enabled: z.boolean().optional(),
+      path: z.string().optional(),
+      token: z.string().optional(),
     })
     .optional(),
   web: z

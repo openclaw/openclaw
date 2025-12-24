@@ -311,6 +311,35 @@ Auth and Tailscale:
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
 - `gateway.tailscale.resetOnExit` resets Serve/Funnel config on shutdown.
 
+### `hooks` (Gateway webhooks)
+
+Enable a simple HTTP webhook surface on the Gateway HTTP server.
+
+Defaults:
+- enabled: `false`
+- path: `/hooks`
+
+```json5
+{
+  hooks: {
+    enabled: true,
+    token: "shared-secret",
+    path: "/hooks"
+  }
+}
+```
+
+Requests must include the hook token:
+- `Authorization: Bearer <token>` **or**
+- `x-clawdis-token: <token>` **or**
+- `?token=<token>`
+
+Endpoints:
+- `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, thinking?, timeoutSeconds? }`
+
+`/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
+
 ### `canvasHost` (LAN/tailnet Canvas file server + live reload)
 
 The Gateway serves a directory of HTML/CSS/JS over HTTP so iOS/Android nodes can simply `canvas.navigate` to it.

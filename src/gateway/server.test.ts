@@ -10,6 +10,7 @@ import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
@@ -74,6 +75,9 @@ const piSdkMock = vi.hoisted(() => ({
     contextWindow?: number;
   }>,
 }));
+const cronIsolatedRun = vi.hoisted(() =>
+  vi.fn(async () => ({ status: "ok", summary: "ok" })),
+);
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<
@@ -101,6 +105,9 @@ vi.mock("../infra/bridge/server.js", () => ({
     };
   }),
 }));
+vi.mock("../cron/isolated-agent.js", () => ({
+  runCronIsolatedAgentTurn: (...args: unknown[]) => cronIsolatedRun(...args),
+}));
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: () => testTailnetIPv4.value,
   pickPrimaryTailnetIPv6: () => undefined,
@@ -112,6 +119,7 @@ let testCronStorePath: string | undefined;
 let testCronEnabled: boolean | undefined = false;
 let testGatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
 let testGatewayAuth: Record<string, unknown> | undefined;
+let testHooksConfig: Record<string, unknown> | undefined;
 const sessionStoreSaveDelayMs = vi.hoisted(() => ({ value: 0 }));
 vi.mock("../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../config/sessions.js")>(
@@ -197,6 +205,7 @@ vi.mock("../config/config.js", () => {
         if (testGatewayAuth) gateway.auth = testGatewayAuth;
         return Object.keys(gateway).length > 0 ? gateway : undefined;
       })(),
+      hooks: testHooksConfig,
       cron: (() => {
         const cron: Record<string, unknown> = {};
         if (typeof testCronEnabled === "boolean")
@@ -251,6 +260,9 @@ beforeEach(async () => {
   testTailnetIPv4.value = undefined;
   testGatewayBind = undefined;
   testGatewayAuth = undefined;
+  testHooksConfig = undefined;
+  cronIsolatedRun.mockClear();
+  drainSystemEvents();
   __resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
   piSdkMock.discoverCalls = 0;
@@ -411,6 +423,16 @@ async function rpcReq<T = unknown>(
     payload?: T;
     error?: { message?: string };
   }>(ws, (o) => o.type === "res" && o.id === id);
+}
+
+async function waitForSystemEvent(timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = peekSystemEvents();
+    if (events.length > 0) return events;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("timeout waiting for system event");
 }
 
 describe("gateway server", () => {
@@ -3597,5 +3619,96 @@ describe("gateway server", () => {
     await new Promise<void>((resolve, reject) =>
       probe.close((err) => (err ? reject(err) : resolve())),
     );
+  });
+
+  test("hooks wake requires auth", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: "Ping" }),
+    });
+    expect(res.status).toBe(401);
+    await server.close();
+  });
+
+  test("hooks wake enqueues system event", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: JSON.stringify({ text: "Ping", mode: "next-heartbeat" }),
+    });
+    expect(res.status).toBe(200);
+    const events = await waitForSystemEvent();
+    expect(events.some((e) => e.includes("Ping"))).toBe(true);
+    drainSystemEvents();
+    await server.close();
+  });
+
+  test("hooks agent posts summary to main", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    cronIsolatedRun.mockResolvedValueOnce({
+      status: "ok",
+      summary: "done",
+    });
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: JSON.stringify({ message: "Do it", name: "Email" }),
+    });
+    expect(res.status).toBe(202);
+    const events = await waitForSystemEvent();
+    expect(events.some((e) => e.includes("Hook Email: done"))).toBe(true);
+    drainSystemEvents();
+    await server.close();
+  });
+
+  test("hooks wake accepts query token", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(
+      `http://127.0.0.1:${port}/hooks/wake?token=hook-secret`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: "Query auth" }),
+      },
+    );
+    expect(res.status).toBe(200);
+    const events = await waitForSystemEvent();
+    expect(events.some((e) => e.includes("Query auth"))).toBe(true);
+    drainSystemEvents();
+    await server.close();
+  });
+
+  test("hooks agent rejects invalid channel", async () => {
+    testHooksConfig = { enabled: true, token: "hook-secret" };
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    const res = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer hook-secret",
+      },
+      body: JSON.stringify({ message: "Nope", channel: "sms" }),
+    });
+    expect(res.status).toBe(400);
+    expect(peekSystemEvents().length).toBe(0);
+    await server.close();
   });
 });

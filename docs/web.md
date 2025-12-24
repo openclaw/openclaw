@@ -21,6 +21,11 @@ The UI talks directly to the Gateway WS and supports:
 - Config (`config.get`, `config.set`) for `~/.clawdis/clawdis.json`
 - Debug (status/health/models snapshots + manual calls)
 
+## Webhooks
+
+When `hooks.enabled=true`, the Gateway also exposes a small webhook surface on the same HTTP server.
+See `docs/configuration.md` → `hooks` for auth + payloads.
+
 ## Config (default-on)
 
 The Control UI is **enabled by default** when assets are present (`dist/control-ui`).

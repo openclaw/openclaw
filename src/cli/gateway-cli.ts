@@ -509,6 +509,30 @@ export function registerGatewayCli(program: Command) {
 
   gatewayCallOpts(
     gateway
+      .command("wake")
+      .description("Enqueue a system event and optionally trigger a heartbeat")
+      .requiredOption("--text <text>", "System event text")
+      .option(
+        "--mode <mode>",
+        "Wake mode (now|next-heartbeat)",
+        "next-heartbeat",
+      )
+      .action(async (opts) => {
+        try {
+          const result = await callGatewayCli("wake", opts, {
+            mode: opts.mode,
+            text: opts.text,
+          });
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(1);
+        }
+      }),
+  );
+
+  gatewayCallOpts(
+    gateway
       .command("send")
       .description("Send a message via the Gateway")
       .requiredOption("--to <jidOrPhone>", "Destination (E.164 or jid)")
