@@ -631,3 +631,81 @@ enum CritterIconRenderer {
         canvas.context.restoreGState()
     }
 }
+
+#if DEBUG
+@MainActor
+extension CritterStatusLabel {
+    static func exerciseForTesting() async {
+        var label = CritterStatusLabel(
+            isPaused: false,
+            isSleeping: false,
+            isWorking: true,
+            earBoostActive: false,
+            blinkTick: 1,
+            sendCelebrationTick: 1,
+            gatewayStatus: .running(details: nil),
+            animationsEnabled: true,
+            iconState: .workingMain(.tool(.bash)))
+
+        _ = label.body
+        _ = label.iconImage
+        _ = label.tickTaskID
+        label.tick(Date())
+        label.resetMotion()
+        label.blink()
+        label.wiggle()
+        label.wiggleLegs()
+        label.wiggleEars()
+        label.scurry()
+        label.scheduleRandomTimers(from: Date())
+        _ = label.gatewayNeedsAttention
+        _ = label.gatewayBadgeColor
+
+        label.isPaused = true
+        _ = label.iconImage
+
+        label.isPaused = false
+        label.isSleeping = true
+        _ = label.iconImage
+
+        label.isSleeping = false
+        label.iconState = .idle
+        _ = label.iconImage
+
+        let failed = CritterStatusLabel(
+            isPaused: false,
+            isSleeping: false,
+            isWorking: false,
+            earBoostActive: false,
+            blinkTick: 0,
+            sendCelebrationTick: 0,
+            gatewayStatus: .failed("boom"),
+            animationsEnabled: false,
+            iconState: .idle)
+        _ = failed.gatewayNeedsAttention
+        _ = failed.gatewayBadgeColor
+
+        let stopped = CritterStatusLabel(
+            isPaused: false,
+            isSleeping: false,
+            isWorking: false,
+            earBoostActive: false,
+            blinkTick: 0,
+            sendCelebrationTick: 0,
+            gatewayStatus: .stopped,
+            animationsEnabled: false,
+            iconState: .idle)
+        _ = stopped.gatewayNeedsAttention
+        _ = stopped.gatewayBadgeColor
+
+        _ = CritterIconRenderer.makeIcon(
+            blink: 0.6,
+            legWiggle: 0.8,
+            earWiggle: 0.4,
+            earScale: 1.4,
+            earHoles: true,
+            eyesClosedLines: true,
+            badge: .init(symbolName: "gearshape.fill", prominence: .secondary))
+    }
+}
+#endif

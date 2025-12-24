@@ -5,7 +5,7 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct VoiceWakeOverlayControllerTests {
-    @Test func overlayControllerLifecycleWithoutUI() {
+    @Test func overlayControllerLifecycleWithoutUI() async {
         let controller = VoiceWakeOverlayController(enableUI: false)
         let token = controller.startSession(
             source: .wakeWord,
@@ -22,6 +22,7 @@ struct VoiceWakeOverlayControllerTests {
 
         controller.updateLevel(token: token, -0.5)
         #expect(controller.model.level == 0)
+        try? await Task.sleep(nanoseconds: 120_000_000)
         controller.updateLevel(token: token, 2.0)
         #expect(controller.model.level == 1)
 
@@ -59,5 +60,9 @@ struct VoiceWakeOverlayControllerTests {
         try? await Task.sleep(nanoseconds: 120_000_000)
         controller.updateLevel(token: token, 0.9)
         #expect(controller.model.level == 0.9)
+    }
+
+    @Test func overlayControllerExercisesHelpers() async {
+        await VoiceWakeOverlayController.exerciseForTesting()
     }
 }

@@ -25,6 +25,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     func setEnabled(_ enabled: Bool) {
+        if ProcessInfo.processInfo.isRunningTests { return }
         self.withMainThread { [weak self] in
             guard let self else { return }
             if enabled {

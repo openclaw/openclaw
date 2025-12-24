@@ -215,6 +215,7 @@ final class HoverHUDController {
     }
 
     private func installDismissMonitor() {
+        if ProcessInfo.processInfo.isRunningTests { return }
         guard self.dismissMonitor == nil, let window else { return }
         self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(matching: [
             .leftMouseDown,

@@ -271,6 +271,9 @@ final class PermissionMonitor {
     private func startMonitoring() {
         Task { await self.checkStatus(force: true) }
 
+        if ProcessInfo.processInfo.isRunningTests {
+            return
+        }
         self.monitorTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             Task { @MainActor in

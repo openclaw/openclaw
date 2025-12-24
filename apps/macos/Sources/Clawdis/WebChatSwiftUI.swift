@@ -230,6 +230,7 @@ final class WebChatSwiftUIWindowController {
     }
 
     private func installDismissMonitor() {
+        if ProcessInfo.processInfo.isRunningTests { return }
         guard self.dismissMonitor == nil, self.window != nil else { return }
         self.dismissMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown])
