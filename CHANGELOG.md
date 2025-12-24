@@ -7,6 +7,9 @@
 - Custom model providers: `models.providers` merges into `~/.clawdis/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
 - Group chat activation modes: per-group `/activation mention|always` command with status visibility.
 
+### Breaking
+- Config refactor: `inbound.*` removed; use top-level `routing` (allowlists + group rules + transcription), `messages` (prefixes/timestamps), and `session` (scoping/store/mainKey). No legacy keys read.
+
 ### Fixes
 - Heartbeat replies now strip repeated `HEARTBEAT_OK` tails to avoid accidental “OK OK” spam.
 - WhatsApp send now preserves existing JIDs (including group `@g.us`) instead of coercing to `@s.whatsapp.net`. (Thanks @arun-8687.)
