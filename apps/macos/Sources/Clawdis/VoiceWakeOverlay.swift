@@ -40,6 +40,7 @@ final class VoiceWakeOverlayController {
     private var autoSendToken: UUID?
     private var activeToken: UUID?
     private var activeSource: Source?
+    private var lastLevelUpdate: TimeInterval = 0
 
     private let width: CGFloat = 360
     private let padding: CGFloat = 10
@@ -49,6 +50,7 @@ final class VoiceWakeOverlayController {
     private let maxHeight: CGFloat = 400
     private let minHeight: CGFloat = 48
     let closeOverflow: CGFloat = 10
+    private let levelUpdateInterval: TimeInterval = 1.0 / 12.0
 
     init(enableUI: Bool = true) {
         self.enableUI = enableUI
@@ -78,6 +80,7 @@ final class VoiceWakeOverlayController {
         self.model.isEditing = false
         self.model.attributed = attributed ?? self.makeAttributed(from: transcript)
         self.model.level = 0
+        self.lastLevelUpdate = 0
         self.present()
         self.updateWindowFrame(animate: true)
         return token
@@ -218,6 +221,7 @@ final class VoiceWakeOverlayController {
         if !self.enableUI {
             self.model.isVisible = false
             self.model.level = 0
+            self.lastLevelUpdate = 0
             self.activeToken = nil
             self.activeSource = nil
             return
@@ -245,6 +249,7 @@ final class VoiceWakeOverlayController {
                 window.orderOut(nil)
                 self.model.isVisible = false
                 self.model.level = 0
+                self.lastLevelUpdate = 0
                 self.activeToken = nil
                 self.activeSource = nil
                 if outcome == .empty {
@@ -260,6 +265,12 @@ final class VoiceWakeOverlayController {
 
     func updateLevel(token: UUID, _ level: Double) {
         guard self.guardToken(token, context: "level") else { return }
+        guard self.model.isVisible else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        if level != 0, now - self.lastLevelUpdate < self.levelUpdateInterval {
+            return
+        }
+        self.lastLevelUpdate = now
         self.model.level = max(0, min(1, level))
     }
 
@@ -506,6 +517,7 @@ struct VoiceWakeOverlayView: View {
                             self.textFocused = true
                         })
                         .frame(maxWidth: .infinity, minHeight: 32, maxHeight: .infinity, alignment: .topLeading)
+                        .focusable(false)
                         .id("display")
                 }
 
@@ -549,10 +561,8 @@ struct VoiceWakeOverlayView: View {
             .padding(.horizontal, 10)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background {
-                let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
-                VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
-                    .clipShape(shape)
-                    .overlay(shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
+                OverlayBackground()
+                    .equatable()
             }
             .shadow(color: Color.black.opacity(0.22), radius: 14, x: 0, y: -2)
             .onHover { self.isHovering = $0 }
@@ -567,20 +577,38 @@ struct VoiceWakeOverlayView: View {
         .padding(.leading, self.controller.closeOverflow)
         .padding(.trailing, self.controller.closeOverflow)
         .padding(.bottom, self.controller.closeOverflow)
-        .onAppear { self.textFocused = false }
-        .onChange(of: self.controller.model.text) { _, _ in
-            self.textFocused = self.controller.model.isEditing
+        .onAppear {
+            self.updateFocusState(visible: self.controller.model.isVisible, editing: self.controller.model.isEditing)
         }
         .onChange(of: self.controller.model.isVisible) { _, visible in
-            if visible { self.textFocused = self.controller.model.isEditing }
+            self.updateFocusState(visible: visible, editing: self.controller.model.isEditing)
         }
         .onChange(of: self.controller.model.isEditing) { _, editing in
-            self.textFocused = editing
+            self.updateFocusState(visible: self.controller.model.isVisible, editing: editing)
         }
         .onChange(of: self.controller.model.attributed) { _, _ in
             self.controller.updateWindowFrame(animate: true)
         }
     }
+
+    private func updateFocusState(visible: Bool, editing: Bool) {
+        let shouldFocus = visible && editing
+        guard self.textFocused != shouldFocus else { return }
+        self.textFocused = shouldFocus
+    }
+}
+
+private struct OverlayBackground: View {
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 12, style: .continuous)
+        VisualEffectView(material: .hudWindow, blendingMode: .behindWindow)
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(Color.white.opacity(0.16), lineWidth: 1))
+    }
+}
+
+extension OverlayBackground: @MainActor Equatable {
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
 }
 
 struct TranscriptTextView: NSViewRepresentable {
