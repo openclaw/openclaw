@@ -249,9 +249,9 @@ private struct ChatMessageBody: View {
         self.message.content.filter { content in
             switch content.type ?? "text" {
             case "file", "attachment":
-                return true
+                true
             default:
-                return false
+                false
             }
         }
     }
@@ -419,7 +419,7 @@ private struct ToolCallCard: View {
         let keys = dict.keys.sorted()
         let pairs = keys.prefix(6).compactMap { key -> String? in
             guard let value = dict[key] else { return nil }
-            return "\(key)=\(renderValue(value) ?? "…")"
+            return "\(key)=\(self.renderValue(value) ?? "…")"
         }
         guard !pairs.isEmpty else { return nil }
         return pairs.joined(separator: " ")

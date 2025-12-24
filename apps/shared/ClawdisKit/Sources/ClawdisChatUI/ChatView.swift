@@ -136,7 +136,8 @@ public struct ClawdisChatView: View {
         let base: [ClawdisChatMessage]
         if self.style == .onboarding {
             guard let first = self.viewModel.messages.first else { return [] }
-            base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel.messages
+            base = first.role.lowercased() == "user" ? Array(self.viewModel.messages.dropFirst()) : self.viewModel
+                .messages
         } else {
             base = self.viewModel.messages
         }
