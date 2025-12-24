@@ -60,4 +60,49 @@ describe("gmail hook config", () => {
     );
     expect(result.ok).toBe(false);
   });
+
+  it("defaults serve path to / when tailscale is enabled", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "[redacted-email]",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            pushToken: "push-token",
+            tailscale: { mode: "funnel" },
+          },
+        },
+      },
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.serve.path).toBe("/");
+      expect(result.value.tailscale.path).toBe("/gmail-pubsub");
+    }
+  });
+
+  it("keeps explicit serve path for tailscale when set", () => {
+    const result = resolveGmailHookRuntimeConfig(
+      {
+        hooks: {
+          token: "hook-token",
+          gmail: {
+            account: "[redacted-email]",
+            topic: "projects/demo/topics/gog-gmail-watch",
+            pushToken: "push-token",
+            serve: { path: "/custom" },
+            tailscale: { mode: "funnel" },
+          },
+        },
+      },
+      {},
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.serve.path).toBe("/custom");
+      expect(result.value.tailscale.path).toBe("/custom");
+    }
+  });
 });
