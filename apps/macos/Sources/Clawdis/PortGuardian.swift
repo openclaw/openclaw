@@ -333,8 +333,13 @@ actor PortGuardian {
 
 #if DEBUG
 extension PortGuardian {
-    static func _testParseListeners(_ text: String) -> [(pid: Int32, command: String, fullCommand: String, user: String?)] {
-        Self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand, $0.user) }
+    static func _testParseListeners(_ text: String) -> [(
+        pid: Int32,
+        command: String,
+        fullCommand: String,
+        user: String?)]
+    {
+        self.parseListeners(from: text).map { ($0.pid, $0.command, $0.fullCommand, $0.user) }
     }
 
     static func _testBuildReport(
@@ -342,7 +347,11 @@ extension PortGuardian {
         mode: AppState.ConnectionMode,
         listeners: [(pid: Int32, command: String, fullCommand: String, user: String?)]) -> PortReport
     {
-        let mapped = listeners.map { Listener(pid: $0.pid, command: $0.command, fullCommand: $0.fullCommand, user: $0.user) }
+        let mapped = listeners.map { Listener(
+            pid: $0.pid,
+            command: $0.command,
+            fullCommand: $0.fullCommand,
+            user: $0.user) }
         return Self.buildReport(port: port, listeners: mapped, mode: mode)
     }
 }
