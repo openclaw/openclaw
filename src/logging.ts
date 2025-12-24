@@ -268,6 +268,10 @@ function shouldSuppressConsoleMessage(message: string): boolean {
   );
 }
 
+function isEpipeError(err: unknown): boolean {
+  return Boolean((err as { code?: string })?.code === "EPIPE");
+}
+
 /**
  * Route console.* calls through pino while still emitting to stdout/stderr.
  * This keeps user-facing output unchanged but guarantees every console call is captured in log files.
@@ -321,9 +325,19 @@ export function enableConsoleCapture(): void {
           level === "error" || level === "fatal" || level === "warn"
             ? process.stderr
             : process.stderr; // in RPC/JSON mode, keep stdout clean
-        target.write(`${formatted}\n`);
+        try {
+          target.write(`${formatted}\n`);
+        } catch (err) {
+          if (isEpipeError(err)) return;
+          throw err;
+        }
       } else {
-        orig.apply(console, args as []);
+        try {
+          orig.apply(console, args as []);
+        } catch (err) {
+          if (isEpipeError(err)) return;
+          throw err;
+        }
       }
     };
 
