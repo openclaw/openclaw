@@ -32,9 +32,9 @@ struct TailscaleIntegrationSection: View {
     let isPaused: Bool
 
     @Environment(TailscaleService.self) private var tailscaleService
-#if DEBUG
+    #if DEBUG
     private var testingService: TailscaleService?
-#endif
+    #endif
 
     @State private var hasLoaded = false
     @State private var tailscaleMode: GatewayTailscaleMode = .off
@@ -47,17 +47,17 @@ struct TailscaleIntegrationSection: View {
     init(connectionMode: AppState.ConnectionMode, isPaused: Bool) {
         self.connectionMode = connectionMode
         self.isPaused = isPaused
-#if DEBUG
+        #if DEBUG
         self.testingService = nil
-#endif
+        #endif
     }
 
     private var effectiveService: TailscaleService {
-#if DEBUG
+        #if DEBUG
         return self.testingService ?? self.tailscaleService
-#else
+        #else
         return self.tailscaleService
-#endif
+        #endif
     }
 
     var body: some View {

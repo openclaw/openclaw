@@ -92,6 +92,7 @@ struct OnboardingView: View {
             .autoconnect()
             .eraseToAnyPublisher()
     }()
+
     private let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,

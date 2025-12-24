@@ -19,9 +19,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cachedErrorText: String?
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
-#if DEBUG
+    #if DEBUG
     private var testControlChannelConnected: Bool?
-#endif
+    #endif
 
     func install(into statusItem: NSStatusItem) {
         self.statusItem = statusItem
@@ -160,9 +160,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     }
 
     private var isControlChannelConnected: Bool {
-#if DEBUG
+        #if DEBUG
         if let override = self.testControlChannelConnected { return override }
-#endif
+        #endif
         if case .connected = ControlChannel.shared.state { return true }
         return false
     }
