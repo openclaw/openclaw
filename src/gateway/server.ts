@@ -175,10 +175,7 @@ function resolveHooksConfig(cfg: ClawdisConfig): HooksConfigResolved | null {
   };
 }
 
-function extractHookToken(
-  req: IncomingMessage,
-  url: URL,
-): string | undefined {
+function extractHookToken(req: IncomingMessage, url: URL): string | undefined {
   const auth =
     typeof req.headers.authorization === "string"
       ? req.headers.authorization.trim()
@@ -1299,7 +1296,6 @@ export async function startGatewayServer(
     );
   }
 
-
   let canvasHost: CanvasHostHandler | null = null;
   let canvasHostServer: CanvasHostServer | null = null;
   if (canvasHostEnabled) {
@@ -1328,10 +1324,7 @@ export async function startGatewayServer(
     if (!hooksConfig) return false;
     const url = new URL(req.url ?? "/", `http://${bindHost}:${port}`);
     const basePath = hooksConfig.basePath;
-    if (
-      url.pathname !== basePath &&
-      !url.pathname.startsWith(`${basePath}/`)
-    ) {
+    if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
       return false;
     }
 
@@ -1351,9 +1344,7 @@ export async function startGatewayServer(
       return true;
     }
 
-    const subPath = url.pathname
-      .slice(basePath.length)
-      .replace(/^\/+/, "");
+    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
     if (!subPath) {
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -1381,8 +1372,7 @@ export async function startGatewayServer(
         return true;
       }
       const modeRaw = (payload as { mode?: unknown }).mode;
-      const mode =
-        modeRaw === "next-heartbeat" ? "next-heartbeat" : "now";
+      const mode = modeRaw === "next-heartbeat" ? "next-heartbeat" : "now";
       enqueueSystemEvent(text);
       if (mode === "now") {
         requestReplyHeartbeatNow({ reason: "hook:wake" });
@@ -1439,9 +1429,12 @@ export async function startGatewayServer(
         typeof thinkingRaw === "string" && thinkingRaw.trim()
           ? thinkingRaw.trim()
           : undefined;
-      const timeoutRaw = (payload as { timeoutSeconds?: unknown }).timeoutSeconds;
+      const timeoutRaw = (payload as { timeoutSeconds?: unknown })
+        .timeoutSeconds;
       const timeoutSeconds =
-        typeof timeoutRaw === "number" && Number.isFinite(timeoutRaw) && timeoutRaw > 0
+        typeof timeoutRaw === "number" &&
+        Number.isFinite(timeoutRaw) &&
+        timeoutRaw > 0
           ? Math.floor(timeoutRaw)
           : undefined;
 
@@ -1483,11 +1476,11 @@ export async function startGatewayServer(
             lane: "cron",
           });
           const summary =
-            result.summary?.trim() ||
-            result.error?.trim() ||
-            result.status;
+            result.summary?.trim() || result.error?.trim() || result.status;
           const prefix =
-            result.status === "ok" ? `Hook ${name}` : `Hook ${name} (${result.status})`;
+            result.status === "ok"
+              ? `Hook ${name}`
+              : `Hook ${name} (${result.status})`;
           enqueueSystemEvent(`${prefix}: ${summary}`.trim());
           if (wakeMode === "now") {
             requestReplyHeartbeatNow({ reason: `hook:${jobId}` });
