@@ -188,6 +188,7 @@ Browser control (optional):
 - [`docs/web.md`](docs/web.md)
 - [`docs/discovery.md`](docs/discovery.md)
 - [`docs/agent.md`](docs/agent.md)
+- Webhooks + external triggers: [`docs/webhook.md`](docs/webhook.md)
 - [`docs/security.md`](docs/security.md)
 - [`docs/troubleshooting.md`](docs/troubleshooting.md)
 - [`docs/ios/connect.md`](docs/ios/connect.md)
