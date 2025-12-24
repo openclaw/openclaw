@@ -28,7 +28,16 @@ export function buildAgentSystemPromptAppend(params: {
       ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user (Peter).`
       : undefined;
   const reasoningHint = params.reasoningTagHint
-    ? "If you must think, put all reasoning inside <think>...</think> only, and never include analysis outside those tags."
+    ? [
+        "ALL internal reasoning MUST be inside <think>...</think>.",
+        "Do not output any analysis outside <think>.",
+        "Format every reply as <think>...</think> then <final>...</final>, with no other text.",
+        "Only the final user-visible reply may appear inside <final>.",
+        "Only text inside <final> is shown to the user; everything else is discarded and never seen by the user.",
+        "Example:",
+        "<think>Short internal reasoning.</think>",
+        "<final>Hey Peter! What would you like to do next?</final>",
+      ].join(" ")
     : undefined;
   const runtimeInfo = params.runtimeInfo;
   const runtimeLines: string[] = [];
@@ -91,7 +100,5 @@ export function buildAgentSystemPromptAppend(params: {
     thinkHint,
   );
 
-  return lines
-    .filter(Boolean)
-    .join("\n");
+  return lines.filter(Boolean).join("\n");
 }

@@ -31,5 +31,6 @@ describe("buildAgentSystemPromptAppend", () => {
 
     expect(prompt).toContain("## Reasoning Format");
     expect(prompt).toContain("<think>...</think>");
+    expect(prompt).toContain("<final>...</final>");
   });
 });
