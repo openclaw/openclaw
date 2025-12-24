@@ -653,3 +653,40 @@ final class NodePairingApprovalPrompter {
         self.updateReconcileLoop()
     }
 }
+
+#if DEBUG
+@MainActor
+extension NodePairingApprovalPrompter {
+    static func exerciseForTesting() async {
+        let prompter = NodePairingApprovalPrompter()
+        let pending = PendingRequest(
+            requestId: "req-1",
+            nodeId: "node-1",
+            displayName: "Node One",
+            platform: "macos",
+            version: "1.0.0",
+            remoteIp: "127.0.0.1",
+            isRepair: false,
+            silent: true,
+            ts: 1_700_000_000_000)
+        let paired = PairedNode(
+            nodeId: "node-1",
+            approvedAtMs: 1_700_000_000_000,
+            displayName: "Node One",
+            platform: "macOS",
+            version: "1.0.0",
+            remoteIp: "127.0.0.1")
+        let list = PairingList(pending: [pending], paired: [paired])
+
+        _ = Self.describe(pending)
+        _ = Self.prettyIP(pending.remoteIp)
+        _ = Self.prettyPlatform(pending.platform)
+        _ = prompter.inferResolution(for: pending, list: list)
+
+        prompter.queue = [pending]
+        _ = prompter.shouldPoll
+        _ = await prompter.trySilentApproveIfPossible(pending)
+        prompter.queue.removeAll()
+    }
+}
+#endif

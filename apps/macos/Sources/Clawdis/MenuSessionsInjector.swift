@@ -19,6 +19,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cachedErrorText: String?
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
+#if DEBUG
+    private var testControlChannelConnected: Bool?
+#endif
 
     func install(into statusItem: NSStatusItem) {
         self.statusItem = statusItem
@@ -157,6 +160,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     }
 
     private var isControlChannelConnected: Bool {
+#if DEBUG
+        if let override = self.testControlChannelConnected { return override }
+#endif
         if case .connected = ControlChannel.shared.state { return true }
         return false
     }
@@ -466,6 +472,24 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.lastKnownMenuWidth = max(300, width)
     }
 }
+
+#if DEBUG
+extension MenuSessionsInjector {
+    func setTestingControlChannelConnected(_ connected: Bool?) {
+        self.testControlChannelConnected = connected
+    }
+
+    func setTestingSnapshot(_ snapshot: SessionStoreSnapshot?, errorText: String? = nil) {
+        self.cachedSnapshot = snapshot
+        self.cachedErrorText = errorText
+        self.cacheUpdatedAt = Date()
+    }
+
+    func injectForTesting(into menu: NSMenu) {
+        self.inject(into: menu)
+    }
+}
+#endif
 
 private final class HighlightedMenuItemHostView: NSView {
     private let baseView: AnyView

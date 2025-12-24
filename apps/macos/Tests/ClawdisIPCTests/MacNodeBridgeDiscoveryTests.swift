@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Network
 import Testing
@@ -39,17 +40,7 @@ import Testing
 
     @MainActor
     @Test func probeEndpointFailsForClosedPort() async throws {
-        let listener = try NWListener(using: .tcp, on: .any)
-        listener.start(queue: DispatchQueue(label: "com.steipete.clawdis.tests.bridge-listener-close"))
-        try await waitForListenerReady(listener, timeoutSeconds: 1.0)
-        let port = listener.port
-        listener.cancel()
-        try await Task.sleep(nanoseconds: 150_000_000)
-
-        guard let port else {
-            throw TestError(message: "listener port missing")
-        }
-
+        let port = try reserveEphemeralPort()
         let endpoint = NWEndpoint.hostPort(host: "127.0.0.1", port: port)
         let ok = await MacNodeModeCoordinator.probeEndpoint(endpoint, timeoutSeconds: 0.4)
         #expect(ok == false)
@@ -117,4 +108,44 @@ private func withEnv(_ key: String, value: String?, _ body: () -> Void) {
         }
     }
     body()
+}
+
+private func reserveEphemeralPort() throws -> NWEndpoint.Port {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    if fd < 0 {
+        throw TestError(message: "socket failed")
+    }
+    defer { close(fd) }
+
+    var addr = sockaddr_in()
+    addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = in_port_t(0)
+    addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+
+    let bindResult = withUnsafePointer(to: &addr) { pointer -> Int32 in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+    }
+    if bindResult != 0 {
+        throw TestError(message: "bind failed")
+    }
+
+    var resolved = sockaddr_in()
+    var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+    let nameResult = withUnsafeMutablePointer(to: &resolved) { pointer -> Int32 in
+        pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            getsockname(fd, $0, &length)
+        }
+    }
+    if nameResult != 0 {
+        throw TestError(message: "getsockname failed")
+    }
+
+    let port = UInt16(bigEndian: resolved.sin_port)
+    guard let endpointPort = NWEndpoint.Port(rawValue: port), endpointPort.rawValue != 0 else {
+        throw TestError(message: "ephemeral port missing")
+    }
+    return endpointPort
 }

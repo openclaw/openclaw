@@ -25,4 +25,17 @@ struct MenuContentSmokeTests {
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
     }
+
+    @Test func menuContentBuildsBodyWithDebugAndCanvas() {
+        let state = AppState(preview: true)
+        state.connectionMode = .local
+        state.debugPaneEnabled = true
+        state.canvasEnabled = true
+        state.canvasPanelVisible = true
+        state.swabbleEnabled = true
+        state.voicePushToTalkEnabled = true
+        state.heartbeatsEnabled = true
+        let view = MenuContent(state: state, updater: nil)
+        _ = view.body
+    }
 }

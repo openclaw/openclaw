@@ -503,3 +503,40 @@ enum BridgePairingApprover {
         }
     }
 }
+
+#if DEBUG
+extension BridgeServer {
+    func exerciseForTesting() async {
+        let conn = NWConnection(to: .hostPort(host: "127.0.0.1", port: 22), using: .tcp)
+        let handler = BridgeConnectionHandler(connection: conn, logger: self.logger)
+        self.connections["node-1"] = handler
+        self.nodeInfoById["node-1"] = BridgeNodeInfo(
+            nodeId: "node-1",
+            displayName: "Node One",
+            platform: "macOS",
+            version: "1.0.0",
+            deviceFamily: "Mac",
+            modelIdentifier: "MacBookPro18,1",
+            remoteAddress: "127.0.0.1",
+            caps: ["chat", "voice"])
+
+        _ = self.connectedNodeIds()
+        _ = self.connectedNodes()
+
+        self.handleListenerState(.ready)
+        self.handleListenerState(.failed(NWError.posix(.ECONNREFUSED)))
+        self.handleListenerState(.waiting(NWError.posix(.ETIMEDOUT)))
+        self.handleListenerState(.cancelled)
+        self.handleListenerState(.setup)
+
+        let subscribe = BridgeEventFrame(event: "chat.subscribe", payloadJSON: "{\"sessionKey\":\"main\"}")
+        await self.handleEvent(nodeId: "node-1", evt: subscribe)
+
+        let unsubscribe = BridgeEventFrame(event: "chat.unsubscribe", payloadJSON: "{\"sessionKey\":\"main\"}")
+        await self.handleEvent(nodeId: "node-1", evt: unsubscribe)
+
+        let invalid = BridgeRPCRequest(id: "req-1", method: "invalid.method", paramsJSON: nil)
+        _ = await self.handleRequest(nodeId: "node-1", req: invalid)
+    }
+}
+#endif
