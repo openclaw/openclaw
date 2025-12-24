@@ -30,6 +30,6 @@ export function applyTemplate(str: string | undefined, ctx: TemplateContext) {
   if (!str) return "";
   return str.replace(/{{\s*(\w+)\s*}}/g, (_, key) => {
     const value = ctx[key as keyof TemplateContext];
-    return value ?? "";
+    return value == null ? "" : String(value);
   });
 }

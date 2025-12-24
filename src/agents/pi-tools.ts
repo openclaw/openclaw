@@ -115,7 +115,7 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
       properties: schema.properties ?? {},
       additionalProperties:
         "additionalProperties" in schema ? schema.additionalProperties : true,
-    } as TSchema,
+    } as unknown as TSchema,
   };
 }
 
