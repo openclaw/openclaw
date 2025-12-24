@@ -22,15 +22,15 @@ The agent was interrupted mid-response.
 
 ### Messages Not Triggering
 
-**Check 1:** Is the sender in `allowFrom`?
+**Check 1:** Is the sender in `routing.allowFrom`?
 ```bash
-cat ~/.clawdis/clawdis.json | jq '.inbound.allowFrom'
+cat ~/.clawdis/clawdis.json | jq '.routing.allowFrom'
 ```
 
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must contain a pattern from mentionPatterns
-cat ~/.clawdis/clawdis.json | jq '.inbound.groupChat'
+cat ~/.clawdis/clawdis.json | jq '.routing.groupChat'
 ```
 
 **Check 3:** Check the logs

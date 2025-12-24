@@ -95,7 +95,7 @@ We no longer collect identity in the onboarding wizard. Instead, the **first age
 
 Identity data still feeds the same defaults as before:
 
-- outbound prefix emoji (`inbound.responsePrefix`)
+- outbound prefix emoji (`messages.responsePrefix`)
 - group mention patterns / wake words
 - default session intro (“You are Samantha…”)
 - macOS UI labels

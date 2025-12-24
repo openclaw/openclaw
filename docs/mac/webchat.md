@@ -5,7 +5,7 @@ read_when:
 ---
 # Web Chat (macOS app)
 
-The macOS menu bar app shows the WebChat UI as a native SwiftUI view and reuses the **primary Clawd session** (`main` by default, configurable via `inbound.session.mainKey`).
+The macOS menu bar app shows the WebChat UI as a native SwiftUI view and reuses the **primary Clawd session** (`main` by default, configurable via `session.mainKey`).
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
 - **Remote mode**: forwards the Gateway WebSocket control port over SSH and uses that as the data plane.

@@ -14,7 +14,7 @@ Goal: add a simple heartbeat poll for the embedded agent that only notifies user
 ## Config & defaults
 - New config key: `agent.heartbeatMinutes` (number of minutes; `0` disables).
 - Default: 30 minutes.
-- New optional idle override for heartbeats: `inbound.session.heartbeatIdleMinutes` (defaults to `idleMinutes`). Heartbeat skips do **not** update the session `updatedAt` so idle expiry still works.
+- New optional idle override for heartbeats: `session.heartbeatIdleMinutes` (defaults to `idleMinutes`). Heartbeat skips do **not** update the session `updatedAt` so idle expiry still works.
 
 ## Poller behavior
 - When gateway runs with command-mode auto-reply, start a timer with the resolved heartbeat interval.
@@ -42,8 +42,8 @@ Goal: add a simple heartbeat poll for the embedded agent that only notifies user
 ## Documentation
 - Add a short README snippet under configuration showing `heartbeatMinutes` and the sentinel rule.
 - Expose CLI triggers:
-  - `clawdis heartbeat` (web provider, defaults to first `allowFrom`; optional `--to` override)
+  - `clawdis heartbeat` (web provider, defaults to first `routing.allowFrom`; optional `--to` override)
     - `--session-id <uuid>` forces resuming a specific session for that heartbeat
   - `clawdis gateway --heartbeat-now` to run the gateway loop with an immediate heartbeat
   - Gateway supports `--heartbeat-now` to fire once at startup.
-  - When multiple sessions are active or `allowFrom` is only `"*"`, require `--to <E.164>` or `--all` for manual heartbeats to avoid ambiguous targets.
+  - When multiple sessions are active or `routing.allowFrom` is only `"*"`, require `--to <E.164>` or `--all` for manual heartbeats to avoid ambiguous targets.

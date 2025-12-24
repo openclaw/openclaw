@@ -9,10 +9,11 @@ read_when:
 CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comments + trailing commas allowed).
 
 If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
-- restrict who can trigger the bot (`inbound.allowFrom`)
-- tune group mention behavior (`inbound.groupChat`)
+- restrict who can trigger the bot (`routing.allowFrom`)
+- tune group mention behavior (`routing.groupChat`)
+- customize message prefixes (`messages`)
 - set the agent’s workspace (`agent.workspace`)
-- tune the embedded agent (`agent`) and session behavior (`inbound.session`)
+- tune the embedded agent (`agent`) and session behavior (`session`)
 - set the agent’s identity (`identity`)
 
 ## Minimal config (recommended starting point)
@@ -20,7 +21,7 @@ If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-
 ```json5
 {
   agent: { workspace: "~/clawd" },
-  inbound: { allowFrom: ["+15555550123"] }
+  routing: { allowFrom: ["+15555550123"] }
 }
 ```
 
@@ -31,8 +32,8 @@ If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-
 Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
 
 If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
-- `inbound.responsePrefix` from `identity.emoji`
-- `inbound.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
+- `messages.responsePrefix` from `identity.emoji`
+- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
 
 ```json5
 {
@@ -59,23 +60,23 @@ If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
 }
 ```
 
-### `inbound.allowFrom`
+### `routing.allowFrom`
 
 Allowlist of E.164 phone numbers that may trigger auto-replies.
 
 ```json5
 {
-  inbound: { allowFrom: ["+15555550123", "+447700900123"] }
+  routing: { allowFrom: ["+15555550123", "+447700900123"] }
 }
 ```
 
-### `inbound.groupChat`
+### `routing.groupChat`
 
 Group messages default to **require mention** (either metadata mention or regex patterns).
 
 ```json5
 {
-  inbound: {
+  routing: {
     groupChat: {
       mentionPatterns: ["@clawd", "clawdbot", "clawd"],
       historyLimit: 50
@@ -93,6 +94,20 @@ Default: `~/clawd`.
 ```json5
 {
   agent: { workspace: "~/clawd" }
+}
+```
+
+### `messages`
+
+Controls inbound/outbound prefixes and timestamps.
+
+```json5
+{
+  messages: {
+    messagePrefix: "[clawdis]",
+    responsePrefix: "🦞",
+    timestampPrefix: "Europe/London"
+  }
 }
 ```
 
@@ -117,8 +132,7 @@ Controls the embedded agent runtime (provider/model/thinking/verbose/timeouts).
     mediaMaxMb: 5,
     heartbeatMinutes: 30,
     contextTokens: 200000
-  },
-  inbound: { workspace: "~/clawd" }
+  }
 }
 ```
 
@@ -138,9 +152,7 @@ Select the model via `agent.provider` + `agent.model`.
 
 ```json5
 {
-  inbound: {
-    agent: { provider: "custom-proxy", model: "llama-3.1-8b" }
-  },
+  agent: { provider: "custom-proxy", model: "llama-3.1-8b" },
   models: {
     mode: "merge",
     providers: {
@@ -172,20 +184,18 @@ Notes:
 - Override the agent config root with `CLAWDIS_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
   if you want `models.json` stored elsewhere.
 
-### `inbound.session`
+### `session`
 
 Controls session scoping, idle expiry, reset triggers, and where the session store is written.
 
 ```json5
 {
-  inbound: {
-    session: {
-      scope: "per-sender",
-      idleMinutes: 60,
-      resetTriggers: ["/new", "/reset"],
-      store: "~/.clawdis/sessions/sessions.json",
-      mainKey: "main"
-    }
+  session: {
+    scope: "per-sender",
+    idleMinutes: 60,
+    resetTriggers: ["/new", "/reset"],
+    store: "~/.clawdis/sessions/sessions.json",
+    mainKey: "main"
   }
 }
 ```
@@ -377,7 +387,7 @@ clawdis dns setup --apply
 
 ## Template variables
 
-Template placeholders are expanded in `inbound.transcribeAudio.command` (and any future templated command fields).
+Template placeholders are expanded in `routing.transcribeAudio.command` (and any future templated command fields).
 
 | Variable | Description |
 |----------|-------------|

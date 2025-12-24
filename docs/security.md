@@ -42,7 +42,7 @@ This is social engineering 101. Create distrust, encourage snooping.
 
 ```json
 {
-  "inbound": {
+  "routing": {
     "allowFrom": ["+15555550123"]
   }
 }
@@ -54,9 +54,11 @@ Only allow specific phone numbers to trigger your AI. Never use `["*"]` in produ
 
 ```json
 {
-  "groupChat": {
-    "requireMention": true,
-    "mentionPatterns": ["@clawd", "@mybot"]
+  "routing": {
+    "groupChat": {
+      "requireMention": true,
+      "mentionPatterns": ["@clawd", "@mybot"]
+    }
   }
 }
 ```

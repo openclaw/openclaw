@@ -76,7 +76,7 @@ Incoming user messages are queued while the agent is streaming. The queue is che
 
 At minimum, set:
 - `agent.workspace`
-- `inbound.allowFrom` (strongly recommended)
+- `routing.allowFrom` (strongly recommended)
 
 ---
 

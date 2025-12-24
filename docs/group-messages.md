@@ -9,7 +9,7 @@ Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that 
 
 ## What’s implemented (2025-12-03)
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Activation is controlled per group (command or UI), not via config.
-- Group allowlist bypass: we still enforce `allowFrom` on the participant at inbox ingest, but group JIDs themselves no longer block replies.
+- Group allowlist bypass: we still enforce `routing.allowFrom` on the participant at inbox ingest, but group JIDs themselves no longer block replies.
 - Per-group sessions: session keys look like `group:<jid>` so commands such as `/verbose on` or `/think:high` are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
 - Context injection: last N (default 50) group messages are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`.
 - Sender surfacing: every group batch now ends with `[from: Sender Name (+E164)]` so Pi knows who is speaking.
@@ -21,7 +21,7 @@ Add a `groupChat` block to `~/.clawdis/clawdis.json` so display-name pings work 
 
 ```json5
 {
-  "inbound": {
+  "routing": {
     "groupChat": {
       "historyLimit": 50,
       "mentionPatterns": [
@@ -45,7 +45,7 @@ Use the group chat command:
 - `/activation mention`
 - `/activation always`
 
-Only the owner number (from `allowFrom`, defaulting to the bot’s own E.164 when unset) can change this. `/status` in the group shows the current activation mode.
+Only the owner number (from `routing.allowFrom`, defaulting to the bot’s own E.164 when unset) can change this. `/status` in the group shows the current activation mode.
 
 ## How to use
 1) Add Clawd UK (`+447700900123`) to the group.

@@ -17,7 +17,7 @@ You’re putting an agent in a position to:
 - send messages back out via WhatsApp/Telegram
 
 Start conservative:
-- Always set `inbound.allowFrom` (never run open-to-the-world on your personal Mac).
+- Always set `routing.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
 - Keep heartbeats disabled until you trust the setup (`heartbeatMinutes: 0`).
 
@@ -74,7 +74,7 @@ clawdis gateway --port 18789
 
 ```json5
 {
-  inbound: {
+  routing: {
     allowFrom: ["+15555550123"]
   }
 }
@@ -98,7 +98,7 @@ Optional: choose a different workspace with `agent.workspace` (supports `~`).
 
 ```json5
 {
-  inbound: {
+  agent: {
     workspace: "~/clawd"
   }
 }
@@ -116,27 +116,27 @@ Example:
 ```json5
 {
   logging: { level: "info" },
-  inbound: {
-    allowFrom: ["+15555550123"],
+  agent: {
+    provider: "anthropic",
+    model: "claude-opus-4-5",
     workspace: "~/clawd",
+    thinkingDefault: "high",
+    timeoutSeconds: 1800,
+    // Start with 0; enable later.
+    heartbeatMinutes: 0
+  },
+  routing: {
+    allowFrom: ["+15555550123"],
     groupChat: {
       requireMention: true,
       mentionPatterns: ["@clawd", "clawd"]
-    },
-    agent: {
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      thinkingDefault: "high",
-      timeoutSeconds: 1800,
-      // Start with 0; enable later.
-      heartbeatMinutes: 0
-    },
-    session: {
-      scope: "per-sender",
-      resetTriggers: ["/new", "/reset"],
-      idleMinutes: 10080,
-      mainKey: "main"
     }
+  },
+  session: {
+    scope: "per-sender",
+    resetTriggers: ["/new", "/reset"],
+    idleMinutes: 10080,
+    mainKey: "main"
   }
 }
 ```
@@ -155,10 +155,8 @@ When `agent.heartbeatMinutes > 0`, CLAWDIS periodically runs a heartbeat prompt 
 
 ```json5
 {
-  inbound: {
-    agent: {
-      heartbeatMinutes: 30
-    }
+  agent: {
+    heartbeatMinutes: 30
   }
 }
 ```

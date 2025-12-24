@@ -30,8 +30,8 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 - WhatsApp events come from `messages.upsert` (Baileys).
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
-- **Allowlist**: `inbound.allowFrom` enforced for direct chats only.
-  - If allowFrom is empty, default allowlist = self number (self-chat mode).
+- **Allowlist**: `routing.allowFrom` enforced for direct chats only.
+  - If `routing.allowFrom` is empty, default allowlist = self number (self-chat mode).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
@@ -56,7 +56,7 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
 - `/activation mention|always` is owner-only.
-- Owner = `inbound.allowFrom` (or self E.164 if unset).
+- Owner = `routing.allowFrom` (or self E.164 if unset).
 - **History injection**:
   - Recent messages (default 50) inserted under:
     `[Chat messages since your last reply - for context]`
@@ -98,14 +98,14 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 - Logged-out => stop and require re-link.
 
 ## Config quick map
-- `inbound.allowFrom` (DM allowlist).
-- `inbound.groupChat.mentionPatterns`
-- `inbound.groupChat.historyLimit`
-- `inbound.messagePrefix` (inbound prefix)
-- `inbound.responsePrefix` (outbound prefix)
+- `routing.allowFrom` (DM allowlist).
+- `routing.groupChat.mentionPatterns`
+- `routing.groupChat.historyLimit`
+- `messages.messagePrefix` (inbound prefix)
+- `messages.responsePrefix` (outbound prefix)
 - `agent.mediaMaxMb`
 - `agent.heartbeatMinutes`
-- `inbound.session.*` (scope, idle, store, mainKey)
+- `session.*` (scope, idle, store, mainKey)
 - `web.heartbeatSeconds`
 - `web.reconnect.*`
 
