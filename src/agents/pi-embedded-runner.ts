@@ -325,7 +325,9 @@ export async function runEmbeddedPiAgent(params: {
         await loadWorkspaceBootstrapFiles(resolvedWorkspace);
       const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
       const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
-      const tools = createClawdisCodingTools();
+      const tools = createClawdisCodingTools({
+        bash: params.config?.agent?.bash,
+      });
       const machineName = await getMachineDisplayName();
       const runtimeInfo = {
         host: machineName,

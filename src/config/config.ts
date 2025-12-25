@@ -325,6 +325,15 @@ export type ClawdisConfig = {
     typingIntervalSeconds?: number;
     /** Periodic background heartbeat runs (minutes). 0 disables. */
     heartbeatMinutes?: number;
+    /** Bash tool defaults. */
+    bash?: {
+      /** Default time (ms) before a bash command auto-backgrounds. */
+      backgroundMs?: number;
+      /** Default timeout (seconds) before auto-killing bash commands. */
+      timeoutSec?: number;
+      /** How long to keep finished sessions in memory (ms). */
+      cleanupMs?: number;
+    };
   };
   routing?: RoutingConfig;
   messages?: MessagesConfig;
@@ -573,6 +582,13 @@ const ClawdisSchema = z.object({
       mediaMaxMb: z.number().positive().optional(),
       typingIntervalSeconds: z.number().int().positive().optional(),
       heartbeatMinutes: z.number().nonnegative().optional(),
+      bash: z
+        .object({
+          backgroundMs: z.number().int().positive().optional(),
+          timeoutSec: z.number().int().positive().optional(),
+          cleanupMs: z.number().int().positive().optional(),
+        })
+        .optional(),
     })
     .optional(),
   routing: RoutingSchema,

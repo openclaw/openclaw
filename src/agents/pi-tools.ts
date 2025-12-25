@@ -4,7 +4,12 @@ import { type TSchema, Type } from "@sinclair/typebox";
 
 import { detectMime } from "../media/mime.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
-import { bashTool, processTool } from "./bash-tools.js";
+import {
+  type BashToolDefaults,
+  type ProcessToolDefaults,
+  createBashTool,
+  createProcessTool,
+} from "./bash-tools.js";
 import { createClawdisTools } from "./clawdis-tools.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -288,18 +293,24 @@ function createClawdisReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
-export function createClawdisCodingTools(): AnyAgentTool[] {
+export function createClawdisCodingTools(options?: {
+  bash?: BashToolDefaults & ProcessToolDefaults;
+}): AnyAgentTool[] {
+  const bashToolName = "bash";
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) return [createClawdisReadTool(tool)];
-    if (tool.name === bashTool.name) return [];
+    if (tool.name === bashToolName) return [];
     return [tool as AnyAgentTool];
   });
-  const tools: AnyAgentTool[] = [
+  const bashTool = createBashTool(options?.bash);
+  const processTool = createProcessTool({
+    cleanupMs: options?.bash?.cleanupMs,
+  });
+  return [
     ...base,
-    bashTool as unknown as AnyAgentTool,
-    processTool as unknown as AnyAgentTool,
+    bashTool,
+    processTool,
     createWhatsAppLoginTool(),
     ...createClawdisTools(),
-  ];
-  return tools.map(normalizeToolParameters);
+  ].map(normalizeToolParameters);
 }

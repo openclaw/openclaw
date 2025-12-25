@@ -1,8 +1,8 @@
-import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-ai";
 import { StringEnum } from "@mariozechner/pi-ai";
 import { Type } from "@sinclair/typebox";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 import {
   addSession,
@@ -15,26 +15,26 @@ import {
   listRunningSessions,
   markBackgrounded,
   markExited,
+  setJobTtlMs,
 } from "./bash-process-registry.js";
-import {
-  getShellConfig,
-  killProcessTree,
-  sanitizeBinaryOutput,
-} from "./shell-utils.js";
+import { getShellConfig, killProcessTree, sanitizeBinaryOutput } from "./shell-utils.js";
 
 const CHUNK_LIMIT = 8 * 1024;
-const DEFAULT_YIELD_MS = clampNumber(
-  readEnvInt("PI_BASH_YIELD_MS"),
-  20_000,
-  10,
-  120_000,
-);
 const DEFAULT_MAX_OUTPUT = clampNumber(
   readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
   30_000,
   1_000,
   150_000,
 );
+
+export type BashToolDefaults = {
+  backgroundMs?: number;
+  timeoutSec?: number;
+};
+
+export type ProcessToolDefaults = {
+  cleanupMs?: number;
+};
 
 const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command to execute" }),
@@ -77,222 +77,247 @@ export type BashToolDetails =
       aggregated: string;
     };
 
-export const bashTool: AgentTool<typeof bashSchema, BashToolDetails> = {
-  name: "bash",
-  label: "bash",
-  description:
-    "Execute bash with background continuation. Use yieldMs/background to continue later via process tool.",
-  parameters: bashSchema,
-  execute: async (_toolCallId, args, signal, onUpdate) => {
-    const params = args as {
-      command: string;
-      workdir?: string;
-      env?: Record<string, string>;
-      yieldMs?: number;
-      background?: boolean;
-      timeout?: number;
-      stdinMode?: "pipe" | "pty";
-    };
+export function createBashTool(
+  defaults?: BashToolDefaults,
+): AgentTool<typeof bashSchema, BashToolDetails> {
+  const defaultBackgroundMs = clampNumber(
+    defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
+    20_000,
+    10,
+    120_000,
+  );
+  const defaultTimeoutSec =
+    typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
+      ? defaults.timeoutSec
+      : 1800;
 
-    if (!params.command) {
-      throw new Error("Provide a command to start.");
-    }
-    if (params.stdinMode && params.stdinMode !== "pipe") {
-      throw new Error('Only stdinMode "pipe" is supported right now.');
-    }
+  return {
+    name: "bash",
+    label: "bash",
+    description:
+      "Execute bash with background continuation. Use yieldMs/background to continue later via process tool.",
+    parameters: bashSchema,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const params = args as {
+        command: string;
+        workdir?: string;
+        env?: Record<string, string>;
+        yieldMs?: number;
+        background?: boolean;
+        timeout?: number;
+        stdinMode?: "pipe" | "pty";
+      };
 
-    const yieldWindow = params.background
-      ? 0
-      : clampNumber(params.yieldMs, DEFAULT_YIELD_MS, 10, 120_000);
-    const maxOutput = DEFAULT_MAX_OUTPUT;
-    const startedAt = Date.now();
-    const sessionId = randomUUID();
-    const workdir = params.workdir?.trim() || process.cwd();
-
-    const { shell, args: shellArgs } = getShellConfig();
-    const env = params.env ?? {};
-    const child: ChildProcessWithoutNullStreams = spawn(
-      shell,
-      [...shellArgs, params.command],
-      {
-        cwd: workdir,
-        env: { ...process.env, ...env },
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
-
-    const session = {
-      id: sessionId,
-      command: params.command,
-      child,
-      startedAt,
-      cwd: workdir,
-      maxOutputChars: maxOutput,
-      totalOutputChars: 0,
-      pendingStdout: [],
-      pendingStderr: [],
-      aggregated: "",
-      tail: "",
-      exited: false,
-      exitCode: undefined as number | null | undefined,
-      exitSignal: undefined as NodeJS.Signals | number | null | undefined,
-      truncated: false,
-      backgrounded: false,
-    };
-    addSession(session);
-
-    let settled = false;
-    let yielded = false;
-    let yieldTimer: NodeJS.Timeout | null = null;
-    let timeoutTimer: NodeJS.Timeout | null = null;
-    let timedOut = false;
-
-    const settle = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      fn();
-    };
-
-    const onAbort = () => {
-      if (child.pid) {
-        killProcessTree(child.pid);
+      if (!params.command) {
+        throw new Error("Provide a command to start.");
       }
-    };
+      if (params.stdinMode && params.stdinMode !== "pipe") {
+        throw new Error('Only stdinMode "pipe" is supported right now.');
+      }
 
-    if (signal?.aborted) onAbort();
-    else if (signal) signal.addEventListener("abort", onAbort, { once: true });
+      const yieldWindow = params.background
+        ? 0
+        : clampNumber(
+            params.yieldMs ?? defaultBackgroundMs,
+            defaultBackgroundMs,
+            10,
+            120_000,
+          );
+      const maxOutput = DEFAULT_MAX_OUTPUT;
+      const startedAt = Date.now();
+      const sessionId = randomUUID();
+      const workdir = params.workdir?.trim() || process.cwd();
 
-    if (typeof params.timeout === "number" && params.timeout > 0) {
-      timeoutTimer = setTimeout(() => {
-        timedOut = true;
-        onAbort();
-      }, params.timeout * 1000);
-    }
-
-    const emitUpdate = () => {
-      if (!onUpdate) return;
-      const tailText = session.tail || session.aggregated;
-      onUpdate({
-        content: [{ type: "text", text: tailText || "" }],
-        details: {
-          status: "running",
-          sessionId,
-          pid: child.pid ?? undefined,
-          startedAt,
-          tail: session.tail,
+      const { shell, args: shellArgs } = getShellConfig();
+      const child: ChildProcessWithoutNullStreams = spawn(
+        shell,
+        [...shellArgs, params.command],
+        {
+          cwd: workdir,
+          env: { ...process.env, ...(params.env ?? {}) },
+          detached: true,
+          stdio: ["pipe", "pipe", "pipe"],
         },
-      });
-    };
+      );
 
-    child.stdout.on("data", (data) => {
-      const str = sanitizeBinaryOutput(data.toString());
-      for (const chunk of chunkString(str)) {
-        appendOutput(session, "stdout", chunk);
-        emitUpdate();
-      }
-    });
-
-    child.stderr.on("data", (data) => {
-      const str = sanitizeBinaryOutput(data.toString());
-      for (const chunk of chunkString(str)) {
-        appendOutput(session, "stderr", chunk);
-        emitUpdate();
-      }
-    });
-
-    return new Promise<AgentToolResult<BashToolDetails>>((resolve, reject) => {
-      const resolveRunning = () => {
-        settle(() =>
-          resolve({
-            content: [
-              {
-                type: "text",
-                text:
-                  `Command still running (session ${sessionId}, pid ${child.pid ?? "n/a"}). ` +
-                  "Use process (list/poll/log/write/kill/clear) for follow-up.",
-              },
-            ],
-            details: {
-              status: "running",
-              sessionId,
-              pid: child.pid ?? undefined,
-              startedAt,
-              tail: session.tail,
-            },
-          }),
-        );
+      const session = {
+        id: sessionId,
+        command: params.command,
+        child,
+        startedAt,
+        cwd: workdir,
+        maxOutputChars: maxOutput,
+        totalOutputChars: 0,
+        pendingStdout: [],
+        pendingStderr: [],
+        aggregated: "",
+        tail: "",
+        exited: false,
+        exitCode: undefined as number | null | undefined,
+        exitSignal: undefined as NodeJS.Signals | number | null | undefined,
+        truncated: false,
+        backgrounded: false,
       };
+      addSession(session);
 
-      const onYieldNow = () => {
-        if (yieldTimer) clearTimeout(yieldTimer);
+      let settled = false;
+      let yielded = false;
+      let yieldTimer: NodeJS.Timeout | null = null;
+      let timeoutTimer: NodeJS.Timeout | null = null;
+      let timedOut = false;
+
+      const settle = (fn: () => void) => {
         if (settled) return;
-        yielded = true;
-        markBackgrounded(session);
-        resolveRunning();
+        settled = true;
+        fn();
       };
 
-      if (yieldWindow === 0) {
-        onYieldNow();
-      } else {
-        yieldTimer = setTimeout(() => {
-          if (settled) return;
-          yielded = true;
-          markBackgrounded(session);
-          resolveRunning();
-        }, yieldWindow);
+      const onAbort = () => {
+        if (child.pid) {
+          killProcessTree(child.pid);
+        }
+      };
+
+      if (signal?.aborted) onAbort();
+      else if (signal) signal.addEventListener("abort", onAbort, { once: true });
+
+      const effectiveTimeout =
+        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+      if (effectiveTimeout > 0) {
+        timeoutTimer = setTimeout(() => {
+          timedOut = true;
+          onAbort();
+        }, effectiveTimeout * 1000);
       }
 
-      child.once("exit", (code, exitSignal) => {
-        if (yieldTimer) clearTimeout(yieldTimer);
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        const durationMs = Date.now() - startedAt;
-        const wasSignal = exitSignal != null;
-        const isSuccess =
-          code === 0 && !wasSignal && !signal?.aborted && !timedOut;
-        const status: "completed" | "failed" = isSuccess
-          ? "completed"
-          : "failed";
-        markExited(session, code, exitSignal, status);
+      const emitUpdate = () => {
+        if (!onUpdate) return;
+        const tailText = session.tail || session.aggregated;
+        onUpdate({
+          content: [{ type: "text", text: tailText || "" }],
+          details: {
+            status: "running",
+            sessionId,
+            pid: child.pid ?? undefined,
+            startedAt,
+            tail: session.tail,
+          },
+        });
+      };
 
-        if (yielded || session.backgrounded) return;
-
-        const aggregated = session.aggregated.trim();
-        if (!isSuccess) {
-          const reason = timedOut
-            ? `Command timed out after ${params.timeout} seconds`
-            : wasSignal && exitSignal
-              ? `Command aborted by signal ${exitSignal}`
-              : code === null
-                ? "Command aborted before exit code was captured"
-                : `Command exited with code ${code}`;
-          const message = aggregated ? `${aggregated}\n\n${reason}` : reason;
-          settle(() => reject(new Error(message)));
-          return;
+      child.stdout.on("data", (data) => {
+        const str = sanitizeBinaryOutput(data.toString());
+        for (const chunk of chunkString(str)) {
+          appendOutput(session, "stdout", chunk);
+          emitUpdate();
         }
-
-        settle(() =>
-          resolve({
-            content: [{ type: "text", text: aggregated || "(no output)" }],
-            details: {
-              status: "completed",
-              exitCode: code ?? 0,
-              durationMs,
-              aggregated,
-            },
-          }),
-        );
       });
 
-      child.once("error", (err) => {
-        if (yieldTimer) clearTimeout(yieldTimer);
-        if (timeoutTimer) clearTimeout(timeoutTimer);
-        markExited(session, null, null, "failed");
-        settle(() => reject(err));
+      child.stderr.on("data", (data) => {
+        const str = sanitizeBinaryOutput(data.toString());
+        for (const chunk of chunkString(str)) {
+          appendOutput(session, "stderr", chunk);
+          emitUpdate();
+        }
       });
-    });
-  },
-};
+
+      return new Promise<AgentToolResult<BashToolDetails>>(
+        (resolve, reject) => {
+          const resolveRunning = () => {
+            settle(() =>
+              resolve({
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      `Command still running (session ${sessionId}, pid ${child.pid ?? "n/a"}). ` +
+                      "Use process (list/poll/log/write/kill/clear/remove) for follow-up.",
+                  },
+                ],
+                details: {
+                  status: "running",
+                  sessionId,
+                  pid: child.pid ?? undefined,
+                  startedAt,
+                  tail: session.tail,
+                },
+              }),
+            );
+          };
+
+          const onYieldNow = () => {
+            if (yieldTimer) clearTimeout(yieldTimer);
+            if (settled) return;
+            yielded = true;
+            markBackgrounded(session);
+            resolveRunning();
+          };
+
+          if (yieldWindow === 0) {
+            onYieldNow();
+          } else {
+            yieldTimer = setTimeout(() => {
+              if (settled) return;
+              yielded = true;
+              markBackgrounded(session);
+              resolveRunning();
+            }, yieldWindow);
+          }
+
+          child.once("exit", (code, exitSignal) => {
+            if (yieldTimer) clearTimeout(yieldTimer);
+            if (timeoutTimer) clearTimeout(timeoutTimer);
+            const durationMs = Date.now() - startedAt;
+            const wasSignal = exitSignal != null;
+            const isSuccess =
+              code === 0 && !wasSignal && !signal?.aborted && !timedOut;
+            const status: "completed" | "failed" = isSuccess
+              ? "completed"
+              : "failed";
+            markExited(session, code, exitSignal, status);
+
+            if (yielded || session.backgrounded) return;
+
+            const aggregated = session.aggregated.trim();
+            if (!isSuccess) {
+              const reason = timedOut
+                ? `Command timed out after ${effectiveTimeout} seconds`
+                : wasSignal && exitSignal
+                  ? `Command aborted by signal ${exitSignal}`
+                  : code === null
+                    ? "Command aborted before exit code was captured"
+                    : `Command exited with code ${code}`;
+              const message = aggregated ? `${aggregated}\n\n${reason}` : reason;
+              settle(() => reject(new Error(message)));
+              return;
+            }
+
+            settle(() =>
+              resolve({
+                content: [{ type: "text", text: aggregated || "(no output)" }],
+                details: {
+                  status: "completed",
+                  exitCode: code ?? 0,
+                  durationMs,
+                  aggregated,
+                },
+              }),
+            );
+          });
+
+          child.once("error", (err) => {
+            if (yieldTimer) clearTimeout(yieldTimer);
+            if (timeoutTimer) clearTimeout(timeoutTimer);
+            markExited(session, null, null, "failed");
+            settle(() => reject(err));
+          });
+        },
+      );
+    },
+  };
+}
+
+export const bashTool = createBashTool();
 
 const processSchema = Type.Object({
   action: StringEnum(
@@ -310,171 +335,185 @@ const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
 });
 
-export const processTool: AgentTool<typeof processSchema> = {
-  name: "process",
-  label: "process",
-  description: "Manage running bash sessions: list, poll, log, write, kill.",
-  parameters: processSchema,
-  execute: async (_toolCallId, args) => {
-    const params = args as {
-      action: "list" | "poll" | "log" | "write" | "kill" | "clear" | "remove";
-      sessionId?: string;
-      data?: string;
-      eof?: boolean;
-      offset?: number;
-      limit?: number;
-    };
+export function createProcessTool(
+  defaults?: ProcessToolDefaults,
+): AgentTool<typeof processSchema> {
+  if (defaults?.cleanupMs !== undefined) {
+    setJobTtlMs(defaults.cleanupMs);
+  }
 
-    if (params.action === "list") {
-      const running = listRunningSessions().map((s) => ({
-        sessionId: s.id,
-        status: "running",
-        pid: s.child.pid ?? undefined,
-        startedAt: s.startedAt,
-        runtimeMs: Date.now() - s.startedAt,
-        cwd: s.cwd,
-        command: s.command,
-        tail: s.tail,
-        truncated: s.truncated,
-      }));
-      const finished = listFinishedSessions().map((s) => ({
-        sessionId: s.id,
-        status: s.status,
-        startedAt: s.startedAt,
-        endedAt: s.endedAt,
-        runtimeMs: s.endedAt - s.startedAt,
-        cwd: s.cwd,
-        command: s.command,
-        tail: s.tail,
-        truncated: s.truncated,
-        exitCode: s.exitCode ?? undefined,
-        exitSignal: s.exitSignal ?? undefined,
-      }));
-      const lines = [...running, ...finished]
-        .sort((a, b) => b.startedAt - a.startedAt)
-        .map(
-          (s) =>
-            `${s.sessionId.slice(0, 8)} ${pad(s.status, 9)} ${formatDuration(
-              s.runtimeMs,
-            )} :: ${truncateMiddle(s.command, 120)}`,
-        );
-      return {
-        content: [
-          {
-            type: "text",
-            text: lines.join("\n") || "No running or recent sessions.",
-          },
-        ],
-        details: { status: "completed", sessions: [...running, ...finished] },
+  return {
+    name: "process",
+    label: "process",
+    description: "Manage running bash sessions: list, poll, log, write, kill.",
+    parameters: processSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as {
+        action: "list" | "poll" | "log" | "write" | "kill" | "clear" | "remove";
+        sessionId?: string;
+        data?: string;
+        eof?: boolean;
+        offset?: number;
+        limit?: number;
       };
-    }
 
-    if (!params.sessionId) {
-      return {
-        content: [
-          { type: "text", text: "sessionId is required for this action." },
-        ],
-        details: { status: "failed" },
-      };
-    }
-
-    const session = getSession(params.sessionId);
-    const finished = getFinishedSession(params.sessionId);
-
-    switch (params.action) {
-      case "poll": {
-        if (!session) {
-          if (finished) {
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    (finished.tail ||
-                      `(no output recorded${
-                        finished.truncated ? " — truncated to cap" : ""
-                      })`) +
-                    `\n\nProcess exited with ${
-                      finished.exitSignal
-                        ? `signal ${finished.exitSignal}`
-                        : `code ${finished.exitCode ?? 0}`
-                    }.`,
-                },
-              ],
-              details: {
-                status:
-                  finished.status === "completed" ? "completed" : "failed",
-                sessionId: params.sessionId,
-                exitCode: finished.exitCode ?? undefined,
-                aggregated: finished.aggregated,
-              },
-            };
-          }
-          return {
-            content: [
-              {
-                type: "text",
-                text: `No session found for ${params.sessionId}`,
-              },
-            ],
-            details: { status: "failed" },
-          };
-        }
-        if (!session.backgrounded) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Session ${params.sessionId} is not backgrounded.`,
-              },
-            ],
-            details: { status: "failed" },
-          };
-        }
-        const { stdout, stderr } = drainSession(session);
-        const exited = session.exited;
-        const exitCode = session.exitCode ?? 0;
-        const exitSignal = session.exitSignal ?? undefined;
-        if (exited) {
-          const status =
-            exitCode === 0 && exitSignal == null ? "completed" : "failed";
-          markExited(
-            session,
-            session.exitCode ?? null,
-            session.exitSignal ?? null,
-            status,
-          );
-        }
-        const status = exited
-          ? exitCode === 0 && exitSignal == null
-            ? "completed"
-            : "failed"
-          : "running";
-        const output = [stdout.trimEnd(), stderr.trimEnd()]
-          .filter(Boolean)
-          .join("\n")
-          .trim();
+      if (params.action === "list") {
+        const running = listRunningSessions().map((s) => ({
+          sessionId: s.id,
+          status: "running",
+          pid: s.child.pid ?? undefined,
+          startedAt: s.startedAt,
+          runtimeMs: Date.now() - s.startedAt,
+          cwd: s.cwd,
+          command: s.command,
+          name: deriveSessionName(s.command),
+          tail: s.tail,
+          truncated: s.truncated,
+        }));
+        const finished = listFinishedSessions().map((s) => ({
+          sessionId: s.id,
+          status: s.status,
+          startedAt: s.startedAt,
+          endedAt: s.endedAt,
+          runtimeMs: s.endedAt - s.startedAt,
+          cwd: s.cwd,
+          command: s.command,
+          name: deriveSessionName(s.command),
+          tail: s.tail,
+          truncated: s.truncated,
+          exitCode: s.exitCode ?? undefined,
+          exitSignal: s.exitSignal ?? undefined,
+        }));
+        const lines = [...running, ...finished]
+          .sort((a, b) => b.startedAt - a.startedAt)
+          .map((s) => {
+            const label = s.name
+              ? truncateMiddle(s.name, 80)
+              : truncateMiddle(s.command, 120);
+            return `${s.sessionId.slice(0, 8)} ${pad(
+              s.status,
+              9,
+            )} ${formatDuration(s.runtimeMs)} :: ${label}`;
+          });
         return {
           content: [
             {
               type: "text",
-              text:
-                (output || "(no new output)") +
-                (exited
-                  ? `\n\nProcess exited with ${
-                      exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
-                    }.`
-                  : "\n\nProcess still running."),
+              text: lines.join("\n") || "No running or recent sessions.",
             },
           ],
-          details: {
-            status,
-            sessionId: params.sessionId,
-            exitCode: exited ? exitCode : undefined,
-            aggregated: session.aggregated,
-          },
+          details: { status: "completed", sessions: [...running, ...finished] },
         };
       }
+
+      if (!params.sessionId) {
+        return {
+          content: [
+            { type: "text", text: "sessionId is required for this action." },
+          ],
+          details: { status: "failed" },
+        };
+      }
+
+      const session = getSession(params.sessionId);
+      const finished = getFinishedSession(params.sessionId);
+
+      switch (params.action) {
+        case "poll": {
+          if (!session) {
+            if (finished) {
+              return {
+                content: [
+                  {
+                    type: "text",
+                    text:
+                      (finished.tail ||
+                        `(no output recorded${
+                          finished.truncated ? " — truncated to cap" : ""
+                        })`) +
+                      `\n\nProcess exited with ${
+                        finished.exitSignal
+                          ? `signal ${finished.exitSignal}`
+                          : `code ${finished.exitCode ?? 0}`
+                      }.`,
+                  },
+                ],
+                details: {
+                  status:
+                    finished.status === "completed" ? "completed" : "failed",
+                  sessionId: params.sessionId,
+                  exitCode: finished.exitCode ?? undefined,
+                  aggregated: finished.aggregated,
+                  name: deriveSessionName(finished.command),
+                },
+              };
+            }
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `No session found for ${params.sessionId}`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          if (!session.backgrounded) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `Session ${params.sessionId} is not backgrounded.`,
+                },
+              ],
+              details: { status: "failed" },
+            };
+          }
+          const { stdout, stderr } = drainSession(session);
+          const exited = session.exited;
+          const exitCode = session.exitCode ?? 0;
+          const exitSignal = session.exitSignal ?? undefined;
+          if (exited) {
+            const status =
+              exitCode === 0 && exitSignal == null ? "completed" : "failed";
+            markExited(
+              session,
+              session.exitCode ?? null,
+              session.exitSignal ?? null,
+              status,
+            );
+          }
+          const status = exited
+            ? exitCode === 0 && exitSignal == null
+              ? "completed"
+              : "failed"
+            : "running";
+          const output = [stdout.trimEnd(), stderr.trimEnd()]
+            .filter(Boolean)
+            .join("\n")
+            .trim();
+          return {
+            content: [
+              {
+                type: "text",
+                text:
+                  (output || "(no new output)") +
+                  (exited
+                    ? `\n\nProcess exited with ${
+                        exitSignal ? `signal ${exitSignal}` : `code ${exitCode}`
+                      }.`
+                    : "\n\nProcess still running."),
+              },
+            ],
+            details: {
+              status,
+              sessionId: params.sessionId,
+              exitCode: exited ? exitCode : undefined,
+              aggregated: session.aggregated,
+              name: deriveSessionName(session.command),
+            },
+          };
+        }
 
       case "log": {
         if (session) {
@@ -489,38 +528,45 @@ export const processTool: AgentTool<typeof processSchema> = {
               details: { status: "failed" },
             };
           }
-          const total = session.aggregated.length;
-          const slice = session.aggregated.slice(
-            params.offset ?? 0,
-            params.limit ? (params.offset ?? 0) + params.limit : undefined,
+          const { slice, totalLines, totalChars } = sliceLogLines(
+            session.aggregated,
+            params.offset,
+            params.limit,
           );
           return {
             content: [{ type: "text", text: slice || "(no output yet)" }],
             details: {
               status: session.exited ? "completed" : "running",
               sessionId: params.sessionId,
-              total,
+              total: totalLines,
+              totalLines,
+              totalChars,
               truncated: session.truncated,
+              name: deriveSessionName(session.command),
             },
           };
         }
         if (finished) {
-          const total = finished.aggregated.length;
-          const slice = finished.aggregated.slice(
-            params.offset ?? 0,
-            params.limit ? (params.offset ?? 0) + params.limit : undefined,
+          const { slice, totalLines, totalChars } = sliceLogLines(
+            finished.aggregated,
+            params.offset,
+            params.limit,
           );
-          const status =
-            finished.status === "completed" ? "completed" : "failed";
+          const status = finished.status === "completed" ? "completed" : "failed";
           return {
-            content: [{ type: "text", text: slice || "(no output recorded)" }],
+            content: [
+              { type: "text", text: slice || "(no output recorded)" },
+            ],
             details: {
               status,
               sessionId: params.sessionId,
-              total,
+              total: totalLines,
+              totalLines,
+              totalChars,
               truncated: finished.truncated,
               exitCode: finished.exitCode ?? undefined,
               exitSignal: finished.exitSignal ?? undefined,
+              name: deriveSessionName(finished.command),
             },
           };
         }
@@ -536,10 +582,7 @@ export const processTool: AgentTool<typeof processSchema> = {
         if (!session) {
           return {
             content: [
-              {
-                type: "text",
-                text: `No active session found for ${params.sessionId}`,
-              },
+              { type: "text", text: `No active session found for ${params.sessionId}` },
             ],
             details: { status: "failed" },
           };
@@ -584,7 +627,11 @@ export const processTool: AgentTool<typeof processSchema> = {
               }${params.eof ? " (stdin closed)" : ""}.`,
             },
           ],
-          details: { status: "running", sessionId: params.sessionId },
+          details: {
+            status: "running",
+            sessionId: params.sessionId,
+            name: session ? deriveSessionName(session.command) : undefined,
+          },
         };
       }
 
@@ -592,10 +639,7 @@ export const processTool: AgentTool<typeof processSchema> = {
         if (!session) {
           return {
             content: [
-              {
-                type: "text",
-                text: `No active session found for ${params.sessionId}`,
-              },
+              { type: "text", text: `No active session found for ${params.sessionId}` },
             ],
             details: { status: "failed" },
           };
@@ -619,70 +663,79 @@ export const processTool: AgentTool<typeof processSchema> = {
           content: [
             { type: "text", text: `Killed session ${params.sessionId}.` },
           ],
-          details: { status: "failed" },
+          details: {
+            status: "failed",
+            name: session ? deriveSessionName(session.command) : undefined,
+          },
         };
       }
 
-      case "clear": {
-        if (finished) {
-          deleteSession(params.sessionId);
-          return {
-            content: [
-              { type: "text", text: `Cleared session ${params.sessionId}.` },
-            ],
-            details: { status: "completed" },
-          };
-        }
-        return {
-          content: [
-            {
-              type: "text",
-              text: `No finished session found for ${params.sessionId}`,
-            },
-          ],
-          details: { status: "failed" },
-        };
-      }
-
-      case "remove": {
-        if (session) {
-          if (session.child.pid) {
-            killProcessTree(session.child.pid);
+        case "clear": {
+          if (finished) {
+            deleteSession(params.sessionId);
+            return {
+              content: [
+                { type: "text", text: `Cleared session ${params.sessionId}.` },
+              ],
+              details: { status: "completed" },
+            };
           }
-          markExited(session, null, "SIGKILL", "failed");
           return {
             content: [
-              { type: "text", text: `Removed session ${params.sessionId}.` },
+              {
+                type: "text",
+                text: `No finished session found for ${params.sessionId}`,
+              },
             ],
             details: { status: "failed" },
           };
         }
-        if (finished) {
-          deleteSession(params.sessionId);
+
+        case "remove": {
+          if (session) {
+            if (session.child.pid) {
+              killProcessTree(session.child.pid);
+            }
+            markExited(session, null, "SIGKILL", "failed");
+            return {
+              content: [
+                { type: "text", text: `Removed session ${params.sessionId}.` },
+              ],
+              details: {
+                status: "failed",
+                name: session ? deriveSessionName(session.command) : undefined,
+              },
+            };
+          }
+          if (finished) {
+            deleteSession(params.sessionId);
+            return {
+              content: [
+                { type: "text", text: `Removed session ${params.sessionId}.` },
+              ],
+              details: { status: "completed" },
+            };
+          }
           return {
             content: [
-              { type: "text", text: `Removed session ${params.sessionId}.` },
+              { type: "text", text: `No session found for ${params.sessionId}` },
             ],
-            details: { status: "completed" },
+            details: { status: "failed" },
           };
         }
-        return {
-          content: [
-            { type: "text", text: `No session found for ${params.sessionId}` },
-          ],
-          details: { status: "failed" },
-        };
       }
-    }
 
-    return {
-      content: [
-        { type: "text", text: `Unknown action ${params.action as string}` },
-      ],
-      details: { status: "failed" },
-    };
-  },
-};
+      return {
+        content: [
+          { type: "text", text: `Unknown action ${params.action as string}` },
+        ],
+        details: { status: "failed" },
+      };
+    },
+  };
+}
+
+export const processTool = createProcessTool();
 
 function clampNumber(
   value: number | undefined,
@@ -713,6 +766,62 @@ function truncateMiddle(str: string, max: number) {
   if (str.length <= max) return str;
   const half = Math.floor((max - 3) / 2);
   return `${str.slice(0, half)}...${str.slice(str.length - half)}`;
+}
+
+function sliceLogLines(
+  text: string,
+  offset?: number,
+  limit?: number,
+): { slice: string; totalLines: number; totalChars: number } {
+  if (!text) return { slice: "", totalLines: 0, totalChars: 0 };
+  const normalized = text.replace(/\r\n/g, "\n");
+  const lines = normalized.split("\n");
+  if (lines.length > 0 && lines[lines.length - 1] === "") {
+    lines.pop();
+  }
+  const totalLines = lines.length;
+  const totalChars = text.length;
+  let start =
+    typeof offset === "number" && Number.isFinite(offset)
+      ? Math.max(0, Math.floor(offset))
+      : 0;
+  if (limit !== undefined && offset === undefined) {
+    const tailCount = Math.max(0, Math.floor(limit));
+    start = Math.max(totalLines - tailCount, 0);
+  }
+  const end =
+    typeof limit === "number" && Number.isFinite(limit)
+      ? start + Math.max(0, Math.floor(limit))
+      : undefined;
+  return { slice: lines.slice(start, end).join("\n"), totalLines, totalChars };
+}
+
+function deriveSessionName(command: string): string | undefined {
+  const tokens = tokenizeCommand(command);
+  if (tokens.length === 0) return undefined;
+  const verb = tokens[0];
+  let target = tokens.slice(1).find((t) => !t.startsWith("-"));
+  if (!target) target = tokens[1];
+  if (!target) return verb;
+  const cleaned = truncateMiddle(stripQuotes(target), 48);
+  return `${stripQuotes(verb)} ${cleaned}`;
+}
+
+function tokenizeCommand(command: string): string[] {
+  const matches =
+    command.match(/(?:[^\s"']+|"(?:\\.|[^"])*"|'(?:\\.|[^'])*')+/g) ?? [];
+  return matches.map((token) => stripQuotes(token)).filter(Boolean);
+}
+
+function stripQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (
+    (trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
 }
 
 function formatDuration(ms: number) {

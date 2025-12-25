@@ -131,10 +131,20 @@ Controls the embedded agent runtime (provider/model/thinking/verbose/timeouts).
     timeoutSeconds: 600,
     mediaMaxMb: 5,
     heartbeatMinutes: 30,
+    bash: {
+      backgroundMs: 20000,
+      timeoutSec: 1800,
+      cleanupMs: 1800000
+    },
     contextTokens: 200000
   }
 }
 ```
+
+`agent.bash` configures background bash defaults:
+- `backgroundMs`: time before auto-background (ms, default 20000)
+- `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
+- `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
 
 ### `models` (custom providers + base URLs)
 

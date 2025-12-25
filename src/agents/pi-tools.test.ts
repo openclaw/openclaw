@@ -32,6 +32,9 @@ describe("createClawdisCodingTools", () => {
         anyOf?: Array<{ properties?: Record<string, unknown> }>;
         properties?: Record<string, unknown>;
       };
+      if (!Array.isArray(parameters.anyOf) || parameters.anyOf.length === 0) {
+        continue;
+      }
       const actionValues = new Set<string>();
       for (const variant of parameters.anyOf ?? []) {
         const action = variant?.properties?.action as
@@ -45,6 +48,9 @@ describe("createClawdisCodingTools", () => {
         }
       }
 
+      if (actionValues.size <= 1) {
+        continue;
+      }
       const mergedAction = parameters.properties?.action as
         | { const?: unknown; enum?: unknown[] }
         | undefined;

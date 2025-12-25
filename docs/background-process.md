@@ -15,7 +15,7 @@ Key parameters:
 - `command` (required)
 - `yieldMs` (default 20000): auto‑background after this delay
 - `background` (bool): background immediately
-- `timeout` (seconds): kill the process after this timeout
+- `timeout` (seconds, default 1800): kill the process after this timeout
 - `workdir`, `env`
 
 Behavior:
@@ -27,6 +27,11 @@ Environment overrides:
 - `PI_BASH_YIELD_MS`: default yield (ms)
 - `PI_BASH_MAX_OUTPUT_CHARS`: in‑memory output cap (chars)
 - `PI_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
+
+Config (preferred):
+- `agent.bash.backgroundMs` (default 20000)
+- `agent.bash.timeoutSec` (default 1800)
+- `agent.bash.cleanupMs` (default 1800000)
 
 ## process tool
 
@@ -43,6 +48,8 @@ Notes:
 - Only backgrounded sessions are listed/persisted in memory.
 - Sessions are lost on process restart (no disk persistence).
 - Session logs are only saved to chat history if you run `process poll/log` and the tool result is recorded.
+- `process list` includes a derived `name` (command verb + target) for quick scans.
+- `process log` uses line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 
 ## Examples
 

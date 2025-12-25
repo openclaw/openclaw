@@ -9,7 +9,7 @@ function clampTtl(value: number | undefined) {
   return Math.min(Math.max(value, MIN_JOB_TTL_MS), MAX_JOB_TTL_MS);
 }
 
-const JOB_TTL_MS = clampTtl(
+let jobTtlMs = clampTtl(
   Number.parseInt(process.env.PI_BASH_JOB_TTL_MS ?? "", 10),
 );
 
@@ -163,14 +163,18 @@ export function clearFinished() {
 export function resetProcessRegistryForTests() {
   runningSessions.clear();
   finishedSessions.clear();
-  if (sweeper) {
-    clearInterval(sweeper);
-    sweeper = null;
-  }
+  stopSweeper();
+}
+
+export function setJobTtlMs(value?: number) {
+  if (value === undefined || Number.isNaN(value)) return;
+  jobTtlMs = clampTtl(value);
+  stopSweeper();
+  startSweeper();
 }
 
 function pruneFinishedSessions() {
-  const cutoff = Date.now() - JOB_TTL_MS;
+  const cutoff = Date.now() - jobTtlMs;
   for (const [id, session] of finishedSessions.entries()) {
     if (session.endedAt < cutoff) {
       finishedSessions.delete(id);
@@ -180,9 +184,12 @@ function pruneFinishedSessions() {
 
 function startSweeper() {
   if (sweeper) return;
-  sweeper = setInterval(
-    pruneFinishedSessions,
-    Math.max(30_000, JOB_TTL_MS / 6),
-  );
+  sweeper = setInterval(pruneFinishedSessions, Math.max(30_000, jobTtlMs / 6));
   sweeper.unref?.();
+}
+
+function stopSweeper() {
+  if (!sweeper) return;
+  clearInterval(sweeper);
+  sweeper = null;
 }

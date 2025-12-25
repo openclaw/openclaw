@@ -20,7 +20,7 @@ Core parameters:
 - `command` (required)
 - `yieldMs` (auto-background after timeout, default 20000)
 - `background` (immediate background)
-- `timeout` (seconds; kills the process if exceeded)
+- `timeout` (seconds; kills the process if exceeded, default 1800)
 
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
@@ -34,7 +34,7 @@ Core actions:
 
 Notes:
 - `poll` returns new output and exit status when complete.
-- `log` supports `offset`/`limit` to page through output.
+- `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 
 ### `clawdis_browser`
 Control the dedicated clawd browser.
@@ -89,6 +89,15 @@ Core actions:
 Notes:
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
 - `update` uses `{ jobId, patch }`.
+
+### `clawdis_gateway`
+Restart the running Gateway process (in-place).
+
+Core actions:
+- `restart` (sends `SIGUSR1` to the current process; `clawdis gateway`/`gateway-daemon` restart in-place)
+
+Notes:
+- Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
 
 ## Parameters (common)
 
