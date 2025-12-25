@@ -52,7 +52,7 @@ export interface FinishedSession {
 const runningSessions = new Map<string, ProcessSession>();
 const finishedSessions = new Map<string, FinishedSession>();
 
-let sweeper: NodeJS.Timer | null = null;
+let sweeper: NodeJS.Timeout | null = null;
 
 export function addSession(session: ProcessSession) {
   runningSessions.set(session.id, session);

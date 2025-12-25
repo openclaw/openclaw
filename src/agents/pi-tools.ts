@@ -294,11 +294,12 @@ export function createClawdisCodingTools(): AnyAgentTool[] {
     if (tool.name === bashTool.name) return [];
     return [tool as AnyAgentTool];
   });
-  return [
+  const tools: AnyAgentTool[] = [
     ...base,
-    bashTool,
-    processTool,
+    bashTool as AnyAgentTool,
+    processTool as AnyAgentTool,
     createWhatsAppLoginTool(),
     ...createClawdisTools(),
-  ].map(normalizeToolParameters);
+  ];
+  return tools.map(normalizeToolParameters);
 }
