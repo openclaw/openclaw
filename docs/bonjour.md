@@ -71,7 +71,7 @@ For a tailnet-only setup, bind it to the Tailscale IP instead:
 - Set `bridge.bind: "tailnet"` in `~/.clawdis/clawdis.json`.
 - Restart the Gateway (or restart the macOS menubar app via `./scripts/restart-mac.sh` on that machine).
 
-This keeps the bridge reachable only from devices on your tailnet (unless you intentionally expose it some other way).
+This keeps the bridge reachable only from devices on your tailnet (while still listening on loopback for local/SSH port-forwards).
 
 ## What advertises
 

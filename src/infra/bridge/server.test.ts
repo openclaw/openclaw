@@ -49,6 +49,17 @@ function sendLine(socket: net.Socket, obj: unknown) {
 describe("node bridge server", () => {
   let baseDir = "";
 
+  const pickNonLoopbackIPv4 = () => {
+    const ifaces = os.networkInterfaces();
+    for (const entries of Object.values(ifaces)) {
+      for (const info of entries ?? []) {
+        if (info.family === "IPv4" && info.internal === false)
+          return info.address;
+      }
+    }
+    return null;
+  };
+
   beforeAll(async () => {
     process.env.CLAWDIS_ENABLE_BRIDGE_IN_TESTS = "1";
     baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-bridge-test-"));
@@ -69,6 +80,31 @@ describe("node bridge server", () => {
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
     const readLine = createLineReader(socket);
     sendLine(socket, { type: "hello", nodeId: "n1" });
+    const line = await readLine();
+    const msg = JSON.parse(line) as { type: string; code?: string };
+    expect(msg.type).toBe("error");
+    expect(msg.code).toBe("NOT_PAIRED");
+    socket.destroy();
+    await server.close();
+  });
+
+  it("also listens on loopback when bound to a non-loopback host", async () => {
+    const host = pickNonLoopbackIPv4();
+    if (!host) return;
+
+    const server = await startNodeBridgeServer({
+      host,
+      port: 0,
+      pairingBaseDir: baseDir,
+    });
+
+    const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", reject);
+    });
+    const readLine = createLineReader(socket);
+    sendLine(socket, { type: "hello", nodeId: "n-loopback" });
     const line = await readLine();
     const msg = JSON.parse(line) as { type: string; code?: string };
     expect(msg.type).toBe("error");

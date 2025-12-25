@@ -209,7 +209,21 @@ export async function startNodeBridgeServer(
 
   const connections = new Map<string, ConnectionState>();
 
-  const server = net.createServer((socket) => {
+  const shouldAlsoListenOnLoopback = (host: string | undefined) => {
+    const h = String(host ?? "")
+      .trim()
+      .toLowerCase();
+    if (!h) return false; // default listen() already includes loopback
+    if (h === "0.0.0.0" || h === "::") return false; // already includes loopback
+    if (h === "localhost") return false;
+    if (h === "127.0.0.1" || h.startsWith("127.")) return false;
+    if (h === "::1") return false;
+    return true;
+  };
+
+  const loopbackHost = "127.0.0.1";
+
+  const onConnection = (socket: net.Socket) => {
     socket.setNoDelay(true);
 
     let buffer = "";
@@ -656,16 +670,44 @@ export async function startNodeBridgeServer(
     socket.on("error", () => {
       // close handler will run after close
     });
-  });
+  };
 
+  const servers: net.Server[] = [];
+  const primary = net.createServer(onConnection);
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(opts.port, opts.host, () => resolve());
+    const onError = (err: Error) => reject(err);
+    primary.once("error", onError);
+    primary.listen(opts.port, opts.host, () => {
+      primary.off("error", onError);
+      resolve();
+    });
   });
+  servers.push(primary);
 
-  const address = server.address();
+  const address = primary.address();
   const port =
     typeof address === "object" && address ? address.port : opts.port;
+
+  if (shouldAlsoListenOnLoopback(opts.host)) {
+    const loopback = net.createServer(onConnection);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (err: Error) => reject(err);
+        loopback.once("error", onError);
+        loopback.listen(port, loopbackHost, () => {
+          loopback.off("error", onError);
+          resolve();
+        });
+      });
+      servers.push(loopback);
+    } catch {
+      try {
+        loopback.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
 
   return {
     port,
@@ -678,8 +720,13 @@ export async function startNodeBridgeServer(
         }
       }
       connections.clear();
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
+      await Promise.all(
+        servers.map(
+          (s) =>
+            new Promise<void>((resolve, reject) =>
+              s.close((err) => (err ? reject(err) : resolve())),
+            ),
+        ),
       );
     },
     listConnected: () => [...connections.values()].map((c) => c.nodeInfo),
