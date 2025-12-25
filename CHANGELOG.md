@@ -30,6 +30,7 @@
 - System prompt now tags allowlisted owner numbers as the user identity to avoid mistaken “friend” assumptions.
 - LM Studio/Ollama replies now require <final> tags; streaming ignores content until <final> begins.
 - `process log` pagination is now line-based (omit `offset` to grab the last N lines).
+- macOS WebChat: assistant bubbles now update correctly when toggling light/dark mode.
 - macOS: avoid spawning a duplicate gateway process when an external listener already exists.
 - Node bridge: when binding to a non-loopback host (e.g. Tailnet IP), also listens on `127.0.0.1` for local connections (without creating duplicate loopback listeners for `0.0.0.0`/`127.0.0.1` binds).
 - UI perf: pause repeat animations when scenes are inactive (typing dots, onboarding glow, iOS status pulse), throttle voice overlay level updates, and reduce overlay focus churn.

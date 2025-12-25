@@ -6,7 +6,39 @@ import AppKit
 import UIKit
 #endif
 
+#if os(macOS)
+private extension NSAppearance {
+    var isDarkAqua: Bool {
+        self.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    }
+}
+#endif
+
 enum ClawdisChatTheme {
+    #if os(macOS)
+    static func resolvedAssistantBubbleColor(for appearance: NSAppearance) -> NSColor {
+        // NSColor semantic colors don't reliably resolve for arbitrary NSAppearance in SwiftPM.
+        // Use explicit light/dark values so the bubble updates when the system appearance flips.
+        appearance.isDarkAqua
+            ? NSColor(calibratedWhite: 0.18, alpha: 0.88)
+            : NSColor(calibratedWhite: 0.94, alpha: 0.92)
+    }
+
+    static func resolvedOnboardingAssistantBubbleColor(for appearance: NSAppearance) -> NSColor {
+        appearance.isDarkAqua
+            ? NSColor(calibratedWhite: 0.20, alpha: 0.94)
+            : NSColor(calibratedWhite: 0.97, alpha: 0.98)
+    }
+
+    static let assistantBubbleDynamicNSColor = NSColor(
+        name: NSColor.Name("ClawdisChatTheme.assistantBubble"),
+        dynamicProvider: resolvedAssistantBubbleColor(for:))
+
+    static let onboardingAssistantBubbleDynamicNSColor = NSColor(
+        name: NSColor.Name("ClawdisChatTheme.onboardingAssistantBubble"),
+        dynamicProvider: resolvedOnboardingAssistantBubbleColor(for:))
+    #endif
+
     static var surface: Color {
         #if os(macOS)
         Color(nsColor: .windowBackgroundColor)
@@ -78,9 +110,7 @@ enum ClawdisChatTheme {
 
     static var assistantBubble: Color {
         #if os(macOS)
-        let base = NSColor.controlBackgroundColor
-        let blended = base.blended(withFraction: 0.18, of: .white) ?? base
-        return Color(nsColor: blended).opacity(0.88)
+        Color(nsColor: self.assistantBubbleDynamicNSColor)
         #else
         Color(uiColor: .secondarySystemBackground)
         #endif
@@ -88,9 +118,7 @@ enum ClawdisChatTheme {
 
     static var onboardingAssistantBubble: Color {
         #if os(macOS)
-        let base = NSColor.controlBackgroundColor
-        let blended = base.blended(withFraction: 0.22, of: .white) ?? base
-        return Color(nsColor: blended)
+        Color(nsColor: self.onboardingAssistantBubbleDynamicNSColor)
         #else
         Color(uiColor: .secondarySystemBackground)
         #endif
