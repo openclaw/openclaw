@@ -8,6 +8,7 @@
 - Group chat activation modes: per-group `/activation mention|always` command with status visibility.
 - Gateway webhooks: external `wake` and isolated `agent` hooks with dedicated token auth.
 - Hook mappings + Gmail Pub/Sub helper (`clawdis hooks gmail setup/run`) with auto-renew + Tailscale Funnel support.
+- Background bash tasks: `bash` auto-yields after 20s (or on demand) with a `process` tool to list/poll/log/write/kill sessions.
 
 ### Breaking
 - Config refactor: `inbound.*` removed; use top-level `routing` (allowlists + group rules + transcription), `messages` (prefixes/timestamps), and `session` (scoping/store/mainKey). No legacy keys read.
