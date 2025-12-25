@@ -34,7 +34,7 @@ jobs:
         if: matrix.runtime == 'node'
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.12.0
           check-latest: true
 
       - name: Setup Bun
@@ -49,7 +49,7 @@ jobs:
         if: matrix.runtime == 'bun'
         uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 22.12.0
           check-latest: true
 
       - name: Runtime versions

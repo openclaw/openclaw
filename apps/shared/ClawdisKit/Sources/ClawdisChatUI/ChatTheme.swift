@@ -7,8 +7,8 @@ import UIKit
 #endif
 
 #if os(macOS)
-private extension NSAppearance {
-    var isDarkAqua: Bool {
+extension NSAppearance {
+    fileprivate var isDarkAqua: Bool {
         self.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
     }
 }
