@@ -25,6 +25,84 @@ type GatewayRpcOpts = {
 
 const gatewayLog = createSubsystemLogger("gateway");
 
+type GatewayRunSignalAction = "stop" | "restart";
+
+async function runGatewayLoop(params: {
+  start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
+  runtime: typeof defaultRuntime;
+}) {
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+  let shuttingDown = false;
+  let restartResolver: (() => void) | null = null;
+
+  const cleanupSignals = () => {
+    process.removeListener("SIGTERM", onSigterm);
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGUSR1", onSigusr1);
+  };
+
+  const request = (action: GatewayRunSignalAction, signal: string) => {
+    if (shuttingDown) {
+      gatewayLog.info(`received ${signal} during shutdown; ignoring`);
+      return;
+    }
+    shuttingDown = true;
+    const isRestart = action === "restart";
+    gatewayLog.info(
+      `received ${signal}; ${isRestart ? "restarting" : "shutting down"}`,
+    );
+
+    const forceExitTimer = setTimeout(() => {
+      gatewayLog.error("shutdown timed out; exiting without full cleanup");
+      cleanupSignals();
+      params.runtime.exit(0);
+    }, 5000);
+
+    void (async () => {
+      try {
+        await server?.close({
+          reason: isRestart ? "gateway restarting" : "gateway stopping",
+          restartExpectedMs: isRestart ? 1500 : null,
+        });
+      } catch (err) {
+        gatewayLog.error(`shutdown error: ${String(err)}`);
+      } finally {
+        clearTimeout(forceExitTimer);
+        server = null;
+        if (isRestart) {
+          shuttingDown = false;
+          restartResolver?.();
+        } else {
+          cleanupSignals();
+          params.runtime.exit(0);
+        }
+      }
+    })();
+  };
+
+  const onSigterm = () => request("stop", "SIGTERM");
+  const onSigint = () => request("stop", "SIGINT");
+  const onSigusr1 = () => request("restart", "SIGUSR1");
+
+  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT", onSigint);
+  process.on("SIGUSR1", onSigusr1);
+
+  try {
+    // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
+    // SIGTERM/SIGINT still exit after a graceful shutdown.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      server = await params.start();
+      await new Promise<void>((resolve) => {
+        restartResolver = resolve;
+      });
+    }
+  } finally {
+    cleanupSignals();
+  }
+}
+
 const gatewayCallOpts = (cmd: Command) =>
   cmd
     .option("--url <url>", "Gateway WebSocket URL", "ws://127.0.0.1:18789")
@@ -155,61 +233,27 @@ export function registerGatewayCli(program: Command) {
         return;
       }
 
-      let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
-      let shuttingDown = false;
-      let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
-
-      const onSigterm = () => shutdown("SIGTERM");
-      const onSigint = () => shutdown("SIGINT");
-
-      const shutdown = (signal: string) => {
-        process.removeListener("SIGTERM", onSigterm);
-        process.removeListener("SIGINT", onSigint);
-
-        if (shuttingDown) {
-          gatewayLog.info(`received ${signal} during shutdown; exiting now`);
-          defaultRuntime.exit(0);
-        }
-        shuttingDown = true;
-        gatewayLog.info(`received ${signal}; shutting down`);
-
-        forceExitTimer = setTimeout(() => {
-          gatewayLog.error("shutdown timed out; exiting without full cleanup");
-          defaultRuntime.exit(0);
-        }, 5000);
-
-        void (async () => {
-          try {
-            await server?.close();
-          } catch (err) {
-            gatewayLog.error(`shutdown error: ${String(err)}`);
-          } finally {
-            if (forceExitTimer) clearTimeout(forceExitTimer);
-            defaultRuntime.exit(0);
-          }
-        })();
-      };
-
-      process.once("SIGTERM", onSigterm);
-      process.once("SIGINT", onSigint);
-
       try {
-        server = await startGatewayServer(port, {
-          bind,
-          auth:
-            authMode || opts.password || authModeRaw
-              ? {
-                  mode: authMode ?? undefined,
-                  password: opts.password ? String(opts.password) : undefined,
-                }
-              : undefined,
-          tailscale:
-            tailscaleMode || opts.tailscaleResetOnExit
-              ? {
-                  mode: tailscaleMode ?? undefined,
-                  resetOnExit: Boolean(opts.tailscaleResetOnExit),
-                }
-              : undefined,
+        await runGatewayLoop({
+          runtime: defaultRuntime,
+          start: async () =>
+            await startGatewayServer(port, {
+              bind,
+              auth:
+                authMode || opts.password || authModeRaw
+                  ? {
+                      mode: authMode ?? undefined,
+                      password: opts.password ? String(opts.password) : undefined,
+                    }
+                  : undefined,
+              tailscale:
+                tailscaleMode || opts.tailscaleResetOnExit
+                  ? {
+                      mode: tailscaleMode ?? undefined,
+                      resetOnExit: Boolean(opts.tailscaleResetOnExit),
+                    }
+                  : undefined,
+            }),
         });
       } catch (err) {
         if (err instanceof GatewayLockError) {
@@ -220,8 +264,6 @@ export function registerGatewayCli(program: Command) {
         defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
         defaultRuntime.exit(1);
       }
-
-      await new Promise<never>(() => {});
     });
 
   const gateway = program
@@ -385,63 +427,27 @@ export function registerGatewayCli(program: Command) {
         return;
       }
 
-      let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
-      let shuttingDown = false;
-      let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
-
-      const onSigterm = () => shutdown("SIGTERM");
-      const onSigint = () => shutdown("SIGINT");
-
-      const shutdown = (signal: string) => {
-        // Ensure we don't leak listeners across restarts/tests.
-        process.removeListener("SIGTERM", onSigterm);
-        process.removeListener("SIGINT", onSigint);
-
-        if (shuttingDown) {
-          gatewayLog.info(`received ${signal} during shutdown; exiting now`);
-          defaultRuntime.exit(0);
-        }
-        shuttingDown = true;
-        gatewayLog.info(`received ${signal}; shutting down`);
-
-        // Avoid hanging forever if a provider task ignores abort.
-        forceExitTimer = setTimeout(() => {
-          gatewayLog.error("shutdown timed out; exiting without full cleanup");
-          defaultRuntime.exit(0);
-        }, 5000);
-
-        void (async () => {
-          try {
-            await server?.close();
-          } catch (err) {
-            gatewayLog.error(`shutdown error: ${String(err)}`);
-          } finally {
-            if (forceExitTimer) clearTimeout(forceExitTimer);
-            defaultRuntime.exit(0);
-          }
-        })();
-      };
-
-      process.once("SIGTERM", onSigterm);
-      process.once("SIGINT", onSigint);
-
       try {
-        server = await startGatewayServer(port, {
-          bind,
-          auth:
-            authMode || opts.password || authModeRaw
-              ? {
-                  mode: authMode ?? undefined,
-                  password: opts.password ? String(opts.password) : undefined,
-                }
-              : undefined,
-          tailscale:
-            tailscaleMode || opts.tailscaleResetOnExit
-              ? {
-                  mode: tailscaleMode ?? undefined,
-                  resetOnExit: Boolean(opts.tailscaleResetOnExit),
-                }
-              : undefined,
+        await runGatewayLoop({
+          runtime: defaultRuntime,
+          start: async () =>
+            await startGatewayServer(port, {
+              bind,
+              auth:
+                authMode || opts.password || authModeRaw
+                  ? {
+                      mode: authMode ?? undefined,
+                      password: opts.password ? String(opts.password) : undefined,
+                    }
+                  : undefined,
+              tailscale:
+                tailscaleMode || opts.tailscaleResetOnExit
+                  ? {
+                      mode: tailscaleMode ?? undefined,
+                      resetOnExit: Boolean(opts.tailscaleResetOnExit),
+                    }
+                  : undefined,
+            }),
         });
       } catch (err) {
         if (err instanceof GatewayLockError) {
@@ -452,8 +458,6 @@ export function registerGatewayCli(program: Command) {
         defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
         defaultRuntime.exit(1);
       }
-      // Keep process alive
-      await new Promise<never>(() => {});
     });
 
   gatewayCallOpts(

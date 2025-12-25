@@ -95,54 +95,82 @@ async function main() {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let forceExitTimer: ReturnType<typeof setTimeout> | null = null;
+  let restartResolver: (() => void) | null = null;
 
-  const shutdown = (signal: string) => {
+  const cleanupSignals = () => {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGUSR1", onSigusr1);
+  };
 
+  const request = (action: "stop" | "restart", signal: string) => {
     if (shuttingDown) {
       defaultRuntime.log(
-        `gateway: received ${signal} during shutdown; exiting now`,
+        `gateway: received ${signal} during shutdown; ignoring`,
       );
-      process.exit(0);
+      return;
     }
     shuttingDown = true;
-    defaultRuntime.log(`gateway: received ${signal}; shutting down`);
+    const isRestart = action === "restart";
+    defaultRuntime.log(
+      `gateway: received ${signal}; ${isRestart ? "restarting" : "shutting down"}`,
+    );
 
     forceExitTimer = setTimeout(() => {
       defaultRuntime.error(
         "gateway: shutdown timed out; exiting without full cleanup",
       );
+      cleanupSignals();
       process.exit(0);
     }, 5000);
 
     void (async () => {
       try {
-        await server?.close();
+        await server?.close({
+          reason: isRestart ? "gateway restarting" : "gateway stopping",
+          restartExpectedMs: isRestart ? 1500 : null,
+        });
       } catch (err) {
         defaultRuntime.error(`gateway: shutdown error: ${String(err)}`);
       } finally {
         if (forceExitTimer) clearTimeout(forceExitTimer);
-        process.exit(0);
+        server = null;
+        if (isRestart) {
+          shuttingDown = false;
+          restartResolver?.();
+        } else {
+          cleanupSignals();
+          process.exit(0);
+        }
       }
     })();
   };
 
-  const onSigterm = () => shutdown("SIGTERM");
-  const onSigint = () => shutdown("SIGINT");
+  const onSigterm = () => request("stop", "SIGTERM");
+  const onSigint = () => request("stop", "SIGINT");
+  const onSigusr1 = () => request("restart", "SIGUSR1");
 
-  process.once("SIGTERM", onSigterm);
-  process.once("SIGINT", onSigint);
+  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT", onSigint);
+  process.on("SIGUSR1", onSigusr1);
 
   try {
-    server = await startGatewayServer(port, { bind });
-  } catch (err) {
-    defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
-    process.exit(1);
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        server = await startGatewayServer(port, { bind });
+      } catch (err) {
+        cleanupSignals();
+        defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
+        process.exit(1);
+      }
+      await new Promise<void>((resolve) => {
+        restartResolver = resolve;
+      });
+    }
+  } finally {
+    cleanupSignals();
   }
-
-  // Keep process alive
-  await new Promise<never>(() => {});
 }
 
 void main();
