@@ -325,6 +325,8 @@ export type ClawdisConfig = {
     typingIntervalSeconds?: number;
     /** Periodic background heartbeat runs (minutes). 0 disables. */
     heartbeatMinutes?: number;
+    /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
+    maxConcurrent?: number;
     /** Bash tool defaults. */
     bash?: {
       /** Default time (ms) before a bash command auto-backgrounds. */
@@ -582,6 +584,7 @@ const ClawdisSchema = z.object({
       mediaMaxMb: z.number().positive().optional(),
       typingIntervalSeconds: z.number().int().positive().optional(),
       heartbeatMinutes: z.number().nonnegative().optional(),
+      maxConcurrent: z.number().int().positive().optional(),
       bash: z
         .object({
           backgroundMs: z.number().int().positive().optional(),

@@ -1736,6 +1736,7 @@ export async function startGatewayServer(
     { controller: AbortController; sessionId: string; sessionKey: string }
   >();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
+  setCommandLaneConcurrency("main", cfgAtStart.agent?.maxConcurrent ?? 1);
 
   const cronStorePath = resolveCronStorePath(cfgAtStart.cron?.store);
   const cronLogger = getChildLogger({
