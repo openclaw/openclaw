@@ -1,14 +1,15 @@
 # Changelog
 
-## 2.0.0-beta3 — Unreleased (2025-12-23)
+## 2.0.0-beta3 — Unreleased (2025-12-25)
 
 ### Highlights
-- First-class Clawdis tools (browser, canvas, nodes, cron) replace the old `clawdis-*` skills; tool schemas are now injected directly into the agent runtime.
-- Custom model providers: `models.providers` merges into `~/.clawdis/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
+- First-class Clawdis tools (browser, canvas, nodes, cron) replace the old `clawdis-*` skills; tool schemas are now injected directly into the agent runtime (including selector-based browser actions).
+- Per-session model selection + custom model providers: `models.providers` merges into `~/.clawdis/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
 - Group chat activation modes: per-group `/activation mention|always` command with status visibility.
 - Gateway webhooks: external `wake` and isolated `agent` hooks with dedicated token auth.
 - Hook mappings + Gmail Pub/Sub helper (`clawdis hooks gmail setup/run`) with auto-renew + Tailscale Funnel support.
 - Background bash tasks: `bash` auto-yields after 20s (or on demand) with a `process` tool to list/poll/log/write/kill sessions.
+- Gateway in-process restart: `clawdis_gateway` tool action triggers a SIGUSR1 restart without needing a supervisor.
 
 ### Breaking
 - Config refactor: `inbound.*` removed; use top-level `routing` (allowlists + group rules + transcription), `messages` (prefixes/timestamps), and `session` (scoping/store/mainKey). No legacy keys read.
@@ -29,6 +30,8 @@
 - System prompt now tags allowlisted owner numbers as the user identity to avoid mistaken “friend” assumptions.
 - LM Studio/Ollama replies now require <final> tags; streaming ignores content until <final> begins.
 - `process log` pagination is now line-based (omit `offset` to grab the last N lines).
+- macOS: avoid spawning a duplicate gateway process when an external listener already exists.
+- Node bridge: when binding to a non-loopback host (e.g. Tailnet IP), also listens on `127.0.0.1` for local connections (without creating duplicate loopback listeners for `0.0.0.0`/`127.0.0.1` binds).
 - UI perf: pause repeat animations when scenes are inactive (typing dots, onboarding glow, iOS status pulse), throttle voice overlay level updates, and reduce overlay focus churn.
 - Canvas defaults/A2UI auto-nav aligned; debug status overlay centered; redundant await removed in `CanvasManager`.
 - Gateway launchd loop fixed by removing redundant `kickstart -k`.
@@ -37,7 +40,7 @@
 ### macOS app
 - Update-ready state surfaced in the menu; menu sections regrouped with session submenus.
 - Session list polish: sleeping/disconnected/error states, usage bar restored, padding + bar sizing tuned, syncing menu removed, header hidden when disconnected.
-- Chat UI polish: glass background, tighter composer spacing, visual effect host tweaks.
+- Chat UI polish: tool call cards + merged tool results, glass background, tighter composer spacing, visual effect host tweaks.
 - OAuth storage moved; legacy session syncing metadata removed.
 
 ### Nodes & Canvas
