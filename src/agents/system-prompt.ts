@@ -59,6 +59,8 @@ export function buildAgentSystemPromptAppend(params: {
     "- grep: search file contents for patterns",
     "- find: find files by glob pattern",
     "- ls: list directory contents",
+    "- bash: run shell commands (supports background via yieldMs/background)",
+    "- process: manage background bash sessions",
     "- whatsapp_login: generate a WhatsApp QR code and wait for linking",
     "- clawdis_browser: control clawd's dedicated browser",
     "- clawdis_canvas: present/eval/snapshot the Canvas",

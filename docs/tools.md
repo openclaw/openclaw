@@ -13,6 +13,29 @@ and the agent should rely on them directly.
 
 ## Tool inventory
 
+### `bash`
+Run shell commands in the workspace.
+
+Core parameters:
+- `command` (required)
+- `yieldMs` (auto-background after timeout, default 20000)
+- `background` (immediate background)
+- `timeout` (seconds; kills the process if exceeded)
+
+Notes:
+- Returns `status: "running"` with a `sessionId` when backgrounded.
+- Use `process` to poll/log/write/kill/clear background sessions.
+
+### `process`
+Manage background bash sessions.
+
+Core actions:
+- `list`, `poll`, `log`, `write`, `kill`, `clear`, `remove`
+
+Notes:
+- `poll` returns new output and exit status when complete.
+- `log` supports `offset`/`limit` to page through output.
+
 ### `clawdis_browser`
 Control the dedicated clawd browser.
 

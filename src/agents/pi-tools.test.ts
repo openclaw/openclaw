@@ -65,4 +65,10 @@ describe("createClawdisCodingTools", () => {
       }
     }
   });
+
+  it("includes bash and process tools", () => {
+    const tools = createClawdisCodingTools();
+    expect(tools.some((tool) => tool.name === "bash")).toBe(true);
+    expect(tools.some((tool) => tool.name === "process")).toBe(true);
+  });
 });

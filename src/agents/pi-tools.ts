@@ -1,9 +1,10 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-ai";
-import { bashTool, codingTools, readTool } from "@mariozechner/pi-coding-agent";
+import { codingTools, readTool } from "@mariozechner/pi-coding-agent";
 import { type TSchema, Type } from "@sinclair/typebox";
 
 import { detectMime } from "../media/mime.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
+import { bashTool, processTool } from "./bash-tools.js";
 import { createClawdisTools } from "./clawdis-tools.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -287,29 +288,17 @@ function createClawdisReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
-function createClawdisBashTool(base: AnyAgentTool): AnyAgentTool {
-  return {
-    ...base,
-    execute: async (toolCallId, params, signal) => {
-      const result = (await base.execute(
-        toolCallId,
-        params,
-        signal,
-      )) as AgentToolResult<unknown>;
-      return sanitizeToolResultImages(result, "bash");
-    },
-  };
-}
-
 export function createClawdisCodingTools(): AnyAgentTool[] {
-  const base = (codingTools as unknown as AnyAgentTool[]).map((tool) =>
-    tool.name === readTool.name
-      ? createClawdisReadTool(tool)
-      : tool.name === bashTool.name
-        ? createClawdisBashTool(tool)
-        : (tool as AnyAgentTool),
-  );
-  return [...base, createWhatsAppLoginTool(), ...createClawdisTools()].map(
-    normalizeToolParameters,
-  );
+  const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
+    if (tool.name === readTool.name) return [createClawdisReadTool(tool)];
+    if (tool.name === bashTool.name) return [];
+    return [tool as AnyAgentTool];
+  });
+  return [
+    ...base,
+    bashTool,
+    processTool,
+    createWhatsAppLoginTool(),
+    ...createClawdisTools(),
+  ].map(normalizeToolParameters);
 }
