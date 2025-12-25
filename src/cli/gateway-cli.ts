@@ -243,7 +243,9 @@ export function registerGatewayCli(program: Command) {
                 authMode || opts.password || authModeRaw
                   ? {
                       mode: authMode ?? undefined,
-                      password: opts.password ? String(opts.password) : undefined,
+                      password: opts.password
+                        ? String(opts.password)
+                        : undefined,
                     }
                   : undefined,
               tailscale:
@@ -437,7 +439,9 @@ export function registerGatewayCli(program: Command) {
                 authMode || opts.password || authModeRaw
                   ? {
                       mode: authMode ?? undefined,
-                      password: opts.password ? String(opts.password) : undefined,
+                      password: opts.password
+                        ? String(opts.password)
+                        : undefined,
                     }
                   : undefined,
               tailscale:

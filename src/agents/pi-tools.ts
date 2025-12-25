@@ -6,9 +6,9 @@ import { detectMime } from "../media/mime.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import {
   type BashToolDefaults,
-  type ProcessToolDefaults,
   createBashTool,
   createProcessTool,
+  type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { createClawdisTools } from "./clawdis-tools.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
