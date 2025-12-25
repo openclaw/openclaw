@@ -46,6 +46,7 @@
 - **Multi-agent safety:** when Peter says "push", you may `git pull --rebase` to integrate latest changes (never discard other agents' work). When Peter says "commit", scope to your changes only. When Peter says "commit all", commit everything in grouped chunks.
 - **Multi-agent safety:** do **not** create/remove/modify `git worktree` checkouts (or edit `.worktrees/*`) unless Peter explicitly asks.
 - **Multi-agent safety:** do **not** switch branches / check out a different branch unless Peter explicitly asks.
+- **Multi-agent safety:** running multiple agents is OK as long as each agent has its own session.
 - When asked to open a “session” file, open the Pi session logs under `~/.clawdis/sessions/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`. If logs are needed from Mac Studio, SSH via Tailscale and read the same path there.
 - Menubar dimming + restart flow mirrors Trimmy: use `scripts/restart-mac.sh` (kills all Clawdis variants, runs `swift build`, packages, relaunches). Icon dimming depends on MenuBarExtraAccess wiring in AppMain; keep `appearsDisabled` updates intact when touching the status item.
 - Never send streaming/partial replies to external messaging surfaces (WhatsApp, Telegram); only final replies should be delivered there. Streaming/tool events may still go to internal UIs/control channel.
