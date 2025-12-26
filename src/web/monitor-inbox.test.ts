@@ -198,6 +198,55 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("captures reply context from wrapped quoted messages", async () => {
+    const onMessage = vi.fn(async (msg) => {
+      await msg.reply("pong");
+    });
+
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "abc", fromMe: false, remoteJid: "[redacted-email]" },
+          message: {
+            extendedTextMessage: {
+              text: "reply",
+              contextInfo: {
+                stanzaId: "q1",
+                participant: "[redacted-email]",
+                quotedMessage: {
+                  viewOnceMessageV2Extension: {
+                    message: { conversation: "original" },
+                  },
+                },
+              },
+            },
+          },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyToId: "q1",
+        replyToBody: "original",
+        replyToSender: "+111",
+      }),
+    );
+    expect(sock.sendMessage).toHaveBeenCalledWith("[redacted-email]", {
+      text: "pong",
+    });
+
+    await listener.close();
+  });
+
   it("captures media path for image messages", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({ verbose: false, onMessage });

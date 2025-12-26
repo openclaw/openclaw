@@ -17,6 +17,22 @@ describe("web inbound helpers", () => {
     expect(body).toBe("caption");
   });
 
+  it("handles document captions", () => {
+    const body = extractText({
+      documentMessage: { caption: " doc " },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(body).toBe("doc");
+  });
+
+  it("unwraps view-once v2 extension messages", () => {
+    const body = extractText({
+      viewOnceMessageV2Extension: {
+        message: { conversation: " hello " },
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(body).toBe("hello");
+  });
+
   it("returns placeholders for media-only payloads", () => {
     expect(
       extractMediaPlaceholder({
