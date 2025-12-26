@@ -91,6 +91,7 @@ describe("directive parsing", () => {
     const res = extractQueueDirective("please /queue interrupt now");
     expect(res.hasDirective).toBe(true);
     expect(res.queueMode).toBe("interrupt");
+    expect(res.queueReset).toBe(false);
     expect(res.cleaned).toBe("please now");
   });
 
@@ -176,6 +177,46 @@ describe("directive parsing", () => {
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
       expect(entry?.queueMode).toBe("interrupt");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("resets queue mode to default", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      await getReplyFromConfig(
+        { Body: "/queue interrupt", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          routing: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const res = await getReplyFromConfig(
+        { Body: "/queue reset", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          routing: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toMatch(/^⚙️ Queue mode reset to default\./);
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.queueMode).toBeUndefined();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

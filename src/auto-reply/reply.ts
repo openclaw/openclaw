@@ -130,19 +130,24 @@ function normalizeQueueMode(raw?: string): QueueMode | undefined {
 export function extractQueueDirective(body?: string): {
   cleaned: string;
   queueMode?: QueueMode;
+  queueReset: boolean;
   rawMode?: string;
   hasDirective: boolean;
 } {
-  if (!body) return { cleaned: "", hasDirective: false };
+  if (!body) return { cleaned: "", hasDirective: false, queueReset: false };
   const match = body.match(/(?:^|\s)\/queue(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i);
-  const queueMode = normalizeQueueMode(match?.[1]);
+  const rawMode = match?.[1];
+  const lowered = rawMode?.trim().toLowerCase();
+  const queueReset = lowered === "default" || lowered === "reset" || lowered === "clear";
+  const queueMode = queueReset ? undefined : normalizeQueueMode(rawMode);
   const cleaned = match
     ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
     : body.trim();
   return {
     cleaned,
     queueMode,
-    rawMode: match?.[1],
+    queueReset,
+    rawMode,
     hasDirective: !!match,
   };
 }
@@ -442,6 +447,7 @@ export async function getReplyFromConfig(
   const {
     cleaned: queueCleaned,
     queueMode: inlineQueueMode,
+    queueReset: inlineQueueReset,
     rawMode: rawQueueMode,
     hasDirective: hasQueueDirective,
   } = extractQueueDirective(modelCleaned);
@@ -580,7 +586,7 @@ export async function getReplyFromConfig(
         text: `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
       };
     }
-    if (hasQueueDirective && !inlineQueueMode) {
+    if (hasQueueDirective && !inlineQueueMode && !inlineQueueReset) {
       cleanupTyping();
       return {
         text: `Unrecognized queue mode "${rawQueueMode ?? ""}". Valid modes: queue, interrupt, drop.`,
@@ -628,7 +634,9 @@ export async function getReplyFromConfig(
           sessionEntry.modelOverride = modelSelection.model;
         }
       }
-      if (hasQueueDirective && inlineQueueMode) {
+      if (hasQueueDirective && inlineQueueReset) {
+        delete sessionEntry.queueMode;
+      } else if (hasQueueDirective && inlineQueueMode) {
         sessionEntry.queueMode = inlineQueueMode;
       }
       sessionEntry.updatedAt = Date.now();
@@ -661,6 +669,8 @@ export async function getReplyFromConfig(
     }
     if (hasQueueDirective && inlineQueueMode) {
       parts.push(`${SYSTEM_MARK} Queue mode set to ${inlineQueueMode}.`);
+    } else if (hasQueueDirective && inlineQueueReset) {
+      parts.push(`${SYSTEM_MARK} Queue mode reset to default.`);
     }
     const ack = parts.join(" ").trim();
     cleanupTyping();
@@ -711,13 +721,18 @@ export async function getReplyFromConfig(
         }
       }
     }
+    if (hasQueueDirective && inlineQueueReset) {
+      delete sessionEntry.queueMode;
+      updated = true;
+    }
     if (updated) {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       await saveSessionStore(storePath, sessionStore);
     }
   }
-  const perMessageQueueMode = hasQueueDirective ? inlineQueueMode : undefined;
+  const perMessageQueueMode =
+    hasQueueDirective && !inlineQueueReset ? inlineQueueMode : undefined;
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)
   const configuredAllowFrom = cfg.routing?.allowFrom;

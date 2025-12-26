@@ -44,6 +44,7 @@ Configure globally or per surface via `routing.queue`:
 ## Per-session overrides
 - `/queue <mode>` as a standalone command stores the mode for the current session.
 - `/queue <mode>` embedded in a message applies **once** (no persistence).
+- `/queue default` or `/queue reset` clears the session override.
 
 ## Scope and guarantees
 - Applies only to config-driven command replies; plain text replies are unaffected.
