@@ -488,15 +488,29 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     message: string,
     meta?: Record<string, unknown>,
   ) => {
-    logToFile(getFileLogger(), level, message, meta);
     const consoleSettings = getConsoleSettings();
+    let consoleMessageOverride: string | undefined;
+    let fileMeta = meta;
+    if (meta && Object.keys(meta).length > 0) {
+      const { consoleMessage, ...rest } = meta as Record<string, unknown> & {
+        consoleMessage?: unknown;
+      };
+      if (typeof consoleMessage === "string") {
+        consoleMessageOverride = consoleMessage;
+      }
+      fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
+    }
+    logToFile(getFileLogger(), level, message, fileMeta);
     if (!shouldLogToConsole(level, consoleSettings)) return;
     const line = formatConsoleLine({
       level,
       subsystem,
-      message,
+      message:
+        consoleSettings.style === "json"
+          ? message
+          : (consoleMessageOverride ?? message),
       style: consoleSettings.style,
-      meta,
+      meta: fileMeta,
     });
     writeConsoleLine(level, line);
   };

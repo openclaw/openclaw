@@ -5875,7 +5875,10 @@ export async function startGatewayServer(
       defaultProvider: DEFAULT_PROVIDER,
       defaultModel: DEFAULT_MODEL,
     });
-  log.info(`agent model: ${agentProvider}/${agentModel}`);
+  const modelRef = `${agentProvider}/${agentModel}`;
+  log.info(`agent model: ${modelRef}`, {
+    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)}`,
+  });
   log.info(`listening on ws://${bindHost}:${port} (PID ${process.pid})`);
   log.info(`log file: ${getResolvedLoggerSettings().file}`);
   let tailscaleCleanup: (() => Promise<void>) | null = null;
