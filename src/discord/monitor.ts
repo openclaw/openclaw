@@ -245,7 +245,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       cleanup();
-      client.destroy();
+      void client.destroy();
       resolve();
     };
     const onError = (err: Error) => {
