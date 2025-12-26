@@ -58,6 +58,7 @@
 ### macOS app
 - Update-ready state surfaced in the menu; menu sections regrouped with session submenus.
 - Menu bar now shows a dedicated Nodes section under Context with inline rows, overflow submenu, and iconized actions.
+- Nodes now expose consistent inline details with per-node submenus for quick copy of key fields.
 - Session list polish: sleeping/disconnected/error states, usage bar restored, padding + bar sizing tuned, syncing menu removed, header hidden when disconnected.
 - Chat UI polish: tool call cards + merged tool results, glass background, tighter composer spacing, visual effect host tweaks.
 - OAuth storage moved; legacy session syncing metadata removed.

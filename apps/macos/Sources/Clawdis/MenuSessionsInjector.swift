@@ -226,6 +226,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 item.view = HighlightedMenuItemHostView(
                     rootView: AnyView(NodeMenuRowView(entry: entry, width: width)),
                     width: width)
+                item.submenu = self.buildNodeSubmenu(entry: entry)
                 menu.insertItem(item, at: cursor)
                 cursor += 1
             }
@@ -417,9 +418,59 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             item.view = HighlightedMenuItemHostView(
                 rootView: AnyView(NodeMenuRowView(entry: entry, width: width)),
                 width: width)
+            item.submenu = self.buildNodeSubmenu(entry: entry)
             menu.addItem(item)
         }
         return menu
+    }
+
+    private func buildNodeSubmenu(entry: InstanceInfo) -> NSMenu {
+        let menu = NSMenu()
+
+        menu.addItem(self.makeNodeCopyItem(label: "ID", value: entry.id))
+
+        if let host = entry.host?.nonEmpty {
+            menu.addItem(self.makeNodeCopyItem(label: "Host", value: host))
+        }
+
+        if let ip = entry.ip?.nonEmpty {
+            menu.addItem(self.makeNodeCopyItem(label: "IP", value: ip))
+        }
+
+        menu.addItem(self.makeNodeCopyItem(label: "Role", value: NodeMenuEntryFormatter.roleText(entry)))
+
+        if let platform = NodeMenuEntryFormatter.platformText(entry) {
+            menu.addItem(self.makeNodeCopyItem(label: "Platform", value: platform))
+        }
+
+        if let version = entry.version?.nonEmpty {
+            menu.addItem(self.makeNodeCopyItem(label: "Version", value: "v\(version)"))
+        }
+
+        menu.addItem(self.makeNodeDetailItem(label: "Last seen", value: entry.ageDescription))
+
+        if entry.lastInputSeconds != nil {
+            menu.addItem(self.makeNodeDetailItem(label: "Last input", value: entry.lastInputDescription))
+        }
+
+        if let reason = entry.reason?.nonEmpty {
+            menu.addItem(self.makeNodeDetailItem(label: "Reason", value: reason))
+        }
+
+        return menu
+    }
+
+    private func makeNodeDetailItem(label: String, value: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "\(label): \(value)", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    private func makeNodeCopyItem(label: String, value: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "\(label): \(value)", action: #selector(self.copyNodeValue(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = value
+        return item
     }
 
     @objc
@@ -529,6 +580,13 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         guard let summary = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(summary, forType: .string)
+    }
+
+    @objc
+    private func copyNodeValue(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 
     // MARK: - Width + placement

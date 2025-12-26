@@ -23,37 +23,65 @@ struct NodeMenuEntryFormatter {
         entry.text.nonEmpty ?? self.primaryName(entry)
     }
 
+    static func roleText(_ entry: InstanceInfo) -> String {
+        if self.isGateway(entry) { return "gateway" }
+        if let mode = entry.mode?.nonEmpty { return mode }
+        return "node"
+    }
+
     static func detailLeft(_ entry: InstanceInfo) -> String {
-        var modeLabel: String?
-        if self.isGateway(entry) {
-            modeLabel = "gateway"
-        } else if let mode = entry.mode?.nonEmpty {
-            modeLabel = mode
-        }
-        if let version = entry.version?.nonEmpty {
-            let base = modeLabel ?? "node"
-            modeLabel = "\(base) v\(version)"
-        }
-
-        if let modeLabel { return modeLabel }
-
-        if let text = entry.text.nonEmpty {
-            let trimmed = text
-                .replacingOccurrences(of: "Node: ", with: "")
-                .replacingOccurrences(of: "Gateway: ", with: "")
-            let candidates = trimmed
-                .components(separatedBy: " · ")
-                .filter { !$0.hasPrefix("mode ") && !$0.hasPrefix("reason ") }
-            if let first = candidates.first, !first.isEmpty { return first }
-        }
-
-        return entry.ageDescription
+        let role = self.roleText(entry)
+        if let ip = entry.ip?.nonEmpty { return "\(ip) · \(role)" }
+        return role
     }
 
     static func detailRight(_ entry: InstanceInfo) -> String? {
-        if let ip = entry.ip?.nonEmpty { return ip }
-        if let platform = entry.platform?.nonEmpty { return platform }
+        var parts: [String] = []
+        if let platform = self.platformText(entry) { parts.append(platform) }
+        if let version = entry.version?.nonEmpty { parts.append("v\(version)") }
+        if parts.isEmpty { return nil }
+        return parts.joined(separator: " · ")
+    }
+
+    static func platformText(_ entry: InstanceInfo) -> String? {
+        if let raw = entry.platform?.nonEmpty {
+            return self.prettyPlatform(raw) ?? raw
+        }
+        if let family = entry.deviceFamily?.lowercased() {
+            if family.contains("mac") { return "macOS" }
+            if family.contains("iphone") { return "iOS" }
+            if family.contains("ipad") { return "iPadOS" }
+            if family.contains("android") { return "Android" }
+        }
         return nil
+    }
+
+    private static func prettyPlatform(_ raw: String) -> String? {
+        let (prefix, version) = self.parsePlatform(raw)
+        if prefix.isEmpty { return nil }
+        let name: String = switch prefix {
+        case "macos": "macOS"
+        case "ios": "iOS"
+        case "ipados": "iPadOS"
+        case "tvos": "tvOS"
+        case "watchos": "watchOS"
+        default: prefix.prefix(1).uppercased() + prefix.dropFirst()
+        }
+        guard let version, !version.isEmpty else { return name }
+        let parts = version.split(separator: ".").map(String.init)
+        if parts.count >= 2 {
+            return "\(name) \(parts[0]).\(parts[1])"
+        }
+        return "\(name) \(version)"
+    }
+
+    private static func parsePlatform(_ raw: String) -> (prefix: String, version: String?) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return ("", nil) }
+        let parts = trimmed.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+        let prefix = parts.first?.lowercased() ?? ""
+        let versionToken = parts.dropFirst().first
+        return (prefix, versionToken)
     }
 
     static func leadingSymbol(_ entry: InstanceInfo) -> String {
@@ -109,7 +137,7 @@ struct NodeMenuRowView: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
 
-                HStack(spacing: 8) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(NodeMenuEntryFormatter.detailLeft(self.entry))
                         .font(.caption)
                         .foregroundStyle(self.secondaryColor)
@@ -118,12 +146,19 @@ struct NodeMenuRowView: View {
 
                     Spacer(minLength: 0)
 
-                    if let right = NodeMenuEntryFormatter.detailRight(self.entry) {
-                        Text(right)
-                            .font(.caption.monospacedDigit())
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        if let right = NodeMenuEntryFormatter.detailRight(self.entry) {
+                            Text(right)
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(self.secondaryColor)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.semibold))
                             .foregroundStyle(self.secondaryColor)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
+                            .padding(.leading, 2)
                     }
                 }
             }
