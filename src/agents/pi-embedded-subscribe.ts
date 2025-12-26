@@ -325,9 +325,7 @@ export function subscribeEmbeddedPiSession(params: {
 
       if (evt.type === "auto_compaction_end") {
         compactionInFlight = false;
-        const willRetry = Boolean(
-          (evt as { willRetry?: unknown }).willRetry,
-        );
+        const willRetry = Boolean((evt as { willRetry?: unknown }).willRetry);
         if (willRetry) {
           noteCompactionRetry();
           resetForCompactionRetry();
@@ -357,7 +355,7 @@ export function subscribeEmbeddedPiSession(params: {
         ensureCompactionPromise();
         return compactionRetryPromise ?? Promise.resolve();
       }
-      return new Promise((resolve) => {
+      return new Promise<void>((resolve) => {
         queueMicrotask(() => {
           if (compactionInFlight || pendingCompactionRetry > 0) {
             ensureCompactionPromise();

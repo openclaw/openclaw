@@ -1,12 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
-
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { describe, expect, it, vi } from "vitest";
 
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 type StubSession = {
   subscribe: (fn: (evt: unknown) => void) => () => void;
 };
+
+type SessionEventHandler = (evt: unknown) => void;
 
 describe("subscribeEmbeddedPiSession", () => {
   it("filters to <final> and falls back when tags are malformed", () => {
@@ -97,16 +98,16 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("waits for auto-compaction retry and clears buffered text", async () => {
-    const listeners: Array<(evt: any) => void> = [];
+    const listeners: SessionEventHandler[] = [];
     const session = {
-      subscribe: (listener: (evt: any) => void) => {
+      subscribe: (listener: SessionEventHandler) => {
         listeners.push(listener);
         return () => {
           const index = listeners.indexOf(listener);
           if (index !== -1) listeners.splice(index, 1);
         };
       },
-    } as any;
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
 
     const subscription = subscribeEmbeddedPiSession({
       session,
@@ -150,13 +151,13 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("resolves after compaction ends without retry", async () => {
-    const listeners: Array<(evt: any) => void> = [];
+    const listeners: SessionEventHandler[] = [];
     const session = {
-      subscribe: (listener: (evt: any) => void) => {
+      subscribe: (listener: SessionEventHandler) => {
         listeners.push(listener);
         return () => {};
       },
-    } as any;
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
 
     const subscription = subscribeEmbeddedPiSession({
       session,
@@ -184,13 +185,13 @@ describe("subscribeEmbeddedPiSession", () => {
   });
 
   it("waits for multiple compaction retries before resolving", async () => {
-    const listeners: Array<(evt: any) => void> = [];
+    const listeners: SessionEventHandler[] = [];
     const session = {
-      subscribe: (listener: (evt: any) => void) => {
+      subscribe: (listener: SessionEventHandler) => {
         listeners.push(listener);
         return () => {};
       },
-    } as any;
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
 
     const subscription = subscribeEmbeddedPiSession({
       session,

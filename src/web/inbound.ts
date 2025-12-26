@@ -333,12 +333,25 @@ export async function monitorWebInbox(options: {
   return {
     close: async () => {
       try {
-        if (typeof sock.ev.off === "function") {
-          sock.ev.off("messages.upsert", handleMessagesUpsert);
-          sock.ev.off("connection.update", handleConnectionUpdate);
-        } else {
-          sock.ev.removeListener?.("messages.upsert", handleMessagesUpsert);
-          sock.ev.removeListener?.("connection.update", handleConnectionUpdate);
+        const ev = sock.ev as unknown as {
+          off?: (event: string, listener: (...args: unknown[]) => void) => void;
+          removeListener?: (
+            event: string,
+            listener: (...args: unknown[]) => void,
+          ) => void;
+        };
+        const messagesUpsertHandler = handleMessagesUpsert as unknown as (
+          ...args: unknown[]
+        ) => void;
+        const connectionUpdateHandler = handleConnectionUpdate as unknown as (
+          ...args: unknown[]
+        ) => void;
+        if (typeof ev.off === "function") {
+          ev.off("messages.upsert", messagesUpsertHandler);
+          ev.off("connection.update", connectionUpdateHandler);
+        } else if (typeof ev.removeListener === "function") {
+          ev.removeListener("messages.upsert", messagesUpsertHandler);
+          ev.removeListener("connection.update", connectionUpdateHandler);
         }
         sock.ws?.close();
       } catch (err) {

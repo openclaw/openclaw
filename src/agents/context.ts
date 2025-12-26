@@ -10,10 +10,15 @@ type ModelEntry = { id: string; contextWindow?: number };
 const MODEL_CACHE = new Map<string, number>();
 const loadPromise = (async () => {
   try {
-    const { discoverModels } = await import("@mariozechner/pi-coding-agent");
+    const { discoverAuthStorage, discoverModels } = await import(
+      "@mariozechner/pi-coding-agent"
+    );
     const cfg = loadConfig();
     await ensureClawdisModelsJson(cfg);
-    const models = discoverModels(resolveClawdisAgentDir()) as ModelEntry[];
+    const agentDir = resolveClawdisAgentDir();
+    const authStorage = discoverAuthStorage(agentDir);
+    const modelRegistry = discoverModels(authStorage, agentDir);
+    const models = modelRegistry.getAll() as ModelEntry[];
     for (const m of models) {
       if (!m?.id) continue;
       if (typeof m.contextWindow === "number" && m.contextWindow > 0) {

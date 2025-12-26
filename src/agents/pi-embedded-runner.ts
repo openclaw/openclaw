@@ -7,11 +7,11 @@ import type { AppMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import {
   type Api,
   type AssistantMessage,
+  getEnvApiKey,
+  getOAuthApiKey,
   type Model,
   type OAuthCredentials,
   type OAuthProvider,
-  getEnvApiKey,
-  getOAuthApiKey,
 } from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
@@ -213,16 +213,32 @@ function resolveModel(
   provider: string,
   modelId: string,
   agentDir?: string,
-): { model?: Model<Api>; error?: string } {
+): {
+  model?: Model<Api>;
+  error?: string;
+  authStorage: ReturnType<typeof discoverAuthStorage>;
+  modelRegistry: ReturnType<typeof discoverModels>;
+} {
   const resolvedAgentDir = agentDir ?? resolveClawdisAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
-  if (!model) return { error: `Unknown model: ${provider}/${modelId}` };
-  return { model };
+  if (!model) {
+    return {
+      error: `Unknown model: ${provider}/${modelId}`,
+      authStorage,
+      modelRegistry,
+    };
+  }
+  return { model, authStorage, modelRegistry };
 }
 
-async function getApiKeyForModel(model: Model<Api>): Promise<string> {
+async function getApiKeyForModel(
+  model: Model<Api>,
+  authStorage: ReturnType<typeof discoverAuthStorage>,
+): Promise<string> {
+  const storedKey = await authStorage.getApiKey(model.provider);
+  if (storedKey) return storedKey;
   ensureOAuthStorage();
   if (model.provider === "anthropic") {
     const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
@@ -320,10 +336,16 @@ export async function runEmbeddedPiAgent(params: {
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       await ensureClawdisModelsJson(params.config);
       const agentDir = resolveClawdisAgentDir();
-      const { model, error } = resolveModel(provider, modelId, agentDir);
+      const { model, error, authStorage, modelRegistry } = resolveModel(
+        provider,
+        modelId,
+        agentDir,
+      );
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
+      const apiKey = await getApiKeyForModel(model, authStorage);
+      authStorage.setRuntimeApiKey(model.provider, apiKey);
 
       const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
@@ -402,6 +424,8 @@ export async function runEmbeddedPiAgent(params: {
         const { session } = await createAgentSession({
           cwd: resolvedWorkspace,
           agentDir,
+          authStorage,
+          modelRegistry,
           model,
           thinkingLevel,
           systemPrompt,
@@ -410,9 +434,6 @@ export async function runEmbeddedPiAgent(params: {
           tools,
           sessionManager,
           settingsManager,
-          getApiKey: async (m) => {
-            return await getApiKeyForModel(m as Model<Api>);
-          },
           skills: promptSkills,
           contextFiles,
         });

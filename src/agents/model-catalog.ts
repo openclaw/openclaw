@@ -25,41 +25,30 @@ export async function loadModelCatalog(params?: {
   if (modelCatalogPromise) return modelCatalogPromise;
 
   modelCatalogPromise = (async () => {
-    const piSdk = (await import("@mariozechner/pi-coding-agent")) as {
-      discoverModels: (agentDir?: string) => Array<{
-        id: string;
-        name?: string;
-        provider: string;
-        contextWindow?: number;
-      }>;
-    };
+    const piSdk = await import("@mariozechner/pi-coding-agent");
 
-    let entries: Array<{
-      id: string;
-      name?: string;
-      provider: string;
-      contextWindow?: number;
-    }> = [];
+    const models: ModelCatalogEntry[] = [];
     try {
       const cfg = params?.config ?? loadConfig();
       await ensureClawdisModelsJson(cfg);
-      entries = piSdk.discoverModels(resolveClawdisAgentDir());
+      const agentDir = resolveClawdisAgentDir();
+      const authStorage = piSdk.discoverAuthStorage(agentDir);
+      const registry = piSdk.discoverModels(authStorage, agentDir);
+      const entries = registry.getAll();
+      for (const entry of entries) {
+        const id = String(entry?.id ?? "").trim();
+        if (!id) continue;
+        const provider = String(entry?.provider ?? "").trim();
+        if (!provider) continue;
+        const name = String(entry?.name ?? id).trim() || id;
+        const contextWindow =
+          typeof entry?.contextWindow === "number" && entry.contextWindow > 0
+            ? entry.contextWindow
+            : undefined;
+        models.push({ id, name, provider, contextWindow });
+      }
     } catch {
-      entries = [];
-    }
-
-    const models: ModelCatalogEntry[] = [];
-    for (const entry of entries) {
-      const id = String(entry?.id ?? "").trim();
-      if (!id) continue;
-      const provider = String(entry?.provider ?? "").trim();
-      if (!provider) continue;
-      const name = String(entry?.name ?? id).trim() || id;
-      const contextWindow =
-        typeof entry?.contextWindow === "number" && entry.contextWindow > 0
-          ? entry.contextWindow
-          : undefined;
-      models.push({ id, name, provider, contextWindow });
+      // Leave models empty on discovery errors.
     }
 
     return models.sort((a, b) => {
