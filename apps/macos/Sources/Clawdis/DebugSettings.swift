@@ -23,6 +23,8 @@ struct DebugSettings: View {
     @State private var portCheckInFlight = false
     @State private var portReports: [DebugActions.PortReport] = []
     @State private var portKillStatus: String?
+    @State private var tunnelResetInFlight = false
+    @State private var tunnelResetStatus: String?
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(attachExistingGatewayOnlyKey) private var attachExistingGatewayOnly: Bool = false
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
@@ -264,10 +266,21 @@ struct DebugSettings: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(self.portCheckInFlight)
+                    Button("Reset SSH tunnel") {
+                        Task { await self.resetGatewayTunnel() }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.tunnelResetInFlight || !self.isRemoteMode)
                 }
 
                 if let portKillStatus {
                     Text(portKillStatus)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let tunnelResetStatus {
+                    Text(tunnelResetStatus)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -594,6 +607,21 @@ struct DebugSettings: View {
     }
 
     @MainActor
+    private func resetGatewayTunnel() async {
+        self.tunnelResetInFlight = true
+        self.tunnelResetStatus = nil
+        let result = await DebugActions.resetGatewayTunnel()
+        switch result {
+        case let .success(message):
+            self.tunnelResetStatus = message
+        case let .failure(err):
+            self.tunnelResetStatus = err.localizedDescription
+        }
+        await self.runPortCheck()
+        self.tunnelResetInFlight = false
+    }
+
+    @MainActor
     private func requestKill(_ listener: DebugActions.PortListener) {
         if listener.expected {
             self.pendingKill = listener
@@ -728,6 +756,10 @@ struct DebugSettings: View {
                 }
             }
         }
+    }
+
+    private var isRemoteMode: Bool {
+        CommandResolver.connectionSettings().mode == .remote
     }
 
     private func configURL() -> URL {

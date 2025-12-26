@@ -153,10 +153,35 @@ actor PortGuardian {
 
         for port in ports {
             let listeners = await self.listeners(on: port)
-            reports.append(Self.buildReport(port: port, listeners: listeners, mode: mode))
+            let tunnelHealthy = await self.probeGatewayHealthIfNeeded(
+                port: port,
+                mode: mode,
+                listeners: listeners)
+            reports.append(Self.buildReport(
+                port: port,
+                listeners: listeners,
+                mode: mode,
+                tunnelHealthy: tunnelHealthy))
         }
 
         return reports
+    }
+
+    func probeGatewayHealth(port: Int, timeout: TimeInterval = 2.0) async -> Bool {
+        let url = URL(string: "http://127.0.0.1:\(port)/")!
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = timeout
+        config.timeoutIntervalForResource = timeout
+        let session = URLSession(configuration: config)
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = timeout
+        do {
+            let (_, response) = try await session.data(for: request)
+            return response is HTTPURLResponse
+        } catch {
+            return false
+        }
     }
 
     private func listeners(on port: Int) async -> [Listener] {
@@ -227,7 +252,8 @@ actor PortGuardian {
     private static func buildReport(
         port: Int,
         listeners: [Listener],
-        mode: AppState.ConnectionMode) -> PortReport
+        mode: AppState.ConnectionMode,
+        tunnelHealthy: Bool?) -> PortReport
     {
         let expectedDesc: String
         let okPredicate: (Listener) -> Bool
@@ -253,16 +279,28 @@ actor PortGuardian {
             return .init(port: port, expected: expectedDesc, status: .missing(text), listeners: [])
         }
 
+        let tunnelUnhealthy = mode == .remote && port == 18789 && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
-            ReportListener(
+            var expected = okPredicate(listener)
+            if tunnelUnhealthy, expected { expected = false }
+            return ReportListener(
                 pid: listener.pid,
                 command: listener.command,
                 fullCommand: listener.fullCommand,
                 user: listener.user,
-                expected: okPredicate(listener))
+                expected: expected)
         }
 
         let offenders = reportListeners.filter { !$0.expected }
+        if tunnelUnhealthy {
+            let list = listeners.map { "\($0.command) (\($0.pid))" }.joined(separator: ", ")
+            let reason = "Port \(port) is served by \(list), but the SSH tunnel is unhealthy."
+            return .init(
+                port: port,
+                expected: expectedDesc,
+                status: .interference(reason, offenders: offenders),
+                listeners: reportListeners)
+        }
         if offenders.isEmpty {
             let list = listeners.map { "\($0.command) (\($0.pid))" }.joined(separator: ", ")
             let okText = "Port \(port) is served by \(list)."
@@ -318,6 +356,17 @@ actor PortGuardian {
         }
     }
 
+    private func probeGatewayHealthIfNeeded(
+        port: Int,
+        mode: AppState.ConnectionMode,
+        listeners: [Listener]) async -> Bool?
+    {
+        guard mode == .remote, port == 18789, !listeners.isEmpty else { return nil }
+        let hasSsh = listeners.contains { $0.command.lowercased().contains("ssh") }
+        guard hasSsh else { return nil }
+        return await self.probeGatewayHealth(port: port)
+    }
+
     private static func loadRecords(from url: URL) -> [Record] {
         guard let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([Record].self, from: data)
@@ -352,7 +401,7 @@ extension PortGuardian {
             command: $0.command,
             fullCommand: $0.fullCommand,
             user: $0.user) }
-        return Self.buildReport(port: port, listeners: mapped, mode: mode)
+        return Self.buildReport(port: port, listeners: mapped, mode: mode, tunnelHealthy: nil)
     }
 }
 #endif
