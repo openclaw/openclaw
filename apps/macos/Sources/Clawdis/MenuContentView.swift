@@ -18,6 +18,7 @@ struct MenuContent: View {
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var browserControlEnabled = true
+    @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
 
     init(state: AppState, updater: UpdaterProviding?) {
         self._state = Bindable(wrappedValue: state)
@@ -51,6 +52,9 @@ struct MenuContent: View {
                         ClawdisConfigFile.setBrowserControlEnabled(enabled)
                     })) {
                 Label("Browser Control", systemImage: "globe")
+            }
+            Toggle(isOn: self.$cameraEnabled) {
+                Label("Allow Camera", systemImage: "camera")
             }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
                 Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")

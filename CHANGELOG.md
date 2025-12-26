@@ -62,6 +62,8 @@
 - Nodes now expose consistent inline details with per-node submenus for quick copy of key fields.
 - Node rows now show compact app versions (build numbers moved to submenus) and offer SSH launch from Bonjour when available.
 - Menu actions are grouped below toggles; Open Canvas hides when disabled and Voice Wake now anchors the mic picker.
+- Connections now include Discord provider status + configuration UI.
+- Menu bar gains an Allow Camera toggle alongside Canvas.
 - Session list polish: sleeping/disconnected/error states, usage bar restored, padding + bar sizing tuned, syncing menu removed, header hidden when disconnected.
 - Chat UI polish: tool call cards + merged tool results, glass background, tighter composer spacing, visual effect host tweaks.
 - OAuth storage moved; legacy session syncing metadata removed.
