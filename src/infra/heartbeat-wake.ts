@@ -58,7 +58,10 @@ export function setHeartbeatWakeHandler(next: HeartbeatWakeHandler | null) {
   }
 }
 
-export function requestHeartbeatNow(opts?: { reason?: string; coalesceMs?: number }) {
+export function requestHeartbeatNow(opts?: {
+  reason?: string;
+  coalesceMs?: number;
+}) {
   pendingReason = opts?.reason ?? pendingReason ?? "requested";
   schedule(opts?.coalesceMs ?? DEFAULT_COALESCE_MS);
 }

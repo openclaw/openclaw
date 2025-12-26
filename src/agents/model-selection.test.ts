@@ -30,7 +30,10 @@ describe("resolveConfiguredModelRef", () => {
       defaultModel: DEFAULT_MODEL,
     });
 
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-5" });
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+    });
   });
 
   it("falls back to defaults when agent.model is missing", () => {

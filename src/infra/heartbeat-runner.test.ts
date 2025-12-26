@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-
-import type { ClawdisConfig } from "../config/config.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
+import type { ClawdisConfig } from "../config/config.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatIntervalMs,

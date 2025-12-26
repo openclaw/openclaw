@@ -4,11 +4,11 @@ import {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "../auto-reply/group-activation.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import {
   HEARTBEAT_PROMPT,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
+import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
@@ -876,7 +876,7 @@ export async function monitorWebProvider(
     let watchdogTimer: NodeJS.Timeout | null = null;
     let lastMessageAt: number | null = null;
     let handledMessages = 0;
-    let lastInboundMsg: WebInboundMsg | null = null;
+    let _lastInboundMsg: WebInboundMsg | null = null;
 
     // Watchdog to detect stuck message processing (e.g., event emitter died)
     // Should be significantly longer than the reply heartbeat interval to avoid false positives
@@ -1184,7 +1184,7 @@ export async function monitorWebProvider(
         status.lastMessageAt = lastMessageAt;
         status.lastEventAt = lastMessageAt;
         emitStatus();
-        lastInboundMsg = msg;
+        _lastInboundMsg = msg;
         const conversationId = msg.conversationId ?? msg.from;
 
         // Same-phone mode logging retained

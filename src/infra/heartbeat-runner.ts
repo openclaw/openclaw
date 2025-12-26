@@ -1,5 +1,8 @@
 import { chunkText } from "../auto-reply/chunk.js";
-import { HEARTBEAT_PROMPT, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import {
+  HEARTBEAT_PROMPT,
+  stripHeartbeatToken,
+} from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
@@ -8,21 +11,21 @@ import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
-  saveSessionStore,
   type SessionEntry,
+  saveSessionStore,
 } from "../config/sessions.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { normalizeE164 } from "../utils.js";
 import { sendMessageTelegram } from "../telegram/send.js";
+import { normalizeE164 } from "../utils.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
+  type HeartbeatRunResult,
   requestHeartbeatNow,
   setHeartbeatWakeHandler,
-  type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
 
 export type HeartbeatTarget = "last" | "whatsapp" | "telegram" | "none";
@@ -93,7 +96,7 @@ function resolveHeartbeatSender(params: {
     lastTo?.trim(),
     lastChannel === "telegram" && lastTo ? `telegram:${lastTo}` : undefined,
     lastChannel === "whatsapp" && lastTo ? `whatsapp:${lastTo}` : undefined,
-  ].filter((val): val is string => Boolean(val && val.trim()));
+  ].filter((val): val is string => Boolean(val?.trim()));
 
   const allowList = allowFrom
     .map((entry) => String(entry))
@@ -156,23 +159,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
     (target === "last" ? lastTo : undefined);
 
   if (!channel || !to) {
-  return { channel: "none", reason: "no-target" };
-}
-
-async function restoreHeartbeatUpdatedAt(params: {
-  storePath: string;
-  sessionKey: string;
-  updatedAt?: number;
-}) {
-  const { storePath, sessionKey, updatedAt } = params;
-  if (typeof updatedAt !== "number") return;
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  if (!entry) return;
-  if (entry.updatedAt === updatedAt) return;
-  store[sessionKey] = { ...entry, updatedAt };
-  await saveSessionStore(storePath, store);
-}
+    return { channel: "none", reason: "no-target" };
+  }
 
   if (channel !== "whatsapp") {
     return { channel, to };
@@ -188,6 +176,21 @@ async function restoreHeartbeatUpdatedAt(params: {
   const normalized = normalizeE164(to);
   if (allowFrom.includes(normalized)) return { channel, to: normalized };
   return { channel, to: allowFrom[0], reason: "allowFrom-fallback" };
+}
+
+async function restoreHeartbeatUpdatedAt(params: {
+  storePath: string;
+  sessionKey: string;
+  updatedAt?: number;
+}) {
+  const { storePath, sessionKey, updatedAt } = params;
+  if (typeof updatedAt !== "number") return;
+  const store = loadSessionStore(storePath);
+  const entry = store[sessionKey];
+  if (!entry) return;
+  if (entry.updatedAt === updatedAt) return;
+  store[sessionKey] = { ...entry, updatedAt };
+  await saveSessionStore(storePath, store);
 }
 
 function normalizeHeartbeatReply(
@@ -334,7 +337,8 @@ export async function runHeartbeatOnce(opts: {
 
     const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
     const mediaUrls =
-      replyPayload.mediaUrls ?? (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+      replyPayload.mediaUrls ??
+      (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
 
     if (delivery.channel === "none" || !delivery.to) {
       emitHeartbeatEvent({
