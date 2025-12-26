@@ -21,7 +21,7 @@ export type SessionEntry = {
   modelOverride?: string;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
-  queueMode?: "queue" | "interrupt" | "drop";
+  queueMode?: "queue" | "interrupt";
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;

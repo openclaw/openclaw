@@ -147,7 +147,7 @@ export type DiscordConfig = {
   mediaMaxMb?: number;
 };
 
-export type QueueMode = "queue" | "interrupt" | "drop";
+export type QueueMode = "queue" | "interrupt";
 
 export type QueueModeBySurface = {
   whatsapp?: QueueMode;
@@ -454,11 +454,7 @@ const GroupChatSchema = z
   })
   .optional();
 
-const QueueModeSchema = z.union([
-  z.literal("queue"),
-  z.literal("interrupt"),
-  z.literal("drop"),
-]);
+const QueueModeSchema = z.union([z.literal("queue"), z.literal("interrupt")]);
 
 const QueueModeBySurfaceSchema = z
   .object({

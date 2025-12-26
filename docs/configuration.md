@@ -93,7 +93,7 @@ Controls how inbound messages behave when an agent run is already active.
 {
   routing: {
     queue: {
-      mode: "interrupt", // global default: queue | interrupt | drop
+      mode: "interrupt", // global default: queue | interrupt
       bySurface: {
         whatsapp: "interrupt",
         telegram: "interrupt",

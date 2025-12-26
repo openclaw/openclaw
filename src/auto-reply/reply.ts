@@ -70,7 +70,7 @@ const SYSTEM_MARK = "⚙️";
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
 
-type QueueMode = "queue" | "interrupt" | "drop";
+type QueueMode = "queue" | "interrupt";
 
 export function extractThinkDirective(body?: string): {
   cleaned: string;
@@ -123,7 +123,6 @@ function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (cleaned === "queue" || cleaned === "queued") return "queue";
   if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort")
     return "interrupt";
-  if (cleaned === "drop" || cleaned === "discard") return "drop";
   return undefined;
 }
 
@@ -589,7 +588,7 @@ export async function getReplyFromConfig(
     if (hasQueueDirective && !inlineQueueMode && !inlineQueueReset) {
       cleanupTyping();
       return {
-        text: `Unrecognized queue mode "${rawQueueMode ?? ""}". Valid modes: queue, interrupt, drop.`,
+        text: `Unrecognized queue mode "${rawQueueMode ?? ""}". Valid modes: queue, interrupt.`,
       };
     }
 
@@ -1107,13 +1106,6 @@ export async function getReplyFromConfig(
     sessionKey ?? sessionIdFinal,
   );
   const laneSize = getQueueSize(sessionLaneKey);
-  if (resolvedQueueMode === "drop" && laneSize > 0) {
-    logVerbose(
-      `Dropping inbound message for ${sessionLaneKey} (queue busy, mode=drop)`,
-    );
-    cleanupTyping();
-    return undefined;
-  }
   if (resolvedQueueMode === "interrupt" && laneSize > 0) {
     const cleared = clearCommandLane(sessionLaneKey);
     const aborted = abortEmbeddedPiRun(sessionIdFinal);

@@ -22,7 +22,6 @@ We now serialize command-based auto-replies (WhatsApp Web listener) through a ti
 Inbound messages can either queue or interrupt when a run is already active:
 - `queue`: serialize per session; if the agent is streaming, the new message is appended to the current run.
 - `interrupt`: abort the active run for that session, then run the newest message.
-- `drop`: ignore the message if the session lane is busy.
 
 Defaults (when unset in config):
 - WhatsApp + Telegram → `interrupt`
