@@ -1,6 +1,6 @@
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
-import { probeDiscord, type DiscordProbe } from "../discord/probe.js";
+import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -82,7 +82,8 @@ export async function getHealthSnapshot(
     ? await probeTelegram(telegramToken.trim(), cappedTimeout, telegramProxy)
     : undefined;
 
-  const discordToken = process.env.DISCORD_BOT_TOKEN ?? cfg.discord?.token ?? "";
+  const discordToken =
+    process.env.DISCORD_BOT_TOKEN ?? cfg.discord?.token ?? "";
   const discordConfigured = discordToken.trim().length > 0;
   const discordProbe = discordConfigured
     ? await probeDiscord(discordToken.trim(), cappedTimeout)

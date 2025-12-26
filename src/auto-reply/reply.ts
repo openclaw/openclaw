@@ -121,7 +121,11 @@ function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (!raw) return undefined;
   const cleaned = raw.trim().toLowerCase();
   if (cleaned === "queue" || cleaned === "queued") return "queue";
-  if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort")
+  if (
+    cleaned === "interrupt" ||
+    cleaned === "interrupts" ||
+    cleaned === "abort"
+  )
     return "interrupt";
   return undefined;
 }
@@ -137,7 +141,8 @@ export function extractQueueDirective(body?: string): {
   const match = body.match(/(?:^|\s)\/queue(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i);
   const rawMode = match?.[1];
   const lowered = rawMode?.trim().toLowerCase();
-  const queueReset = lowered === "default" || lowered === "reset" || lowered === "clear";
+  const queueReset =
+    lowered === "default" || lowered === "reset" || lowered === "clear";
   const queueMode = queueReset ? undefined : normalizeQueueMode(rawMode);
   const cleaned = match
     ? body.replace(match[0], "").replace(/\s+/g, " ").trim()

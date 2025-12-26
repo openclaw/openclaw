@@ -42,7 +42,10 @@ type DiscordMediaInfo = {
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const cfg = loadConfig();
   const token = normalizeDiscordToken(
-    opts.token ?? process.env.DISCORD_BOT_TOKEN ?? cfg.discord?.token ?? undefined,
+    opts.token ??
+      process.env.DISCORD_BOT_TOKEN ??
+      cfg.discord?.token ??
+      undefined,
   );
   if (!token) {
     throw new Error(
@@ -119,9 +122,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           const guildId = message.guild?.id ?? "";
           const userId = message.author.id;
           const guildOk =
-            !guilds ||
-            guilds.allowAll ||
-            (guildId && guilds.ids.has(guildId));
+            !guilds || guilds.allowAll || (guildId && guilds.ids.has(guildId));
           const userOk = !users || users.allowAll || users.ids.has(userId);
           if (!guildOk || !userOk) {
             logVerbose(

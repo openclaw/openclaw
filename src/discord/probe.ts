@@ -38,7 +38,11 @@ export async function probeDiscord(
     elapsedMs: 0,
   };
   if (!normalized) {
-    return { ...result, error: "missing token", elapsedMs: Date.now() - started };
+    return {
+      ...result,
+      error: "missing token",
+      elapsedMs: Date.now() - started,
+    };
   }
   try {
     const res = await fetchWithTimeout(
@@ -70,4 +74,3 @@ export async function probeDiscord(
     };
   }
 }
-

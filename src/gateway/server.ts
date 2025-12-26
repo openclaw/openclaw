@@ -67,8 +67,11 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
-import { monitorDiscordProvider, sendMessageDiscord } from "../discord/index.js";
-import { probeDiscord, type DiscordProbe } from "../discord/probe.js";
+import {
+  monitorDiscordProvider,
+  sendMessageDiscord,
+} from "../discord/index.js";
+import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { isVerbose } from "../globals.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
@@ -1986,9 +1989,7 @@ export async function startGatewayServer(
         running: false,
         lastError: "not configured",
       };
-      logDiscord.info(
-        "skipping provider start (no DISCORD_BOT_TOKEN/config)",
-      );
+      logDiscord.info("skipping provider start (no DISCORD_BOT_TOKEN/config)");
       return;
     }
     let discordBotLabel = "";
