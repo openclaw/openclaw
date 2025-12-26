@@ -70,6 +70,7 @@
 - Remote SSH tunnels now get health checks; Debug → Ports highlights unhealthy tunnels and offers Reset SSH tunnel.
 - Menu bar session/node sections no longer reflow while open, keeping hover highlights aligned.
 - Menu hover highlights now span the full width (including submenu arrows).
+- Menu session rows now refresh while open without width changes (no more stuck “Loading sessions…”).
 
 ### Nodes & Canvas
 - Debug status overlay gated and toggleable on macOS/iOS/Android nodes.

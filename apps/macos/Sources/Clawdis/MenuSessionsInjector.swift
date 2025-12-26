@@ -16,6 +16,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var nodesLoadTask: Task<Void, Never>?
     private var isMenuOpen = false
     private var lastKnownMenuWidth: CGFloat?
+    private var menuOpenWidth: CGFloat?
 
     private var cachedSnapshot: SessionStoreSnapshot?
     private var cachedErrorText: String?
@@ -48,27 +49,38 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) {
         self.originalDelegate?.menuWillOpen?(menu)
         self.isMenuOpen = true
+        self.menuOpenWidth = self.currentMenuWidth(for: menu)
 
         self.inject(into: menu)
         self.injectNodes(into: menu)
 
-        // Refresh in background for the next open (but do not re-inject while open).
+        // Refresh in background for the next open; keep width stable while open.
         self.loadTask?.cancel()
         self.loadTask = Task { [weak self] in
             guard let self else { return }
             await self.refreshCache(force: false)
+            await MainActor.run {
+                guard self.isMenuOpen else { return }
+                self.inject(into: menu)
+                self.injectNodes(into: menu)
+            }
         }
 
         self.nodesLoadTask?.cancel()
         self.nodesLoadTask = Task { [weak self] in
             guard let self else { return }
             await self.nodesStore.refresh()
+            await MainActor.run {
+                guard self.isMenuOpen else { return }
+                self.injectNodes(into: menu)
+            }
         }
     }
 
     func menuDidClose(_ menu: NSMenu) {
         self.originalDelegate?.menuDidClose?(menu)
         self.isMenuOpen = false
+        self.menuOpenWidth = nil
         self.loadTask?.cancel()
         self.nodesLoadTask?.cancel()
     }
@@ -736,6 +748,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     }
 
     private func initialWidth(for menu: NSMenu) -> CGFloat {
+        if let openWidth = self.menuOpenWidth {
+            return max(300, openWidth)
+        }
         let candidates: [CGFloat] = [
             menu.size.width,
             menu.minimumWidth,
@@ -785,8 +800,20 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     }
 
     private func captureMenuWidthIfAvailable(from view: NSView) {
+        guard !self.isMenuOpen else { return }
         guard let width = view.window?.contentView?.bounds.width, width > 0 else { return }
         self.lastKnownMenuWidth = max(300, width)
+    }
+
+    private func currentMenuWidth(for menu: NSMenu) -> CGFloat {
+        let candidates: [CGFloat] = [
+            menu.size.width,
+            menu.minimumWidth,
+            self.lastKnownMenuWidth ?? 0,
+            self.fallbackWidth,
+        ]
+        let resolved = candidates.max() ?? self.fallbackWidth
+        return max(300, resolved)
     }
 }
 
