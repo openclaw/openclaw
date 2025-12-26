@@ -1349,9 +1349,10 @@ export async function monitorWebProvider(
       }, WATCHDOG_CHECK_MS);
     }
 
-    whatsappLog.info(
-      "Listening for personal WhatsApp inbound messages. Ctrl+C to stop.",
-    );
+    whatsappLog.info("Listening for personal WhatsApp inbound messages.");
+    if (process.stdout.isTTY || process.stderr.isTTY) {
+      whatsappLog.raw("Ctrl+C to stop.");
+    }
 
     if (!keepAlive) {
       await closeListener();
