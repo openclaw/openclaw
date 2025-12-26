@@ -12,7 +12,10 @@ import {
 } from "vitest";
 
 vi.mock("../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
 }));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";

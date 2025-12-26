@@ -14,7 +14,9 @@ import {
   resolveConfiguredModelRef,
 } from "../agents/model-selection.js";
 import {
+  abortEmbeddedPiRun,
   queueEmbeddedPiMessage,
+  resolveEmbeddedSessionLane,
   runEmbeddedPiAgent,
 } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
@@ -37,6 +39,7 @@ import { logVerbose } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { triggerClawdisRestart } from "../infra/restart.js";
 import { drainSystemEvents } from "../infra/system-events.js";
+import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
@@ -66,6 +69,8 @@ const SYSTEM_MARK = "⚙️";
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
+
+type QueueMode = "queue" | "interrupt" | "drop";
 
 export function extractThinkDirective(body?: string): {
   cleaned: string;
@@ -108,6 +113,36 @@ export function extractVerboseDirective(body?: string): {
     cleaned,
     verboseLevel,
     rawLevel: match?.[1],
+    hasDirective: !!match,
+  };
+}
+
+function normalizeQueueMode(raw?: string): QueueMode | undefined {
+  if (!raw) return undefined;
+  const cleaned = raw.trim().toLowerCase();
+  if (cleaned === "queue" || cleaned === "queued") return "queue";
+  if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort")
+    return "interrupt";
+  if (cleaned === "drop" || cleaned === "discard") return "drop";
+  return undefined;
+}
+
+export function extractQueueDirective(body?: string): {
+  cleaned: string;
+  queueMode?: QueueMode;
+  rawMode?: string;
+  hasDirective: boolean;
+} {
+  if (!body) return { cleaned: "", hasDirective: false };
+  const match = body.match(/(?:^|\s)\/queue(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i);
+  const queueMode = normalizeQueueMode(match?.[1]);
+  const cleaned = match
+    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    : body.trim();
+  return {
+    cleaned,
+    queueMode,
+    rawMode: match?.[1],
     hasDirective: !!match,
   };
 }
@@ -156,7 +191,39 @@ function stripMentions(
   }
   // Generic mention patterns like @123456789 or plain digits
   result = result.replace(/@[0-9+]{5,}/g, " ");
+  // Discord-style mentions (<@123> or <@!123>)
+  result = result.replace(/<@!?\d+>/g, " ");
   return result.replace(/\s+/g, " ").trim();
+}
+
+function defaultQueueModeForSurface(surface?: string): QueueMode {
+  const normalized = surface?.trim().toLowerCase();
+  if (normalized === "discord") return "queue";
+  if (normalized === "webchat") return "queue";
+  return "interrupt";
+}
+
+function resolveQueueMode(params: {
+  cfg: ClawdisConfig;
+  surface?: string;
+  sessionEntry?: SessionEntry;
+  inlineMode?: QueueMode;
+}): QueueMode {
+  const surfaceKey = params.surface?.trim().toLowerCase();
+  const queueCfg = params.cfg.routing?.queue;
+  const surfaceMode =
+    surfaceKey && queueCfg?.bySurface
+      ? (queueCfg.bySurface as Record<string, QueueMode | undefined>)[
+          surfaceKey
+        ]
+      : undefined;
+  return (
+    params.inlineMode ??
+    params.sessionEntry?.queueMode ??
+    surfaceMode ??
+    queueCfg?.mode ??
+    defaultQueueModeForSurface(surfaceKey)
+  );
 }
 
 export async function getReplyFromConfig(
@@ -343,6 +410,7 @@ export async function getReplyFromConfig(
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    queueMode: baseEntry?.queueMode,
   };
   sessionStore[sessionKey] = sessionEntry;
   await saveSessionStore(storePath, sessionStore);
@@ -371,8 +439,14 @@ export async function getReplyFromConfig(
     rawModel: rawModelDirective,
     hasDirective: hasModelDirective,
   } = extractModelDirective(verboseCleaned);
-  sessionCtx.Body = modelCleaned;
-  sessionCtx.BodyStripped = modelCleaned;
+  const {
+    cleaned: queueCleaned,
+    queueMode: inlineQueueMode,
+    rawMode: rawQueueMode,
+    hasDirective: hasQueueDirective,
+  } = extractQueueDirective(modelCleaned);
+  sessionCtx.Body = queueCleaned;
+  sessionCtx.BodyStripped = queueCleaned;
 
   const defaultGroupActivation = () => {
     const requireMention = cfg.routing?.groupChat?.requireMention;
@@ -457,9 +531,14 @@ export async function getReplyFromConfig(
     DEFAULT_CONTEXT_TOKENS;
 
   const directiveOnly = (() => {
-    if (!hasThinkDirective && !hasVerboseDirective && !hasModelDirective)
+    if (
+      !hasThinkDirective &&
+      !hasVerboseDirective &&
+      !hasModelDirective &&
+      !hasQueueDirective
+    )
       return false;
-    const stripped = stripStructuralPrefixes(modelCleaned ?? "");
+    const stripped = stripStructuralPrefixes(queueCleaned ?? "");
     const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
     return noMentions.length === 0;
   })();
@@ -499,6 +578,12 @@ export async function getReplyFromConfig(
       cleanupTyping();
       return {
         text: `Unrecognized verbose level "${rawVerboseLevel ?? ""}". Valid levels: off, on.`,
+      };
+    }
+    if (hasQueueDirective && !inlineQueueMode) {
+      cleanupTyping();
+      return {
+        text: `Unrecognized queue mode "${rawQueueMode ?? ""}". Valid modes: queue, interrupt, drop.`,
       };
     }
 
@@ -543,6 +628,9 @@ export async function getReplyFromConfig(
           sessionEntry.modelOverride = modelSelection.model;
         }
       }
+      if (hasQueueDirective && inlineQueueMode) {
+        sessionEntry.queueMode = inlineQueueMode;
+      }
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;
       await saveSessionStore(storePath, sessionStore);
@@ -570,6 +658,9 @@ export async function getReplyFromConfig(
           ? `Model reset to default (${label}).`
           : `Model set to ${label}.`,
       );
+    }
+    if (hasQueueDirective && inlineQueueMode) {
+      parts.push(`${SYSTEM_MARK} Queue mode set to ${inlineQueueMode}.`);
     }
     const ack = parts.join(" ").trim();
     cleanupTyping();
@@ -626,6 +717,7 @@ export async function getReplyFromConfig(
       await saveSessionStore(storePath, sessionStore);
     }
   }
+  const perMessageQueueMode = hasQueueDirective ? inlineQueueMode : undefined;
 
   // Optional allowlist by origin number (E.164 without whatsapp: prefix)
   const configuredAllowFrom = cfg.routing?.allowFrom;
@@ -990,7 +1082,35 @@ export async function getReplyFromConfig(
         .trim()
     : queueBodyBase;
 
-  if (queueEmbeddedPiMessage(sessionIdFinal, queuedBody)) {
+  const resolvedQueueMode = resolveQueueMode({
+    cfg,
+    surface: sessionCtx.Surface,
+    sessionEntry,
+    inlineMode: perMessageQueueMode,
+  });
+  const sessionLaneKey = resolveEmbeddedSessionLane(
+    sessionKey ?? sessionIdFinal,
+  );
+  const laneSize = getQueueSize(sessionLaneKey);
+  if (resolvedQueueMode === "drop" && laneSize > 0) {
+    logVerbose(
+      `Dropping inbound message for ${sessionLaneKey} (queue busy, mode=drop)`,
+    );
+    cleanupTyping();
+    return undefined;
+  }
+  if (resolvedQueueMode === "interrupt" && laneSize > 0) {
+    const cleared = clearCommandLane(sessionLaneKey);
+    const aborted = abortEmbeddedPiRun(sessionIdFinal);
+    logVerbose(
+      `Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`,
+    );
+  }
+
+  if (
+    resolvedQueueMode === "queue" &&
+    queueEmbeddedPiMessage(sessionIdFinal, queuedBody)
+  ) {
     if (sessionEntry && sessionStore && sessionKey) {
       sessionEntry.updatedAt = Date.now();
       sessionStore[sessionKey] = sessionEntry;

@@ -22,6 +22,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default; disable with `discord.requireMention = false`.
 7. Optional DM allowlist: reuse `discord.allowFrom` with user ids (`1234567890` or `discord:1234567890`). Use `"*"` to allow all DMs.
+8. Optional guild allowlist: set `discord.guildAllowFrom` with `guilds` and/or `users` to gate who can invoke the bot in servers.
 
 Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.
 
@@ -38,6 +39,10 @@ Note: Discord does not provide a simple username → id lookup without extra gui
   discord: {
     token: "abc.123",
     allowFrom: ["123456789012345678"],
+    guildAllowFrom: {
+      guilds: ["123456789012345678"],
+      users: ["987654321098765432"]
+    },
     requireMention: true,
     mediaMaxMb: 8
   }
@@ -45,6 +50,7 @@ Note: Discord does not provide a simple username → id lookup without extra gui
 ```
 
 - `allowFrom`: DM allowlist (user ids). Omit or set to `["*"]` to allow any DM sender.
+- `guildAllowFrom`: Optional allowlist for guild messages. Set `guilds` and/or `users` (ids). When both are set, both must match.
 - `requireMention`: when `true`, messages in guild channels must mention the bot.
 - `mediaMaxMb`: clamp inbound media saved to disk.
 

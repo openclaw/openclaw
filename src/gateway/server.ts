@@ -2014,6 +2014,7 @@ export async function startGatewayServer(
       runtime: discordRuntimeEnv,
       abortSignal: discordAbort.signal,
       allowFrom: cfg.discord?.allowFrom,
+      guildAllowFrom: cfg.discord?.guildAllowFrom,
       requireMention: cfg.discord?.requireMention,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
     })

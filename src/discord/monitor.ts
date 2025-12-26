@@ -25,6 +25,10 @@ export type MonitorDiscordOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   allowFrom?: Array<string | number>;
+  guildAllowFrom?: {
+    guilds?: Array<string | number>;
+    users?: Array<string | number>;
+  };
   requireMention?: boolean;
   mediaMaxMb?: number;
 };
@@ -55,6 +59,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   };
 
   const allowFrom = opts.allowFrom ?? cfg.discord?.allowFrom;
+  const guildAllowFrom = opts.guildAllowFrom ?? cfg.discord?.guildAllowFrom;
   const requireMention =
     opts.requireMention ?? cfg.discord?.requireMention ?? true;
   const mediaMaxBytes =
@@ -86,9 +91,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (!message.author) return;
 
       const isDirectMessage = !message.guild;
+      const botId = client.user?.id;
+      const wasMentioned =
+        !isDirectMessage && Boolean(botId && message.mentions.has(botId));
       if (!isDirectMessage && requireMention) {
-        const botId = client.user?.id;
-        if (botId && !message.mentions.has(botId)) {
+        if (botId && !wasMentioned) {
           logger.info(
             {
               channelId: message.channelId,
@@ -97,6 +104,31 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             "discord: skipping guild message",
           );
           return;
+        }
+      }
+
+      if (!isDirectMessage && guildAllowFrom) {
+        const guilds = normalizeDiscordAllowList(guildAllowFrom.guilds, [
+          "guild:",
+        ]);
+        const users = normalizeDiscordAllowList(guildAllowFrom.users, [
+          "discord:",
+          "user:",
+        ]);
+        if (guilds || users) {
+          const guildId = message.guild?.id ?? "";
+          const userId = message.author.id;
+          const guildOk =
+            !guilds ||
+            guilds.allowAll ||
+            (guildId && guilds.ids.has(guildId));
+          const userOk = !users || users.allowAll || users.ids.has(userId);
+          if (!guildOk || !userOk) {
+            logVerbose(
+              `Blocked discord guild sender ${userId} (guild ${guildId || "unknown"}) not in guildAllowFrom`,
+            );
+            return;
+          }
         }
       }
 
@@ -155,6 +187,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             ? message.channel.name
             : undefined,
         Surface: "discord" as const,
+        WasMentioned: wasMentioned,
         MessageSid: message.id,
         Timestamp: message.createdTimestamp,
         MediaPath: media?.path,
@@ -274,6 +307,27 @@ function buildGuildLabel(message: import("discord.js").Message) {
   const channelName =
     "name" in message.channel ? message.channel.name : message.channelId;
   return `${message.guild?.name ?? "Guild"} #${channelName} id:${message.channelId}`;
+}
+
+function normalizeDiscordAllowList(
+  raw: Array<string | number> | undefined,
+  prefixes: string[],
+): { allowAll: boolean; ids: Set<string> } | null {
+  if (!raw || raw.length === 0) return null;
+  const cleaned = raw
+    .map((entry) => String(entry).trim())
+    .filter(Boolean)
+    .map((entry) => {
+      for (const prefix of prefixes) {
+        if (entry.toLowerCase().startsWith(prefix)) {
+          return entry.slice(prefix.length);
+        }
+      }
+      return entry;
+    });
+  const allowAll = cleaned.includes("*");
+  const ids = new Set(cleaned.filter((entry) => entry !== "*"));
+  return { allowAll, ids };
 }
 
 async function sendTyping(message: Message) {

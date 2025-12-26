@@ -21,6 +21,7 @@ export type SessionEntry = {
   modelOverride?: string;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
+  queueMode?: "queue" | "interrupt" | "drop";
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
@@ -132,6 +133,7 @@ export async function updateLastRoute(params: {
     verboseLevel: existing?.verboseLevel,
     providerOverride: existing?.providerOverride,
     modelOverride: existing?.modelOverride,
+    queueMode: existing?.queueMode,
     inputTokens: existing?.inputTokens,
     outputTokens: existing?.outputTokens,
     totalTokens: existing?.totalTokens,

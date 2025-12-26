@@ -5,8 +5,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../agents/pi-embedded.js", () => ({
+  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+  resolveEmbeddedSessionLane: (key: string) =>
+    `session:${key.trim() || "main"}`,
 }));
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
@@ -20,6 +23,7 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import {
+  extractQueueDirective,
   extractThinkDirective,
   extractVerboseDirective,
   getReplyFromConfig,
@@ -83,6 +87,13 @@ describe("directive parsing", () => {
     expect(res.thinkLevel).toBe("high");
   });
 
+  it("matches queue directive", () => {
+    const res = extractQueueDirective("please /queue interrupt now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("interrupt");
+    expect(res.cleaned).toBe("please now");
+  });
+
   it("applies inline think and still runs agent content", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
@@ -138,6 +149,33 @@ describe("directive parsing", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toMatch(/^⚙️ Verbose logging enabled\./);
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("acks queue directive and persists override", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/queue interrupt", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          routing: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toMatch(/^⚙️ Queue mode set to interrupt\./);
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.queueMode).toBe("interrupt");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

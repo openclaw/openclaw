@@ -139,8 +139,21 @@ export type TelegramConfig = {
 export type DiscordConfig = {
   token?: string;
   allowFrom?: Array<string | number>;
+  guildAllowFrom?: {
+    guilds?: Array<string | number>;
+    users?: Array<string | number>;
+  };
   requireMention?: boolean;
   mediaMaxMb?: number;
+};
+
+export type QueueMode = "queue" | "interrupt" | "drop";
+
+export type QueueModeBySurface = {
+  whatsapp?: QueueMode;
+  telegram?: QueueMode;
+  discord?: QueueMode;
+  webchat?: QueueMode;
 };
 
 export type GroupChatConfig = {
@@ -157,6 +170,10 @@ export type RoutingConfig = {
     timeoutSeconds?: number;
   };
   groupChat?: GroupChatConfig;
+  queue?: {
+    mode?: QueueMode;
+    bySurface?: QueueModeBySurface;
+  };
 };
 
 export type MessagesConfig = {
@@ -437,6 +454,21 @@ const GroupChatSchema = z
   })
   .optional();
 
+const QueueModeSchema = z.union([
+  z.literal("queue"),
+  z.literal("interrupt"),
+  z.literal("drop"),
+]);
+
+const QueueModeBySurfaceSchema = z
+  .object({
+    whatsapp: QueueModeSchema.optional(),
+    telegram: QueueModeSchema.optional(),
+    discord: QueueModeSchema.optional(),
+    webchat: QueueModeSchema.optional(),
+  })
+  .optional();
+
 const TranscribeAudioSchema = z
   .object({
     command: z.array(z.string()),
@@ -498,6 +530,12 @@ const RoutingSchema = z
     allowFrom: z.array(z.string()).optional(),
     groupChat: GroupChatSchema,
     transcribeAudio: TranscribeAudioSchema,
+    queue: z
+      .object({
+        mode: QueueModeSchema.optional(),
+        bySurface: QueueModeBySurfaceSchema,
+      })
+      .optional(),
   })
   .optional();
 
@@ -698,6 +736,12 @@ const ClawdisSchema = z.object({
     .object({
       token: z.string().optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      guildAllowFrom: z
+        .object({
+          guilds: z.array(z.union([z.string(), z.number()])).optional(),
+          users: z.array(z.union([z.string(), z.number()])).optional(),
+        })
+        .optional(),
       requireMention: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
     })

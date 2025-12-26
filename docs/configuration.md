@@ -85,6 +85,26 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
+### `routing.queue`
+
+Controls how inbound messages behave when an agent run is already active.
+
+```json5
+{
+  routing: {
+    queue: {
+      mode: "interrupt", // global default: queue | interrupt | drop
+      bySurface: {
+        whatsapp: "interrupt",
+        telegram: "interrupt",
+        discord: "queue",
+        webchat: "queue"
+      }
+    }
+  }
+}
+```
+
 ### `discord` (bot transport)
 
 Configure the Discord bot by setting the bot token and optional gating:
@@ -94,6 +114,10 @@ Configure the Discord bot by setting the bot token and optional gating:
   discord: {
     token: "your-bot-token",
     allowFrom: ["discord:1234567890", "*"], // optional DM allowlist (user ids)
+    guildAllowFrom: {
+      guilds: ["123456789012345678"],      // optional guild allowlist (ids)
+      users: ["987654321098765432"]        // optional user allowlist (ids)
+    },
     requireMention: true,                   // require @bot mentions in guilds
     mediaMaxMb: 8                           // clamp inbound media size
   }

@@ -122,3 +122,12 @@ export function getTotalQueueSize() {
   }
   return total;
 }
+
+export function clearCommandLane(lane = "main") {
+  const cleaned = lane.trim() || "main";
+  const state = lanes.get(cleaned);
+  if (!state) return 0;
+  const removed = state.queue.length;
+  state.queue.length = 0;
+  return removed;
+}

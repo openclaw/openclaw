@@ -18,6 +18,33 @@ We now serialize command-based auto-replies (WhatsApp Web listener) through a ti
 - When verbose logging is enabled, queued commands emit a short notice if they waited more than ~2s before starting.
 - Typing indicators (`onReplyStart`) still fire immediately on enqueue so user experience is unchanged while we wait our turn.
 
+## Queue modes (per surface)
+Inbound messages can either queue or interrupt when a run is already active:
+- `queue`: serialize per session; if the agent is streaming, the new message is appended to the current run.
+- `interrupt`: abort the active run for that session, then run the newest message.
+- `drop`: ignore the message if the session lane is busy.
+
+Defaults (when unset in config):
+- WhatsApp + Telegram → `interrupt`
+- Discord + WebChat → `queue`
+
+Configure globally or per surface via `routing.queue`:
+
+```json5
+{
+  routing: {
+    queue: {
+      mode: "interrupt",
+      bySurface: { discord: "queue", telegram: "interrupt" }
+    }
+  }
+}
+```
+
+## Per-session overrides
+- `/queue <mode>` as a standalone command stores the mode for the current session.
+- `/queue <mode>` embedded in a message applies **once** (no persistence).
+
 ## Scope and guarantees
 - Applies only to config-driven command replies; plain text replies are unaffected.
 - Default lane (`main`) is process-wide for inbound + main heartbeats; set `agent.maxConcurrent` to allow multiple sessions in parallel.

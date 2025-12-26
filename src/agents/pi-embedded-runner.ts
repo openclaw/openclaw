@@ -86,6 +86,7 @@ export type EmbeddedPiRunResult = {
 type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
+  abort: () => void;
 };
 
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
@@ -201,6 +202,27 @@ export function queueEmbeddedPiMessage(
   if (!handle.isStreaming()) return false;
   void handle.queueMessage(text);
   return true;
+}
+
+export function abortEmbeddedPiRun(sessionId: string): boolean {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) return false;
+  handle.abort();
+  return true;
+}
+
+export function isEmbeddedPiRunActive(sessionId: string): boolean {
+  return ACTIVE_EMBEDDED_RUNS.has(sessionId);
+}
+
+export function isEmbeddedPiRunStreaming(sessionId: string): boolean {
+  const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
+  if (!handle) return false;
+  return handle.isStreaming();
+}
+
+export function resolveEmbeddedSessionLane(key: string) {
+  return resolveSessionLane(key);
 }
 
 function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
@@ -445,14 +467,19 @@ export async function runEmbeddedPiAgent(params: {
         if (prior.length > 0) {
           session.agent.replaceMessages(prior);
         }
+        let aborted = Boolean(params.abortSignal?.aborted);
+        const abortRun = () => {
+          aborted = true;
+          void session.abort();
+        };
         const queueHandle: EmbeddedPiQueueHandle = {
           queueMessage: async (text: string) => {
             await session.queueMessage(text);
           },
           isStreaming: () => session.isStreaming,
+          abort: abortRun,
         };
         ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
-        let aborted = Boolean(params.abortSignal?.aborted);
 
         const {
           assistantTexts,
@@ -473,8 +500,7 @@ export async function runEmbeddedPiAgent(params: {
 
         const abortTimer = setTimeout(
           () => {
-            aborted = true;
-            void session.abort();
+            abortRun();
           },
           Math.max(1, params.timeoutMs),
         );
@@ -482,8 +508,7 @@ export async function runEmbeddedPiAgent(params: {
         let messagesSnapshot: AppMessage[] = [];
         let sessionIdUsed = session.sessionId;
         const onAbort = () => {
-          aborted = true;
-          void session.abort();
+          abortRun();
         };
         if (params.abortSignal) {
           if (params.abortSignal.aborted) {
