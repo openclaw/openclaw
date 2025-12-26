@@ -72,6 +72,41 @@ export function subscribeEmbeddedPiSession(params: {
   const toolMetaById = new Map<string, string | undefined>();
   let deltaBuffer = "";
   let lastStreamedAssistant: string | undefined;
+  let compactionInFlight = false;
+  let pendingCompactionRetry = 0;
+  let compactionRetryResolve: (() => void) | undefined;
+  let compactionRetryPromise: Promise<void> | null = null;
+
+  const ensureCompactionPromise = () => {
+    if (!compactionRetryPromise) {
+      compactionRetryPromise = new Promise((resolve) => {
+        compactionRetryResolve = resolve;
+      });
+    }
+  };
+
+  const noteCompactionRetry = () => {
+    pendingCompactionRetry += 1;
+    ensureCompactionPromise();
+  };
+
+  const resolveCompactionRetry = () => {
+    if (pendingCompactionRetry <= 0) return;
+    pendingCompactionRetry -= 1;
+    if (pendingCompactionRetry === 0 && !compactionInFlight) {
+      compactionRetryResolve?.();
+      compactionRetryResolve = undefined;
+      compactionRetryPromise = null;
+    }
+  };
+
+  const maybeResolveCompactionWait = () => {
+    if (pendingCompactionRetry === 0 && !compactionInFlight) {
+      compactionRetryResolve?.();
+      compactionRetryResolve = undefined;
+      compactionRetryPromise = null;
+    }
+  };
   const FINAL_START_RE = /<\s*final\s*>/i;
   const FINAL_END_RE = /<\s*\/\s*final\s*>/i;
   // Local providers sometimes emit malformed tags; normalize before filtering.
@@ -103,6 +138,15 @@ export function subscribeEmbeddedPiSession(params: {
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
     });
   });
+
+  const resetForCompactionRetry = () => {
+    assistantTexts.length = 0;
+    toolMetas.length = 0;
+    toolMetaById.clear();
+    deltaBuffer = "";
+    lastStreamedAssistant = undefined;
+    toolDebouncer.flush();
+  };
 
   const unsubscribe = params.session.subscribe(
     (evt: AgentEvent | { type: string; [k: string]: unknown }) => {
@@ -274,8 +318,31 @@ export function subscribeEmbeddedPiSession(params: {
         }
       }
 
+      if (evt.type === "auto_compaction_start") {
+        compactionInFlight = true;
+        ensureCompactionPromise();
+      }
+
+      if (evt.type === "auto_compaction_end") {
+        compactionInFlight = false;
+        const willRetry = Boolean(
+          (evt as { willRetry?: unknown }).willRetry,
+        );
+        if (willRetry) {
+          noteCompactionRetry();
+          resetForCompactionRetry();
+        } else {
+          maybeResolveCompactionWait();
+        }
+      }
+
       if (evt.type === "agent_end") {
         toolDebouncer.flush();
+        if (pendingCompactionRetry > 0) {
+          resolveCompactionRetry();
+        } else {
+          maybeResolveCompactionWait();
+        }
       }
     },
   );
@@ -285,5 +352,21 @@ export function subscribeEmbeddedPiSession(params: {
     toolMetas,
     unsubscribe,
     flush: () => toolDebouncer.flush(),
+    waitForCompactionRetry: () => {
+      if (compactionInFlight || pendingCompactionRetry > 0) {
+        ensureCompactionPromise();
+        return compactionRetryPromise ?? Promise.resolve();
+      }
+      return new Promise((resolve) => {
+        queueMicrotask(() => {
+          if (compactionInFlight || pendingCompactionRetry > 0) {
+            ensureCompactionPromise();
+            void (compactionRetryPromise ?? Promise.resolve()).then(resolve);
+          } else {
+            resolve();
+          }
+        });
+      });
+    },
   };
 }

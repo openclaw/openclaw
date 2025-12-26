@@ -996,44 +996,57 @@ export async function getReplyFromConfig(
       await startTypingLoop();
     }
     const runId = crypto.randomUUID();
-    const runResult = await runEmbeddedPiAgent({
-      sessionId: sessionIdFinal,
-      sessionKey,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      skillsSnapshot,
-      prompt: commandBody,
-      extraSystemPrompt: groupIntro || undefined,
-      ownerNumbers: ownerList.length > 0 ? ownerList : undefined,
-      enforceFinalTag:
-        provider === "lmstudio" || provider === "ollama" ? true : undefined,
-      provider,
-      model,
-      thinkLevel: resolvedThinkLevel,
-      verboseLevel: resolvedVerboseLevel,
-      timeoutMs,
-      runId,
-      onPartialReply: opts?.onPartialReply
-        ? async (payload) => {
-            await startTypingOnText(payload.text);
-            await opts.onPartialReply?.({
-              text: payload.text,
-              mediaUrls: payload.mediaUrls,
-            });
-          }
-        : undefined,
-      shouldEmitToolResult,
-      onToolResult: opts?.onToolResult
-        ? async (payload) => {
-            await startTypingOnText(payload.text);
-            await opts.onToolResult?.({
-              text: payload.text,
-              mediaUrls: payload.mediaUrls,
-            });
-          }
-        : undefined,
-    });
+    let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+    try {
+      runResult = await runEmbeddedPiAgent({
+        sessionId: sessionIdFinal,
+        sessionKey,
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        skillsSnapshot,
+        prompt: commandBody,
+        extraSystemPrompt: groupIntro || undefined,
+        ownerNumbers: ownerList.length > 0 ? ownerList : undefined,
+        enforceFinalTag:
+          provider === "lmstudio" || provider === "ollama" ? true : undefined,
+        provider,
+        model,
+        thinkLevel: resolvedThinkLevel,
+        verboseLevel: resolvedVerboseLevel,
+        timeoutMs,
+        runId,
+        onPartialReply: opts?.onPartialReply
+          ? async (payload) => {
+              await startTypingOnText(payload.text);
+              await opts.onPartialReply?.({
+                text: payload.text,
+                mediaUrls: payload.mediaUrls,
+              });
+            }
+          : undefined,
+        shouldEmitToolResult,
+        onToolResult: opts?.onToolResult
+          ? async (payload) => {
+              await startTypingOnText(payload.text);
+              await opts.onToolResult?.({
+                text: payload.text,
+                mediaUrls: payload.mediaUrls,
+              });
+            }
+          : undefined,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isContextOverflow =
+        /context.*overflow|too large|context window/i.test(message);
+      defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      return {
+        text: isContextOverflow
+          ? "⚠️ Context overflow - conversation too long. Starting fresh might help!"
+          : "⚠️ Agent failed. Check gateway logs.",
+      };
+    }
 
     if (
       shouldInjectGroupIntro &&

@@ -101,6 +101,30 @@ describe("trigger handling", () => {
     });
   });
 
+  it("returns a context overflow fallback when the embedded agent throws", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(
+        new Error("Context window exceeded"),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe(
+        "⚠️ Context overflow - conversation too long. Starting fresh might help!",
+      );
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    });
+  });
+
   it("uses heartbeat model override for heartbeat runs", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({

@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+
+import type { AssistantMessage } from "@mariozechner/pi-ai";
+
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
 
 type StubSession = {
@@ -91,5 +94,58 @@ describe("subscribeEmbeddedPiSession", () => {
 
     const payload = onPartialReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello world");
+  });
+
+  it("waits for auto-compaction retry and clears buffered text", async () => {
+    const listeners: Array<(evt: any) => void> = [];
+    const session = {
+      subscribe: (listener: (evt: any) => void) => {
+        listeners.push(listener);
+        return () => {
+          const index = listeners.indexOf(listener);
+          if (index !== -1) listeners.splice(index, 1);
+        };
+      },
+    } as any;
+
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-1",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "oops" }],
+    } as AssistantMessage;
+
+    for (const listener of listeners) {
+      listener({ type: "message_end", message: assistantMessage });
+    }
+
+    expect(subscription.assistantTexts.length).toBe(1);
+
+    for (const listener of listeners) {
+      listener({
+        type: "auto_compaction_end",
+        willRetry: true,
+      });
+    }
+
+    expect(subscription.assistantTexts.length).toBe(0);
+
+    let resolved = false;
+    const waitPromise = subscription.waitForCompactionRetry().then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+
+    for (const listener of listeners) {
+      listener({ type: "agent_end" });
+    }
+
+    await waitPromise;
+    expect(resolved).toBe(true);
   });
 });
