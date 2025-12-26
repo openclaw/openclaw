@@ -81,7 +81,9 @@
         position: fixed;
         inset: 0;
         display: none;
-        place-items: start center;
+        align-items: center;
+        justify-content: flex-start;
+        flex-direction: column;
         padding-top: calc(20px + env(safe-area-inset-top, 0px));
         pointer-events: none;
         z-index: 3;
@@ -171,7 +173,7 @@
               statusEl.style.display = 'none';
               return;
             }
-            statusEl.style.display = 'grid';
+            statusEl.style.display = 'flex';
             if (titleEl && typeof title === 'string') titleEl.textContent = title;
             if (subtitleEl && typeof subtitle === 'string') subtitleEl.textContent = subtitle;
             if (!debugStatusEnabled) {
