@@ -6,12 +6,14 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     static let shared = MenuSessionsInjector()
 
     private let tag = 9_415_557
+    private let nodesTag = 9_415_558
     private let fallbackWidth: CGFloat = 320
     private let activeWindowSeconds: TimeInterval = 24 * 60 * 60
 
     private weak var originalDelegate: NSMenuDelegate?
     private weak var statusItem: NSStatusItem?
     private var loadTask: Task<Void, Never>?
+    private var nodesLoadTask: Task<Void, Never>?
     private var isMenuOpen = false
     private var lastKnownMenuWidth: CGFloat?
 
@@ -19,6 +21,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cachedErrorText: String?
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
+    private let nodesStore = InstancesStore.shared
     #if DEBUG
     private var testControlChannelConnected: Bool?
     #endif
@@ -36,6 +39,8 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         if self.loadTask == nil {
             self.loadTask = Task { await self.refreshCache(force: true) }
         }
+
+        self.nodesStore.start()
     }
 
     func menuWillOpen(_ menu: NSMenu) {
@@ -43,6 +48,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.isMenuOpen = true
 
         self.inject(into: menu)
+        self.injectNodes(into: menu)
 
         // Refresh in background for the next open (but only when connected).
         self.loadTask?.cancel()
@@ -53,6 +59,17 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 guard self.isMenuOpen else { return }
                 // SwiftUI might have refreshed menu items; re-inject once.
                 self.inject(into: menu)
+                self.injectNodes(into: menu)
+            }
+        }
+
+        self.nodesLoadTask?.cancel()
+        self.nodesLoadTask = Task { [weak self] in
+            guard let self else { return }
+            await self.nodesStore.refresh()
+            await MainActor.run {
+                guard self.isMenuOpen else { return }
+                self.injectNodes(into: menu)
             }
         }
     }
@@ -61,6 +78,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.originalDelegate?.menuDidClose?(menu)
         self.isMenuOpen = false
         self.loadTask?.cancel()
+        self.nodesLoadTask?.cancel()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
@@ -157,6 +175,73 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             guard let self, let headerView else { return }
             self.captureMenuWidthIfAvailable(from: headerView)
         }
+    }
+
+    private func injectNodes(into menu: NSMenu) {
+        for item in menu.items where item.tag == self.nodesTag {
+            menu.removeItem(item)
+        }
+
+        guard let insertIndex = self.findNodesInsertIndex(in: menu) else { return }
+        let width = self.initialWidth(for: menu)
+        var cursor = insertIndex
+
+        let entries = self.sortedNodeEntries()
+        let header = self.makeNodesHeaderItem(width: width, count: entries.count)
+        menu.insertItem(header, at: cursor)
+        cursor += 1
+
+        guard self.isControlChannelConnected else {
+            menu.insertItem(
+                self.makeMessageItem(text: "No connection to gateway", symbolName: "wifi.slash", width: width),
+                at: cursor)
+            cursor += 1
+            let separator = NSMenuItem.separator()
+            separator.tag = self.nodesTag
+            menu.insertItem(separator, at: cursor)
+            return
+        }
+
+        if let error = self.nodesStore.lastError?.nonEmpty {
+            menu.insertItem(self.makeMessageItem(text: "Error: \(error)", symbolName: "exclamationmark.triangle",
+                width: width), at: cursor)
+            cursor += 1
+        } else if let status = self.nodesStore.statusMessage?.nonEmpty {
+            menu.insertItem(self.makeMessageItem(text: status, symbolName: "info.circle", width: width), at: cursor)
+            cursor += 1
+        }
+
+        if entries.isEmpty {
+            let title = self.nodesStore.isLoading ? "Loading nodes..." : "No nodes yet"
+            menu.insertItem(self.makeMessageItem(text: title, symbolName: "circle.dashed", width: width), at: cursor)
+            cursor += 1
+        } else {
+            for entry in entries.prefix(5) {
+                let item = NSMenuItem()
+                item.tag = self.nodesTag
+                item.target = self
+                item.action = #selector(self.copyNodeSummary(_:))
+                item.representedObject = NodeMenuEntryFormatter.summaryText(entry)
+                item.view = HighlightedMenuItemHostView(
+                    rootView: AnyView(NodeMenuRowView(entry: entry, width: width)),
+                    width: width)
+                menu.insertItem(item, at: cursor)
+                cursor += 1
+            }
+
+            if entries.count > 5 {
+                let moreItem = NSMenuItem()
+                moreItem.tag = self.nodesTag
+                moreItem.title = "More Nodes..."
+                moreItem.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
+                let overflow = Array(entries.dropFirst(5))
+                moreItem.submenu = self.buildNodesOverflowMenu(entries: overflow, width: width)
+                menu.insertItem(moreItem, at: cursor)
+                cursor += 1
+            }
+        }
+
+        _ = cursor
     }
 
     private var isControlChannelConnected: Bool {
@@ -321,6 +406,21 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         return menu
     }
 
+    private func buildNodesOverflowMenu(entries: [InstanceInfo], width: CGFloat) -> NSMenu {
+        let menu = NSMenu()
+        for entry in entries {
+            let item = NSMenuItem()
+            item.target = self
+            item.action = #selector(self.copyNodeSummary(_:))
+            item.representedObject = NodeMenuEntryFormatter.summaryText(entry)
+            item.view = HighlightedMenuItemHostView(
+                rootView: AnyView(NodeMenuRowView(entry: entry, width: width)),
+                width: width)
+            menu.addItem(item)
+        }
+        return menu
+    }
+
     @objc
     private func patchThinking(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
@@ -423,10 +523,33 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
     }
 
+    @objc
+    private func copyNodeSummary(_ sender: NSMenuItem) {
+        guard let summary = sender.representedObject as? String else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(summary, forType: .string)
+    }
+
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
         // Insert right before the separator above "Send Heartbeats".
+        if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
+            if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
+                return sepIdx
+            }
+            return idx
+        }
+
+        if let sepIdx = menu.items.firstIndex(where: { $0.isSeparatorItem }) {
+            return sepIdx
+        }
+
+        if menu.items.count >= 1 { return 1 }
+        return menu.items.count
+    }
+
+    private func findNodesInsertIndex(in menu: NSMenu) -> Int? {
         if let idx = menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }) {
             if let sepIdx = menu.items[..<idx].lastIndex(where: { $0.isSeparatorItem }) {
                 return sepIdx
@@ -450,6 +573,53 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         ]
         let resolved = candidates.max() ?? self.fallbackWidth
         return max(300, resolved)
+    }
+
+    private func sortedNodeEntries() -> [InstanceInfo] {
+        let entries = self.nodesStore.instances.filter { entry in
+            let mode = entry.mode?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            return mode != "health"
+        }
+        return entries.sorted { lhs, rhs in
+            let lhsGateway = NodeMenuEntryFormatter.isGateway(lhs)
+            let rhsGateway = NodeMenuEntryFormatter.isGateway(rhs)
+            if lhsGateway != rhsGateway { return lhsGateway }
+
+            let lhsLocal = NodeMenuEntryFormatter.isLocal(lhs)
+            let rhsLocal = NodeMenuEntryFormatter.isLocal(rhs)
+            if lhsLocal != rhsLocal { return lhsLocal }
+
+            let lhsName = NodeMenuEntryFormatter.primaryName(lhs).lowercased()
+            let rhsName = NodeMenuEntryFormatter.primaryName(rhs).lowercased()
+            if lhsName == rhsName { return lhs.ts > rhs.ts }
+            return lhsName < rhsName
+        }
+    }
+
+    private func makeNodesHeaderItem(width: CGFloat, count: Int) -> NSMenuItem {
+        let view = AnyView(
+            HStack(spacing: 6) {
+                Image(systemName: "network")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("Nodes")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                Text("\(count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 12)
+            .padding(.vertical, 6)
+            .frame(minWidth: 300, alignment: .leading))
+
+        let item = NSMenuItem()
+        item.tag = self.nodesTag
+        item.isEnabled = false
+        item.view = self.makeHostedView(rootView: view, width: width, highlighted: false)
+        return item
     }
 
     // MARK: - Views
@@ -490,81 +660,3 @@ extension MenuSessionsInjector {
     }
 }
 #endif
-
-private final class HighlightedMenuItemHostView: NSView {
-    private let baseView: AnyView
-    private let hosting: NSHostingView<AnyView>
-    private var targetWidth: CGFloat
-    private var tracking: NSTrackingArea?
-    private var hovered = false {
-        didSet { self.updateHighlight() }
-    }
-
-    init(rootView: AnyView, width: CGFloat) {
-        self.baseView = rootView
-        self.hosting = NSHostingView(rootView: AnyView(rootView.environment(\.menuItemHighlighted, false)))
-        self.targetWidth = max(1, width)
-        super.init(frame: .zero)
-
-        self.addSubview(self.hosting)
-        self.hosting.autoresizingMask = [.width, .height]
-        self.updateSizing()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    override var intrinsicContentSize: NSSize {
-        self.hosting.fittingSize
-    }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let tracking {
-            self.removeTrackingArea(tracking)
-        }
-        let options: NSTrackingArea.Options = [
-            .mouseEnteredAndExited,
-            .activeAlways,
-            .inVisibleRect,
-        ]
-        let area = NSTrackingArea(rect: self.bounds, options: options, owner: self, userInfo: nil)
-        self.addTrackingArea(area)
-        self.tracking = area
-    }
-
-    override func mouseEntered(with event: NSEvent) {
-        _ = event
-        self.hovered = true
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        _ = event
-        self.hovered = false
-    }
-
-    override func layout() {
-        super.layout()
-        self.hosting.frame = self.bounds
-    }
-
-    override func draw(_ dirtyRect: NSRect) {
-        if self.hovered {
-            NSColor.selectedContentBackgroundColor.setFill()
-            self.bounds.fill()
-        }
-        super.draw(dirtyRect)
-    }
-
-    private func updateHighlight() {
-        self.hosting.rootView = AnyView(self.baseView.environment(\.menuItemHighlighted, self.hovered))
-        self.updateSizing()
-        self.needsDisplay = true
-    }
-
-    private func updateSizing() {
-        self.hosting.frame.size.width = self.targetWidth
-        let size = self.hosting.fittingSize
-        self.frame = NSRect(origin: .zero, size: NSSize(width: self.targetWidth, height: size.height))
-    }
-}

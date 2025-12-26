@@ -44,6 +44,7 @@ final class InstancesStore {
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 30
     private var eventTask: Task<Void, Never>?
+    private var startCount = 0
     private var lastPresenceById: [String: InstanceInfo] = [:]
     private var lastLoginNotifiedAtMs: [String: Double] = [:]
 
@@ -57,6 +58,8 @@ final class InstancesStore {
 
     func start() {
         guard !self.isPreview else { return }
+        self.startCount += 1
+        guard self.startCount == 1 else { return }
         guard self.task == nil else { return }
         self.startGatewaySubscription()
         self.task = Task.detached { [weak self] in
@@ -70,6 +73,10 @@ final class InstancesStore {
     }
 
     func stop() {
+        guard !self.isPreview else { return }
+        guard self.startCount > 0 else { return }
+        self.startCount -= 1
+        guard self.startCount == 0 else { return }
         self.task?.cancel()
         self.task = nil
         self.eventTask?.cancel()

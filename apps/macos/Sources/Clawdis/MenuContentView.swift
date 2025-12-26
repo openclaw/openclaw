@@ -48,20 +48,8 @@ struct MenuContent: View {
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
-            Divider()
-            Button("Open Chat") {
-                Task { @MainActor in
-                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
-                    WebChatManager.shared.show(sessionKey: sessionKey)
-                }
-            }
-            Button("Open Dashboard") {
-                Task { @MainActor in
-                    await self.openDashboard()
-                }
-            }
             Toggle(isOn: Binding(get: { self.state.canvasEnabled }, set: { self.state.canvasEnabled = $0 })) {
-                Text("Allow Canvas")
+                Label("Allow Canvas", systemImage: "rectangle.and.pencil.and.ellipsis")
             }
             .onChange(of: self.state.canvasEnabled) { _, enabled in
                 if !enabled {
@@ -69,14 +57,34 @@ struct MenuContent: View {
                 }
             }
             if self.state.canvasEnabled {
-                Button(self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas") {
+                Button {
                     if self.state.canvasPanelVisible {
                         CanvasManager.shared.hideAll()
                     } else {
                         // Don't force a navigation on re-open: preserve the current web view state.
                         _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
                     }
+                } label: {
+                    Label(
+                        self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
+                        systemImage: "rectangle.inset.filled.on.rectangle")
                 }
+            }
+            Divider()
+            Button {
+                Task { @MainActor in
+                    let sessionKey = await WebChatManager.shared.preferredSessionKey()
+                    WebChatManager.shared.show(sessionKey: sessionKey)
+                }
+            } label: {
+                Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
+            }
+            Button {
+                Task { @MainActor in
+                    await self.openDashboard()
+                }
+            } label: {
+                Label("Open Dashboard", systemImage: "gauge")
             }
             Divider()
             Toggle(
@@ -86,7 +94,7 @@ struct MenuContent: View {
                         self.browserControlEnabled = enabled
                         ClawdisConfigFile.setBrowserControlEnabled(enabled)
                     })) {
-                Text("Browser Control")
+                Label("Browser Control", systemImage: "globe")
             }
             Divider()
             Button("Settings…") { self.open(tab: .general) }
