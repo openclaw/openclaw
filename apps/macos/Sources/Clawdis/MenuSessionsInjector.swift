@@ -52,27 +52,17 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.inject(into: menu)
         self.injectNodes(into: menu)
 
-        // Refresh in background for the next open (but only when connected).
+        // Refresh in background for the next open (but do not re-inject while open).
         self.loadTask?.cancel()
         self.loadTask = Task { [weak self] in
             guard let self else { return }
             await self.refreshCache(force: false)
-            await MainActor.run {
-                guard self.isMenuOpen else { return }
-                // SwiftUI might have refreshed menu items; re-inject once.
-                self.inject(into: menu)
-                self.injectNodes(into: menu)
-            }
         }
 
         self.nodesLoadTask?.cancel()
         self.nodesLoadTask = Task { [weak self] in
             guard let self else { return }
             await self.nodesStore.refresh()
-            await MainActor.run {
-                guard self.isMenuOpen else { return }
-                self.injectNodes(into: menu)
-            }
         }
     }
 
