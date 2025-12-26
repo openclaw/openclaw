@@ -43,14 +43,6 @@ struct MenuContent: View {
                     self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
                 }
             }
-            Toggle(isOn: self.voiceWakeBinding) {
-                Label("Voice Wake", systemImage: "mic.fill")
-            }
-                .disabled(!voiceWakeSupported)
-                .opacity(voiceWakeSupported ? 1 : 0.5)
-            if self.showVoiceWakeMicPicker {
-                self.voiceWakeMicMenu
-            }
             Toggle(
                 isOn: Binding(
                     get: { self.browserControlEnabled },
@@ -68,6 +60,14 @@ struct MenuContent: View {
                     CanvasManager.shared.hideAll()
                 }
             }
+            Toggle(isOn: self.voiceWakeBinding) {
+                Label("Voice Wake", systemImage: "mic.fill")
+            }
+                .disabled(!voiceWakeSupported)
+                .opacity(voiceWakeSupported ? 1 : 0.5)
+            if self.showVoiceWakeMicPicker {
+                self.voiceWakeMicMenu
+            }
             Divider()
             Button {
                 Task { @MainActor in
@@ -84,19 +84,20 @@ struct MenuContent: View {
             } label: {
                 Label("Open Chat", systemImage: "bubble.left.and.bubble.right")
             }
-            Button {
-                if self.state.canvasPanelVisible {
-                    CanvasManager.shared.hideAll()
-                } else {
-                    // Don't force a navigation on re-open: preserve the current web view state.
-                    _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
+            if self.state.canvasEnabled {
+                Button {
+                    if self.state.canvasPanelVisible {
+                        CanvasManager.shared.hideAll()
+                    } else {
+                        // Don't force a navigation on re-open: preserve the current web view state.
+                        _ = try? CanvasManager.shared.show(sessionKey: "main", path: nil)
+                    }
+                } label: {
+                    Label(
+                        self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
+                        systemImage: "rectangle.inset.filled.on.rectangle")
                 }
-            } label: {
-                Label(
-                    self.state.canvasPanelVisible ? "Close Canvas" : "Open Canvas",
-                    systemImage: "rectangle.inset.filled.on.rectangle")
             }
-            .disabled(!self.state.canvasEnabled)
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
