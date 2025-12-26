@@ -307,27 +307,27 @@ export async function monitorWebInbox(options: {
   const handleConnectionUpdate = (
     update: Partial<import("@whiskeysockets/baileys").ConnectionState>,
   ) => {
-      try {
-        if (update.connection === "close") {
-          const status = getStatusCode(update.lastDisconnect?.error);
-          onCloseResolve?.({
-            status,
-            isLoggedOut: status === DisconnectReason.loggedOut,
-            error: update.lastDisconnect?.error,
-          });
-        }
-      } catch (err) {
-        inboundLogger.error(
-          { error: String(err) },
-          "connection.update handler error",
-        );
+    try {
+      if (update.connection === "close") {
+        const status = getStatusCode(update.lastDisconnect?.error);
         onCloseResolve?.({
-          status: undefined,
-          isLoggedOut: false,
-          error: err,
+          status,
+          isLoggedOut: status === DisconnectReason.loggedOut,
+          error: update.lastDisconnect?.error,
         });
       }
-    };
+    } catch (err) {
+      inboundLogger.error(
+        { error: String(err) },
+        "connection.update handler error",
+      );
+      onCloseResolve?.({
+        status: undefined,
+        isLoggedOut: false,
+        error: err,
+      });
+    }
+  };
   sock.ev.on("connection.update", handleConnectionUpdate);
 
   return {
@@ -338,10 +338,7 @@ export async function monitorWebInbox(options: {
           sock.ev.off("connection.update", handleConnectionUpdate);
         } else {
           sock.ev.removeListener?.("messages.upsert", handleMessagesUpsert);
-          sock.ev.removeListener?.(
-            "connection.update",
-            handleConnectionUpdate,
-          );
+          sock.ev.removeListener?.("connection.update", handleConnectionUpdate);
         }
         sock.ws?.close();
       } catch (err) {
