@@ -56,7 +56,7 @@
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdisProtocol/GatewayModels.swift",
-    "canvas:a2ui:bundle": "pnpm -s exec tsc -p vendor/a2ui/renderers/lit/tsconfig.json && rolldown -c apps/shared/ClawdisKit/Tools/CanvasA2UI/rolldown.config.mjs"
+    "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh"
   },
   "keywords": [],
   "author": "",
