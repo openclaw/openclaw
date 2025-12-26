@@ -3204,6 +3204,10 @@ export async function startGatewayServer(
 
   const machineDisplayName = await getMachineDisplayName();
   const canvasHostPortForBridge = canvasHostServer?.port;
+  const canvasHostHostForBridge =
+    canvasHostServer && bridgeHost && bridgeHost !== "0.0.0.0" && bridgeHost !== "::"
+      ? bridgeHost
+      : undefined;
 
   if (bridgeEnabled && bridgePort > 0 && bridgeHost) {
     try {
@@ -3212,6 +3216,7 @@ export async function startGatewayServer(
         port: bridgePort,
         serverName: machineDisplayName,
         canvasHostPort: canvasHostPortForBridge,
+        canvasHostHost: canvasHostHostForBridge,
         onRequest: (nodeId, req) => handleBridgeRequest(nodeId, req),
         onAuthenticated: async (node) => {
           const host = node.displayName?.trim() || node.nodeId;
