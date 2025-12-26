@@ -392,84 +392,102 @@ describe("trigger handling", () => {
 
 describe("group intro prompts", () => {
   it("labels Discord groups using the surface metadata", async () => {
-    const commandSpy = vi
-      .spyOn(commandReply, "runCommandReply")
-      .mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
 
-    await getReplyFromConfig(
-      {
-        Body: "status update",
-        From: "group:dev",
-        To: "+1888",
-        ChatType: "group",
-        GroupSubject: "Release Squad",
-        GroupMembers: "Alice, Bob",
-        Surface: "discord",
-      },
-      {},
-      baseCfg,
-    );
+      await getReplyFromConfig(
+        {
+          Body: "status update",
+          From: "group:dev",
+          To: "+1888",
+          ChatType: "group",
+          GroupSubject: "Release Squad",
+          GroupMembers: "Alice, Bob",
+          Surface: "discord",
+        },
+        {},
+        makeCfg(home),
+      );
 
-    expect(commandSpy).toHaveBeenCalledOnce();
-    const body =
-      commandSpy.mock.calls.at(-1)?.[0]?.templatingCtx.Body ?? "";
-    const intro = body.split("\n\n")[0];
-    expect(intro).toBe(
-      'You are replying inside the Discord group "Release Squad". Group members: Alice, Bob. Address the specific sender noted in the message context.',
-    );
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const extraSystemPrompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
+          ?.extraSystemPrompt ?? "";
+      expect(extraSystemPrompt).toBe(
+        'You are replying inside the Discord group "Release Squad". Group members: Alice, Bob. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.',
+      );
+    });
   });
 
   it("keeps WhatsApp labeling for WhatsApp group chats", async () => {
-    const commandSpy = vi
-      .spyOn(commandReply, "runCommandReply")
-      .mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
 
-    await getReplyFromConfig(
-      {
-        Body: "ping",
-        From: "[redacted-email]",
-        To: "+1999",
-        ChatType: "group",
-        GroupSubject: "Ops",
-        Surface: "whatsapp",
-      },
-      {},
-      baseCfg,
-    );
+      await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "[redacted-email]",
+          To: "+1999",
+          ChatType: "group",
+          GroupSubject: "Ops",
+          Surface: "whatsapp",
+        },
+        {},
+        makeCfg(home),
+      );
 
-    expect(commandSpy).toHaveBeenCalledOnce();
-    const body =
-      commandSpy.mock.calls.at(-1)?.[0]?.templatingCtx.Body ?? "";
-    const intro = body.split("\n\n")[0];
-    expect(intro).toBe(
-      'You are replying inside the WhatsApp group "Ops". Address the specific sender noted in the message context.',
-    );
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const extraSystemPrompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
+          ?.extraSystemPrompt ?? "";
+      expect(extraSystemPrompt).toBe(
+        'You are replying inside the WhatsApp group "Ops". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.',
+      );
+    });
   });
 
   it("labels Telegram groups using their own surface", async () => {
-    const commandSpy = vi
-      .spyOn(commandReply, "runCommandReply")
-      .mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 1 } });
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
 
-    await getReplyFromConfig(
-      {
-        Body: "ping",
-        From: "group:tg",
-        To: "+1777",
-        ChatType: "group",
-        GroupSubject: "Dev Chat",
-        Surface: "telegram",
-      },
-      {},
-      baseCfg,
-    );
+      await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "group:tg",
+          To: "+1777",
+          ChatType: "group",
+          GroupSubject: "Dev Chat",
+          Surface: "telegram",
+        },
+        {},
+        makeCfg(home),
+      );
 
-    expect(commandSpy).toHaveBeenCalledOnce();
-    const body =
-      commandSpy.mock.calls.at(-1)?.[0]?.templatingCtx.Body ?? "";
-    const intro = body.split("\n\n")[0];
-    expect(intro).toBe(
-      'You are replying inside the Telegram group "Dev Chat". Address the specific sender noted in the message context.',
-    );
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const extraSystemPrompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
+          ?.extraSystemPrompt ?? "";
+      expect(extraSystemPrompt).toBe(
+        'You are replying inside the Telegram group "Dev Chat". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.',
+      );
+    });
   });
 });

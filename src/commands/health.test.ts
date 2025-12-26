@@ -29,6 +29,7 @@ describe("healthCommand", () => {
         connect: { ok: true, elapsedMs: 10 },
       },
       telegram: { configured: true, probe: { ok: true, elapsedMs: 1 } },
+      discord: { configured: false },
       heartbeatSeconds: 60,
       sessions: {
         path: "/tmp/sessions.json",
@@ -54,6 +55,7 @@ describe("healthCommand", () => {
       durationMs: 5,
       web: { linked: false, authAgeMs: null },
       telegram: { configured: false },
+      discord: { configured: false },
       heartbeatSeconds: 60,
       sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
     } satisfies HealthSummary);
