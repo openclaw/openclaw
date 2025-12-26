@@ -253,19 +253,21 @@ final class MacNodeModeCoordinator {
         seconds: Double,
         operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
-        let task = Task { try await operation() }
-        let timeout = Task {
-            try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw NSError(domain: "Bridge", code: 22, userInfo: [
+                    NSLocalizedDescriptionKey: "operation timed out",
+                ])
+            }
+            let result = try await group.next()
+            group.cancelAll()
+            if let result { return result }
             throw NSError(domain: "Bridge", code: 22, userInfo: [
                 NSLocalizedDescriptionKey: "operation timed out",
             ])
         }
-        defer { timeout.cancel() }
-        return try await withTaskCancellationHandler(operation: {
-            try await task.value
-        }, onCancel: {
-            timeout.cancel()
-        })
     }
 
     private func resolveBridgeEndpoint(timeoutSeconds: Double) async -> NWEndpoint? {
