@@ -106,6 +106,8 @@ cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
     <string>Clawdis needs Automation (AppleScript) permission to drive Terminal and other apps for agent actions.</string>
     <key>NSAppTransportSecurity</key>
     <dict>
+        <key>NSAllowsArbitraryLoadsInWebContent</key>
+        <true/>
         <key>NSExceptionDomains</key>
         <dict>
             <key>100.100.100.100</key>
