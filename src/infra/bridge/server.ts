@@ -138,6 +138,7 @@ export type NodeBridgeServerOpts = {
   port: number; // 0 = ephemeral
   pairingBaseDir?: string;
   canvasHostPort?: number;
+  canvasHostHost?: string;
   onEvent?: (nodeId: string, evt: BridgeEventFrame) => Promise<void> | void;
   onRequest?: (
     nodeId: string,
@@ -187,10 +188,20 @@ export async function startNodeBridgeServer(
       ? opts.serverName.trim()
       : os.hostname();
 
+  const isLoopbackHost = (host: string) => {
+    const normalized = host.trim().toLowerCase();
+    if (normalized === "localhost") return true;
+    if (normalized === "::1") return true;
+    if (normalized === "0.0.0.0" || normalized === "::") return true;
+    return normalized.startsWith("127.");
+  };
+
   const buildCanvasHostUrl = (socket: net.Socket) => {
     const port = opts.canvasHostPort;
     if (!port) return undefined;
-    const host = socket.localAddress?.trim();
+    const localHost = socket.localAddress?.trim() ?? "";
+    const override = opts.canvasHostHost?.trim() ?? "";
+    const host = !localHost || isLoopbackHost(localHost) ? override : localHost;
     if (!host) return undefined;
     const formatted = host.includes(":") ? `[${host}]` : host;
     return `http://${formatted}:${port}`;
