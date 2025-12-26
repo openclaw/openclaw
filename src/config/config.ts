@@ -343,6 +343,8 @@ export type ClawdisConfig = {
     workspace?: string;
     /** Optional allowlist for /model (provider/model or model-only). */
     allowedModels?: string[];
+    /** Optional model aliases for /model (alias -> provider/model). */
+    modelAliases?: Record<string, string>;
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
     /** Default thinking level when no /think directive is present. */
@@ -662,6 +664,7 @@ const ClawdisSchema = z.object({
       model: z.string().optional(),
       workspace: z.string().optional(),
       allowedModels: z.array(z.string()).optional(),
+      modelAliases: z.record(z.string(), z.string()).optional(),
       contextTokens: z.number().int().positive().optional(),
       thinkingDefault: z
         .union([

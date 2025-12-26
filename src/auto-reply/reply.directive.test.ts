@@ -393,6 +393,41 @@ describe("directive parsing", () => {
     });
   });
 
+  it("supports model aliases on /model directive", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model Opus", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "openai/gpt-4.1-mini",
+            workspace: path.join(home, "clawd"),
+            allowedModels: [
+              "openai/gpt-4.1-mini",
+              "anthropic/claude-opus-4-5",
+            ],
+            modelAliases: {
+              Opus: "anthropic/claude-opus-4-5",
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to Opus");
+      expect(text).toContain("anthropic/claude-opus-4-5");
+      const store = loadSessionStore(storePath);
+      const entry = store.main;
+      expect(entry.modelOverride).toBe("claude-opus-4-5");
+      expect(entry.providerOverride).toBe("anthropic");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses model override for inline /model", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

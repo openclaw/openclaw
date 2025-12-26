@@ -200,6 +200,7 @@ Controls inbound/outbound prefixes and timestamps.
 Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `allowedModels` lets `/model` list/filter and enforce a per-session allowlist
 (omit to show the full catalog).
+`modelAliases` adds short names for `/model` (alias -> provider/model).
 
 ```json5
 {
@@ -209,6 +210,10 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
       "anthropic/claude-opus-4-5",
       "anthropic/claude-sonnet-4-1"
     ],
+    modelAliases: {
+      Opus: "anthropic/claude-opus-4-5",
+      Sonnet: "anthropic/claude-sonnet-4-1"
+    },
     thinkingDefault: "low",
     verboseDefault: "off",
     timeoutSeconds: 600,
@@ -229,6 +234,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 ```
 
 `agent.model` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
+If `modelAliases` is configured, you may also use the alias key (e.g. `Opus`).
 If you omit the provider, CLAWDIS currently assumes `anthropic` as a temporary
 deprecation fallback.
 

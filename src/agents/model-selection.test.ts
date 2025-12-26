@@ -50,4 +50,26 @@ describe("resolveConfiguredModelRef", () => {
       model: DEFAULT_MODEL,
     });
   });
+
+  it("resolves agent.model aliases when configured", () => {
+    const cfg = {
+      agent: {
+        model: "Opus",
+        modelAliases: {
+          Opus: "anthropic/claude-opus-4-5",
+        },
+      },
+    } satisfies ClawdisConfig;
+
+    const resolved = resolveConfiguredModelRef({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
+
+    expect(resolved).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+    });
+  });
 });
