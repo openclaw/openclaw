@@ -106,6 +106,7 @@ jobs:
         run: bunx tsc -p tsconfig.json
 
   macos-app:
+    if: github.event_name == 'pull_request'
     runs-on: macos-latest
     steps:
       - name: Checkout
