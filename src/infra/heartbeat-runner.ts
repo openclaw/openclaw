@@ -372,7 +372,7 @@ export async function runHeartbeatOnce(opts: {
       reason: String(err),
       durationMs: Date.now() - startedAt,
     });
-    log.error({ error: String(err) }, "heartbeat failed");
+    log.error("heartbeat failed", { error: String(err) });
     return { status: "failed", reason: String(err) };
   }
 }
@@ -385,7 +385,7 @@ export function startHeartbeatRunner(opts: {
   const cfg = opts.cfg ?? loadConfig();
   const intervalMs = resolveHeartbeatIntervalMs(cfg);
   if (!intervalMs) {
-    log.info({ enabled: false }, "heartbeat: disabled");
+    log.info("heartbeat: disabled", { enabled: false });
   }
 
   const runtime = opts.runtime ?? defaultRuntime;
@@ -406,7 +406,7 @@ export function startHeartbeatRunner(opts: {
       requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
     }, intervalMs);
     timer.unref?.();
-    log.info({ intervalMs }, "heartbeat: started");
+    log.info("heartbeat: started", { intervalMs });
   }
 
   const cleanup = () => {
