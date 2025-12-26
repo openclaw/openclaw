@@ -37,12 +37,15 @@ struct MenuContent: View {
 
             Divider()
             Toggle(isOn: self.heartbeatsBinding) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Send Heartbeats")
+                HStack(spacing: 8) {
+                    Label("Send Heartbeats", systemImage: "waveform.path.ecg")
+                    Spacer(minLength: 0)
                     self.statusLine(label: self.heartbeatStatus.label, color: self.heartbeatStatus.color)
                 }
             }
-            Toggle(isOn: self.voiceWakeBinding) { Text("Voice Wake") }
+            Toggle(isOn: self.voiceWakeBinding) {
+                Label("Voice Wake", systemImage: "mic.fill")
+            }
                 .disabled(!voiceWakeSupported)
                 .opacity(voiceWakeSupported ? 1 : 0.5)
             if self.showVoiceWakeMicPicker {

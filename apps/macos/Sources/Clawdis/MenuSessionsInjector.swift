@@ -192,10 +192,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         menu.insertItem(topSeparator, at: cursor)
         cursor += 1
 
-        let header = self.makeNodesHeaderItem(width: width, count: entries.count)
-        menu.insertItem(header, at: cursor)
-        cursor += 1
-
         guard self.isControlChannelConnected else {
             menu.insertItem(
                 self.makeMessageItem(text: "No connection to gateway", symbolName: "wifi.slash", width: width),
@@ -221,7 +217,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             menu.insertItem(self.makeMessageItem(text: title, symbolName: "circle.dashed", width: width), at: cursor)
             cursor += 1
         } else {
-            for entry in entries.prefix(5) {
+            for entry in entries.prefix(8) {
                 let item = NSMenuItem()
                 item.tag = self.nodesTag
                 item.target = self
@@ -234,12 +230,12 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 cursor += 1
             }
 
-            if entries.count > 5 {
+            if entries.count > 8 {
                 let moreItem = NSMenuItem()
                 moreItem.tag = self.nodesTag
                 moreItem.title = "More Nodes..."
                 moreItem.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: nil)
-                let overflow = Array(entries.dropFirst(5))
+                let overflow = Array(entries.dropFirst(8))
                 moreItem.submenu = self.buildNodesOverflowMenu(entries: overflow, width: width)
                 menu.insertItem(moreItem, at: cursor)
                 cursor += 1
@@ -601,31 +597,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
     }
 
-    private func makeNodesHeaderItem(width: CGFloat, count: Int) -> NSMenuItem {
-        let view = AnyView(
-            HStack(spacing: 6) {
-                Image(systemName: "network")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text("Nodes")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                Text("\(count)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.leading, 18)
-            .padding(.trailing, 12)
-            .padding(.vertical, 6)
-            .frame(minWidth: 300, alignment: .leading))
 
-        let item = NSMenuItem()
-        item.tag = self.nodesTag
-        item.isEnabled = false
-        item.view = self.makeHostedView(rootView: view, width: width, highlighted: false)
-        return item
-    }
 
     // MARK: - Views
 
