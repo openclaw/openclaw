@@ -22,7 +22,7 @@ ASC_KEY_PATH=/absolute/path/to/AuthKey_XXXXXXXXXX.p8
 IOS_DEVELOPMENT_TEAM=YOUR_TEAM_ID
 ```
 
-Tip: run `scripts/ios-team-id.sh` from the repo root to print a Team ID to paste into `.env`.
+Tip: run `scripts/ios-team-id.sh` from the repo root to print a Team ID to paste into `.env`. Fastlane falls back to this helper if `IOS_DEVELOPMENT_TEAM` is missing.
 
 Run:
 
