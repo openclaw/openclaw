@@ -91,6 +91,32 @@ describe("config identity defaults", () => {
     });
   });
 
+  it("respects empty responsePrefix to disable identity defaults", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdis");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdis.json"),
+        JSON.stringify(
+          {
+            identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" },
+            messages: { responsePrefix: "" },
+            routing: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.responsePrefix).toBe("");
+    });
+  });
+
   it("does not synthesize agent/session when absent", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdis");

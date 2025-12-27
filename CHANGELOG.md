@@ -40,6 +40,7 @@
 - System prompt now tags allowlisted owner numbers as the user identity to avoid mistaken “friend” assumptions.
 - LM Studio/Ollama replies now require <final> tags; streaming ignores content until <final> begins.
 - LM Studio responses API: tools payloads no longer include `strict: null`, and LM Studio no longer gets forced `<think>/<final>` tags.
+- Empty `messages.responsePrefix` now disables the identity emoji prefix.
 - `process log` pagination is now line-based (omit `offset` to grab the last N lines).
 - macOS WebChat: assistant bubbles now update correctly when toggling light/dark mode.
 - macOS: avoid spawning a duplicate gateway process when an external listener already exists.
