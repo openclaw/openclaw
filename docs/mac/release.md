@@ -13,6 +13,10 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 - Developer ID Application cert installed (`Developer ID Application: Peter Steinberger (Y5PE65HELJ)` is expected).
 - Sparkle private key path set in the environment as `SPARKLE_PRIVATE_KEY_FILE`; key lives in `/Users/steipete/Library/CloudStorage/Dropbox/Backup/Sparkle` (same key as Trimmy; public key baked into Info.plist).
 - Notary credentials (keychain profile or API key) for `xcrun notarytool` if you want Gatekeeper-safe DMG/zip distribution.
+  - We use a Keychain profile named `clawdis-notary`, created from App Store Connect API key env vars in your shell profile:
+    - `APP_STORE_CONNECT_API_KEY_P8`, `APP_STORE_CONNECT_KEY_ID`, `APP_STORE_CONNECT_ISSUER_ID`
+    - `echo "$APP_STORE_CONNECT_API_KEY_P8" | sed 's/\\n/\n/g' > /tmp/clawdis-notary.p8`
+    - `xcrun notarytool store-credentials "clawdis-notary" --key /tmp/clawdis-notary.p8 --key-id "$APP_STORE_CONNECT_KEY_ID" --issuer "$APP_STORE_CONNECT_ISSUER_ID"`
 - `pnpm` deps installed (`pnpm install --config.node-linker=hoisted`).
 - Sparkle tools are fetched automatically via SwiftPM at `apps/macos/.build/artifacts/sparkle/Sparkle/bin/` (`sign_update`, `generate_appcast`, etc.).
 
