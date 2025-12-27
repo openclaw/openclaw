@@ -182,6 +182,7 @@ final class GatewayProcessManager {
                 self.existingGatewayDetails = details
                 self.status = .attachedExisting(details: details)
                 self.appendLog("[gateway] using existing instance: \(details)\n")
+                self.refreshControlChannelIfNeeded(reason: "attach existing")
                 self.refreshLog()
                 return true
             } catch {
@@ -289,6 +290,7 @@ final class GatewayProcessManager {
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
                 self.status = .running(details: details)
+                self.refreshControlChannelIfNeeded(reason: "gateway started")
                 self.refreshLog()
                 return
             } catch {
@@ -305,6 +307,17 @@ final class GatewayProcessManager {
         if self.log.count > self.logLimit {
             self.log = String(self.log.suffix(self.logLimit))
         }
+    }
+
+    private func refreshControlChannelIfNeeded(reason: String) {
+        switch ControlChannel.shared.state {
+        case .connected, .connecting:
+            return
+        case .disconnected, .degraded:
+            break
+        }
+        self.appendLog("[gateway] refreshing control channel (\(reason))\n")
+        Task { await ControlChannel.shared.configure() }
     }
 
     func clearLog() {

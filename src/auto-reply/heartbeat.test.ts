@@ -19,18 +19,15 @@ describe("stripHeartbeatToken", () => {
     });
   });
 
-  it("keeps content and removes token when mixed", () => {
+  it("skips any reply that includes the heartbeat token", () => {
     expect(stripHeartbeatToken(`ALERT ${HEARTBEAT_TOKEN}`)).toEqual({
-      shouldSkip: false,
-      text: "ALERT",
+      shouldSkip: true,
+      text: "",
     });
-    expect(stripHeartbeatToken("hello")).toEqual({
-      shouldSkip: false,
-      text: "hello",
+    expect(stripHeartbeatToken("HEARTBEAT_OK 🦞")).toEqual({
+      shouldSkip: true,
+      text: "",
     });
-  });
-
-  it("strips repeated OK tails after heartbeat token", () => {
     expect(stripHeartbeatToken("HEARTBEAT_OK_OK_OK")).toEqual({
       shouldSkip: true,
       text: "",
@@ -48,8 +45,15 @@ describe("stripHeartbeatToken", () => {
       text: "",
     });
     expect(stripHeartbeatToken("ALERT HEARTBEAT_OK_OK")).toEqual({
+      shouldSkip: true,
+      text: "",
+    });
+  });
+
+  it("keeps non-heartbeat content", () => {
+    expect(stripHeartbeatToken("hello")).toEqual({
       shouldSkip: false,
-      text: "ALERT",
+      text: "hello",
     });
   });
 });

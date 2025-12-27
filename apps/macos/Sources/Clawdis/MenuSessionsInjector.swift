@@ -110,7 +110,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         guard self.isControlChannelConnected else {
             menu.insertItem(self.makeMessageItem(
-                text: "No connection to gateway",
+                text: self.controlChannelStatusText,
                 symbolName: "wifi.slash",
                 width: width), at: insertIndex)
             return
@@ -199,7 +199,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         guard self.isControlChannelConnected else {
             menu.insertItem(
-                self.makeMessageItem(text: "No connection to gateway", symbolName: "wifi.slash", width: width),
+                self.makeMessageItem(text: self.controlChannelStatusText, symbolName: "wifi.slash", width: width),
                 at: cursor)
             cursor += 1
             let separator = NSMenuItem.separator()
@@ -257,6 +257,29 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         #endif
         if case .connected = ControlChannel.shared.state { return true }
         return false
+    }
+
+    private var controlChannelStatusText: String {
+        switch ControlChannel.shared.state {
+        case .connected:
+            return "Connected"
+        case .connecting:
+            return "Connecting to gateway…"
+        case let .degraded(reason):
+            if self.shouldShowConnecting { return "Connecting to gateway…" }
+            return reason.nonEmpty ?? "No connection to gateway"
+        case .disconnected:
+            return self.shouldShowConnecting ? "Connecting to gateway…" : "No connection to gateway"
+        }
+    }
+
+    private var shouldShowConnecting: Bool {
+        switch GatewayProcessManager.shared.status {
+        case .starting, .running, .attachedExisting:
+            return true
+        case .stopped, .failed:
+            return false
+        }
     }
 
     private func makeMessageItem(text: String, symbolName: String, width: CGFloat) -> NSMenuItem {

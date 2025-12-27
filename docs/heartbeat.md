@@ -11,6 +11,7 @@ surface anything that needs attention without spamming the user.
 ## Prompt contract
 - Heartbeat body defaults to `HEARTBEAT` (configurable via `agent.heartbeat.prompt`).
 - If nothing needs attention, the model must reply **exactly** `HEARTBEAT_OK`.
+- Any response containing `HEARTBEAT_OK` is treated as an ack and discarded.
 - For alerts, do **not** include `HEARTBEAT_OK`; return only the alert text.
 
 ## Config
