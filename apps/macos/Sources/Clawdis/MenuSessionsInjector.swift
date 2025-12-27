@@ -751,14 +751,19 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         if let openWidth = self.menuOpenWidth {
             return max(300, openWidth)
         }
-        let candidates: [CGFloat] = [
-            menu.size.width,
-            menu.minimumWidth,
-            self.lastKnownMenuWidth ?? 0,
-            self.fallbackWidth,
-        ]
-        let resolved = candidates.max() ?? self.fallbackWidth
-        return max(300, resolved)
+        return self.currentMenuWidth(for: menu)
+    }
+
+    private func menuWindowWidth(for menu: NSMenu) -> CGFloat? {
+        var menuWindow: NSWindow?
+        for item in menu.items {
+            if let window = item.view?.window {
+                menuWindow = window
+                break
+            }
+        }
+        guard let width = menuWindow?.contentView?.bounds.width, width > 0 else { return nil }
+        return width
     }
 
     private func sortedNodeEntries() -> [InstanceInfo] {
@@ -806,6 +811,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     }
 
     private func currentMenuWidth(for menu: NSMenu) -> CGFloat {
+        if let width = self.menuWindowWidth(for: menu) {
+            return max(300, width)
+        }
         let candidates: [CGFloat] = [
             menu.size.width,
             menu.minimumWidth,
