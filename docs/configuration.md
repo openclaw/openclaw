@@ -296,6 +296,53 @@ Select the model via `agent.model` (provider/model).
 }
 ```
 
+### Local models (LM Studio) — recommended setup
+
+Best current local setup (what we’re running): **MiniMax M2.1** on a beefy Mac Studio
+via **LM Studio** using the **Responses API**.
+
+```json5
+{
+  agent: {
+    model: "Minimax",
+    allowedModels: [
+      "anthropic/claude-opus-4-5",
+      "lmstudio/minimax-m2.1-gs32"
+    ],
+    modelAliases: {
+      Opus: "anthropic/claude-opus-4-5",
+      Minimax: "lmstudio/minimax-m2.1-gs32"
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      lmstudio: {
+        baseUrl: "http://127.0.0.1:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-responses",
+        models: [
+          {
+            id: "minimax-m2.1-gs32",
+            name: "MiniMax M2.1 GS32",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 196608,
+            maxTokens: 8192
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Notes:
+- LM Studio must have the model loaded and the local server enabled (default URL above).
+- Responses API enables clean reasoning/output separation; WhatsApp sees only final text.
+- Adjust `contextWindow`/`maxTokens` if your LM Studio context length differs.
+
 Notes:
 - Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`,
   `google-generative-ai`
