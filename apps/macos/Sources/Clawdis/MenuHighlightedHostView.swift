@@ -25,7 +25,8 @@ final class HighlightedMenuItemHostView: NSView {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
     override var intrinsicContentSize: NSSize {
-        self.hosting.fittingSize
+        let size = self.hosting.fittingSize
+        return NSSize(width: self.targetWidth, height: size.height)
     }
 
     override func updateTrackingAreas() {
@@ -79,11 +80,11 @@ final class HighlightedMenuItemHostView: NSView {
     }
 
     private func updateSizing() {
-        let width = max(1, self.superview?.bounds.width ?? self.targetWidth)
-        self.targetWidth = width
+        let width = max(1, self.targetWidth)
         self.hosting.frame.size.width = width
         let size = self.hosting.fittingSize
         self.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
+        self.invalidateIntrinsicContentSize()
     }
 
 }

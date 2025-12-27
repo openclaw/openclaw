@@ -73,6 +73,7 @@
 - Menu bar session/node sections no longer reflow while open, keeping hover highlights aligned.
 - Menu hover highlights now span the full width (including submenu arrows).
 - Menu session rows now refresh while open without width changes (no more stuck “Loading sessions…”).
+- Menu width no longer grows on hover when moving the mouse across rows.
 - macOS node timeouts now share a single async timeout helper for consistent behavior.
 
 ### Nodes & Canvas
