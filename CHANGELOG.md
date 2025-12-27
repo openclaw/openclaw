@@ -76,6 +76,7 @@
 - Menu session rows now refresh while open without width changes (no more stuck “Loading sessions…”).
 - Menu width no longer grows on hover when moving the mouse across rows.
 - macOS node timeouts now share a single async timeout helper for consistent behavior.
+- WebChat window defaults tightened (narrower width, edge-to-edge layout) and the SwiftUI tag removed from the title.
 
 ### Nodes & Canvas
 - Debug status overlay gated and toggleable on macOS/iOS/Android nodes.
