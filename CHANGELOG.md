@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0-beta3 — Unreleased (2025-12-26)
+## 2.0.0-beta3 — 2025-12-27
 
 ### Highlights
 - First-class Clawdis tools (browser, canvas, nodes, cron) replace the old `clawdis-*` skills; tool schemas are now injected directly into the agent runtime.

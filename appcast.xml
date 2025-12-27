@@ -1,32 +1,132 @@
-<?xml version="1.0" encoding="utf-8"?>
-<rss version="2.0"
-     xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"
-     xmlns:dc="http://purl.org/dc/elements/1.1/">
-  <channel>
-    <title>Clawdis Updates</title>
-    <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
-    <description>Signed update feed for the Clawdis macOS companion app.</description>
-    <item>
-      <title>Clawdis 2.0.0-beta2</title>
-      <sparkle:releaseNotesLink>https://github.com/steipete/clawdis/releases/tag/v2.0.0-beta2</sparkle:releaseNotesLink>
-      <pubDate>Sun, 21 Dec 2025 02:25:39 +0000</pubDate>
-      <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta2/Clawdis-2.0.0-beta2.zip"
-                 sparkle:edSignature="voRWLh2Cbg/i2KtUV6ci/MW3b7hK/u1ZPoiryKs+S36ua3xnc51R97JGwmIaToCfTHg2mgFWF7M6qppfe7YsAw=="
-                 sparkle:version="2.0.0-beta2"
-                 sparkle:shortVersionString="2.0.0-beta2"
-                 length="67435891"
-                 type="application/octet-stream" />
-    </item>
-    <item>
-      <title>Clawdis 2.0.0-beta1</title>
-      <sparkle:releaseNotesLink>https://github.com/steipete/clawdis/releases/tag/v2.0.0-beta1</sparkle:releaseNotesLink>
-      <pubDate>Fri, 19 Dec 2025 17:19:50 +0000</pubDate>
-      <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta1/Clawdis-2.0.0-beta1.zip"
-                 sparkle:edSignature="oEpGD46U4ZyBBSY9/piUIFDJU+KlFB751JIWOW2yS0sRNHKszyG5khDHg9o9bV9Zo8DOCNF/HOi88jmtHJAaCQ=="
-                 sparkle:version="2.0.0-beta1"
-                 sparkle:shortVersionString="2.0.0-beta1"
-                 length="72410016"
-                 type="application/octet-stream" />
-    </item>
-  </channel>
+<?xml version="1.0" standalone="yes"?>
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Clawdis</title>
+        <item>
+            <title>2.0.0-beta3</title>
+            <pubDate>Sat, 27 Dec 2025 19:02:02 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
+            <sparkle:version>2.0.0-beta3</sparkle:version>
+            <sparkle:shortVersionString>2.0.0-beta3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdis 2.0.0-beta3</h2>
+<h3>Highlights</h3>
+<ul>
+<li>First-class Clawdis tools (browser, canvas, nodes, cron) replace the old <code>clawdis-*</code> skills; tool schemas are now injected directly into the agent runtime.</li>
+<li>Per-session model selection + custom model providers: <code>models.providers</code> merges into <code>~/.clawdis/agent/models.json</code> (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.</li>
+<li>Group chat activation modes: per-group <code>/activation mention|always</code> command with status visibility.</li>
+<li>Discord bot transport for DMs and guild text channels, with allowlists + mention gating.</li>
+<li>Gateway webhooks: external <code>wake</code> and isolated <code>agent</code> hooks with dedicated token auth.</li>
+<li>Hook mappings + Gmail Pub/Sub helper (<code>clawdis hooks gmail setup/run</code>) with auto-renew + Tailscale Funnel support.</li>
+<li>Command queue modes + per-session overrides (<code>/queue ...</code>) and new <code>agent.maxConcurrent</code> cap for safe parallelism across sessions.</li>
+<li>Background bash tasks: <code>bash</code> auto-yields after 20s (or on demand) with a <code>process</code> tool to list/poll/log/write/kill sessions.</li>
+<li>Gateway in-process restart: <code>clawdis_gateway</code> tool action triggers a SIGUSR1 restart without needing a supervisor.</li>
+</ul>
+<h3>Breaking</h3>
+<ul>
+<li>Config refactor: <code>inbound.*</code> removed; use top-level <code>routing</code> (allowlists + group rules + transcription), <code>messages</code> (prefixes/timestamps), and <code>session</code> (scoping/store/mainKey). No legacy keys read.</li>
+<li>Heartbeat config moved to <code>agent.heartbeat</code>: set <code>every: "30m"</code> (duration string) and optional <code>model</code>. <code>agent.heartbeatMinutes</code> is removed, and heartbeats are disabled unless <code>agent.heartbeat.every</code> is set.</li>
+<li>Heartbeats now run via the gateway runner (main session) and deliver to the last used channel by default. WhatsApp reply-heartbeat behavior is removed; use <code>agent.heartbeat.target</code>/<code>to</code> (or <code>target: "none"</code>) to control delivery.</li>
+<li>Browser <code>act</code> no longer accepts CSS <code>selector</code>; use <code>snapshot</code> refs (default <code>ai</code>) or <code>evaluate</code> as an escape hatch.</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Heartbeat replies now strip repeated <code>HEARTBEAT_OK</code> tails to avoid accidental “OK OK” spam.</li>
+<li>Heartbeat delivery now uses the last non-empty payload, preventing tool preambles from swallowing the final reply.</li>
+<li>Heartbeat failure logs now include the error reason instead of <code>[object Object]</code>.</li>
+<li>Duration strings now accept <code>h</code> (hours) where durations are parsed (e.g., heartbeat intervals).</li>
+<li>WhatsApp inbound now normalizes more wrapper types so quoted reply bodies are extracted reliably.</li>
+<li>WhatsApp send now preserves existing JIDs (including group <code>@g.us</code>) instead of coercing to <code>@s.whatsapp.net</code>. (Thanks @arun-8687.)</li>
+<li>Telegram/WhatsApp: reply context stays in <code>Body</code>/<code>ReplyTo*</code>, but outbound replies no longer thread to the original message. (Thanks @joshp123 for the PR and follow-up question.)</li>
+<li>Suppressed libsignal session cleanup spam from console logs unless verbose mode is enabled.</li>
+<li>WhatsApp web creds persistence hardened; credentials are restored before auth checks and QR login auto-restarts if it stalls.</li>
+<li>Group chats now honor <code>routing.groupChat.requireMention=false</code> as the default activation when no per-group override exists.</li>
+<li>Gateway auth no longer supports PAM/system mode; use token or shared password.</li>
+<li>Tailscale Funnel now requires password auth (no token-only public exposure).</li>
+<li>Group <code>/new</code> resets now work with @mentions so activation guidance appears on fresh sessions.</li>
+<li>Group chat activation context is now injected into the system prompt at session start (and after activation changes), including /new greetings.</li>
+<li>Typing indicators now start only once a reply payload is produced (no "thinking" typing for silent runs).</li>
+<li>WhatsApp group typing now starts immediately only when the bot is mentioned; otherwise it waits until real output exists.</li>
+<li>Streamed <code><think></code> segments are stripped before partial replies are emitted.</li>
+<li>System prompt now tags allowlisted owner numbers as the user identity to avoid mistaken “friend” assumptions.</li>
+<li>LM Studio/Ollama replies now require <final> tags; streaming ignores content until <final> begins.</li>
+<li>LM Studio responses API: tools payloads no longer include <code>strict: null</code>, and LM Studio no longer gets forced <code><think>/<final></code> tags.</li>
+<li>Identity emoji no longer auto-prefixes replies (set <code>messages.responsePrefix</code> explicitly if desired).</li>
+<li>Model switches now enqueue a system event so the next run knows the active model.</li>
+<li><code>/model status</code> now lists available models (same as <code>/model</code>).</li>
+<li><code>process log</code> pagination is now line-based (omit <code>offset</code> to grab the last N lines).</li>
+<li>macOS WebChat: assistant bubbles now update correctly when toggling light/dark mode.</li>
+<li>macOS: avoid spawning a duplicate gateway process when an external listener already exists.</li>
+<li>Node bridge: when binding to a non-loopback host (e.g. Tailnet IP), also listens on <code>127.0.0.1</code> for local connections (without creating duplicate loopback listeners for <code>0.0.0.0</code>/<code>127.0.0.1</code> binds).</li>
+<li>UI perf: pause repeat animations when scenes are inactive (typing dots, onboarding glow, iOS status pulse), throttle voice overlay level updates, and reduce overlay focus churn.</li>
+<li>Canvas defaults/A2UI auto-nav aligned; debug status overlay centered; redundant await removed in <code>CanvasManager</code>.</li>
+<li>Gateway launchd loop fixed by removing redundant <code>kickstart -k</code>.</li>
+<li>CLI now hints when Peekaboo is unauthorized.</li>
+<li>WhatsApp web inbox listeners now clean up on close to avoid duplicate handlers.</li>
+<li>Gateway startup now brings up browser control before external providers; WhatsApp/Telegram/Discord auto-start can be disabled with <code>web.enabled</code>, <code>telegram.enabled</code>, or <code>discord.enabled</code>.</li>
+</ul>
+<h3>Providers & Routing</h3>
+<ul>
+<li>New Discord provider for DMs + guild text channels with allowlists and mention-gated replies by default.</li>
+<li><code>routing.queue</code> now controls queue vs interrupt behavior globally + per surface (defaults: WhatsApp/Telegram interrupt, Discord/WebChat queue).</li>
+<li><code>/queue <mode></code> supports one-shot or per-session overrides; <code>/queue reset|default</code> clears overrides.</li>
+<li><code>agent.maxConcurrent</code> caps global parallel runs while keeping per-session serialization.</li>
+</ul>
+<h3>macOS app</h3>
+<ul>
+<li>Update-ready state surfaced in the menu; menu sections regrouped with session submenus.</li>
+<li>Menu bar now shows a dedicated Nodes section under Context with inline rows, overflow submenu, and iconized actions.</li>
+<li>Nodes now expose consistent inline details with per-node submenus for quick copy of key fields.</li>
+<li>Node rows now show compact app versions (build numbers moved to submenus) and offer SSH launch from Bonjour when available.</li>
+<li>Menu actions are grouped below toggles; Open Canvas hides when disabled and Voice Wake now anchors the mic picker.</li>
+<li>Connections now include Discord provider status + configuration UI.</li>
+<li>Menu bar gains an Allow Camera toggle alongside Canvas.</li>
+<li>Session list polish: sleeping/disconnected/error states, usage bar restored, padding + bar sizing tuned, syncing menu removed, header hidden when disconnected.</li>
+<li>Chat UI polish: tool call cards + merged tool results, glass background, tighter composer spacing, visual effect host tweaks.</li>
+<li>OAuth storage moved; legacy session syncing metadata removed.</li>
+<li>Remote SSH tunnels now get health checks; Debug → Ports highlights unhealthy tunnels and offers Reset SSH tunnel.</li>
+<li>Menu bar session/node sections no longer reflow while open, keeping hover highlights aligned.</li>
+<li>Menu hover highlights now span the full width (including submenu arrows).</li>
+<li>Menu session rows now refresh while open without width changes (no more stuck “Loading sessions…”).</li>
+<li>Menu width no longer grows on hover when moving the mouse across rows.</li>
+<li>Context usage bars now have higher contrast in light mode.</li>
+<li>macOS node timeouts now share a single async timeout helper for consistent behavior.</li>
+<li>WebChat window defaults tightened (narrower width, edge-to-edge layout) and the SwiftUI tag removed from the title.</li>
+</ul>
+<h3>Nodes & Canvas</h3>
+<ul>
+<li>Debug status overlay gated and toggleable on macOS/iOS/Android nodes.</li>
+<li>Gateway now derives the canvas host URL via a shared helper for bridge + WS handshakes (avoids loopback pitfalls).</li>
+<li><code>canvas a2ui push</code> validates JSONL with line errors, rejects v0.9 payloads, and supports <code>--text</code> quick renders.</li>
+<li><code>nodes rename</code> lets you override paired node display names without editing JSON.</li>
+<li>Android scaffold asset cleanup; iOS canvas/voice wake adjustments.</li>
+</ul>
+<h3>Logging & Observability</h3>
+<ul>
+<li>New subsystem console formatter with color modes, shortened prefixes, and TTY detection; browser/gateway logs route through the subsystem logger.</li>
+<li>WhatsApp console output streamlined; chalk/tslog typing fixes.</li>
+</ul>
+<h3>Web UI</h3>
+<ul>
+<li>Chat is now the dashboard landing view; health status simplified; initial scroll animation removed.</li>
+</ul>
+<h3>Build, Dev, Docs</h3>
+<ul>
+<li>Notarization flow added for macOS release artifacts; packaging scripts updated.</li>
+<li>macOS signing auto-selects Developer ID → Apple Distribution → Apple Development; no ad-hoc fallback.</li>
+<li>Added type-aware oxlint; docs list resolves from cwd; formatting/lint cleanup and dependency bumps (Peekaboo).</li>
+<li>Docs refreshed for tools, custom model providers, Discord, queue/routing, group activation commands, logging, restart semantics, release notes, GitHub pages CTAs, and npm pitfalls.</li>
+<li><code>pnpm build</code> now skips A2UI bundling for faster builds (run <code>pnpm canvas:a2ui:bundle</code> when needed).</li>
+</ul>
+<h3>Tests</h3>
+<ul>
+<li>Coverage added for models config merging, WhatsApp reply context, QR login flows, auto-reply behavior, and gateway SIGTERM timeouts.</li>
+<li>Added gateway webhook coverage (auth, validation, and summary posting).</li>
+<li>Vitest now isolates HOME/XDG config roots so tests never touch a real <code>~/.clawdis</code> install.</li>
+</ul>
+<p><a href="https://github.com/steipete/clawdis/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta3/Clawdis-2.0.0-beta3.zip" length="70404952" type="application/octet-stream" sparkle:edSignature="NMyAKWKCTFKRjMCK9bnGrFyjAav69PHhh4Y/HdMp11QQ2CISDIjvtRj80gVRszzB0SX4pxSvt9/9EOx1jJ9eDw=="/>
+        </item>
+    </channel>
 </rss>

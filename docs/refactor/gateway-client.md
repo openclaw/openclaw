@@ -1,3 +1,10 @@
+---
+summary: "Refactor notes for the macOS gateway client typed API migration (Dec 2025)."
+read_when:
+  - Refactoring macOS gateway client or typed gateway methods
+  - Auditing agent routing or channel semantics
+---
+
 # Gateway Client Refactor (Dec 2025)
 
 Goal: remove stringly-typed gateway calls from the macOS app, centralize routing/channel semantics, and improve error handling.
