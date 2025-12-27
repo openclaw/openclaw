@@ -878,11 +878,6 @@ function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
   let mutated = false;
   const next: ClawdisConfig = { ...cfg };
 
-  if (emoji && messages.responsePrefix === undefined) {
-    next.messages = { ...(next.messages ?? messages), responsePrefix: emoji };
-    mutated = true;
-  }
-
   if (name && !groupChat.mentionPatterns) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join("\\s+") : escapeRegExp(name);

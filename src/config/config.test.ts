@@ -27,7 +27,7 @@ describe("config identity defaults", () => {
     process.env.HOME = previousHome;
   });
 
-  it("derives responsePrefix and mentionPatterns when identity is set", async () => {
+  it("derives mentionPatterns when identity is set", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdis");
       await fs.mkdir(configDir, { recursive: true });
@@ -49,7 +49,7 @@ describe("config identity defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.messages?.responsePrefix).toBe("🦥");
+      expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.routing?.groupChat?.mentionPatterns).toEqual([
         "\\b@?Samantha\\b",
       ]);
@@ -139,12 +139,38 @@ describe("config identity defaults", () => {
       const { loadConfig } = await import("./config.js");
       const cfg = loadConfig();
 
-      expect(cfg.messages?.responsePrefix).toBe("🦥");
+      expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.routing?.groupChat?.mentionPatterns).toEqual([
         "\\b@?Samantha\\b",
       ]);
       expect(cfg.agent).toBeUndefined();
       expect(cfg.session).toBeUndefined();
+    });
+  });
+
+  it("does not derive responsePrefix from identity emoji", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdis");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdis.json"),
+        JSON.stringify(
+          {
+            identity: { name: "Clawd", theme: "space lobster", emoji: "🦞" },
+            messages: {},
+            routing: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.responsePrefix).toBeUndefined();
     });
   });
 });
