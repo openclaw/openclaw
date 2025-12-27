@@ -160,7 +160,13 @@ describe("runHeartbeatOnce", () => {
 
       await runHeartbeatOnce({
         cfg,
-        deps: { sendWhatsApp, getQueueSize: () => 0, nowMs: () => 0 },
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => true,
+          hasActiveWebListener: () => true,
+        },
       });
 
       expect(sendWhatsApp).toHaveBeenCalledTimes(1);
@@ -169,6 +175,61 @@ describe("runHeartbeatOnce", () => {
         "Final alert",
         expect.any(Object),
       );
+    } finally {
+      replySpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips WhatsApp delivery when not linked or running", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-hb-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    try {
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            main: {
+              sessionId: "sid",
+              updatedAt: Date.now(),
+              lastChannel: "whatsapp",
+              lastTo: "+1555",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const cfg: ClawdisConfig = {
+        agent: {
+          heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+        },
+        routing: { allowFrom: ["*"] },
+        session: { store: storePath },
+      };
+
+      replySpy.mockResolvedValue({ text: "Heartbeat alert" });
+      const sendWhatsApp = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        toJid: "jid",
+      });
+
+      const res = await runHeartbeatOnce({
+        cfg,
+        deps: {
+          sendWhatsApp,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          webAuthExists: async () => false,
+          hasActiveWebListener: () => false,
+        },
+      });
+
+      expect(res.status).toBe("skipped");
+      expect(res).toMatchObject({ reason: "whatsapp-not-linked" });
+      expect(sendWhatsApp).not.toHaveBeenCalled();
     } finally {
       replySpy.mockRestore();
       await fs.rm(tmpDir, { recursive: true, force: true });

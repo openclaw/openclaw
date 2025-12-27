@@ -18,9 +18,11 @@ import { sendMessageDiscord } from "../discord/send.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
+import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { sendMessageTelegram } from "../telegram/send.js";
 import { normalizeE164 } from "../utils.js";
+import { getActiveWebListener } from "../web/active-listener.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
@@ -49,6 +51,8 @@ type HeartbeatDeps = {
   sendDiscord?: typeof sendMessageDiscord;
   getQueueSize?: (lane?: string) => number;
   nowMs?: () => number;
+  webAuthExists?: () => Promise<boolean>;
+  hasActiveWebListener?: () => boolean;
 };
 
 const log = createSubsystemLogger("gateway/heartbeat");
@@ -141,6 +145,26 @@ function resolveHeartbeatSender(params: {
   }
   if (allowList.length > 0) return allowList[0];
   return candidates[0] ?? "heartbeat";
+}
+
+async function resolveWhatsAppReadiness(
+  cfg: ClawdisConfig,
+  deps?: HeartbeatDeps,
+): Promise<{ ok: boolean; reason: string }> {
+  if (cfg.web?.enabled === false) {
+    return { ok: false, reason: "whatsapp-disabled" };
+  }
+  const authExists = await (deps?.webAuthExists ?? webAuthExists)();
+  if (!authExists) {
+    return { ok: false, reason: "whatsapp-not-linked" };
+  }
+  const listenerActive = deps?.hasActiveWebListener
+    ? deps.hasActiveWebListener()
+    : Boolean(getActiveWebListener());
+  if (!listenerActive) {
+    return { ok: false, reason: "whatsapp-not-running" };
+  }
+  return { ok: true, reason: "ok" };
 }
 
 export function resolveHeartbeatDeliveryTarget(params: {
@@ -390,6 +414,23 @@ export async function runHeartbeatOnce(opts: {
         hasMedia: mediaUrls.length > 0,
       });
       return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
+    if (delivery.channel === "whatsapp") {
+      const readiness = await resolveWhatsAppReadiness(cfg, opts.deps);
+      if (!readiness.ok) {
+        emitHeartbeatEvent({
+          status: "skipped",
+          reason: readiness.reason,
+          preview: normalized.text?.slice(0, 200),
+          durationMs: Date.now() - startedAt,
+          hasMedia: mediaUrls.length > 0,
+        });
+        log.info("heartbeat: whatsapp not ready", {
+          reason: readiness.reason,
+        });
+        return { status: "skipped", reason: readiness.reason };
+      }
     }
 
     const deps = {
