@@ -9,7 +9,7 @@ import SwiftUI
 private let webChatSwiftLogger = Logger(subsystem: "com.steipete.clawdis", category: "WebChatSwiftUI")
 
 private enum WebChatSwiftUILayout {
-    static let windowSize = NSSize(width: 1120, height: 840)
+    static let windowSize = NSSize(width: 500, height: 840)
     static let panelSize = NSSize(width: 480, height: 640)
     static let windowMinSize = NSSize(width: 480, height: 360)
     static let anchorPadding: CGFloat = 8
@@ -263,7 +263,7 @@ final class WebChatSwiftUIWindowController {
                 styleMask: [.titled, .closable, .resizable, .miniaturizable],
                 backing: .buffered,
                 defer: false)
-            window.title = "Clawdis Chat (SwiftUI)"
+            window.title = "Clawdis Chat"
             window.contentViewController = contentViewController
             window.isReleasedWhenClosed = false
             window.titleVisibility = .visible

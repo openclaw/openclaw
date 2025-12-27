@@ -16,14 +16,16 @@ public struct ClawdisChatView: View {
 
     private enum Layout {
         #if os(macOS)
-        static let outerPadding: CGFloat = 6
+        static let outerPaddingHorizontal: CGFloat = 6
+        static let outerPaddingVertical: CGFloat = 0
         static let stackSpacing: CGFloat = 6
         static let messageSpacing: CGFloat = 6
-        static let messageListPaddingTop: CGFloat = 2
+        static let messageListPaddingTop: CGFloat = 0
         static let messageListPaddingBottom: CGFloat = 4
         static let messageListPaddingHorizontal: CGFloat = 6
         #else
-        static let outerPadding: CGFloat = 6
+        static let outerPaddingHorizontal: CGFloat = 6
+        static let outerPaddingVertical: CGFloat = 6
         static let stackSpacing: CGFloat = 6
         static let messageSpacing: CGFloat = 12
         static let messageListPaddingTop: CGFloat = 4
@@ -51,8 +53,8 @@ public struct ClawdisChatView: View {
                 self.messageList
                 ClawdisChatComposer(viewModel: self.viewModel, style: self.style)
             }
-            .padding(.horizontal, Layout.outerPadding)
-            .padding(.vertical, Layout.outerPadding)
+            .padding(.horizontal, Layout.outerPaddingHorizontal)
+            .padding(.vertical, Layout.outerPaddingVertical)
             .frame(maxWidth: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
