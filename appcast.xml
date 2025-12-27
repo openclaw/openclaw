@@ -9,7 +9,7 @@
             <sparkle:version>2.0.0-beta3</sparkle:version>
             <sparkle:shortVersionString>2.0.0-beta3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta4/Clawdis-2.0.0-beta3.zip" length="70407960" type="application/octet-stream" sparkle:edSignature="A8ySMmbLRrpIkqkrmc9QrC+6om8Iyqray/6x/YNiJxDoJeXjp2T5t8XT0CKJeNBUlDkzIj/fwiK53v0qQ59cDQ=="/>
+            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta3/Clawdis-2.0.0-beta3.zip" length="70407960" type="application/octet-stream" sparkle:edSignature="A8ySMmbLRrpIkqkrmc9QrC+6om8Iyqray/6x/YNiJxDoJeXjp2T5t8XT0CKJeNBUlDkzIj/fwiK53v0qQ59cDQ=="/>
         </item>
         <item>
             <title>2.0.0-beta4</title>
