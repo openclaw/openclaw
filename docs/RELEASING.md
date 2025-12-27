@@ -29,6 +29,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 - [ ] `pnpm lint`
 - [ ] `pnpm test` (or `pnpm test:coverage` if you need coverage output)
 - [ ] `pnpm run build` (last sanity check after tests)
+- [ ] `pnpm release:check` (verifies npm pack contents)
 - [ ] (Optional) Spot-check the web gateway if your changes affect send/receive paths.
 
 5) **macOS app (Sparkle)**
