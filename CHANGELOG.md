@@ -42,6 +42,7 @@
 - LM Studio responses API: tools payloads no longer include `strict: null`, and LM Studio no longer gets forced `<think>/<final>` tags.
 - Identity emoji no longer auto-prefixes replies (set `messages.responsePrefix` explicitly if desired).
 - Model switches now enqueue a system event so the next run knows the active model.
+- `/model status` now lists available models (same as `/model`).
 - `process log` pagination is now line-based (omit `offset` to grab the last N lines).
 - macOS WebChat: assistant bubbles now update correctly when toggling light/dark mode.
 - macOS: avoid spawning a duplicate gateway process when an external listener already exists.

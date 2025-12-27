@@ -554,6 +554,11 @@ export async function getReplyFromConfig(
     alias
       ? `Model switched to ${alias} (${label}).`
       : `Model switched to ${label}.`;
+  const isModelListAlias =
+    hasModelDirective && rawModelDirective?.trim().toLowerCase() === "status";
+  const effectiveModelDirective = isModelListAlias
+    ? undefined
+    : rawModelDirective;
 
   const directiveOnly = (() => {
     if (
@@ -569,7 +574,7 @@ export async function getReplyFromConfig(
   })();
 
   if (directiveOnly) {
-    if (hasModelDirective && !rawModelDirective) {
+    if (hasModelDirective && (!rawModelDirective || isModelListAlias)) {
       if (allowedModelCatalog.length === 0) {
         cleanupTyping();
         return { text: "No models available." };
@@ -620,16 +625,16 @@ export async function getReplyFromConfig(
     let modelSelection:
       | { provider: string; model: string; isDefault: boolean; alias?: string }
       | undefined;
-    if (hasModelDirective && rawModelDirective) {
+    if (hasModelDirective && effectiveModelDirective) {
       const resolved = resolveModelRefFromString({
-        raw: rawModelDirective,
+        raw: effectiveModelDirective,
         defaultProvider,
         aliasIndex,
       });
       if (!resolved) {
         cleanupTyping();
         return {
-          text: `Unrecognized model "${rawModelDirective}". Use /model to list available models.`,
+          text: `Unrecognized model "${effectiveModelDirective}". Use /model to list available models.`,
         };
       }
       const key = modelKey(resolved.ref.provider, resolved.ref.model);
@@ -742,9 +747,9 @@ export async function getReplyFromConfig(
       }
       updated = true;
     }
-    if (hasModelDirective && rawModelDirective) {
+    if (hasModelDirective && effectiveModelDirective) {
       const resolved = resolveModelRefFromString({
-        raw: rawModelDirective,
+        raw: effectiveModelDirective,
         defaultProvider,
         aliasIndex,
       });
