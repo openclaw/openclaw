@@ -10,7 +10,8 @@ private let webChatSwiftLogger = Logger(subsystem: "com.steipete.clawdis", categ
 
 private enum WebChatSwiftUILayout {
     static let windowSize = NSSize(width: 1120, height: 840)
-    static let panelSize = NSSize(width: 480, height: 640)
+    static let panelSize = NSSize(width: 560, height: 720)
+    static let windowMinSize = NSSize(width: 960, height: 720)
     static let anchorPadding: CGFloat = 8
 }
 
@@ -167,6 +168,7 @@ final class WebChatSwiftUIWindowController {
 
     func show() {
         guard let window else { return }
+        self.ensureWindowSize()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         self.onVisibilityChanged?(true)
@@ -270,7 +272,7 @@ final class WebChatSwiftUIWindowController {
             window.isOpaque = false
             window.center()
             WindowPlacement.ensureOnScreen(window: window, defaultSize: WebChatSwiftUILayout.windowSize)
-            window.minSize = NSSize(width: 880, height: 680)
+            window.minSize = WebChatSwiftUILayout.windowMinSize
             window.contentView?.wantsLayer = true
             window.contentView?.layer?.backgroundColor = NSColor.clear.cgColor
             return window
@@ -340,5 +342,15 @@ final class WebChatSwiftUIWindowController {
         ])
 
         return controller
+    }
+
+    private func ensureWindowSize() {
+        guard case .window = self.presentation, let window else { return }
+        let current = window.frame.size
+        let min = WebChatSwiftUILayout.windowMinSize
+        if current.width < min.width || current.height < min.height {
+            let frame = WindowPlacement.centeredFrame(size: WebChatSwiftUILayout.windowSize)
+            window.setFrame(frame, display: false)
+        }
     }
 }
