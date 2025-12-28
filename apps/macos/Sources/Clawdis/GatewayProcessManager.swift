@@ -320,6 +320,21 @@ final class GatewayProcessManager {
         Task { await ControlChannel.shared.configure() }
     }
 
+    func waitForGatewayReady(timeout: TimeInterval = 6) async -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if !self.desiredActive { return false }
+            do {
+                _ = try await GatewayConnection.shared.requestRaw(method: .health, timeoutMs: 1500)
+                return true
+            } catch {
+                try? await Task.sleep(nanoseconds: 300_000_000)
+            }
+        }
+        self.appendLog("[gateway] readiness wait timed out\n")
+        return false
+    }
+
     func clearLog() {
         self.log = ""
         try? FileManager.default.removeItem(atPath: LogLocator.launchdGatewayLogPath)

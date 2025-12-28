@@ -22,13 +22,6 @@ final class ConnectionModeCoordinator {
         case .local:
             await RemoteTunnelManager.shared.stopAll()
             WebChatManager.shared.resetTunnels()
-            do {
-                try await ControlChannel.shared.configure(mode: .local)
-            } catch {
-                // Control channel will mark itself degraded; nothing else to do here.
-                self.logger.error(
-                    "control channel local configure failed: \(error.localizedDescription, privacy: .public)")
-            }
             let shouldStart = GatewayAutostartPolicy.shouldStartGateway(mode: .local, paused: paused)
             if shouldStart {
                 GatewayProcessManager.shared.setActive(true)
@@ -39,8 +32,16 @@ final class ConnectionModeCoordinator {
                 {
                     Task { await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded() }
                 }
+                _ = await GatewayProcessManager.shared.waitForGatewayReady()
             } else {
                 GatewayProcessManager.shared.stop()
+            }
+            do {
+                try await ControlChannel.shared.configure(mode: .local)
+            } catch {
+                // Control channel will mark itself degraded; nothing else to do here.
+                self.logger.error(
+                    "control channel local configure failed: \(error.localizedDescription, privacy: .public)")
             }
             Task.detached { await PortGuardian.shared.sweep(mode: .local) }
 
