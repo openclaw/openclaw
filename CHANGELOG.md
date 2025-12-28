@@ -11,7 +11,7 @@
 - Package contents: include Discord/hooks build outputs in the npm tarball to avoid missing module errors.
 - Heartbeat replies now drop any output containing `HEARTBEAT_OK`, preventing stray emoji/text from being delivered.
 - macOS menu now refreshes the control channel after the gateway starts and shows “Connecting to gateway…” while the gateway is coming up.
-- macOS local mode now waits for the gateway to be ready before configuring the control channel.
+- macOS local mode now waits for the gateway to be ready before configuring the control channel, avoiding false “no connection” flashes.
 
 ## 2.0.0-beta3 — 2025-12-27
 
