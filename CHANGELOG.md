@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.0.0-beta5 — Unreleased
+
+### Fixes
+- macOS: Voice Wake now fully tears down the Speech pipeline when disabled (cancel pending restarts, drop stale callbacks) to avoid high CPU in the background.
+
 ## 2.0.0-beta4 — 2025-12-27
 
 ### Fixes

@@ -37,6 +37,7 @@ actor VoiceWakeRuntime {
     private var listeningState: ListeningState = .idle
     private var overlayToken: UUID?
     private var activeTriggerEndTime: TimeInterval?
+    private var scheduledRestartTask: Task<Void, Never>?
 
     // Tunables
     // Silence threshold once we've captured user speech (post-trigger).
@@ -182,21 +183,19 @@ actor VoiceWakeRuntime {
         }
     }
 
-    private func stop(dismissOverlay: Bool = true) {
+    private func stop(dismissOverlay: Bool = true, cancelScheduledRestart: Bool = true) {
+        if cancelScheduledRestart {
+            self.scheduledRestartTask?.cancel()
+            self.scheduledRestartTask = nil
+        }
         self.captureTask?.cancel()
         self.captureTask = nil
         self.isCapturing = false
         self.capturedTranscript = ""
         self.captureStartedAt = nil
         self.triggerChimePlayed = false
-        self.recognitionTask?.cancel()
-        self.recognitionTask = nil
-        self.recognitionRequest?.endAudio()
-        self.recognitionRequest = nil
-        self.audioEngine?.inputNode.removeTap(onBus: 0)
-        self.audioEngine?.stop()
-        // Release the engine so we also release any audio session/resources when Voice Wake is disabled/stopped.
-        self.audioEngine = nil
+        self.haltRecognitionPipeline()
+        self.recognizer = nil
         self.currentConfig = nil
         self.listeningState = .idle
         self.activeTriggerEndTime = nil
@@ -425,7 +424,7 @@ actor VoiceWakeRuntime {
     private func restartRecognizer() {
         // Restart the recognizer so we listen for the next trigger with a clean buffer.
         let current = self.currentConfig
-        self.stop(dismissOverlay: false)
+        self.stop(dismissOverlay: false, cancelScheduledRestart: false)
         if let current {
             Task { await self.start(with: current) }
         }
@@ -437,7 +436,8 @@ actor VoiceWakeRuntime {
     }
 
     private func scheduleRestartRecognizer(delay: TimeInterval = 0.7) {
-        Task { [weak self] in
+        self.scheduledRestartTask?.cancel()
+        self.scheduledRestartTask = Task { [weak self] in
             let nanos = UInt64(max(0, delay) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanos)
             guard let self else { return }
