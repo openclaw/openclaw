@@ -233,8 +233,8 @@ final class ScreenRecordService {
     @MainActor
     private func startCapture(
         includeAudio: Bool,
-        handler: @escaping (CMSampleBuffer, RPSampleBufferType, Error?) -> Void,
-        completion: @escaping (Error?) -> Void)
+        handler: @escaping @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void,
+        completion: @escaping @Sendable (Error?) -> Void)
     {
         let recorder = RPScreenRecorder.shared()
         recorder.isMicrophoneEnabled = includeAudio
@@ -242,8 +242,8 @@ final class ScreenRecordService {
     }
 
     @MainActor
-    private func stopCapture(_ completion: @escaping (Error?) -> Void) {
-        RPScreenRecorder.shared().stopCapture(completionHandler: completion)
+    private func stopCapture(_ completion: @escaping @Sendable (Error?) -> Void) {
+        RPScreenRecorder.shared().stopCapture { error in completion(error) }
     }
 
     private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
