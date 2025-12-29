@@ -184,7 +184,7 @@ final class ScreenRecordService {
             }
 
             Task { @MainActor in
-                self.startCapture(
+                startReplayKitCapture(
                     includeAudio: includeAudio,
                     handler: handler,
                     completion: completion)
@@ -195,7 +195,7 @@ final class ScreenRecordService {
 
         let stopError = await withCheckedContinuation { cont in
             Task { @MainActor in
-                self.stopCapture { error in cont.resume(returning: error) }
+                stopReplayKitCapture { error in cont.resume(returning: error) }
             }
         }
         if let stopError { throw stopError }
@@ -230,22 +230,6 @@ final class ScreenRecordService {
         return outURL.path
     }
 
-    @MainActor
-    private func startCapture(
-        includeAudio: Bool,
-        handler: @escaping @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void,
-        completion: @escaping @Sendable (Error?) -> Void)
-    {
-        let recorder = RPScreenRecorder.shared()
-        recorder.isMicrophoneEnabled = includeAudio
-        recorder.startCapture(handler: handler, completionHandler: completion)
-    }
-
-    @MainActor
-    private func stopCapture(_ completion: @escaping @Sendable (Error?) -> Void) {
-        RPScreenRecorder.shared().stopCapture { error in completion(error) }
-    }
-
     private nonisolated static func clampDurationMs(_ ms: Int?) -> Int {
         let v = ms ?? 10000
         return min(60000, max(250, v))
@@ -256,6 +240,22 @@ final class ScreenRecordService {
         if !v.isFinite { return 10 }
         return min(30, max(1, v))
     }
+}
+
+@MainActor
+private func startReplayKitCapture(
+    includeAudio: Bool,
+    handler: @escaping @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void,
+    completion: @escaping @Sendable (Error?) -> Void)
+{
+    let recorder = RPScreenRecorder.shared()
+    recorder.isMicrophoneEnabled = includeAudio
+    recorder.startCapture(handler: handler, completionHandler: completion)
+}
+
+@MainActor
+private func stopReplayKitCapture(_ completion: @escaping @Sendable (Error?) -> Void) {
+    RPScreenRecorder.shared().stopCapture { error in completion(error) }
 }
 
 #if DEBUG
