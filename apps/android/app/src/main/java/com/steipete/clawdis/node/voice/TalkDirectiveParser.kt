@@ -162,30 +162,27 @@ object TalkDirectiveParser {
   }
 }
 
-private fun JsonElement?.asStringOrNull(): String? = (this as? JsonPrimitive)?.contentOrNull
+private fun JsonElement?.asStringOrNull(): String? =
+  (this as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 private fun JsonElement?.asDoubleOrNull(): Double? {
   val primitive = this as? JsonPrimitive ?: return null
-  if (primitive.isString) return primitive.content.toDoubleOrNull()
-  return primitive.doubleOrNull
+  return primitive.content.toDoubleOrNull()
 }
 
 private fun JsonElement?.asIntOrNull(): Int? {
   val primitive = this as? JsonPrimitive ?: return null
-  if (primitive.isString) return primitive.content.toIntOrNull()
-  return primitive.intOrNull
+  return primitive.content.toIntOrNull()
 }
 
 private fun JsonElement?.asLongOrNull(): Long? {
   val primitive = this as? JsonPrimitive ?: return null
-  if (primitive.isString) return primitive.content.toLongOrNull()
-  return primitive.longOrNull
+  return primitive.content.toLongOrNull()
 }
 
 private fun JsonElement?.asBooleanOrNull(): Boolean? {
   val primitive = this as? JsonPrimitive ?: return null
-  if (primitive.booleanOrNull != null) return primitive.booleanOrNull
-  val content = primitive.contentOrNull?.trim()?.lowercase() ?: return null
+  val content = primitive.content.trim().lowercase()
   return when (content) {
     "true", "yes", "1" -> true
     "false", "no", "0" -> false
