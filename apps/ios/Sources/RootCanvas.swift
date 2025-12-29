@@ -119,6 +119,7 @@ struct RootCanvas: View {
 }
 
 private struct CanvasContent: View {
+    @Environment(NodeAppModel.self) private var appModel
     var systemColorScheme: ColorScheme
     var bridgeStatus: StatusPill.BridgeState
     var voiceWakeEnabled: Bool
@@ -173,28 +174,63 @@ private struct CanvasContent: View {
     }
 
     private var statusActivity: StatusPill.Activity? {
-        // Status pill owns transient capture state so it doesn't overlap the connection indicator.
-        guard let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind else { return nil }
-        let systemImage: String
-        let tint: Color?
-        switch cameraHUDKind {
-        case .photo:
-            systemImage = "camera.fill"
-            tint = nil
-        case .recording:
-            systemImage = "video.fill"
-            tint = .red
-        case .success:
-            systemImage = "checkmark.circle.fill"
-            tint = .green
-        case .error:
-            systemImage = "exclamationmark.triangle.fill"
-            tint = .red
+        // Status pill owns transient activity state so it doesn't overlap the connection indicator.
+        if self.appModel.isBackgrounded {
+            return StatusPill.Activity(
+                title: "Foreground required",
+                systemImage: "exclamationmark.triangle.fill",
+                tint: .orange)
         }
 
-        return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
-    }
+        let bridgeStatus = self.appModel.bridgeStatusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bridgeLower = bridgeStatus.lowercased()
+        if bridgeLower.contains("repair") {
+            return StatusPill.Activity(title: "Repairing…", systemImage: "wrench.and.screwdriver", tint: .orange)
+        }
+        if bridgeLower.contains("approval") || bridgeLower.contains("pairing") {
+            return StatusPill.Activity(title: "Approval pending", systemImage: "person.crop.circle.badge.clock")
+        }
+        if bridgeLower.contains("reconnecting") || bridgeLower.contains("connecting") {
+            return StatusPill.Activity(title: "Gateway reconnecting…", systemImage: "arrow.triangle.2.circlepath")
+        }
 
+        if self.appModel.screenRecordActive {
+            return StatusPill.Activity(title: "Recording screen…", systemImage: "record.circle.fill", tint: .red)
+        }
+
+        if let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind {
+            let systemImage: String
+            let tint: Color?
+            switch cameraHUDKind {
+            case .photo:
+                systemImage = "camera.fill"
+                tint = nil
+            case .recording:
+                systemImage = "video.fill"
+                tint = .red
+            case .success:
+                systemImage = "checkmark.circle.fill"
+                tint = .green
+            case .error:
+                systemImage = "exclamationmark.triangle.fill"
+                tint = .red
+            }
+            return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
+        }
+
+        if self.voiceWakeEnabled {
+            let voiceStatus = self.appModel.voiceWake.statusText
+            if voiceStatus.localizedCaseInsensitiveContains("microphone permission") {
+                return StatusPill.Activity(title: "Mic permission", systemImage: "mic.slash", tint: .orange)
+            }
+            if voiceStatus == "Paused" {
+                let suffix = self.appModel.isBackgrounded ? " (background)" : ""
+                return StatusPill.Activity(title: "Voice Wake paused\(suffix)", systemImage: "pause.circle.fill")
+            }
+        }
+
+        return nil
+    }
 }
 
 private struct OverlayButton: View {

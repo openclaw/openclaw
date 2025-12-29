@@ -14,6 +14,7 @@ struct MenuContent: View {
     private let heartbeatStore = HeartbeatStore.shared
     private let controlChannel = ControlChannel.shared
     private let activityStore = WorkActivityStore.shared
+    @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
@@ -32,6 +33,13 @@ struct MenuContent: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(self.connectionLabel)
                     self.statusLine(label: self.healthStatus.label, color: self.healthStatus.color)
+                    if self.pairingPrompter.pendingCount > 0 {
+                        let repairCount = self.pairingPrompter.pendingRepairCount
+                        let repairSuffix = repairCount > 0 ? " · \(repairCount) repair" : ""
+                        self.statusLine(
+                            label: "Pairing approval pending (\(self.pairingPrompter.pendingCount))\(repairSuffix)",
+                            color: .orange)
+                    }
                 }
             }
             .disabled(self.state.connectionMode == .unconfigured)

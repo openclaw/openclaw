@@ -111,6 +111,9 @@ class NodeRuntime(context: Context) {
   private val _cameraFlashToken = MutableStateFlow(0L)
   val cameraFlashToken: StateFlow<Long> = _cameraFlashToken.asStateFlow()
 
+  private val _screenRecordActive = MutableStateFlow(false)
+  val screenRecordActive: StateFlow<Boolean> = _screenRecordActive.asStateFlow()
+
   private val _serverName = MutableStateFlow<String?>(null)
   val serverName: StateFlow<String?> = _serverName.asStateFlow()
 
@@ -756,14 +759,20 @@ class NodeRuntime(context: Context) {
         }
       }
       ClawdisScreenCommand.Record.rawValue -> {
-        val res =
-          try {
-            screenRecorder.record(paramsJson)
-          } catch (err: Throwable) {
-            val (code, message) = invokeErrorFromThrowable(err)
-            return BridgeSession.InvokeResult.error(code = code, message = message)
-          }
-        BridgeSession.InvokeResult.ok(res.payloadJson)
+        // Status pill mirrors screen recording state so it stays visible without overlay stacking.
+        _screenRecordActive.value = true
+        try {
+          val res =
+            try {
+              screenRecorder.record(paramsJson)
+            } catch (err: Throwable) {
+              val (code, message) = invokeErrorFromThrowable(err)
+              return BridgeSession.InvokeResult.error(code = code, message = message)
+            }
+          BridgeSession.InvokeResult.ok(res.payloadJson)
+        } finally {
+          _screenRecordActive.value = false
+        }
       }
       else ->
         BridgeSession.InvokeResult.error(

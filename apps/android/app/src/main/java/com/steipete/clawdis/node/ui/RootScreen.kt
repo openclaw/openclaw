@@ -36,6 +36,10 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Report
+import androidx.compose.material.icons.filled.ScreenShare
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -65,39 +69,100 @@ fun RootScreen(viewModel: MainViewModel) {
   val statusText by viewModel.statusText.collectAsState()
   val cameraHud by viewModel.cameraHud.collectAsState()
   val cameraFlashToken by viewModel.cameraFlashToken.collectAsState()
+  val screenRecordActive by viewModel.screenRecordActive.collectAsState()
+  val isForeground by viewModel.isForeground.collectAsState()
+  val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
   val activity =
-    remember(cameraHud) {
-      // Status pill owns transient capture state so it doesn't overlap the connection indicator.
-      cameraHud?.let { hud ->
-        when (hud.kind) {
+    remember(cameraHud, screenRecordActive, isForeground, statusText, voiceWakeStatusText) {
+      // Status pill owns transient activity state so it doesn't overlap the connection indicator.
+      if (!isForeground) {
+        return@remember StatusActivity(
+          title = "Foreground required",
+          icon = Icons.Default.Report,
+          contentDescription = "Foreground required",
+        )
+      }
+
+      val lowerStatus = statusText.lowercase()
+      if (lowerStatus.contains("repair")) {
+        return@remember StatusActivity(
+          title = "Repairing…",
+          icon = Icons.Default.Refresh,
+          contentDescription = "Repairing",
+        )
+      }
+      if (lowerStatus.contains("pairing") || lowerStatus.contains("approval")) {
+        return@remember StatusActivity(
+          title = "Approval pending",
+          icon = Icons.Default.RecordVoiceOver,
+          contentDescription = "Approval pending",
+        )
+      }
+      if (lowerStatus.contains("reconnecting") || lowerStatus.contains("connecting")) {
+        return@remember StatusActivity(
+          title = "Gateway reconnecting…",
+          icon = Icons.Default.Refresh,
+          contentDescription = "Gateway reconnecting",
+        )
+      }
+
+      if (screenRecordActive) {
+        return@remember StatusActivity(
+          title = "Recording screen…",
+          icon = Icons.Default.ScreenShare,
+          contentDescription = "Recording screen",
+          tint = androidx.compose.ui.graphics.Color.Red,
+        )
+      }
+
+      if (cameraHud != null) {
+        return@remember when (cameraHud.kind) {
           CameraHudKind.Photo ->
             StatusActivity(
-              title = hud.message,
+              title = cameraHud.message,
               icon = Icons.Default.PhotoCamera,
               contentDescription = "Taking photo",
             )
           CameraHudKind.Recording ->
             StatusActivity(
-              title = hud.message,
+              title = cameraHud.message,
               icon = Icons.Default.FiberManualRecord,
               contentDescription = "Recording",
               tint = androidx.compose.ui.graphics.Color.Red,
             )
           CameraHudKind.Success ->
             StatusActivity(
-              title = hud.message,
+              title = cameraHud.message,
               icon = Icons.Default.CheckCircle,
               contentDescription = "Capture finished",
             )
           CameraHudKind.Error ->
             StatusActivity(
-              title = hud.message,
+              title = cameraHud.message,
               icon = Icons.Default.Error,
               contentDescription = "Capture failed",
               tint = androidx.compose.ui.graphics.Color.Red,
             )
         }
       }
+
+      if (voiceWakeStatusText.contains("Microphone permission", ignoreCase = true)) {
+        return@remember StatusActivity(
+          title = "Mic permission",
+          icon = Icons.Default.Error,
+          contentDescription = "Mic permission required",
+        )
+      }
+      if (voiceWakeStatusText == "Paused") {
+        val suffix = if (!isForeground) " (background)" else ""
+        return@remember StatusActivity(
+          title = "Voice Wake paused$suffix",
+          icon = Icons.Default.RecordVoiceOver,
+          contentDescription = "Voice Wake paused",
+        )
+      }
+
+      null
     }
 
   val bridgeState =

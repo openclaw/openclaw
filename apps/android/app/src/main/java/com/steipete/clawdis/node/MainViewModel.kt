@@ -23,9 +23,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val statusText: StateFlow<String> = runtime.statusText
   val serverName: StateFlow<String?> = runtime.serverName
   val remoteAddress: StateFlow<String?> = runtime.remoteAddress
+  val isForeground: StateFlow<Boolean> = runtime.isForeground
 
   val cameraHud: StateFlow<CameraHudState?> = runtime.cameraHud
   val cameraFlashToken: StateFlow<Long> = runtime.cameraFlashToken
+  val screenRecordActive: StateFlow<Boolean> = runtime.screenRecordActive
 
   val instanceId: StateFlow<String> = runtime.instanceId
   val displayName: StateFlow<String> = runtime.displayName
@@ -33,6 +35,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val preventSleep: StateFlow<Boolean> = runtime.preventSleep
   val wakeWords: StateFlow<List<String>> = runtime.wakeWords
   val voiceWakeMode: StateFlow<VoiceWakeMode> = runtime.voiceWakeMode
+  val voiceWakeStatusText: StateFlow<String> = runtime.voiceWakeStatusText
   val voiceWakeStatusText: StateFlow<String> = runtime.voiceWakeStatusText
   val voiceWakeIsListening: StateFlow<Boolean> = runtime.voiceWakeIsListening
   val talkEnabled: StateFlow<Boolean> = runtime.talkEnabled

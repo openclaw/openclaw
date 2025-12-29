@@ -14,6 +14,8 @@
 - iOS/Android nodes: bridge auto-connect refreshes stale tokens and settings now show richer bridge/device details.
 - iOS/Android nodes: status pill now surfaces camera activity instead of overlay toasts.
 - iOS/Android/macOS nodes: camera snaps recompress to keep base64 payloads under 5 MB.
+- iOS/Android nodes: status pill now surfaces pairing, screen recording, voice wake, and foreground-required states.
+- macOS menu: top status line now shows pending node pairing approvals (incl. repairs).
 - CLI: avoid spurious gateway close errors after successful request/response cycles.
 - Agent runtime: clamp tool-result images to the 5MB Anthropic limit to avoid hard request rejections.
 - Tests: add Swift Testing coverage for camera errors and Kotest coverage for Android bridge endpoints.

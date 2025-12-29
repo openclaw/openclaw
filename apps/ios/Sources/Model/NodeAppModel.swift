@@ -36,6 +36,7 @@ final class NodeAppModel {
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
     var cameraFlashNonce: Int = 0
+    var screenRecordActive: Bool = false
 
     init() {
         self.voiceWake.configure { [weak self] cmd in
@@ -598,6 +599,9 @@ final class NodeAppModel {
                         NSLocalizedDescriptionKey: "INVALID_REQUEST: screen format must be mp4",
                     ])
                 }
+                // Status pill mirrors screen recording state so it stays visible without overlay stacking.
+                self.screenRecordActive = true
+                defer { self.screenRecordActive = false }
                 let path = try await self.screenRecorder.record(
                     screenIndex: params.screenIndex,
                     durationMs: params.durationMs,
