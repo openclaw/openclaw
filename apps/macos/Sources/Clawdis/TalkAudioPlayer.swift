@@ -3,7 +3,7 @@ import Foundation
 import OSLog
 
 @MainActor
-final class TalkAudioPlayer: NSObject, AVAudioPlayerDelegate {
+final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
     static let shared = TalkAudioPlayer()
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "talk.tts")

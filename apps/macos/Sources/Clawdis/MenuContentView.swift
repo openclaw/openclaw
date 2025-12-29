@@ -80,11 +80,6 @@ struct MenuContent: View {
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
-            Toggle(isOn: self.talkBinding) {
-                Label("Talk", systemImage: "bubble.left.and.waveform")
-            }
-                .disabled(!voiceWakeSupported)
-                .opacity(voiceWakeSupported ? 1 : 0.5)
             Divider()
             Button {
                 Task { @MainActor in
@@ -115,6 +110,13 @@ struct MenuContent: View {
                         systemImage: "rectangle.inset.filled.on.rectangle")
                 }
             }
+            Button {
+                Task { await self.state.setTalkEnabled(!self.state.talkEnabled) }
+            } label: {
+                Label(self.state.talkEnabled ? "Stop Talk Mode" : "Talk Mode", systemImage: "bubble.left.and.waveform")
+            }
+            .disabled(!voiceWakeSupported)
+            .opacity(voiceWakeSupported ? 1 : 0.5)
             Divider()
             Button("Settings…") { self.open(tab: .general) }
                 .keyboardShortcut(",", modifiers: [.command])
@@ -341,14 +343,6 @@ struct MenuContent: View {
             get: { self.state.swabbleEnabled },
             set: { newValue in
                 Task { await self.state.setVoiceWakeEnabled(newValue) }
-            })
-    }
-
-    private var talkBinding: Binding<Bool> {
-        Binding(
-            get: { self.state.talkEnabled },
-            set: { newValue in
-                Task { await self.state.setTalkEnabled(newValue) }
             })
     }
 

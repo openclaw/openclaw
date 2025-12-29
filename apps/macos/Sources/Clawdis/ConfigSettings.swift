@@ -277,14 +277,25 @@ struct ConfigSettings: View {
                 GridRow {
                     self.gridLabel("Voice ID")
                     VStack(alignment: .leading, spacing: 6) {
-                        ComboBox("ElevenLabs voice ID", text: self.$talkVoiceId) {
-                            ForEach(self.talkVoiceSuggestions, id: \.self) { value in
-                                Text(value).tag(value)
+                        HStack(spacing: 8) {
+                            TextField("ElevenLabs voice ID", text: self.$talkVoiceId)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(maxWidth: .infinity)
+                                .onChange(of: self.talkVoiceId) { _, _ in self.autosaveConfig() }
+                            if !self.talkVoiceSuggestions.isEmpty {
+                                Menu {
+                                    ForEach(self.talkVoiceSuggestions, id: \.self) { value in
+                                        Button(value) {
+                                            self.talkVoiceId = value
+                                            self.autosaveConfig()
+                                        }
+                                    }
+                                } label: {
+                                    Label("Suggestions", systemImage: "chevron.up.chevron.down")
+                                }
+                                .fixedSize()
                             }
                         }
-                        .textFieldStyle(.roundedBorder)
-                        .frame(maxWidth: .infinity)
-                        .onChange(of: self.talkVoiceId) { _, _ in self.autosaveConfig() }
                         Text("Defaults to ELEVENLABS_VOICE_ID / SAG_VOICE_ID if unset.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)

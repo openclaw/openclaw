@@ -87,9 +87,9 @@ actor TalkModeRuntime {
 
     private struct RecognitionUpdate {
         let transcript: String?
-        let segments: [SFTranscriptionSegment]
+        let hasConfidence: Bool
         let isFinal: Bool
-        let error: Error?
+        let errorDescription: String?
         let generation: Int
     }
 
@@ -136,12 +136,13 @@ actor TalkModeRuntime {
 
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self, generation] result, error in
             guard let self else { return }
+            let segments = result?.bestTranscription.segments ?? []
             let transcript = result?.bestTranscription.formattedString
             let update = RecognitionUpdate(
                 transcript: transcript,
-                segments: result?.bestTranscription.segments ?? [],
+                hasConfidence: segments.contains { $0.confidence > 0.6 },
                 isFinal: result?.isFinal ?? false,
-                error: error,
+                errorDescription: error?.localizedDescription,
                 generation: generation)
             Task { await self.handleRecognition(update) }
         }
@@ -161,14 +162,14 @@ actor TalkModeRuntime {
 
     private func handleRecognition(_ update: RecognitionUpdate) async {
         guard update.generation == self.recognitionGeneration else { return }
-        if let error = update.error {
-            self.logger.debug("talk recognition error: \(error.localizedDescription, privacy: .public)")
+        if let errorDescription = update.errorDescription {
+            self.logger.debug("talk recognition error: \(errorDescription, privacy: .public)")
         }
         guard let transcript = update.transcript else { return }
 
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         if self.phase == .speaking, self.interruptOnSpeech {
-            if await self.shouldInterrupt(transcript: trimmed, segments: update.segments) {
+            if await self.shouldInterrupt(transcript: trimmed, hasConfidence: update.hasConfidence) {
                 await self.stopSpeaking(reason: .speech)
                 self.lastTranscript = ""
                 self.lastHeard = nil
@@ -194,11 +195,14 @@ actor TalkModeRuntime {
     private func startSilenceMonitor() {
         self.silenceTask?.cancel()
         self.silenceTask = Task { [weak self] in
-            guard let self else { return }
-            while self.isEnabled {
-                try? await Task.sleep(nanoseconds: 200_000_000)
-                await self.checkSilence()
-            }
+            await self?.silenceLoop()
+        }
+    }
+
+    private func silenceLoop() async {
+        while self.isEnabled {
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            await self.checkSilence()
         }
     }
 
@@ -297,9 +301,9 @@ actor TalkModeRuntime {
     }
 
     private func waitForChatCompletion(runId: String, timeoutSeconds: Int) async -> ChatCompletionState {
-        await withTaskGroup(of: ChatCompletionState.self) { group in
+        let stream = await GatewayConnection.shared.subscribe()
+        return await withTaskGroup(of: ChatCompletionState.self) { group in
             group.addTask { [runId] in
-                let stream = GatewayConnection.shared.subscribe()
                 for await push in stream {
                     if case let .event(evt) = push, evt.event == "chat", let payload = evt.payload {
                         if let chat = try? JSONDecoder().decode(
@@ -332,13 +336,13 @@ actor TalkModeRuntime {
         do {
             let history = try await GatewayConnection.shared.chatHistory(sessionKey: sessionKey)
             let messages = history.messages ?? []
-            let decoded = messages.compactMap { item in
+            let decoded: [ClawdisChatMessage] = messages.compactMap { item in
                 guard let data = try? JSONEncoder().encode(item) else { return nil }
                 return try? JSONDecoder().decode(ClawdisChatMessage.self, from: data)
             }
             guard let assistant = decoded.last(where: { $0.role == "assistant" }) else { return nil }
             let text = assistant.content.compactMap { $0.text }.joined(separator: "\n")
-            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmed = text.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         } catch {
             self.logger.error("talk history fetch failed: \(error.localizedDescription, privacy: .public)")
@@ -418,7 +422,7 @@ actor TalkModeRuntime {
             let audio = try await ElevenLabsClient(apiKey: apiKey).synthesize(
                 voiceId: voiceId,
                 request: request)
-            let result = await MainActor.run { await TalkAudioPlayer.shared.play(data: audio) }
+            let result = await TalkAudioPlayer.shared.play(data: audio)
             if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
                 if self.interruptOnSpeech {
                     self.lastInterruptedAtSeconds = interruptedAt
@@ -533,7 +537,7 @@ actor TalkModeRuntime {
         return sqrt(sum / Double(frameCount))
     }
 
-    private func shouldInterrupt(transcript: String, segments: [SFTranscriptionSegment]) async -> Bool {
+    private func shouldInterrupt(transcript: String, hasConfidence: Bool) async -> Bool {
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
         if self.isLikelyEcho(of: trimmed) { return false }
@@ -541,7 +545,6 @@ actor TalkModeRuntime {
         if let lastSpeechEnergyAt, now.timeIntervalSince(lastSpeechEnergyAt) > 0.35 {
             return false
         }
-        let hasConfidence = segments.contains { $0.confidence > 0.6 }
         return hasConfidence
     }
 
