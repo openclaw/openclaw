@@ -26,6 +26,7 @@ struct RootTabs: View {
             StatusPill(
                 bridge: self.bridgeStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
+                activity: nil,
                 onTap: { self.selectedTab = 2 })
                 .padding(.leading, 10)
                 .safeAreaPadding(.top, 10)

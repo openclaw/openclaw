@@ -32,6 +32,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.FiberManualRecord
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -47,6 +51,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.ContextCompat
+import com.steipete.clawdis.node.CameraHudKind
 import com.steipete.clawdis.node.MainViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -60,6 +65,39 @@ fun RootScreen(viewModel: MainViewModel) {
   val statusText by viewModel.statusText.collectAsState()
   val cameraHud by viewModel.cameraHud.collectAsState()
   val cameraFlashToken by viewModel.cameraFlashToken.collectAsState()
+  val activity =
+    remember(cameraHud) {
+      cameraHud?.let { hud ->
+        when (hud.kind) {
+          CameraHudKind.Photo ->
+            StatusActivity(
+              title = hud.message,
+              icon = Icons.Default.PhotoCamera,
+              contentDescription = "Taking photo",
+            )
+          CameraHudKind.Recording ->
+            StatusActivity(
+              title = hud.message,
+              icon = Icons.Default.FiberManualRecord,
+              contentDescription = "Recording",
+              tint = androidx.compose.ui.graphics.Color.Red,
+            )
+          CameraHudKind.Success ->
+            StatusActivity(
+              title = hud.message,
+              icon = Icons.Default.CheckCircle,
+              contentDescription = "Capture finished",
+            )
+          CameraHudKind.Error ->
+            StatusActivity(
+              title = hud.message,
+              icon = Icons.Default.Error,
+              contentDescription = "Capture failed",
+              tint = androidx.compose.ui.graphics.Color.Red,
+            )
+        }
+      }
+    }
 
   val bridgeState =
     remember(serverName, statusText) {
@@ -80,9 +118,9 @@ fun RootScreen(viewModel: MainViewModel) {
     CanvasView(viewModel = viewModel, modifier = Modifier.fillMaxSize())
   }
 
-  // Camera HUD (flash + toast) must be in a Popup to render above the WebView.
+  // Camera flash must be in a Popup to render above the WebView.
   Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
-    CameraHudOverlay(hud = cameraHud, flashToken = cameraFlashToken, modifier = Modifier.fillMaxSize())
+    CameraFlashOverlay(token = cameraFlashToken, modifier = Modifier.fillMaxSize())
   }
 
   // Keep the overlay buttons above the WebView canvas (AndroidView), otherwise they may not receive touches.
@@ -90,6 +128,7 @@ fun RootScreen(viewModel: MainViewModel) {
     StatusPill(
       bridge = bridgeState,
       voiceEnabled = voiceEnabled,
+      activity = activity,
       onClick = { sheet = Sheet.Settings },
       modifier = Modifier.windowInsetsPadding(safeOverlayInsets).padding(start = 12.dp, top = 12.dp),
     )

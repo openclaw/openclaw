@@ -152,6 +152,7 @@ private struct CanvasContent: View {
             StatusPill(
                 bridge: self.bridgeStatus,
                 voiceWakeEnabled: self.voiceWakeEnabled,
+                activity: self.statusActivity,
                 brighten: self.brightenButtons,
                 onTap: {
                     self.openSettings()
@@ -169,33 +170,30 @@ private struct CanvasContent: View {
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .overlay(alignment: .topLeading) {
-            if let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind {
-                CameraCaptureToast(
-                    text: cameraHUDText,
-                    kind: self.mapCameraKind(cameraHUDKind),
-                    brighten: self.brightenButtons)
-                    .padding(SwiftUI.Edge.Set.leading, 10)
-                    .safeAreaPadding(SwiftUI.Edge.Set.top, 106)
-                    .transition(
-                        AnyTransition.move(edge: SwiftUI.Edge.top)
-                            .combined(with: AnyTransition.opacity))
-            }
-        }
     }
 
-    private func mapCameraKind(_ kind: NodeAppModel.CameraHUDKind) -> CameraCaptureToast.Kind {
-        switch kind {
+    private var statusActivity: StatusPill.Activity? {
+        guard let cameraHUDText, !cameraHUDText.isEmpty, let cameraHUDKind else { return nil }
+        let systemImage: String
+        let tint: Color?
+        switch cameraHUDKind {
         case .photo:
-            .photo
+            systemImage = "camera.fill"
+            tint = nil
         case .recording:
-            .recording
+            systemImage = "video.fill"
+            tint = .red
         case .success:
-            .success
+            systemImage = "checkmark.circle.fill"
+            tint = .green
         case .error:
-            .error
+            systemImage = "exclamationmark.triangle.fill"
+            tint = .red
         }
+
+        return StatusPill.Activity(title: cameraHUDText, systemImage: systemImage, tint: tint)
     }
+
 }
 
 private struct OverlayButton: View {
@@ -259,61 +257,5 @@ private struct CameraFlashOverlay: View {
                     }
                 }
             }
-    }
-}
-
-private struct CameraCaptureToast: View {
-    enum Kind {
-        case photo
-        case recording
-        case success
-        case error
-    }
-
-    var text: String
-    var kind: Kind
-    var brighten: Bool = false
-
-    var body: some View {
-        HStack(spacing: 10) {
-            self.icon
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.primary)
-
-            Text(self.text)
-                .font(.system(size: 14, weight: .semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-        }
-        .padding(.vertical, 10)
-        .padding(.horizontal, 12)
-        .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.white.opacity(self.brighten ? 0.24 : 0.18), lineWidth: 0.5)
-                }
-                .shadow(color: .black.opacity(0.25), radius: 12, y: 6)
-        }
-        .accessibilityLabel("Camera")
-        .accessibilityValue(self.text)
-    }
-
-    @ViewBuilder
-    private var icon: some View {
-        switch self.kind {
-        case .photo:
-            Image(systemName: "camera.fill")
-        case .recording:
-            Image(systemName: "record.circle.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.red, .primary)
-        case .success:
-            Image(systemName: "checkmark.circle.fill")
-        case .error:
-            Image(systemName: "exclamationmark.triangle.fill")
-        }
     }
 }
