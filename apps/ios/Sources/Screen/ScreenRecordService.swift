@@ -1,7 +1,6 @@
 import AVFoundation
 import ReplayKit
 
-@MainActor
 final class ScreenRecordService {
     private struct UncheckedSendableBox<T>: @unchecked Sendable {
         let value: T
@@ -52,7 +51,9 @@ final class ScreenRecordService {
         try? FileManager.default.removeItem(at: outURL)
 
         let recorder = RPScreenRecorder.shared()
-        recorder.isMicrophoneEnabled = includeAudio
+        await MainActor.run {
+            recorder.isMicrophoneEnabled = includeAudio
+        }
 
         var writer: AVAssetWriter?
         var videoInput: AVAssetWriterInput?
@@ -61,16 +62,23 @@ final class ScreenRecordService {
         var sawVideo = false
         var lastVideoTime: CMTime?
         var handlerError: Error?
-        let lock = NSLock()
+        let stateLock = NSLock()
+
+        func withStateLock<T>(_ body: () -> T) -> T {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return body()
+        }
 
         func setHandlerError(_ error: Error) {
-            lock.lock()
-            defer { lock.unlock() }
+            withStateLock {
             if handlerError == nil { handlerError = error }
+            }
         }
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            recorder.startCapture(handler: { sample, type, error in
+            Task { @MainActor in
+                recorder.startCapture(handler: { sample, type, error in
                 if let error {
                     setHandlerError(error)
                     return
@@ -80,12 +88,16 @@ final class ScreenRecordService {
                 switch type {
                 case .video:
                     let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-                    if let lastVideoTime {
-                        let delta = CMTimeSubtract(pts, lastVideoTime)
-                        if delta.seconds < (1.0 / fpsValue) { return }
+                    let shouldSkip = withStateLock {
+                        if let lastVideoTime {
+                            let delta = CMTimeSubtract(pts, lastVideoTime)
+                            return delta.seconds < (1.0 / fpsValue)
+                        }
+                        return false
                     }
+                    if shouldSkip { return }
 
-                    if writer == nil {
+                    if withStateLock({ writer == nil }) {
                         guard let imageBuffer = CMSampleBufferGetImageBuffer(sample) else {
                             setHandlerError(ScreenRecordError.captureFailed("Missing image buffer"))
                             return
@@ -111,7 +123,9 @@ final class ScreenRecordService {
                                 aInput.expectsMediaDataInRealTime = true
                                 if w.canAdd(aInput) {
                                     w.add(aInput)
-                                    audioInput = aInput
+                                    withStateLock {
+                                        audioInput = aInput
+                                    }
                                 }
                             }
 
@@ -120,29 +134,37 @@ final class ScreenRecordService {
                                     .writeFailed(w.error?.localizedDescription ?? "Failed to start writer")
                             }
                             w.startSession(atSourceTime: pts)
-                            writer = w
-                            videoInput = vInput
-                            started = true
+                            withStateLock {
+                                writer = w
+                                videoInput = vInput
+                                started = true
+                            }
                         } catch {
                             setHandlerError(error)
                             return
                         }
                     }
 
-                    guard let vInput = videoInput, started else { return }
+                    let vInput = withStateLock { videoInput }
+                    let isStarted = withStateLock { started }
+                    guard let vInput, isStarted else { return }
                     if vInput.isReadyForMoreMediaData {
                         if vInput.append(sample) {
-                            sawVideo = true
-                            lastVideoTime = pts
+                            withStateLock {
+                                sawVideo = true
+                                lastVideoTime = pts
+                            }
                         } else {
-                            if let err = writer?.error {
+                            if let err = withStateLock({ writer?.error }) {
                                 setHandlerError(ScreenRecordError.writeFailed(err.localizedDescription))
                             }
                         }
                     }
 
                 case .audioApp, .audioMic:
-                    guard includeAudio, let aInput = audioInput, started else { return }
+                    let aInput = withStateLock { audioInput }
+                    let isStarted = withStateLock { started }
+                    guard includeAudio, let aInput, isStarted else { return }
                     if aInput.isReadyForMoreMediaData {
                         _ = aInput.append(sample)
                     }
@@ -150,27 +172,35 @@ final class ScreenRecordService {
                 @unknown default:
                     break
                 }
-            }, completionHandler: { error in
+                }, completionHandler: { error in
                 if let error { cont.resume(throwing: error) } else { cont.resume() }
-            })
+                })
+            }
         }
 
         try await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
 
-        let stopError = await withCheckedContinuation { cont in
-            recorder.stopCapture { error in cont.resume(returning: error) }
+        let stopError = await MainActor.run {
+            await withCheckedContinuation { cont in
+                recorder.stopCapture { error in cont.resume(returning: error) }
+            }
         }
         if let stopError { throw stopError }
 
-        if let handlerError { throw handlerError }
-        guard let writer, let videoInput, sawVideo else {
+        let handlerErrorSnapshot = withStateLock { handlerError }
+        if let handlerErrorSnapshot { throw handlerErrorSnapshot }
+        let writerSnapshot = withStateLock { writer }
+        let videoInputSnapshot = withStateLock { videoInput }
+        let audioInputSnapshot = withStateLock { audioInput }
+        let sawVideoSnapshot = withStateLock { sawVideo }
+        guard let writerSnapshot, let videoInputSnapshot, sawVideoSnapshot else {
             throw ScreenRecordError.captureFailed("No frames captured")
         }
 
-        videoInput.markAsFinished()
-        audioInput?.markAsFinished()
+        videoInputSnapshot.markAsFinished()
+        audioInputSnapshot?.markAsFinished()
 
-        let writerBox = UncheckedSendableBox(value: writer)
+        let writerBox = UncheckedSendableBox(value: writerSnapshot)
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             writerBox.value.finishWriting {
                 let writer = writerBox.value
