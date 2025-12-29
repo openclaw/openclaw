@@ -115,30 +115,30 @@ fun RootScreen(viewModel: MainViewModel) {
         )
       }
 
-      if (cameraHud != null) {
-        return@remember when (cameraHud.kind) {
+      cameraHud?.let { hud ->
+        return@remember when (hud.kind) {
           CameraHudKind.Photo ->
             StatusActivity(
-              title = cameraHud.message,
+              title = hud.message,
               icon = Icons.Default.PhotoCamera,
               contentDescription = "Taking photo",
             )
           CameraHudKind.Recording ->
             StatusActivity(
-              title = cameraHud.message,
+              title = hud.message,
               icon = Icons.Default.FiberManualRecord,
               contentDescription = "Recording",
               tint = androidx.compose.ui.graphics.Color.Red,
             )
           CameraHudKind.Success ->
             StatusActivity(
-              title = cameraHud.message,
+              title = hud.message,
               icon = Icons.Default.CheckCircle,
               contentDescription = "Capture finished",
             )
           CameraHudKind.Error ->
             StatusActivity(
-              title = cameraHud.message,
+              title = hud.message,
               icon = Icons.Default.Error,
               contentDescription = "Capture failed",
               tint = androidx.compose.ui.graphics.Color.Red,

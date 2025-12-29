@@ -233,7 +233,7 @@ final class TalkModeManager: NSObject {
             "sessionKey": "main",
             "message": message,
             "thinking": "low",
-            "timeoutMs": 30_000,
+            "timeoutMs": 30000,
             "idempotencyKey": UUID().uuidString,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -260,7 +260,10 @@ final class TalkModeManager: NSObject {
     }
 
     private func fetchLatestAssistantText(bridge: BridgeSession) async throws -> String? {
-        let res = try await bridge.request(method: "chat.history", paramsJSON: "{\"sessionKey\":\"main\"}", timeoutSeconds: 15)
+        let res = try await bridge.request(
+            method: "chat.history",
+            paramsJSON: "{\"sessionKey\":\"main\"}",
+            timeoutSeconds: 15)
         guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return nil }
         guard let messages = json["messages"] as? [[String: Any]] else { return nil }
         for msg in messages.reversed() {
@@ -499,7 +502,7 @@ private enum TalkModeRuntime {
 
     static func validatedSeed(_ value: Int?) -> UInt32? {
         guard let value else { return nil }
-        if value < 0 || value > 4294967295 { return nil }
+        if value < 0 || value > 4_294_967_295 { return nil }
         return UInt32(value)
     }
 

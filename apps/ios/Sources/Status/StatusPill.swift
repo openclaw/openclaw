@@ -31,12 +31,12 @@ struct StatusPill: View {
     struct Activity: Equatable {
         var title: String
         var systemImage: String
-        var tint: Color? = nil
+        var tint: Color?
     }
 
     var bridge: BridgeState
     var voiceWakeEnabled: Bool
-    var activity: Activity? = nil
+    var activity: Activity?
     var brighten: Bool = false
     var onTap: () -> Void
 

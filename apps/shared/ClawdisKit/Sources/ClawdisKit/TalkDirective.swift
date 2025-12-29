@@ -67,7 +67,8 @@ public enum TalkDirectiveParser {
         var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
         guard !lines.isEmpty else { return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: []) }
 
-        guard let firstNonEmpty = lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        guard let firstNonEmpty =
+            lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
@@ -83,8 +84,8 @@ public enum TalkDirectiveParser {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
         }
 
-        let speakerBoost = boolValue(json, keys: ["speaker_boost", "speakerBoost"])
-            ?? boolValue(json, keys: ["no_speaker_boost", "noSpeakerBoost"]).map { !$0 }
+        let speakerBoost = self.boolValue(json, keys: ["speaker_boost", "speakerBoost"])
+            ?? self.boolValue(json, keys: ["no_speaker_boost", "noSpeakerBoost"]).map { !$0 }
 
         let directive = TalkDirective(
             voiceId: stringValue(json, keys: ["voice", "voice_id", "voiceId"]),

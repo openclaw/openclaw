@@ -36,7 +36,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val wakeWords: StateFlow<List<String>> = runtime.wakeWords
   val voiceWakeMode: StateFlow<VoiceWakeMode> = runtime.voiceWakeMode
   val voiceWakeStatusText: StateFlow<String> = runtime.voiceWakeStatusText
-  val voiceWakeStatusText: StateFlow<String> = runtime.voiceWakeStatusText
   val voiceWakeIsListening: StateFlow<Boolean> = runtime.voiceWakeIsListening
   val talkEnabled: StateFlow<Boolean> = runtime.talkEnabled
   val talkStatusText: StateFlow<String> = runtime.talkStatusText
