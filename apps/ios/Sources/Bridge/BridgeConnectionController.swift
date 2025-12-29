@@ -6,6 +6,15 @@ import Observation
 import SwiftUI
 import UIKit
 
+protocol BridgePairingClient: Sendable {
+    func pairAndHello(
+        endpoint: NWEndpoint,
+        hello: BridgeHello,
+        onStatus: (@Sendable (String) -> Void)?) async throws -> String
+}
+
+extension BridgeClient: BridgePairingClient {}
+
 @MainActor
 @Observable
 final class BridgeConnectionController {
@@ -18,8 +27,15 @@ final class BridgeConnectionController {
     private var didAutoConnect = false
     private var seenStableIDs = Set<String>()
 
-    init(appModel: NodeAppModel, startDiscovery: Bool = true) {
+    private let bridgeClientFactory: @Sendable () -> any BridgePairingClient
+
+    init(
+        appModel: NodeAppModel,
+        startDiscovery: Bool = true,
+        bridgeClientFactory: @escaping @Sendable () -> any BridgePairingClient = { BridgeClient() })
+    {
         self.appModel = appModel
+        self.bridgeClientFactory = bridgeClientFactory
 
         BridgeSettingsStore.bootstrapPersistence()
         let defaults = UserDefaults.standard
@@ -85,7 +101,7 @@ final class BridgeConnectionController {
 
         let token = KeychainStore.loadString(
             service: "com.steipete.clawdis.bridge",
-            account: "bridge-token.\(instanceId)")?
+            account: self.keychainAccount(instanceId: instanceId))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !token.isEmpty else { return }
 
@@ -99,9 +115,8 @@ final class BridgeConnectionController {
             guard let port = NWEndpoint.Port(rawValue: UInt16(resolvedPort)) else { return }
 
             self.didAutoConnect = true
-            appModel.connectToBridge(
-                endpoint: .hostPort(host: NWEndpoint.Host(manualHost), port: port),
-                hello: self.makeHello(token: token))
+            let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(manualHost), port: port)
+            self.startAutoConnect(endpoint: endpoint, token: token, instanceId: instanceId)
             return
         }
 
@@ -112,7 +127,7 @@ final class BridgeConnectionController {
         guard let target = self.bridges.first(where: { $0.stableID == targetStableID }) else { return }
 
         self.didAutoConnect = true
-        appModel.connectToBridge(endpoint: target.endpoint, hello: self.makeHello(token: token))
+        self.startAutoConnect(endpoint: target.endpoint, token: token, instanceId: instanceId)
     }
 
     private func updateLastDiscoveredBridge(from bridges: [BridgeDiscoveryModel.DiscoveredBridge]) {
@@ -138,6 +153,40 @@ final class BridgeConnectionController {
             modelIdentifier: self.modelIdentifier(),
             caps: self.currentCaps(),
             commands: self.currentCommands())
+    }
+
+    private func keychainAccount(instanceId: String) -> String {
+        "bridge-token.\(instanceId)"
+    }
+
+    private func startAutoConnect(endpoint: NWEndpoint, token: String, instanceId: String) {
+        guard let appModel else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let hello = self.makeHello(token: token)
+                let refreshed = try await self.bridgeClientFactory().pairAndHello(
+                    endpoint: endpoint,
+                    hello: hello,
+                    onStatus: { status in
+                        Task { @MainActor in
+                            appModel.bridgeStatusText = status
+                        }
+                    })
+                let resolvedToken = refreshed.isEmpty ? token : refreshed
+                if !refreshed.isEmpty, refreshed != token {
+                    _ = KeychainStore.saveString(
+                        refreshed,
+                        service: "com.steipete.clawdis.bridge",
+                        account: self.keychainAccount(instanceId: instanceId))
+                }
+                appModel.connectToBridge(endpoint: endpoint, hello: self.makeHello(token: resolvedToken))
+            } catch {
+                await MainActor.run {
+                    appModel.bridgeStatusText = "Bridge error: \(error.localizedDescription)"
+                }
+            }
+        }
     }
 
     private func resolvedDisplayName(defaults: UserDefaults) -> String {
@@ -264,6 +313,14 @@ extension BridgeConnectionController {
 
     func _test_appVersion() -> String {
         self.appVersion()
+    }
+
+    func _test_setBridges(_ bridges: [BridgeDiscoveryModel.DiscoveredBridge]) {
+        self.bridges = bridges
+    }
+
+    func _test_triggerAutoConnect() {
+        self.maybeAutoConnect()
     }
 }
 #endif
