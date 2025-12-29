@@ -1,7 +1,7 @@
 import AVFoundation
 import ReplayKit
 
-final class ScreenRecordService {
+final class ScreenRecordService: @unchecked Sendable {
     private struct UncheckedSendableBox<T>: @unchecked Sendable {
         let value: T
     }
