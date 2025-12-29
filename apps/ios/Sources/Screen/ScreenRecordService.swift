@@ -72,116 +72,116 @@ final class ScreenRecordService {
 
         func setHandlerError(_ error: Error) {
             withStateLock {
-            if handlerError == nil { handlerError = error }
+                if handlerError == nil { handlerError = error }
             }
         }
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             Task { @MainActor in
                 recorder.startCapture(handler: { sample, type, error in
-                if let error {
-                    setHandlerError(error)
-                    return
-                }
-                guard CMSampleBufferDataIsReady(sample) else { return }
-
-                switch type {
-                case .video:
-                    let pts = CMSampleBufferGetPresentationTimeStamp(sample)
-                    let shouldSkip = withStateLock {
-                        if let lastVideoTime {
-                            let delta = CMTimeSubtract(pts, lastVideoTime)
-                            return delta.seconds < (1.0 / fpsValue)
-                        }
-                        return false
+                    if let error {
+                        setHandlerError(error)
+                        return
                     }
-                    if shouldSkip { return }
+                    guard CMSampleBufferDataIsReady(sample) else { return }
 
-                    if withStateLock({ writer == nil }) {
-                        guard let imageBuffer = CMSampleBufferGetImageBuffer(sample) else {
-                            setHandlerError(ScreenRecordError.captureFailed("Missing image buffer"))
-                            return
-                        }
-                        let width = CVPixelBufferGetWidth(imageBuffer)
-                        let height = CVPixelBufferGetHeight(imageBuffer)
-                        do {
-                            let w = try AVAssetWriter(outputURL: outURL, fileType: .mp4)
-                            let settings: [String: Any] = [
-                                AVVideoCodecKey: AVVideoCodecType.h264,
-                                AVVideoWidthKey: width,
-                                AVVideoHeightKey: height,
-                            ]
-                            let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
-                            vInput.expectsMediaDataInRealTime = true
-                            guard w.canAdd(vInput) else {
-                                throw ScreenRecordError.writeFailed("Cannot add video input")
+                    switch type {
+                    case .video:
+                        let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+                        let shouldSkip = withStateLock {
+                            if let lastVideoTime {
+                                let delta = CMTimeSubtract(pts, lastVideoTime)
+                                return delta.seconds < (1.0 / fpsValue)
                             }
-                            w.add(vInput)
+                            return false
+                        }
+                        if shouldSkip { return }
 
-                            if includeAudio {
-                                let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
-                                aInput.expectsMediaDataInRealTime = true
-                                if w.canAdd(aInput) {
-                                    w.add(aInput)
-                                    withStateLock {
-                                        audioInput = aInput
+                        if withStateLock({ writer == nil }) {
+                            guard let imageBuffer = CMSampleBufferGetImageBuffer(sample) else {
+                                setHandlerError(ScreenRecordError.captureFailed("Missing image buffer"))
+                                return
+                            }
+                            let width = CVPixelBufferGetWidth(imageBuffer)
+                            let height = CVPixelBufferGetHeight(imageBuffer)
+                            do {
+                                let w = try AVAssetWriter(outputURL: outURL, fileType: .mp4)
+                                let settings: [String: Any] = [
+                                    AVVideoCodecKey: AVVideoCodecType.h264,
+                                    AVVideoWidthKey: width,
+                                    AVVideoHeightKey: height,
+                                ]
+                                let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+                                vInput.expectsMediaDataInRealTime = true
+                                guard w.canAdd(vInput) else {
+                                    throw ScreenRecordError.writeFailed("Cannot add video input")
+                                }
+                                w.add(vInput)
+
+                                if includeAudio {
+                                    let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+                                    aInput.expectsMediaDataInRealTime = true
+                                    if w.canAdd(aInput) {
+                                        w.add(aInput)
+                                        withStateLock {
+                                            audioInput = aInput
+                                        }
                                     }
                                 }
-                            }
 
-                            guard w.startWriting() else {
-                                throw ScreenRecordError
-                                    .writeFailed(w.error?.localizedDescription ?? "Failed to start writer")
-                            }
-                            w.startSession(atSourceTime: pts)
-                            withStateLock {
-                                writer = w
-                                videoInput = vInput
-                                started = true
-                            }
-                        } catch {
-                            setHandlerError(error)
-                            return
-                        }
-                    }
-
-                    let vInput = withStateLock { videoInput }
-                    let isStarted = withStateLock { started }
-                    guard let vInput, isStarted else { return }
-                    if vInput.isReadyForMoreMediaData {
-                        if vInput.append(sample) {
-                            withStateLock {
-                                sawVideo = true
-                                lastVideoTime = pts
-                            }
-                        } else {
-                            if let err = withStateLock({ writer?.error }) {
-                                setHandlerError(ScreenRecordError.writeFailed(err.localizedDescription))
+                                guard w.startWriting() else {
+                                    throw ScreenRecordError
+                                        .writeFailed(w.error?.localizedDescription ?? "Failed to start writer")
+                                }
+                                w.startSession(atSourceTime: pts)
+                                withStateLock {
+                                    writer = w
+                                    videoInput = vInput
+                                    started = true
+                                }
+                            } catch {
+                                setHandlerError(error)
+                                return
                             }
                         }
-                    }
 
-                case .audioApp, .audioMic:
-                    let aInput = withStateLock { audioInput }
-                    let isStarted = withStateLock { started }
-                    guard includeAudio, let aInput, isStarted else { return }
-                    if aInput.isReadyForMoreMediaData {
-                        _ = aInput.append(sample)
-                    }
+                        let vInput = withStateLock { videoInput }
+                        let isStarted = withStateLock { started }
+                        guard let vInput, isStarted else { return }
+                        if vInput.isReadyForMoreMediaData {
+                            if vInput.append(sample) {
+                                withStateLock {
+                                    sawVideo = true
+                                    lastVideoTime = pts
+                                }
+                            } else {
+                                if let err = withStateLock({ writer?.error }) {
+                                    setHandlerError(ScreenRecordError.writeFailed(err.localizedDescription))
+                                }
+                            }
+                        }
 
-                @unknown default:
-                    break
-                }
+                    case .audioApp, .audioMic:
+                        let aInput = withStateLock { audioInput }
+                        let isStarted = withStateLock { started }
+                        guard includeAudio, let aInput, isStarted else { return }
+                        if aInput.isReadyForMoreMediaData {
+                            _ = aInput.append(sample)
+                        }
+
+                    @unknown default:
+                        break
+                    }
                 }, completionHandler: { error in
-                if let error { cont.resume(throwing: error) } else { cont.resume() }
+                    if let error { cont.resume(throwing: error) } else { cont.resume() }
                 })
             }
         }
 
         try await Task.sleep(nanoseconds: UInt64(durationMs) * 1_000_000)
 
-        let stopError = await MainActor.run {
-            await withCheckedContinuation { cont in
+        let stopError = await withCheckedContinuation { cont in
+            Task { @MainActor in
                 recorder.stopCapture { error in cont.resume(returning: error) }
             }
         }
