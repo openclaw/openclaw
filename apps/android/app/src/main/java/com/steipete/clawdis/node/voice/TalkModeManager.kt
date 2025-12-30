@@ -18,7 +18,6 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.steipete.clawdis.node.bridge.BridgeSession
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -44,6 +43,7 @@ class TalkModeManager(
 ) {
   companion object {
     private const val tag = "TalkMode"
+    private const val defaultModelIdFallback = "eleven_v3"
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -81,6 +81,7 @@ class TalkModeManager(
 
   private var defaultVoiceId: String? = null
   private var currentVoiceId: String? = null
+  private var fallbackVoiceId: String? = null
   private var defaultModelId: String? = null
   private var currentModelId: String? = null
   private var defaultOutputFormat: String? = null
@@ -97,7 +98,7 @@ class TalkModeManager(
   private var chatSubscribedSessionKey: String? = null
 
   private var player: MediaPlayer? = null
-  private var currentAudioFile: File? = null
+  private var streamingSource: StreamingMediaDataSource? = null
   private var systemTts: TextToSpeech? = null
   private var systemTtsPending: CompletableDeferred<Unit>? = null
   private var systemTtsPendingId: String? = null
@@ -464,7 +465,13 @@ class TalkModeManager(
     val apiKey =
       apiKey?.trim()?.takeIf { it.isNotEmpty() }
         ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
-    val voiceId = resolvedVoice ?: currentVoiceId ?: defaultVoiceId
+    val preferredVoice = resolvedVoice ?: currentVoiceId ?: defaultVoiceId
+    val voiceId =
+      if (!apiKey.isNullOrEmpty()) {
+        resolveVoiceId(preferredVoice, apiKey)
+      } else {
+        null
+      }
 
     _statusText.value = "Speaking…"
     _isSpeaking.value = true
@@ -486,24 +493,25 @@ class TalkModeManager(
       } else {
         _usingFallbackTts.value = false
         val ttsStarted = SystemClock.elapsedRealtime()
+        val modelId = directive?.modelId ?: currentModelId ?: defaultModelId
         val request =
           ElevenLabsRequest(
             text = cleaned,
-            modelId = directive?.modelId ?: currentModelId ?: defaultModelId,
+            modelId = modelId,
             outputFormat =
               TalkModeRuntime.validatedOutputFormat(directive?.outputFormat ?: defaultOutputFormat),
             speed = TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm),
-            stability = TalkModeRuntime.validatedUnit(directive?.stability),
+            stability = TalkModeRuntime.validatedStability(directive?.stability, modelId),
             similarity = TalkModeRuntime.validatedUnit(directive?.similarity),
             style = TalkModeRuntime.validatedUnit(directive?.style),
             speakerBoost = directive?.speakerBoost,
             seed = TalkModeRuntime.validatedSeed(directive?.seed),
             normalize = TalkModeRuntime.validatedNormalize(directive?.normalize),
             language = TalkModeRuntime.validatedLanguage(directive?.language),
+            latencyTier = TalkModeRuntime.validatedLatencyTier(directive?.latencyTier),
           )
-        val audio = synthesize(voiceId = voiceId!!, apiKey = apiKey!!, request = request)
-        Log.d(tag, "elevenlabs ok bytes=${audio.size} durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
-        playAudio(audio)
+        streamAndPlay(voiceId = voiceId!!, apiKey = apiKey!!, request = request)
+        Log.d(tag, "elevenlabs stream ok durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
       }
     } catch (err: Throwable) {
       Log.w(tag, "speak failed: ${err.message ?: err::class.simpleName}; falling back to system voice")
@@ -520,22 +528,28 @@ class TalkModeManager(
     _isSpeaking.value = false
   }
 
-  private suspend fun playAudio(data: ByteArray) {
+  private suspend fun streamAndPlay(voiceId: String, apiKey: String, request: ElevenLabsRequest) {
     stopSpeaking(resetInterrupt = false)
-    val file = File.createTempFile("talk-", ".mp3", context.cacheDir)
-    file.writeBytes(data)
-    currentAudioFile = file
+
+    val dataSource = StreamingMediaDataSource()
+    streamingSource = dataSource
 
     val player = MediaPlayer()
     this.player = player
 
+    val prepared = CompletableDeferred<Unit>()
     val finished = CompletableDeferred<Unit>()
+
     player.setAudioAttributes(
       AudioAttributes.Builder()
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
         .setUsage(AudioAttributes.USAGE_ASSISTANT)
         .build(),
     )
+    player.setOnPreparedListener {
+      it.start()
+      prepared.complete(Unit)
+    }
     player.setOnCompletionListener {
       finished.complete(Unit)
     }
@@ -544,16 +558,30 @@ class TalkModeManager(
       true
     }
 
-    player.setDataSource(file.absolutePath)
+    player.setDataSource(dataSource)
     withContext(Dispatchers.Main) {
-      player.setOnPreparedListener { it.start() }
       player.prepareAsync()
     }
 
+    val fetchError = CompletableDeferred<Throwable?>()
+    val fetchJob =
+      scope.launch(Dispatchers.IO) {
+        try {
+          streamTts(voiceId = voiceId, apiKey = apiKey, request = request, sink = dataSource)
+          fetchError.complete(null)
+        } catch (err: Throwable) {
+          dataSource.fail()
+          fetchError.complete(err)
+        }
+      }
+
     Log.d(tag, "play start")
     try {
+      prepared.await()
       finished.await()
+      fetchError.await()?.let { throw it }
     } finally {
+      fetchJob.cancel()
       cleanupPlayer()
     }
     Log.d(tag, "play done")
@@ -674,8 +702,8 @@ class TalkModeManager(
     player?.stop()
     player?.release()
     player = null
-    currentAudioFile?.delete()
-    currentAudioFile = null
+    streamingSource?.close()
+    streamingSource = null
   }
 
   private fun shouldInterrupt(transcript: String): Boolean {
@@ -713,13 +741,15 @@ class TalkModeManager(
       defaultVoiceId = voice ?: envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       voiceAliases = aliases
       if (!voiceOverrideActive) currentVoiceId = defaultVoiceId
-      defaultModelId = model
+      defaultModelId = model ?: defaultModelIdFallback
       if (!modelOverrideActive) currentModelId = defaultModelId
       defaultOutputFormat = outputFormat
       apiKey = key ?: envKey?.takeIf { it.isNotEmpty() }
       if (interrupt != null) interruptOnSpeech = interrupt
     } catch (_: Throwable) {
       defaultVoiceId = envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
+      defaultModelId = defaultModelIdFallback
+      if (!modelOverrideActive) currentModelId = defaultModelId
       apiKey = envKey?.takeIf { it.isNotEmpty() }
       voiceAliases = emptyMap()
     }
@@ -730,9 +760,21 @@ class TalkModeManager(
     return obj["runId"].asStringOrNull()
   }
 
-  private suspend fun synthesize(voiceId: String, apiKey: String, request: ElevenLabsRequest): ByteArray {
-    return withContext(Dispatchers.IO) {
-      val url = URL("https://api.elevenlabs.io/v1/text-to-speech/$voiceId")
+  private suspend fun streamTts(
+    voiceId: String,
+    apiKey: String,
+    request: ElevenLabsRequest,
+    sink: StreamingMediaDataSource,
+  ) {
+    withContext(Dispatchers.IO) {
+      val baseUrl = "https://api.elevenlabs.io/v1/text-to-speech/$voiceId/stream"
+      val latencyTier = request.latencyTier
+      val url =
+        if (latencyTier != null) {
+          URL("$baseUrl?optimize_streaming_latency=$latencyTier")
+        } else {
+          URL(baseUrl)
+        }
       val conn = url.openConnection() as HttpURLConnection
       conn.requestMethod = "POST"
       conn.connectTimeout = 30_000
@@ -746,13 +788,21 @@ class TalkModeManager(
       conn.outputStream.use { it.write(payload.toByteArray()) }
 
       val code = conn.responseCode
-      val stream = if (code >= 400) conn.errorStream else conn.inputStream
-      val data = stream.readBytes()
       if (code >= 400) {
-        val message = String(data)
+        val message = conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
+        sink.fail()
         throw IllegalStateException("ElevenLabs failed: $code $message")
       }
-      data
+
+      val buffer = ByteArray(8 * 1024)
+      conn.inputStream.use { input ->
+        while (true) {
+          val read = input.read(buffer)
+          if (read <= 0) break
+          sink.append(buffer.copyOf(read))
+        }
+      }
+      sink.finish()
     }
   }
 
@@ -794,6 +844,7 @@ class TalkModeManager(
     val seed: Long?,
     val normalize: String?,
     val language: String?,
+    val latencyTier: Int?,
   )
 
   private object TalkModeRuntime {
@@ -814,6 +865,15 @@ class TalkModeManager(
       if (value == null) return null
       if (value < 0 || value > 1) return null
       return value
+    }
+
+    fun validatedStability(value: Double?, modelId: String?): Double? {
+      if (value == null) return null
+      val normalized = modelId?.trim()?.lowercase()
+      if (normalized == "eleven_v3") {
+        return if (value == 0.0 || value == 0.5 || value == 1.0) value else null
+      }
+      return validatedUnit(value)
     }
 
     fun validatedSeed(value: Long?): Long? {
@@ -838,6 +898,12 @@ class TalkModeManager(
       val trimmed = value?.trim()?.lowercase() ?: return null
       if (trimmed.isEmpty()) return null
       return if (trimmed.startsWith("mp3_")) trimmed else null
+    }
+
+    fun validatedLatencyTier(value: Int?): Int? {
+      if (value == null) return null
+      if (value < 0 || value > 4) return null
+      return value
     }
 
     fun isMessageTimestampAfter(timestamp: Double, sinceSeconds: Double): Boolean {
@@ -876,6 +942,62 @@ class TalkModeManager(
     return if (isLikelyVoiceId(trimmed)) trimmed else null
   }
 
+  private suspend fun resolveVoiceId(preferred: String?, apiKey: String): String? {
+    val trimmed = preferred?.trim().orEmpty()
+    if (trimmed.isNotEmpty()) {
+      val resolved = resolveVoiceAlias(trimmed)
+      if (resolved != null) return resolved
+      Log.w(tag, "unknown voice alias $trimmed")
+    }
+    fallbackVoiceId?.let { return it }
+
+    return try {
+      val voices = listVoices(apiKey)
+      val first = voices.firstOrNull() ?: return null
+      fallbackVoiceId = first.voiceId
+      if (defaultVoiceId.isNullOrBlank()) {
+        defaultVoiceId = first.voiceId
+      }
+      if (!voiceOverrideActive) {
+        currentVoiceId = first.voiceId
+      }
+      val name = first.name ?: "unknown"
+      Log.d(tag, "default voice selected $name (${first.voiceId})")
+      first.voiceId
+    } catch (err: Throwable) {
+      Log.w(tag, "list voices failed: ${err.message ?: err::class.simpleName}")
+      null
+    }
+  }
+
+  private suspend fun listVoices(apiKey: String): List<ElevenLabsVoice> {
+    return withContext(Dispatchers.IO) {
+      val url = URL("https://api.elevenlabs.io/v1/voices")
+      val conn = url.openConnection() as HttpURLConnection
+      conn.requestMethod = "GET"
+      conn.connectTimeout = 15_000
+      conn.readTimeout = 15_000
+      conn.setRequestProperty("xi-api-key", apiKey)
+
+      val code = conn.responseCode
+      val stream = if (code >= 400) conn.errorStream else conn.inputStream
+      val data = stream.readBytes()
+      if (code >= 400) {
+        val message = data.toString(Charsets.UTF_8)
+        throw IllegalStateException("ElevenLabs voices failed: $code $message")
+      }
+
+      val root = json.parseToJsonElement(data.toString(Charsets.UTF_8)).asObjectOrNull()
+      val voices = (root?.get("voices") as? JsonArray) ?: JsonArray(emptyList())
+      voices.mapNotNull { entry ->
+        val obj = entry.asObjectOrNull() ?: return@mapNotNull null
+        val voiceId = obj["voice_id"].asStringOrNull() ?: return@mapNotNull null
+        val name = obj["name"].asStringOrNull()
+        ElevenLabsVoice(voiceId, name)
+      }
+    }
+  }
+
   private fun isLikelyVoiceId(value: String): Boolean {
     if (value.length < 10) return false
     return value.all { it.isLetterOrDigit() || it == '-' || it == '_' }
@@ -883,6 +1005,8 @@ class TalkModeManager(
 
   private fun normalizeAliasKey(value: String): String =
     value.trim().lowercase()
+
+  private data class ElevenLabsVoice(val voiceId: String, val name: String?)
 
   private val listener =
     object : RecognitionListener {

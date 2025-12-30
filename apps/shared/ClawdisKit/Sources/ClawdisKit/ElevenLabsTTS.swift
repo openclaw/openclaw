@@ -22,6 +22,7 @@ public struct ElevenLabsTTSRequest: Sendable {
     public var seed: UInt32?
     public var normalize: String?
     public var language: String?
+    public var latencyTier: Int?
 
     public init(
         text: String,
@@ -34,7 +35,8 @@ public struct ElevenLabsTTSRequest: Sendable {
         speakerBoost: Bool? = nil,
         seed: UInt32? = nil,
         normalize: String? = nil,
-        language: String? = nil)
+        language: String? = nil,
+        latencyTier: Int? = nil)
     {
         self.text = text
         self.modelId = modelId
@@ -47,6 +49,7 @@ public struct ElevenLabsTTSRequest: Sendable {
         self.seed = seed
         self.normalize = normalize
         self.language = language
+        self.latencyTier = latencyTier
     }
 }
 
@@ -155,6 +158,72 @@ public struct ElevenLabsTTSClient: Sendable {
         ])
     }
 
+    public func streamSynthesize(
+        voiceId: String,
+        request: ElevenLabsTTSRequest) -> AsyncThrowingStream<Data, Error>
+    {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let url = Self.streamingURL(
+                        baseUrl: self.baseUrl,
+                        voiceId: voiceId,
+                        latencyTier: request.latencyTier)
+                    let body = try JSONSerialization.data(withJSONObject: Self.buildPayload(request), options: [])
+
+                    var req = URLRequest(url: url)
+                    req.httpMethod = "POST"
+                    req.httpBody = body
+                    req.timeoutInterval = self.requestTimeoutSeconds
+                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                    req.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
+                    req.setValue(self.apiKey, forHTTPHeaderField: "xi-api-key")
+
+                    let (bytes, response) = try await URLSession.shared.bytes(for: req)
+                    guard let http = response as? HTTPURLResponse else {
+                        throw NSError(domain: "ElevenLabsTTS", code: 1, userInfo: [
+                            NSLocalizedDescriptionKey: "ElevenLabs invalid response",
+                        ])
+                    }
+
+                    let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "unknown").lowercased()
+                    if http.statusCode >= 400 {
+                        let message = try await Self.readErrorBody(bytes: bytes)
+                        throw NSError(domain: "ElevenLabsTTS", code: http.statusCode, userInfo: [
+                            NSLocalizedDescriptionKey: "ElevenLabs failed: \(http.statusCode) ct=\(contentType) \(message)",
+                        ])
+                    }
+                    if !contentType.contains("audio") {
+                        let message = try await Self.readErrorBody(bytes: bytes)
+                        throw NSError(domain: "ElevenLabsTTS", code: 415, userInfo: [
+                            NSLocalizedDescriptionKey: "ElevenLabs returned non-audio ct=\(contentType) \(message)",
+                        ])
+                    }
+
+                    var buffer = Data()
+                    buffer.reserveCapacity(16_384)
+                    for try await byte in bytes {
+                        buffer.append(byte)
+                        if buffer.count >= 8_192 {
+                            continuation.yield(buffer)
+                            buffer.removeAll(keepingCapacity: true)
+                        }
+                    }
+                    if !buffer.isEmpty {
+                        continuation.yield(buffer)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     public func listVoices() async throws -> [ElevenLabsVoice] {
         var url = self.baseUrl
         url.appendPathComponent("v1")
@@ -180,7 +249,7 @@ public struct ElevenLabsTTSClient: Sendable {
     public static func validatedOutputFormat(_ value: String?) -> String? {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
-        guard trimmed.hasPrefix("mp3_") else { return nil }
+        guard trimmed.hasPrefix("mp3_") || trimmed.hasPrefix("pcm_") else { return nil }
         return trimmed
     }
 
@@ -229,5 +298,34 @@ public struct ElevenLabsTTSClient: Sendable {
     private static func truncatedErrorBody(_ data: Data) -> String {
         let raw = String(data: data.prefix(4096), encoding: .utf8) ?? "unknown"
         return raw.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\r", with: " ")
+    }
+
+    private static func streamingURL(baseUrl: URL, voiceId: String, latencyTier: Int?) -> URL {
+        var url = baseUrl
+        url.appendPathComponent("v1")
+        url.appendPathComponent("text-to-speech")
+        url.appendPathComponent(voiceId)
+        url.appendPathComponent("stream")
+
+        guard let latencyTier else { return url }
+        let latencyItem = URLQueryItem(
+            name: "optimize_streaming_latency",
+            value: "\(latencyTier)")
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url
+        }
+        var items = components.queryItems ?? []
+        items.append(latencyItem)
+        components.queryItems = items
+        return components.url ?? url
+    }
+
+    private static func readErrorBody(bytes: URLSession.AsyncBytes) async throws -> String {
+        var data = Data()
+        for try await byte in bytes {
+            data.append(byte)
+            if data.count >= 4096 { break }
+        }
+        return truncatedErrorBody(data)
     }
 }

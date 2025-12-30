@@ -10,6 +10,7 @@ actor TalkModeRuntime {
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "talk.runtime")
     private let ttsLogger = Logger(subsystem: "com.steipete.clawdis", category: "talk.tts")
+    private static let defaultModelIdFallback = "eleven_v3"
 
     private final class RMSMeter: @unchecked Sendable {
         private let lock = NSLock()
@@ -62,6 +63,7 @@ actor TalkModeRuntime {
     private var lastSpokenText: String?
     private var apiKey: String?
     private var fallbackVoiceId: String?
+    private var lastPlaybackWasPCM: Bool = false
 
     private let silenceWindow: TimeInterval = 0.7
     private let minSpeechRMS: Double = 1e-3
@@ -496,7 +498,7 @@ actor TalkModeRuntime {
 
         do {
             if let apiKey, !apiKey.isEmpty, let voiceId {
-                let desiredOutputFormat = directive?.outputFormat ?? self.defaultOutputFormat
+                let desiredOutputFormat = directive?.outputFormat ?? self.defaultOutputFormat ?? "pcm_44100"
                 let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(desiredOutputFormat)
                 if outputFormat == nil, let desiredOutputFormat, !desiredOutputFormat.isEmpty {
                     self.logger
@@ -504,27 +506,25 @@ actor TalkModeRuntime {
                             "talk output_format unsupported for local playback: \(desiredOutputFormat, privacy: .public)")
                 }
 
+                let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
                 let request = ElevenLabsTTSRequest(
                     text: cleaned,
-                    modelId: directive?.modelId ?? self.currentModelId ?? self.defaultModelId,
+                    modelId: modelId,
                     outputFormat: outputFormat,
                     speed: TalkTTSValidation.resolveSpeed(speed: directive?.speed, rateWPM: directive?.rateWPM),
-                    stability: TalkTTSValidation.validatedUnit(directive?.stability),
+                    stability: TalkTTSValidation.validatedStability(directive?.stability, modelId: modelId),
                     similarity: TalkTTSValidation.validatedUnit(directive?.similarity),
                     style: TalkTTSValidation.validatedUnit(directive?.style),
                     speakerBoost: directive?.speakerBoost,
                     seed: TalkTTSValidation.validatedSeed(directive?.seed),
                     normalize: ElevenLabsTTSClient.validatedNormalize(directive?.normalize),
-                    language: language)
+                    language: language,
+                    latencyTier: TalkTTSValidation.validatedLatencyTier(directive?.latencyTier))
 
                 self.ttsLogger.info("talk TTS synth timeout=\(synthTimeoutSeconds, privacy: .public)s")
                 let client = ElevenLabsTTSClient(apiKey: apiKey)
-                let audio = try await client.synthesizeWithHardTimeout(
-                    voiceId: voiceId,
-                    request: request,
-                    hardTimeoutSeconds: synthTimeoutSeconds)
+                let stream = client.streamSynthesize(voiceId: voiceId, request: request)
                 guard self.isCurrent(gen) else { return }
-                self.ttsLogger.info("talk TTS response bytes=\(audio.count, privacy: .public)")
 
                 if self.interruptOnSpeech {
                     await self.startRecognition()
@@ -534,12 +534,20 @@ actor TalkModeRuntime {
                 await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
                 self.phase = .speaking
 
-                let result = await TalkAudioPlayer.shared.play(data: audio)
+                let sampleRate = TalkTTSValidation.pcmSampleRate(from: outputFormat)
+                let result: StreamingPlaybackResult
+                if let sampleRate {
+                    self.lastPlaybackWasPCM = true
+                    result = await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+                } else {
+                    self.lastPlaybackWasPCM = false
+                    result = await StreamingAudioPlayer.shared.play(stream: stream)
+                }
                 self.ttsLogger
                     .info(
                         "talk audio result finished=\(result.finished, privacy: .public) interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
                 if !result.finished, result.interruptedAt == nil {
-                    throw NSError(domain: "TalkAudioPlayer", code: 1, userInfo: [
+                    throw NSError(domain: "StreamingAudioPlayer", code: 1, userInfo: [
                         NSLocalizedDescriptionKey: "audio playback failed",
                     ])
                 }
@@ -631,7 +639,15 @@ actor TalkModeRuntime {
     }
 
     func stopSpeaking(reason: TalkStopReason) async {
-        let interruptedAt = await MainActor.run { TalkAudioPlayer.shared.stop() }
+        let interruptedAt = await MainActor.run {
+            let primary = self.lastPlaybackWasPCM
+                ? PCMStreamingAudioPlayer.shared.stop()
+                : StreamingAudioPlayer.shared.stop()
+            _ = self.lastPlaybackWasPCM
+                ? StreamingAudioPlayer.shared.stop()
+                : PCMStreamingAudioPlayer.shared.stop()
+            return primary
+        }
         await TalkSystemSpeechSynthesizer.shared.stop()
         guard self.phase == .speaking else { return }
         if reason == .speech, let interruptedAt {
@@ -707,7 +723,8 @@ actor TalkModeRuntime {
                     guard !key.isEmpty, !value.isEmpty else { return }
                     acc[key] = value
                 } ?? [:]
-            let model = talk?["modelId"]?.stringValue
+            let model = talk?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedModel = (model?.isEmpty == false) ? model! : Self.defaultModelIdFallback
             let outputFormat = talk?["outputFormat"]?.stringValue
             let interrupt = talk?["interruptOnSpeech"]?.boolValue
             let apiKey = talk?["apiKey"]?.stringValue
@@ -721,7 +738,7 @@ actor TalkModeRuntime {
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: resolvedAliases,
-                modelId: model,
+                modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
                 apiKey: resolvedApiKey)
@@ -733,7 +750,7 @@ actor TalkModeRuntime {
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: [:],
-                modelId: nil,
+                modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
                 apiKey: resolvedApiKey)

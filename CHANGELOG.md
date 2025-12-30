@@ -17,6 +17,9 @@
 - macOS Talk Mode: throttle audio-level updates (avoid per-buffer task creation) to reduce CPU/task churn.
 - macOS Talk Mode: increase overlay window size so wave rings don’t clip; close button is hover-only and closer to the orb.
 - Talk Mode: fall back to system TTS when ElevenLabs is unavailable, returns non-audio, or playback fails (macOS/iOS/Android).
+- Talk Mode: stream PCM on macOS/iOS for lower latency (incremental playback); Android continues MP3 streaming.
+- Talk Mode: validate ElevenLabs v3 stability and latency tier directives before sending requests.
+- iOS/Android Talk Mode: auto-select the first ElevenLabs voice when none is configured.
 - ElevenLabs: add retry/backoff for 429/5xx and include content-type in errors for debugging.
 - Talk Mode: align to the gateway’s main session key and fall back to history polling when chat events drop (prevents stuck “thinking” / missing messages).
 - Talk Mode: treat history timestamps as seconds or milliseconds to avoid stale assistant picks (macOS/iOS/Android).

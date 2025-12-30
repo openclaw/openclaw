@@ -10,7 +10,7 @@ Talk mode is a continuous voice conversation loop:
 1) Listen for speech
 2) Send transcript to the model (main session, chat.send)
 3) Wait for the response
-4) Speak it via ElevenLabs
+4) Speak it via ElevenLabs (streaming playback)
 
 ## Behavior (macOS)
 - **Always-on overlay** while Talk mode is enabled.
@@ -55,8 +55,10 @@ Supported keys:
 
 Defaults:
 - `interruptOnSpeech`: true
-- `voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID`
+- `voiceId`: falls back to `ELEVENLABS_VOICE_ID` / `SAG_VOICE_ID` (or first ElevenLabs voice when API key is available)
+- `modelId`: defaults to `eleven_v3` when unset
 - `apiKey`: falls back to `ELEVENLABS_API_KEY` (or gateway shell profile if available)
+- `outputFormat`: defaults to `pcm_44100` on macOS/iOS for faster streaming playback (Android stays on MP3)
 
 ## macOS UI
 - Menu bar toggle: **Talk**
@@ -71,4 +73,6 @@ Defaults:
 ## Notes
 - Requires Speech + Microphone permissions.
 - Uses `chat.send` against session key `main`.
-- TTS uses ElevenLabs API with `ELEVENLABS_API_KEY`.
+- TTS uses ElevenLabs streaming API with `ELEVENLABS_API_KEY` and incremental playback on macOS/iOS/Android for lower latency.
+- `stability` for `eleven_v3` is validated to `0.0`, `0.5`, or `1.0`; other models accept `0..1`.
+- `latency_tier` is validated to `0..4` when set.
