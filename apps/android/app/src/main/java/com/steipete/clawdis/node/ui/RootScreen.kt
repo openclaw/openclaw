@@ -83,6 +83,9 @@ fun RootScreen(viewModel: MainViewModel) {
   val isForeground by viewModel.isForeground.collectAsState()
   val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
   val talkEnabled by viewModel.talkEnabled.collectAsState()
+  val talkStatusText by viewModel.talkStatusText.collectAsState()
+  val talkIsListening by viewModel.talkIsListening.collectAsState()
+  val talkIsSpeaking by viewModel.talkIsSpeaking.collectAsState()
   val seamColorArgb by viewModel.seamColorArgb.collectAsState()
   val seamColor = remember(seamColorArgb) { ComposeColor(seamColorArgb) }
   val audioPermissionLauncher =
@@ -263,6 +266,17 @@ fun RootScreen(viewModel: MainViewModel) {
       OverlayIconButton(
         onClick = { sheet = Sheet.Settings },
         icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+      )
+    }
+  }
+
+  if (talkEnabled) {
+    Popup(alignment = Alignment.Center, properties = PopupProperties(focusable = false)) {
+      TalkOrbOverlay(
+        seamColor = seamColor,
+        statusText = talkStatusText,
+        isListening = talkIsListening,
+        isSpeaking = talkIsSpeaking,
       )
     }
   }

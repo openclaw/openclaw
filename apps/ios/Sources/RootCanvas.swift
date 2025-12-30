@@ -166,6 +166,12 @@ private struct CanvasContent: View {
             .padding(.top, 10)
             .padding(.trailing, 10)
         }
+        .overlay(alignment: .center) {
+            if self.appModel.talkMode.isEnabled {
+                TalkOrbOverlay()
+                    .transition(.opacity)
+            }
+        }
         .overlay(alignment: .topLeading) {
             StatusPill(
                 bridge: self.bridgeStatus,

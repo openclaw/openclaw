@@ -14,6 +14,10 @@
 - macOS Talk Mode: avoid stuck playback when the audio player never starts (fail-fast + watchdog).
 - macOS Talk Mode: increase overlay window size so wave rings don’t clip; close button is hover-only and closer to the orb.
 - Talk Mode: wait for chat history to surface the assistant reply before starting TTS (macOS/iOS/Android).
+- iOS/Android Talk Mode: explicitly `chat.subscribe` when Talk Mode is active, so completion events arrive even if the Chat UI isn’t open.
+- Chat UI: refresh history when another client finishes a run in the same session, so Talk Mode + Voice Wake transcripts appear consistently.
+- Gateway: `voice.transcript` now also maps agent bus output to `chat` events, ensuring chat UIs refresh for voice-triggered runs.
+- iOS/Android: show a centered Talk Mode orb overlay while Talk Mode is enabled.
 - Gateway config: inject `talk.apiKey` from `ELEVENLABS_API_KEY`/shell profile so nodes can fetch it on demand.
 - Canvas A2UI: tag requests with `platform=android|ios|macos` and boost Android canvas background contrast.
 - iOS/Android nodes: enable scrolling for loaded web pages in the Canvas WebView (default scaffold stays touch-first).

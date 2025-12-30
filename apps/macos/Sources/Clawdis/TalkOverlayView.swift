@@ -26,21 +26,21 @@ struct TalkOverlayView: View {
                             .frame(width: 18, height: 18)
                             .background(Color.black.opacity(0.4))
                             .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .contentShape(Circle())
-                    .offset(x: -10, y: -10)
-                    .opacity(self.hoveringWindow ? 1 : 0)
-                    .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
-                    .allowsHitTesting(self.hoveringWindow)
                 }
+                .buttonStyle(.plain)
+                .contentShape(Circle())
+                .offset(x: -7, y: -7)
+                .opacity(self.hoveringWindow ? 1 : 0)
+                .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
+                .allowsHitTesting(self.hoveringWindow)
+            }
         }
         .frame(width: TalkOverlayController.overlaySize, height: TalkOverlayController.overlaySize, alignment: .center)
         .contentShape(Rectangle())
         .onHover { self.hoveringWindow = $0 }
     }
 
-    private static let defaultSeamColor = Color(red: 0.62, green: 0.88, blue: 1.0)
+    private static let defaultSeamColor = Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
 
     private var seamColor: Color {
         Self.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor
