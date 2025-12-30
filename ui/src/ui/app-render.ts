@@ -1,7 +1,13 @@
 import { html, nothing } from "lit";
 
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
-import { TAB_GROUPS, subtitleForTab, titleForTab, type Tab } from "./navigation";
+import {
+  TAB_GROUPS,
+  pathForTab,
+  subtitleForTab,
+  titleForTab,
+  type Tab,
+} from "./navigation";
 import type {
   ConfigSnapshot,
   CronJob,
@@ -51,6 +57,7 @@ export type AppViewState = {
   settings: { gatewayUrl: string; token: string; sessionKey: string };
   password: string;
   tab: Tab;
+  basePath: string;
   connected: boolean;
   hello: GatewayHelloOk | null;
   lastError: string | null;
@@ -352,12 +359,27 @@ export function renderApp(state: AppViewState) {
 }
 
 function renderTab(state: AppViewState, tab: Tab) {
+  const href = pathForTab(tab, state.basePath);
   return html`
-    <button
+    <a
+      href=${href}
       class="nav-item ${state.tab === tab ? "active" : ""}"
-      @click=${() => state.setTab(tab)}
+      @click=${(event: MouseEvent) => {
+        if (
+          event.defaultPrevented ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+        event.preventDefault();
+        state.setTab(tab);
+      }}
     >
       <span>${titleForTab(tab)}</span>
-    </button>
+    </a>
   `;
 }

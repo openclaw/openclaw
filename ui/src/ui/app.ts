@@ -4,7 +4,7 @@ import { customElement, state } from "lit/decorators.js";
 import { GatewayBrowserClient, type GatewayEventFrame, type GatewayHelloOk } from "./gateway";
 import { loadSettings, saveSettings, type UiSettings } from "./storage";
 import { renderApp } from "./app-render";
-import type { Tab } from "./navigation";
+import { normalizePath, pathForTab, tabFromPath, type Tab } from "./navigation";
 import type {
   ConfigSnapshot,
   CronJob,
@@ -157,6 +157,8 @@ export class ClawdisApp extends LitElement {
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
+  basePath = "";
+  private popStateHandler = () => this.onPopState();
 
   createRenderRoot() {
     return this;
@@ -164,7 +166,15 @@ export class ClawdisApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    this.basePath = this.inferBasePath();
+    this.syncTabWithLocation(true);
+    window.addEventListener("popstate", this.popStateHandler);
     this.connect();
+  }
+
+  disconnectedCallback() {
+    window.removeEventListener("popstate", this.popStateHandler);
+    super.disconnectedCallback();
   }
 
   protected updated(changed: Map<PropertyKey, unknown>) {
@@ -264,8 +274,9 @@ export class ClawdisApp extends LitElement {
   }
 
   setTab(next: Tab) {
-    this.tab = next;
+    if (this.tab !== next) this.tab = next;
     void this.refreshActiveTab();
+    this.syncUrlWithTab(next, false);
   }
 
   private async refreshActiveTab() {
@@ -276,9 +287,52 @@ export class ClawdisApp extends LitElement {
     if (this.tab === "cron") await this.loadCron();
     if (this.tab === "skills") await loadSkills(this);
     if (this.tab === "nodes") await loadNodes(this);
-    if (this.tab === "chat") await loadChatHistory(this);
+    if (this.tab === "chat") {
+      await loadChatHistory(this);
+      this.scheduleChatScroll();
+    }
     if (this.tab === "config") await loadConfig(this);
     if (this.tab === "debug") await loadDebug(this);
+  }
+
+  private inferBasePath() {
+    if (typeof window === "undefined") return "";
+    const path = window.location.pathname;
+    if (path === "/ui" || path.startsWith("/ui/")) return "/ui";
+    return "";
+  }
+
+  private syncTabWithLocation(replace: boolean) {
+    if (typeof window === "undefined") return;
+    const resolved = tabFromPath(window.location.pathname, this.basePath) ?? "chat";
+    this.setTabFromRoute(resolved);
+    this.syncUrlWithTab(resolved, replace);
+  }
+
+  private onPopState() {
+    if (typeof window === "undefined") return;
+    const resolved = tabFromPath(window.location.pathname, this.basePath);
+    if (!resolved) return;
+    this.setTabFromRoute(resolved);
+  }
+
+  private setTabFromRoute(next: Tab) {
+    if (this.tab !== next) this.tab = next;
+    if (this.connected) void this.refreshActiveTab();
+  }
+
+  private syncUrlWithTab(tab: Tab, replace: boolean) {
+    if (typeof window === "undefined") return;
+    const targetPath = normalizePath(pathForTab(tab, this.basePath));
+    const currentPath = normalizePath(window.location.pathname);
+    if (currentPath === targetPath) return;
+    const url = new URL(window.location.href);
+    url.pathname = targetPath;
+    if (replace) {
+      window.history.replaceState({}, "", url.toString());
+    } else {
+      window.history.pushState({}, "", url.toString());
+    }
   }
 
   async loadOverview() {
