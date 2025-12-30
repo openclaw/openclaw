@@ -7,6 +7,7 @@
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
 
 ### Fixes
+- Docs/agent tools: clarify that browser `wait` should be avoided by default and used only in exceptional cases.
 - macOS: Voice Wake now fully tears down the Speech pipeline when disabled (cancel pending restarts, drop stale callbacks) to avoid high CPU in the background.
 - macOS menu: add a Talk Mode action alongside the Open Dashboard/Chat/Canvas entries.
 - macOS Debug: hide “Restart Gateway” when the app won’t start a local gateway (remote mode / attach-only).
