@@ -60,7 +60,10 @@ async function resizeImageBase64IfNeeded(params: {
   }
 
   const qualities = [85, 75, 65, 55, 45, 35];
-  const sideStart = maxDim > 0 ? Math.min(params.maxDimensionPx, maxDim) : params.maxDimensionPx;
+  const sideStart =
+    maxDim > 0
+      ? Math.min(params.maxDimensionPx, maxDim)
+      : params.maxDimensionPx;
   const sideGrid = [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
     .map((v) => Math.min(params.maxDimensionPx, v))
     .filter((v, i, arr) => v > 0 && arr.indexOf(v) === i)
@@ -91,7 +94,9 @@ async function resizeImageBase64IfNeeded(params: {
   const best = smallest?.buffer ?? buf;
   const maxMb = (params.maxBytes / (1024 * 1024)).toFixed(0);
   const gotMb = (best.byteLength / (1024 * 1024)).toFixed(2);
-  throw new Error(`Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`);
+  throw new Error(
+    `Image could not be reduced below ${maxMb}MB (got ${gotMb}MB)`,
+  );
 }
 
 export async function sanitizeContentBlocksImages(
