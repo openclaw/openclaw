@@ -39,6 +39,8 @@ final class TalkModeManager: NSObject {
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
+    var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
+    var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
     private var bridge: BridgeSession?
     private let silenceWindow: TimeInterval = 0.7
@@ -502,10 +504,10 @@ final class TalkModeManager: NSObject {
                 let result: StreamingPlaybackResult
                 if let sampleRate {
                     self.lastPlaybackWasPCM = true
-                    result = await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+                    result = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
                 } else {
                     self.lastPlaybackWasPCM = false
-                    result = await StreamingAudioPlayer.shared.play(stream: stream)
+                    result = await self.mp3Player.play(stream: stream)
                 }
                 self.logger
                     .info(
@@ -554,14 +556,14 @@ final class TalkModeManager: NSObject {
     private func stopSpeaking(storeInterruption: Bool = true) {
         guard self.isSpeaking else { return }
         let interruptedAt = self.lastPlaybackWasPCM
-            ? PCMStreamingAudioPlayer.shared.stop()
-            : StreamingAudioPlayer.shared.stop()
+            ? self.pcmPlayer.stop()
+            : self.mp3Player.stop()
         if storeInterruption {
             self.lastInterruptedAtSeconds = interruptedAt
         }
         _ = self.lastPlaybackWasPCM
-            ? StreamingAudioPlayer.shared.stop()
-            : PCMStreamingAudioPlayer.shared.stop()
+            ? self.mp3Player.stop()
+            : self.pcmPlayer.stop()
         TalkSystemSpeechSynthesizer.shared.stop()
         self.isSpeaking = false
     }

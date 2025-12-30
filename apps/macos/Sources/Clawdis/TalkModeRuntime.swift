@@ -64,6 +64,8 @@ actor TalkModeRuntime {
     private var apiKey: String?
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
+    var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
+    var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
     private let silenceWindow: TimeInterval = 0.7
     private let minSpeechRMS: Double = 1e-3
@@ -538,10 +540,10 @@ actor TalkModeRuntime {
                 let result: StreamingPlaybackResult
                 if let sampleRate {
                     self.lastPlaybackWasPCM = true
-                    result = await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+                    result = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
                 } else {
                     self.lastPlaybackWasPCM = false
-                    result = await StreamingAudioPlayer.shared.play(stream: stream)
+                    result = await self.mp3Player.play(stream: stream)
                 }
                 self.ttsLogger
                     .info(
@@ -642,11 +644,11 @@ actor TalkModeRuntime {
         let usePCM = self.lastPlaybackWasPCM
         let interruptedAt = await MainActor.run {
             let primary = usePCM
-                ? PCMStreamingAudioPlayer.shared.stop()
-                : StreamingAudioPlayer.shared.stop()
+                ? self.pcmPlayer.stop()
+                : self.mp3Player.stop()
             _ = usePCM
-                ? StreamingAudioPlayer.shared.stop()
-                : PCMStreamingAudioPlayer.shared.stop()
+                ? self.mp3Player.stop()
+                : self.pcmPlayer.stop()
             return primary
         }
         await TalkSystemSpeechSynthesizer.shared.stop()
