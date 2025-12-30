@@ -150,7 +150,7 @@ final class NodeAppModel {
         guard let raw = await self.bridge.currentCanvasHostUrl() else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let base = URL(string: trimmed) else { return nil }
-        return base.appendingPathComponent("__clawdis__/a2ui/").absoluteString
+        return base.appendingPathComponent("__clawdis__/a2ui/").absoluteString + "?platform=ios"
     }
 
     private func showA2UIOnConnectIfNeeded() async {

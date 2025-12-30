@@ -815,7 +815,7 @@ class NodeRuntime(context: Context) {
     val raw = session.currentCanvasHostUrl()?.trim().orEmpty()
     if (raw.isBlank()) return null
     val base = raw.trimEnd('/')
-    return "${base}/__clawdis__/a2ui/"
+    return "${base}/__clawdis__/a2ui/?platform=android"
   }
 
   private suspend fun ensureA2uiReady(a2uiUrl: String): Boolean {

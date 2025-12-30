@@ -7,6 +7,8 @@ import android.graphics.Color
 import android.util.Log
 import android.view.View
 import android.webkit.JavascriptInterface
+import android.webkit.ConsoleMessage
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebSettings
 import android.webkit.WebResourceError
@@ -15,6 +17,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebViewClient
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.webkit.WebSettingsCompat
+import androidx.webkit.WebViewFeature
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -301,6 +305,15 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         // Some embedded web UIs (incl. the "background website") use localStorage/sessionStorage.
         settings.domStorageEnabled = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.FORCE_DARK)) {
+          WebSettingsCompat.setForceDark(settings, WebSettingsCompat.FORCE_DARK_OFF)
+        }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
+          WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
+        }
+        if (isDebuggable) {
+          Log.d("ClawdisWebView", "userAgent: ${settings.userAgentString}")
+        }
         isScrollContainer = true
         overScrollMode = View.OVER_SCROLL_IF_CONTENT_SCROLLS
         isVerticalScrollBarEnabled = true
@@ -331,11 +344,38 @@ private fun CanvasView(viewModel: MainViewModel, modifier: Modifier = Modifier) 
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
+              if (isDebuggable) {
+                Log.d("ClawdisWebView", "onPageFinished: $url")
+              }
               viewModel.canvas.onPageFinished()
             }
+
+            override fun onRenderProcessGone(
+              view: WebView,
+              detail: android.webkit.RenderProcessGoneDetail,
+            ): Boolean {
+              if (isDebuggable) {
+                Log.e(
+                  "ClawdisWebView",
+                  "onRenderProcessGone didCrash=${detail.didCrash()} priorityAtExit=${detail.rendererPriorityAtExit()}",
+                )
+              }
+              return true
+            }
           }
-        setBackgroundColor(Color.BLACK)
-        setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        webChromeClient =
+          object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+              if (!isDebuggable) return false
+              val msg = consoleMessage ?: return false
+              Log.d(
+                "ClawdisWebView",
+                "console ${msg.messageLevel()} @ ${msg.sourceId()}:${msg.lineNumber()} ${msg.message()}",
+              )
+              return false
+            }
+          }
+        // Use default layer/background; avoid forcing a black fill over WebView content.
 
         val a2uiBridge =
           CanvasA2UIActionBridge { payload ->

@@ -4,6 +4,21 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Clawdis Canvas</title>
+    <script>
+      (() => {
+        try {
+          const params = new URLSearchParams(window.location.search);
+          const platform = (params.get('platform') || '').trim().toLowerCase();
+          if (platform) {
+            document.documentElement.dataset.platform = platform;
+            return;
+          }
+          if (/android/i.test(navigator.userAgent || '')) {
+            document.documentElement.dataset.platform = 'android';
+          }
+        } catch (_) {}
+      })();
+    </script>
     <style>
       :root { color-scheme: dark; }
       @media (prefers-reduced-motion: reduce) {
@@ -19,6 +34,13 @@
           #000;
         color: #e5e7eb;
         overflow: hidden;
+      }
+      :root[data-platform="android"] body {
+        background:
+          radial-gradient(1200px 900px at 15% 20%, rgba(42, 113, 255, 0.38), rgba(0,0,0,0) 55%),
+          radial-gradient(900px 700px at 85% 30%, rgba(255, 0, 138, 0.30), rgba(0,0,0,0) 60%),
+          radial-gradient(1000px 900px at 60% 90%, rgba(0, 209, 255, 0.28), rgba(0,0,0,0) 60%),
+          #07090f;
       }
       body::before {
         content:"";
@@ -37,6 +59,7 @@
         pointer-events: none;
         animation: clawdis-grid-drift 140s ease-in-out infinite alternate;
       }
+      :root[data-platform="android"] body::before { opacity: 0.60; }
       body::after {
         content:"";
         position: fixed;
@@ -54,6 +77,7 @@
         pointer-events: none;
         animation: clawdis-glow-drift 110s ease-in-out infinite alternate;
       }
+      :root[data-platform="android"] body::after { opacity: 0.70; }
       @supports (mix-blend-mode: screen) {
         body::after { mix-blend-mode: screen; }
       }
