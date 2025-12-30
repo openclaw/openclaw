@@ -1,12 +1,10 @@
+import AppKit
 import SwiftUI
 
 struct TalkOverlayView: View {
     var controller: TalkOverlayController
     @State private var appState = AppStateStore.shared
     @State private var hoveringWindow = false
-    @State private var dragStartOrigin: CGPoint?
-    @State private var didDrag: Bool = false
-    private static let orbCornerNudge: CGFloat = 12
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -16,46 +14,16 @@ struct TalkOverlayView: View {
                 level: self.controller.model.level,
                 accent: self.seamColor,
                 isPaused: isPaused)
-                .frame(width: 96, height: 96)
-                .padding(.top, 6 + TalkOverlayController.windowInset - Self.orbCornerNudge)
-                .padding(.trailing, 6 + TalkOverlayController.windowInset - Self.orbCornerNudge)
+                .frame(width: TalkOverlayController.orbSize, height: TalkOverlayController.orbSize)
+                .padding(.top, TalkOverlayController.orbPadding)
+                .padding(.trailing, TalkOverlayController.orbPadding)
                 .contentShape(Circle())
                 .opacity(isPaused ? 0.55 : 1)
-                .highPriorityGesture(
-                    TapGesture(count: 2).onEnded {
-                        TalkModeController.shared.stopSpeaking(reason: .userTap)
-                    })
-                .highPriorityGesture(
-                    TapGesture().onEnded {
-                        if self.didDrag { return }
-                        TalkModeController.shared.togglePaused()
-                    })
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                        .onChanged { value in
-                            if self.dragStartOrigin == nil {
-                                self.dragStartOrigin = self.controller.currentWindowOrigin()
-                                self.didDrag = false
-                                TalkModeController.shared.setPaused(true)
-                            }
-
-                            if abs(value.translation.width) + abs(value.translation.height) > 2 {
-                                self.didDrag = true
-                            }
-
-                            guard let start = self.dragStartOrigin else { return }
-                            let origin = CGPoint(
-                                x: start.x + value.translation.width,
-                                y: start.y - value.translation.height)
-                            self.controller.setWindowOrigin(origin)
-                        }
-                        .onEnded { _ in
-                            self.dragStartOrigin = nil
-                            Task { @MainActor in
-                                try? await Task.sleep(nanoseconds: 80_000_000)
-                                self.didDrag = false
-                            }
-                        })
+                .background(
+                    TalkOrbInteractionView(
+                        onSingleClick: { TalkModeController.shared.togglePaused() },
+                        onDoubleClick: { TalkModeController.shared.stopSpeaking(reason: .userTap) },
+                        onDragStart: { TalkModeController.shared.setPaused(true) }))
                 .overlay(alignment: .topLeading) {
                     Button {
                         TalkModeController.shared.exitTalkMode()
@@ -74,10 +42,9 @@ struct TalkOverlayView: View {
                 .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
                 .allowsHitTesting(self.hoveringWindow)
             }
+            .onHover { self.hoveringWindow = $0 }
         }
         .frame(width: TalkOverlayController.overlaySize, height: TalkOverlayController.overlaySize, alignment: .center)
-        .contentShape(Rectangle())
-        .onHover { self.hoveringWindow = $0 }
     }
 
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
@@ -95,6 +62,70 @@ struct TalkOverlayView: View {
         let g = Double((value >> 8) & 0xFF) / 255.0
         let b = Double(value & 0xFF) / 255.0
         return Color(red: r, green: g, blue: b)
+    }
+}
+
+private struct TalkOrbInteractionView: NSViewRepresentable {
+    let onSingleClick: () -> Void
+    let onDoubleClick: () -> Void
+    let onDragStart: () -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = OrbInteractionNSView()
+        view.onSingleClick = self.onSingleClick
+        view.onDoubleClick = self.onDoubleClick
+        view.onDragStart = self.onDragStart
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.clear.cgColor
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        guard let view = nsView as? OrbInteractionNSView else { return }
+        view.onSingleClick = self.onSingleClick
+        view.onDoubleClick = self.onDoubleClick
+        view.onDragStart = self.onDragStart
+    }
+}
+
+private final class OrbInteractionNSView: NSView {
+    var onSingleClick: (() -> Void)?
+    var onDoubleClick: (() -> Void)?
+    var onDragStart: (() -> Void)?
+    private var mouseDownEvent: NSEvent?
+    private var didDrag = false
+    private var suppressSingleClick = false
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        self.mouseDownEvent = event
+        self.didDrag = false
+        self.suppressSingleClick = event.clickCount > 1
+        if event.clickCount == 2 {
+            self.onDoubleClick?()
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let startEvent = self.mouseDownEvent else { return }
+        if !self.didDrag {
+            let dx = event.locationInWindow.x - startEvent.locationInWindow.x
+            let dy = event.locationInWindow.y - startEvent.locationInWindow.y
+            if abs(dx) + abs(dy) < 2 { return }
+            self.didDrag = true
+            self.onDragStart?()
+            self.window?.performDrag(with: startEvent)
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if !self.didDrag && !self.suppressSingleClick {
+            self.onSingleClick?()
+        }
+        self.mouseDownEvent = nil
+        self.didDrag = false
+        self.suppressSingleClick = false
     }
 }
 

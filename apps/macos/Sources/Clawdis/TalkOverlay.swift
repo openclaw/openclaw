@@ -8,7 +8,9 @@ import SwiftUI
 final class TalkOverlayController {
     static let shared = TalkOverlayController()
     static let overlaySize: CGFloat = 440
-    static let windowInset: CGFloat = 88
+    static let orbSize: CGFloat = 96
+    static let orbPadding: CGFloat = 12
+    static let orbHitSlop: CGFloat = 10
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "talk.overlay")
 
@@ -22,7 +24,7 @@ final class TalkOverlayController {
     var model = Model()
     private var window: NSPanel?
     private var hostingView: NSHostingView<TalkOverlayView>?
-    private let padding: CGFloat = 8
+    private let screenInset: CGFloat = 0
 
     func present() {
         self.ensureWindow()
@@ -115,7 +117,7 @@ final class TalkOverlayController {
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
 
-        let host = NSHostingView(rootView: TalkOverlayView(controller: self))
+        let host = TalkOverlayHostingView(rootView: TalkOverlayView(controller: self))
         host.translatesAutoresizingMaskIntoConstraints = false
         panel.contentView = host
         self.hostingView = host
@@ -127,8 +129,21 @@ final class TalkOverlayController {
         let size = NSSize(width: Self.overlaySize, height: Self.overlaySize)
         let visible = screen.visibleFrame
         let origin = CGPoint(
-            x: visible.maxX - size.width - self.padding + Self.windowInset,
-            y: visible.maxY - size.height - self.padding + Self.windowInset)
+            x: visible.maxX - size.width - self.screenInset,
+            y: visible.maxY - size.height - self.screenInset)
         return NSRect(origin: origin, size: size)
+    }
+}
+
+private final class TalkOverlayHostingView: NSHostingView<TalkOverlayView> {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let center = CGPoint(
+            x: self.bounds.maxX - TalkOverlayController.orbPadding - (TalkOverlayController.orbSize / 2),
+            y: self.bounds.maxY - TalkOverlayController.orbPadding - (TalkOverlayController.orbSize / 2))
+        let radius = (TalkOverlayController.orbSize / 2) + TalkOverlayController.orbHitSlop
+        let dx = point.x - center.x
+        let dy = point.y - center.y
+        guard dx * dx + dy * dy <= radius * radius else { return nil }
+        return super.hitTest(point)
     }
 }
