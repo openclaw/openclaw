@@ -77,7 +77,7 @@ public struct ClawdisChatView: View {
         ZStack {
             ScrollView {
                 LazyVStack(spacing: Layout.messageSpacing) {
-                    messageListRows
+                    self.messageListRows
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
                 .scrollTargetLayout()
