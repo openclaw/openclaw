@@ -9,6 +9,7 @@ struct TalkOverlayView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             let isPaused = self.controller.model.isPaused
+            Color.clear
             TalkOrbView(
                 phase: self.controller.model.phase,
                 level: self.controller.model.level,
@@ -40,11 +41,13 @@ struct TalkOverlayView: View {
                 .offset(x: -2, y: -2)
                 .opacity(self.hoveringWindow ? 1 : 0)
                 .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
-                .allowsHitTesting(self.hoveringWindow)
             }
             .onHover { self.hoveringWindow = $0 }
         }
-        .frame(width: TalkOverlayController.overlaySize, height: TalkOverlayController.overlaySize, alignment: .center)
+        .frame(
+            width: TalkOverlayController.overlaySize,
+            height: TalkOverlayController.overlaySize,
+            alignment: .topTrailing)
     }
 
     private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
