@@ -67,10 +67,16 @@ public enum TalkDirectiveParser {
         var lines = normalized.split(separator: "\n", omittingEmptySubsequences: false)
         guard !lines.isEmpty else { return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: []) }
 
-        guard let firstNonEmpty =
+        guard let firstNonEmptyIndex =
             lines.firstIndex(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
         else {
             return TalkDirectiveParseResult(directive: nil, stripped: text, unknownKeys: [])
+        }
+
+        var firstNonEmpty = firstNonEmptyIndex
+        if firstNonEmpty > 0 {
+            lines.removeSubrange(0..<firstNonEmpty)
+            firstNonEmpty = 0
         }
 
         let head = lines[firstNonEmpty].trimmingCharacters(in: .whitespacesAndNewlines)

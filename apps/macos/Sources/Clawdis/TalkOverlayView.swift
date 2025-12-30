@@ -31,7 +31,7 @@ struct TalkOverlayView: View {
                 }
                 .buttonStyle(.plain)
                 .contentShape(Circle())
-                .offset(x: -5, y: -5)
+                .offset(x: -2, y: -2)
                 .opacity(self.hoveringWindow ? 1 : 0)
                 .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
                 .allowsHitTesting(self.hoveringWindow)
@@ -42,7 +42,7 @@ struct TalkOverlayView: View {
         .onHover { self.hoveringWindow = $0 }
     }
 
-    private static let defaultSeamColor = Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+    private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
     private var seamColor: Color {
         Self.color(fromHex: self.appState.seamColorHex) ?? Self.defaultSeamColor

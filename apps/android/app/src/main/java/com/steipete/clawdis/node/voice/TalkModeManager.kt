@@ -13,6 +13,8 @@ import android.os.SystemClock
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.steipete.clawdis.node.bridge.BridgeSession
@@ -89,6 +91,9 @@ class TalkModeManager(
 
   private var player: MediaPlayer? = null
   private var currentAudioFile: File? = null
+  private var systemTts: TextToSpeech? = null
+  private var systemTtsPending: CompletableDeferred<Unit>? = null
+  private var systemTtsPendingId: String? = null
 
   fun attachSession(session: BridgeSession) {
     this.session = session
@@ -181,6 +186,10 @@ class TalkModeManager(
       recognizer?.destroy()
       recognizer = null
     }
+    systemTts?.stop()
+    systemTtsPending?.cancel()
+    systemTtsPending = null
+    systemTtsPendingId = null
   }
 
   private fun startListeningInternal(markListening: Boolean) {
@@ -441,16 +450,6 @@ class TalkModeManager(
       apiKey?.trim()?.takeIf { it.isNotEmpty() }
         ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
     val voiceId = directive?.voiceId ?: currentVoiceId ?: defaultVoiceId
-    if (voiceId.isNullOrBlank()) {
-      _statusText.value = "Missing voice ID"
-      Log.w(tag, "missing voiceId")
-      return
-    }
-    if (apiKey.isNullOrEmpty()) {
-      _statusText.value = "Missing ELEVENLABS_API_KEY"
-      Log.w(tag, "missing ELEVENLABS_API_KEY")
-      return
-    }
 
     _statusText.value = "Speaking…"
     _isSpeaking.value = true
@@ -458,28 +457,46 @@ class TalkModeManager(
     ensureInterruptListener()
 
     try {
-      val ttsStarted = SystemClock.elapsedRealtime()
-      val request =
-        ElevenLabsRequest(
-          text = cleaned,
-          modelId = directive?.modelId ?: currentModelId ?: defaultModelId,
-          outputFormat =
-            TalkModeRuntime.validatedOutputFormat(directive?.outputFormat ?: defaultOutputFormat),
-          speed = TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm),
-          stability = TalkModeRuntime.validatedUnit(directive?.stability),
-          similarity = TalkModeRuntime.validatedUnit(directive?.similarity),
-          style = TalkModeRuntime.validatedUnit(directive?.style),
-          speakerBoost = directive?.speakerBoost,
-          seed = TalkModeRuntime.validatedSeed(directive?.seed),
-          normalize = TalkModeRuntime.validatedNormalize(directive?.normalize),
-          language = TalkModeRuntime.validatedLanguage(directive?.language),
-        )
-      val audio = synthesize(voiceId = voiceId, apiKey = apiKey, request = request)
-      Log.d(tag, "elevenlabs ok bytes=${audio.size} durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
-      playAudio(audio)
+      val canUseElevenLabs = !voiceId.isNullOrBlank() && !apiKey.isNullOrEmpty()
+      if (!canUseElevenLabs) {
+        if (voiceId.isNullOrBlank()) {
+          Log.w(tag, "missing voiceId; falling back to system voice")
+        }
+        if (apiKey.isNullOrEmpty()) {
+          Log.w(tag, "missing ELEVENLABS_API_KEY; falling back to system voice")
+        }
+        _statusText.value = "Speaking (System)…"
+        speakWithSystemTts(cleaned)
+      } else {
+        val ttsStarted = SystemClock.elapsedRealtime()
+        val request =
+          ElevenLabsRequest(
+            text = cleaned,
+            modelId = directive?.modelId ?: currentModelId ?: defaultModelId,
+            outputFormat =
+              TalkModeRuntime.validatedOutputFormat(directive?.outputFormat ?: defaultOutputFormat),
+            speed = TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm),
+            stability = TalkModeRuntime.validatedUnit(directive?.stability),
+            similarity = TalkModeRuntime.validatedUnit(directive?.similarity),
+            style = TalkModeRuntime.validatedUnit(directive?.style),
+            speakerBoost = directive?.speakerBoost,
+            seed = TalkModeRuntime.validatedSeed(directive?.seed),
+            normalize = TalkModeRuntime.validatedNormalize(directive?.normalize),
+            language = TalkModeRuntime.validatedLanguage(directive?.language),
+          )
+        val audio = synthesize(voiceId = voiceId!!, apiKey = apiKey!!, request = request)
+        Log.d(tag, "elevenlabs ok bytes=${audio.size} durMs=${SystemClock.elapsedRealtime() - ttsStarted}")
+        playAudio(audio)
+      }
     } catch (err: Throwable) {
-      _statusText.value = "Speak failed: ${err.message ?: err::class.simpleName}"
-      Log.w(tag, "speak failed: ${err.message ?: err::class.simpleName}")
+      Log.w(tag, "speak failed: ${err.message ?: err::class.simpleName}; falling back to system voice")
+      try {
+        _statusText.value = "Speaking (System)…"
+        speakWithSystemTts(cleaned)
+      } catch (fallbackErr: Throwable) {
+        _statusText.value = "Speak failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}"
+        Log.w(tag, "system voice failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}")
+      }
     }
 
     _isSpeaking.value = false
@@ -524,9 +541,103 @@ class TalkModeManager(
     Log.d(tag, "play done")
   }
 
+  private suspend fun speakWithSystemTts(text: String) {
+    val trimmed = text.trim()
+    if (trimmed.isEmpty()) return
+    val ok = ensureSystemTts()
+    if (!ok) {
+      throw IllegalStateException("system TTS unavailable")
+    }
+
+    val tts = systemTts ?: throw IllegalStateException("system TTS unavailable")
+    val utteranceId = "talk-${UUID.randomUUID()}"
+    val deferred = CompletableDeferred<Unit>()
+    systemTtsPending?.cancel()
+    systemTtsPending = deferred
+    systemTtsPendingId = utteranceId
+
+    withContext(Dispatchers.Main) {
+      val params = Bundle()
+      tts.speak(trimmed, TextToSpeech.QUEUE_FLUSH, params, utteranceId)
+    }
+
+    withContext(Dispatchers.IO) {
+      try {
+        kotlinx.coroutines.withTimeout(180_000) { deferred.await() }
+      } catch (err: Throwable) {
+        throw err
+      }
+    }
+  }
+
+  private suspend fun ensureSystemTts(): Boolean {
+    if (systemTts != null) return true
+    return withContext(Dispatchers.Main) {
+      val deferred = CompletableDeferred<Boolean>()
+      val tts =
+        try {
+          TextToSpeech(context) { status ->
+            deferred.complete(status == TextToSpeech.SUCCESS)
+          }
+        } catch (_: Throwable) {
+          deferred.complete(false)
+          null
+        }
+      if (tts == null) return@withContext false
+
+      tts.setOnUtteranceProgressListener(
+        object : UtteranceProgressListener() {
+          override fun onStart(utteranceId: String?) {}
+
+          override fun onDone(utteranceId: String?) {
+            if (utteranceId == null) return
+            if (utteranceId != systemTtsPendingId) return
+            systemTtsPending?.complete(Unit)
+            systemTtsPending = null
+            systemTtsPendingId = null
+          }
+
+          @Deprecated("Deprecated in Java")
+          override fun onError(utteranceId: String?) {
+            if (utteranceId == null) return
+            if (utteranceId != systemTtsPendingId) return
+            systemTtsPending?.completeExceptionally(IllegalStateException("system TTS error"))
+            systemTtsPending = null
+            systemTtsPendingId = null
+          }
+
+          override fun onError(utteranceId: String?, errorCode: Int) {
+            if (utteranceId == null) return
+            if (utteranceId != systemTtsPendingId) return
+            systemTtsPending?.completeExceptionally(IllegalStateException("system TTS error $errorCode"))
+            systemTtsPending = null
+            systemTtsPendingId = null
+          }
+        },
+      )
+
+      val ok =
+        try {
+          deferred.await()
+        } catch (_: Throwable) {
+          false
+        }
+      if (ok) {
+        systemTts = tts
+      } else {
+        tts.shutdown()
+      }
+      ok
+    }
+  }
+
   private fun stopSpeaking(resetInterrupt: Boolean = true) {
     if (!_isSpeaking.value) {
       cleanupPlayer()
+      systemTts?.stop()
+      systemTtsPending?.cancel()
+      systemTtsPending = null
+      systemTtsPendingId = null
       return
     }
     if (resetInterrupt) {
@@ -534,6 +645,10 @@ class TalkModeManager(
       lastInterruptedAtSeconds = currentMs / 1000.0
     }
     cleanupPlayer()
+    systemTts?.stop()
+    systemTtsPending?.cancel()
+    systemTtsPending = null
+    systemTtsPendingId = null
     _isSpeaking.value = false
   }
 

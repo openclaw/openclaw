@@ -930,7 +930,7 @@ class NodeRuntime(context: Context) {
 
 private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
 
-private const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF7FB8D4
+private const val DEFAULT_SEAM_COLOR_ARGB: Long = 0xFF4F7A9A
 
 private const val a2uiReadyCheckJS: String =
   """

@@ -50,6 +50,18 @@ final class TalkDirectiveTests: XCTestCase {
         XCTAssertEqual(result.stripped, "Hello.")
     }
 
+    func testSkipsLeadingEmptyLinesWhenParsingDirective() {
+        let text = """
+
+
+        {"voice":"abc123"}
+        Hello there.
+        """
+        let result = TalkDirectiveParser.parse(text)
+        XCTAssertEqual(result.directive?.voiceId, "abc123")
+        XCTAssertEqual(result.stripped, "Hello there.")
+    }
+
     func testTracksUnknownKeys() {
         let text = """
         {"voice":"abc","mystery":"value","extra":1}

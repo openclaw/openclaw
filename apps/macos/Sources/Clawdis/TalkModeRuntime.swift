@@ -291,7 +291,9 @@ actor TalkModeRuntime {
         await self.reloadConfig()
         guard self.isCurrent(gen) else { return }
         let prompt = self.buildPrompt(transcript: transcript)
-        let sessionKey = await GatewayConnection.shared.mainSessionKey()
+        let sessionKey =
+            await MainActor.run { WebChatManager.shared.activeSessionKey } ??
+            await GatewayConnection.shared.mainSessionKey()
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
         self.logger.info(
@@ -335,20 +337,9 @@ actor TalkModeRuntime {
     }
 
     private func buildPrompt(transcript: String) -> String {
-        var lines: [String] = [
-            "Talk Mode active. Reply in a concise, spoken tone.",
-            "You may optionally prefix the response with JSON (first line) to set ElevenLabs voice, e.g. {\"voice\":\"<id>\",\"once\":true}.",
-        ]
-
-        if let interrupted = self.lastInterruptedAtSeconds {
-            let formatted = String(format: "%.1f", interrupted)
-            lines.append("Assistant speech interrupted at \(formatted)s.")
-            self.lastInterruptedAtSeconds = nil
-        }
-
-        lines.append("")
-        lines.append(transcript)
-        return lines.joined(separator: "\n")
+        let interrupted = self.lastInterruptedAtSeconds
+        self.lastInterruptedAtSeconds = nil
+        return TalkPromptBuilder.build(transcript: transcript, interruptedAtSeconds: interrupted)
     }
 
     private func waitForAssistantText(
@@ -378,7 +369,7 @@ actor TalkModeRuntime {
                 guard message.role == "assistant" else { return false }
                 guard let since else { return true }
                 guard let timestamp = message.timestamp else { return false }
-                return Self.isMessageTimestampAfter(timestamp, sinceSeconds: since)
+                return TalkHistoryTimestamp.isAfter(timestamp, sinceSeconds: since)
             }
             guard let assistant else { return nil }
             let text = assistant.content.compactMap { $0.text }.joined(separator: "\n")
@@ -421,76 +412,108 @@ actor TalkModeRuntime {
             }
         }
 
-        guard let apiKey = self.apiKey, !apiKey.isEmpty else {
-            self.logger.error("talk missing ELEVENLABS_API_KEY")
-            return
-        }
-
+        let apiKey = self.apiKey?.trimmingCharacters(in: .whitespacesAndNewlines)
         let requestedVoice =
             directive?.voiceId ??
             self.currentVoiceId ??
             self.defaultVoiceId
-        guard let voiceId = await self.resolveVoiceId(preferred: requestedVoice, apiKey: apiKey) else {
-            self.logger.error("talk missing voiceId; set talk.voiceId or ELEVENLABS_VOICE_ID")
-            return
-        }
-        guard self.isCurrent(gen) else { return }
-        self.ttsLogger.info("talk TTS request voiceId=\(voiceId, privacy: .public) chars=\(cleaned.count, privacy: .public)")
 
-        await self.startRecognition()
-        guard self.isCurrent(gen) else { return }
-        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-        self.phase = .speaking
+        let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
+
+        let voiceId: String?
+        if let apiKey, !apiKey.isEmpty {
+            voiceId = await self.resolveVoiceId(preferred: requestedVoice, apiKey: apiKey)
+        } else {
+            voiceId = nil
+        }
+
+        if apiKey?.isEmpty != false {
+            self.ttsLogger.warning("talk missing ELEVENLABS_API_KEY; falling back to system voice")
+        } else if voiceId == nil {
+            self.ttsLogger.warning("talk missing voiceId; falling back to system voice")
+        } else if let voiceId {
+            self.ttsLogger.info("talk TTS request voiceId=\(voiceId, privacy: .public) chars=\(cleaned.count, privacy: .public)")
+        }
         self.lastSpokenText = cleaned
 
-        let resolvedSpeed = Self.resolveSpeed(
-            speed: directive?.speed,
-            rateWPM: directive?.rateWPM,
-            logger: self.logger)
-
-        let request = ElevenLabsRequest(
-            text: cleaned,
-            modelId: directive?.modelId ?? self.currentModelId ?? self.defaultModelId,
-            outputFormat: Self.validatedOutputFormat(directive?.outputFormat ?? self.defaultOutputFormat, logger: self.logger),
-            speed: resolvedSpeed,
-            stability: Self.validatedUnit(directive?.stability, name: "stability", logger: self.logger),
-            similarity: Self.validatedUnit(directive?.similarity, name: "similarity", logger: self.logger),
-            style: Self.validatedUnit(directive?.style, name: "style", logger: self.logger),
-            speakerBoost: directive?.speakerBoost,
-            seed: Self.validatedSeed(directive?.seed, logger: self.logger),
-            normalize: Self.validatedNormalize(directive?.normalize, logger: self.logger),
-            language: Self.validatedLanguage(directive?.language, logger: self.logger))
-
         let synthTimeoutSeconds = max(20.0, min(90.0, Double(cleaned.count) * 0.12))
-        self.ttsLogger.info("talk TTS synth timeout=\(synthTimeoutSeconds, privacy: .public)s")
 
         do {
-            let client = ElevenLabsClient(apiKey: apiKey, logger: self.ttsLogger)
-            let audio = try await withThrowingTaskGroup(of: Data.self) { group in
-                group.addTask {
-                    try await client.synthesize(voiceId: voiceId, request: request)
+            if let apiKey, !apiKey.isEmpty, let voiceId {
+                let desiredOutputFormat = directive?.outputFormat ?? self.defaultOutputFormat
+                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(desiredOutputFormat)
+                if outputFormat == nil, let desiredOutputFormat, !desiredOutputFormat.isEmpty {
+                    self.logger.warning("talk output_format unsupported for local playback: \(desiredOutputFormat, privacy: .public)")
                 }
-                group.addTask {
-                    try await Task.sleep(nanoseconds: UInt64(synthTimeoutSeconds * 1_000_000_000))
-                    throw NSError(domain: "TalkTTS", code: 408, userInfo: [
-                        NSLocalizedDescriptionKey: "ElevenLabs TTS timed out after \(synthTimeoutSeconds)s",
+
+                let request = ElevenLabsTTSRequest(
+                    text: cleaned,
+                    modelId: directive?.modelId ?? self.currentModelId ?? self.defaultModelId,
+                    outputFormat: outputFormat,
+                    speed: TalkTTSValidation.resolveSpeed(speed: directive?.speed, rateWPM: directive?.rateWPM),
+                    stability: TalkTTSValidation.validatedUnit(directive?.stability),
+                    similarity: TalkTTSValidation.validatedUnit(directive?.similarity),
+                    style: TalkTTSValidation.validatedUnit(directive?.style),
+                    speakerBoost: directive?.speakerBoost,
+                    seed: TalkTTSValidation.validatedSeed(directive?.seed),
+                    normalize: ElevenLabsTTSClient.validatedNormalize(directive?.normalize),
+                    language: language)
+
+                self.ttsLogger.info("talk TTS synth timeout=\(synthTimeoutSeconds, privacy: .public)s")
+                let client = ElevenLabsTTSClient(apiKey: apiKey)
+                let audio = try await client.synthesizeWithHardTimeout(
+                    voiceId: voiceId,
+                    request: request,
+                    hardTimeoutSeconds: synthTimeoutSeconds)
+                guard self.isCurrent(gen) else { return }
+                self.ttsLogger.info("talk TTS response bytes=\(audio.count, privacy: .public)")
+
+                if self.interruptOnSpeech {
+                    await self.startRecognition()
+                    guard self.isCurrent(gen) else { return }
+                }
+
+                await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+                self.phase = .speaking
+
+                let result = await TalkAudioPlayer.shared.play(data: audio)
+                self.ttsLogger.info("talk audio result finished=\(result.finished, privacy: .public) interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
+                if !result.finished, result.interruptedAt == nil {
+                    throw NSError(domain: "TalkAudioPlayer", code: 1, userInfo: [
+                        NSLocalizedDescriptionKey: "audio playback failed",
                     ])
                 }
-                let data = try await group.next()!
-                group.cancelAll()
-                return data
-            }
-            guard self.isCurrent(gen) else { return }
-            self.ttsLogger.info("talk TTS response bytes=\(audio.count, privacy: .public)")
-            let result = await TalkAudioPlayer.shared.play(data: audio)
-            self.ttsLogger.info("talk audio result finished=\(result.finished, privacy: .public) interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
-            if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
-                if self.interruptOnSpeech {
-                    self.lastInterruptedAtSeconds = interruptedAt
+                if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
+                    if self.interruptOnSpeech {
+                        self.lastInterruptedAtSeconds = interruptedAt
+                    }
                 }
+            } else {
+                self.ttsLogger.info("talk system voice start chars=\(cleaned.count, privacy: .public)")
+                if self.interruptOnSpeech {
+                    await self.startRecognition()
+                    guard self.isCurrent(gen) else { return }
+                }
+                await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+                self.phase = .speaking
+                await TalkSystemSpeechSynthesizer.shared.stop()
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+                self.ttsLogger.info("talk system voice done")
             }
         } catch {
-            self.logger.error("talk TTS failed: \(error.localizedDescription, privacy: .public)")
+            self.ttsLogger.error("talk TTS failed: \(error.localizedDescription, privacy: .public); falling back to system voice")
+            do {
+                if self.interruptOnSpeech {
+                    await self.startRecognition()
+                    guard self.isCurrent(gen) else { return }
+                }
+                await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+                self.phase = .speaking
+                await TalkSystemSpeechSynthesizer.shared.stop()
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+            } catch {
+                self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
 
         if self.phase == .speaking {
@@ -505,7 +528,7 @@ actor TalkModeRuntime {
         if let fallbackVoiceId { return fallbackVoiceId }
 
         do {
-            let voices = try await ElevenLabsClient(apiKey: apiKey, logger: self.ttsLogger).listVoices()
+            let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
             guard let first = voices.first else {
                 self.ttsLogger.error("elevenlabs voices list empty")
                 return nil
@@ -528,6 +551,7 @@ actor TalkModeRuntime {
 
     func stopSpeaking(reason: TalkStopReason) async {
         let interruptedAt = await MainActor.run { TalkAudioPlayer.shared.stop() }
+        await TalkSystemSpeechSynthesizer.shared.stop()
         guard self.phase == .speaking else { return }
         if reason == .speech, let interruptedAt {
             self.lastInterruptedAtSeconds = interruptedAt
@@ -720,154 +744,4 @@ actor TalkModeRuntime {
         return normalized
     }
 
-    private static func validatedLanguage(_ value: String?, logger: Logger) -> String? {
-        guard let value else { return nil }
-        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard normalized.count == 2, normalized.allSatisfy({ $0 >= "a" && $0 <= "z" }) else {
-            logger.warning("talk language invalid: \(normalized, privacy: .public)")
-            return nil
-        }
-        return normalized
-    }
-
-    private static func validatedOutputFormat(_ value: String?, logger: Logger) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !trimmed.isEmpty else { return nil }
-        guard trimmed.hasPrefix("mp3_") else {
-            logger.warning("talk output_format unsupported for local playback: \(trimmed, privacy: .public)")
-            return nil
-        }
-        return trimmed
-    }
-
-    private static func isMessageTimestampAfter(_ timestamp: Double, sinceSeconds: Double) -> Bool {
-        let sinceMs = sinceSeconds * 1000
-        if timestamp > 10_000_000_000 {
-            return timestamp >= sinceMs - 500
-        }
-        return timestamp >= sinceSeconds - 0.5
-    }
-}
-
-private struct ElevenLabsRequest {
-    let text: String
-    let modelId: String?
-    let outputFormat: String?
-    let speed: Double?
-    let stability: Double?
-    let similarity: Double?
-    let style: Double?
-    let speakerBoost: Bool?
-    let seed: UInt32?
-    let normalize: String?
-    let language: String?
-}
-
-private struct ElevenLabsClient {
-    let apiKey: String
-    let logger: Logger
-    let baseUrl: URL = URL(string: "https://api.elevenlabs.io")!
-    let ttsTimeoutSeconds: TimeInterval = 45
-    let listVoicesTimeoutSeconds: TimeInterval = 15
-
-    func synthesize(voiceId: String, request: ElevenLabsRequest) async throws -> Data {
-        var url = self.baseUrl
-        url.appendPathComponent("v1")
-        url.appendPathComponent("text-to-speech")
-        url.appendPathComponent(voiceId)
-
-        let charCount = request.text.count
-        self.logger.info(
-            "elevenlabs tts request voice=\(voiceId, privacy: .public) model=\(request.modelId ?? "default", privacy: .public) chars=\(charCount, privacy: .public)")
-        let startedAt = Date()
-
-        var payload: [String: Any] = [
-            "text": request.text,
-        ]
-        if let modelId = request.modelId, !modelId.isEmpty {
-            payload["model_id"] = modelId
-        }
-        if let outputFormat = request.outputFormat, !outputFormat.isEmpty {
-            payload["output_format"] = outputFormat
-        }
-        if let seed = request.seed {
-            payload["seed"] = seed
-        }
-        if let normalize = request.normalize {
-            payload["apply_text_normalization"] = normalize
-        }
-        if let language = request.language {
-            payload["language_code"] = language
-        }
-        var voiceSettings: [String: Any] = [:]
-        if let speed = request.speed { voiceSettings["speed"] = speed }
-        if let stability = request.stability { voiceSettings["stability"] = stability }
-        if let similarity = request.similarity { voiceSettings["similarity_boost"] = similarity }
-        if let style = request.style { voiceSettings["style"] = style }
-        if let speakerBoost = request.speakerBoost { voiceSettings["use_speaker_boost"] = speakerBoost }
-        if !voiceSettings.isEmpty {
-            payload["voice_settings"] = voiceSettings
-        }
-
-        let body = try JSONSerialization.data(withJSONObject: payload, options: [])
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.httpBody = body
-        req.timeoutInterval = self.ttsTimeoutSeconds
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
-        req.setValue(self.apiKey, forHTTPHeaderField: "xi-api-key")
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let message = String(data: data, encoding: .utf8) ?? "unknown"
-            self.logger.error(
-                "elevenlabs tts failed status=\(http.statusCode, privacy: .public) message=\(message, privacy: .public)")
-            throw NSError(domain: "TalkTTS", code: http.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "ElevenLabs failed: \(http.statusCode) \(message)",
-            ])
-        }
-        let elapsed = Date().timeIntervalSince(startedAt)
-        self.logger.info("elevenlabs tts ok bytes=\(data.count, privacy: .public) dur=\(elapsed, privacy: .public)s")
-        return data
-    }
-
-    func listVoices() async throws -> [ElevenLabsVoice] {
-        var url = self.baseUrl
-        url.appendPathComponent("v1")
-        url.appendPathComponent("voices")
-
-        self.logger.info("elevenlabs voices list request")
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = self.listVoicesTimeoutSeconds
-        req.setValue(self.apiKey, forHTTPHeaderField: "xi-api-key")
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-        if let http = response as? HTTPURLResponse, http.statusCode >= 400 {
-            let message = String(data: data, encoding: .utf8) ?? "unknown"
-            self.logger.error(
-                "elevenlabs voices list failed status=\(http.statusCode, privacy: .public) message=\(message, privacy: .public)")
-            throw NSError(domain: "TalkTTS", code: http.statusCode, userInfo: [
-                NSLocalizedDescriptionKey: "ElevenLabs voices failed: \(http.statusCode) \(message)",
-            ])
-        }
-
-        let decoded = try JSONDecoder().decode(ElevenLabsVoicesResponse.self, from: data)
-        return decoded.voices
-    }
-}
-
-private struct ElevenLabsVoice: Decodable {
-    let voiceId: String
-    let name: String?
-
-    enum CodingKeys: String, CodingKey {
-        case voiceId = "voice_id"
-        case name
-    }
-}
-
-private struct ElevenLabsVoicesResponse: Decodable {
-    let voices: [ElevenLabsVoice]
 }

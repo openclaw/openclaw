@@ -7,7 +7,7 @@ import SwiftUI
 @Observable
 final class TalkOverlayController {
     static let shared = TalkOverlayController()
-    static let overlaySize: CGFloat = 360
+    static let overlaySize: CGFloat = 440
     static let windowInset: CGFloat = 88
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "talk.overlay")

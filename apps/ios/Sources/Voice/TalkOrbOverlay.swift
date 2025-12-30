@@ -12,14 +12,14 @@ struct TalkOrbOverlay: View {
             ZStack {
                 Circle()
                     .stroke(seam.opacity(0.26), lineWidth: 2)
-                    .frame(width: 280, height: 280)
+                    .frame(width: 320, height: 320)
                     .scaleEffect(self.pulse ? 1.15 : 0.96)
                     .opacity(self.pulse ? 0.0 : 1.0)
                     .animation(.easeOut(duration: 1.3).repeatForever(autoreverses: false), value: self.pulse)
 
                 Circle()
                     .stroke(seam.opacity(0.18), lineWidth: 2)
-                    .frame(width: 280, height: 280)
+                    .frame(width: 320, height: 320)
                     .scaleEffect(self.pulse ? 1.45 : 1.02)
                     .opacity(self.pulse ? 0.0 : 0.9)
                     .animation(.easeOut(duration: 1.9).repeatForever(autoreverses: false).delay(0.2), value: self.pulse)
@@ -35,7 +35,7 @@ struct TalkOrbOverlay: View {
                             center: .center,
                             startRadius: 1,
                             endRadius: 112))
-                    .frame(width: 168, height: 168)
+                    .frame(width: 190, height: 190)
                     .overlay(
                         Circle()
                             .stroke(seam.opacity(0.35), lineWidth: 1))

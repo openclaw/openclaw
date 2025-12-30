@@ -293,7 +293,7 @@ final class NodeAppModel {
         Self.color(fromHex: self.seamColorHex) ?? Self.defaultSeamColor
     }
 
-    private static let defaultSeamColor = Color(red: 127 / 255.0, green: 184 / 255.0, blue: 212 / 255.0)
+    private static let defaultSeamColor = Color(red: 79 / 255.0, green: 122 / 255.0, blue: 154 / 255.0)
 
     private static func color(fromHex raw: String?) -> Color? {
         let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
