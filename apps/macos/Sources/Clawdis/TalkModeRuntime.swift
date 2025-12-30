@@ -291,9 +291,13 @@ actor TalkModeRuntime {
         await self.reloadConfig()
         guard self.isCurrent(gen) else { return }
         let prompt = self.buildPrompt(transcript: transcript)
-        let sessionKey =
-            await MainActor.run { WebChatManager.shared.activeSessionKey } ??
-            await GatewayConnection.shared.mainSessionKey()
+        let activeSessionKey = await MainActor.run { WebChatManager.shared.activeSessionKey }
+        let sessionKey: String
+        if let activeSessionKey {
+            sessionKey = activeSessionKey
+        } else {
+            sessionKey = await GatewayConnection.shared.mainSessionKey()
+        }
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
         self.logger.info(
