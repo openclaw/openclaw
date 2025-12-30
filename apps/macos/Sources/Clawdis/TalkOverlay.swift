@@ -126,7 +126,10 @@ final class TalkOverlayController {
     }
 
     private func targetFrame() -> NSRect {
-        guard let screen = NSScreen.main else { return .zero }
+        let screen = self.window?.screen
+            ?? NSScreen.main
+            ?? NSScreen.screens.first
+        guard let screen else { return .zero }
         let size = NSSize(width: Self.overlaySize, height: Self.overlaySize)
         let visible = screen.visibleFrame
         let origin = CGPoint(
@@ -139,16 +142,5 @@ final class TalkOverlayController {
 private final class TalkOverlayHostingView: NSHostingView<TalkOverlayView> {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
         true
-    }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let center = CGPoint(
-            x: self.bounds.maxX - TalkOverlayController.orbPadding - (TalkOverlayController.orbSize / 2),
-            y: self.bounds.maxY - TalkOverlayController.orbPadding - (TalkOverlayController.orbSize / 2))
-        let radius = (TalkOverlayController.orbSize / 2) + TalkOverlayController.orbHitSlop
-        let dx = point.x - center.x
-        let dy = point.y - center.y
-        guard dx * dx + dy * dy <= radius * radius else { return nil }
-        return super.hitTest(point)
     }
 }
