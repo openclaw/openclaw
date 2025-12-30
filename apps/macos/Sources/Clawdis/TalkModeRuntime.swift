@@ -64,8 +64,6 @@ actor TalkModeRuntime {
     private var apiKey: String?
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
-    var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
-    var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
     private let silenceWindow: TimeInterval = 0.7
     private let minSpeechRMS: Double = 1e-3
@@ -540,10 +538,10 @@ actor TalkModeRuntime {
                 let result: StreamingPlaybackResult
                 if let sampleRate {
                     self.lastPlaybackWasPCM = true
-                    result = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
+                    result = await self.playPCM(stream: stream, sampleRate: sampleRate)
                 } else {
                     self.lastPlaybackWasPCM = false
-                    result = await self.mp3Player.play(stream: stream)
+                    result = await self.playMP3(stream: stream)
                 }
                 self.ttsLogger
                     .info(
@@ -642,15 +640,8 @@ actor TalkModeRuntime {
 
     func stopSpeaking(reason: TalkStopReason) async {
         let usePCM = self.lastPlaybackWasPCM
-        let interruptedAt = await MainActor.run {
-            let primary = usePCM
-                ? self.pcmPlayer.stop()
-                : self.mp3Player.stop()
-            _ = usePCM
-                ? self.mp3Player.stop()
-                : self.pcmPlayer.stop()
-            return primary
-        }
+        let interruptedAt = usePCM ? await self.stopPCM() : await self.stopMP3()
+        _ = usePCM ? await self.stopMP3() : await self.stopPCM()
         await TalkSystemSpeechSynthesizer.shared.stop()
         guard self.phase == .speaking else { return }
         if reason == .speech, let interruptedAt {
@@ -665,6 +656,31 @@ actor TalkModeRuntime {
         }
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+    }
+
+    // MARK: - Audio playback (MainActor helpers)
+
+    @MainActor
+    private func playPCM(
+        stream: AsyncThrowingStream<Data, Error>,
+        sampleRate: Double) async -> StreamingPlaybackResult
+    {
+        await PCMStreamingAudioPlayer.shared.play(stream: stream, sampleRate: sampleRate)
+    }
+
+    @MainActor
+    private func playMP3(stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult {
+        await StreamingAudioPlayer.shared.play(stream: stream)
+    }
+
+    @MainActor
+    private func stopPCM() -> Double? {
+        PCMStreamingAudioPlayer.shared.stop()
+    }
+
+    @MainActor
+    private func stopMP3() -> Double? {
+        StreamingAudioPlayer.shared.stop()
     }
 
     // MARK: - Config
