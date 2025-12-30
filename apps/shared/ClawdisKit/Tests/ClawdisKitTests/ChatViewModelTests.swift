@@ -117,6 +117,29 @@ private extension TestChatTransportState {
 }
 
 @Suite struct ChatViewModelTests {
+    @Test func dedupesDuplicateHistoryMessages() async throws {
+        let ts = Date().timeIntervalSince1970 * 1000
+        let duplicate = AnyCodable([
+            "role": "assistant",
+            "content": [["type": "text", "text": "Same message"]],
+            "timestamp": ts,
+        ])
+        let history = ClawdisChatHistoryPayload(
+            sessionKey: "main",
+            sessionId: "sess-main",
+            messages: [duplicate, duplicate],
+            thinkingLevel: "off")
+
+        let transport = TestChatTransport(historyResponses: [history])
+        let vm = await MainActor.run { ClawdisChatViewModel(sessionKey: "main", transport: transport) }
+
+        await MainActor.run { vm.load() }
+        try await waitUntil("bootstrap") { await MainActor.run { !vm.messages.isEmpty } }
+
+        #expect(await MainActor.run { vm.messages.count } == 1)
+        #expect(await MainActor.run { vm.messages.first?.role } == "assistant")
+    }
+
     @Test func streamsAssistantAndClearsOnFinal() async throws {
         let sessionId = "sess-main"
         let history1 = ClawdisChatHistoryPayload(

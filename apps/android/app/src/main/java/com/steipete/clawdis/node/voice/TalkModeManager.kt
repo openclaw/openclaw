@@ -80,18 +80,19 @@ class TalkModeManager(
   private var interruptOnSpeech: Boolean = true
   private var voiceOverrideActive = false
   private var modelOverrideActive = false
+  private var mainSessionKey: String = "main"
 
   private var session: BridgeSession? = null
   private var pendingRunId: String? = null
   private var pendingFinal: CompletableDeferred<Boolean>? = null
-  private var chatSubscribed = false
+  private var chatSubscribedSessionKey: String? = null
 
   private var player: MediaPlayer? = null
   private var currentAudioFile: File? = null
 
   fun attachSession(session: BridgeSession) {
     this.session = session
-    chatSubscribed = false
+    chatSubscribedSessionKey = null
   }
 
   fun setEnabled(enabled: Boolean) {
@@ -173,7 +174,7 @@ class TalkModeManager(
     _isListening.value = false
     _statusText.value = "Off"
     stopSpeaking()
-    chatSubscribed = false
+    chatSubscribedSessionKey = null
 
     mainHandler.post {
       recognizer?.cancel()
@@ -281,18 +282,15 @@ class TalkModeManager(
 
     try {
       val startedAt = System.currentTimeMillis().toDouble() / 1000.0
-      subscribeChatIfNeeded(bridge = bridge, sessionKey = "main")
-      Log.d(tag, "chat.send start chars=${prompt.length}")
+      subscribeChatIfNeeded(bridge = bridge, sessionKey = mainSessionKey)
+      Log.d(tag, "chat.send start sessionKey=${mainSessionKey.ifBlank { "main" }} chars=${prompt.length}")
       val runId = sendChat(prompt, bridge)
       Log.d(tag, "chat.send ok runId=$runId")
       val ok = waitForChatFinal(runId)
       if (!ok) {
-        _statusText.value = "No reply"
-        Log.w(tag, "chat final timeout runId=$runId")
-        start()
-        return
+        Log.w(tag, "chat final timeout runId=$runId; attempting history fallback")
       }
-      val assistant = waitForAssistantText(bridge, startedAt, 12_000)
+      val assistant = waitForAssistantText(bridge, startedAt, if (ok) 12_000 else 25_000)
       if (assistant.isNullOrBlank()) {
         _statusText.value = "No reply"
         Log.w(tag, "assistant text timeout runId=$runId")
@@ -312,12 +310,12 @@ class TalkModeManager(
   }
 
   private suspend fun subscribeChatIfNeeded(bridge: BridgeSession, sessionKey: String) {
-    if (chatSubscribed) return
     val key = sessionKey.trim()
     if (key.isEmpty()) return
+    if (chatSubscribedSessionKey == key) return
     try {
       bridge.sendEvent("chat.subscribe", """{"sessionKey":"$key"}""")
-      chatSubscribed = true
+      chatSubscribedSessionKey = key
       Log.d(tag, "chat.subscribe ok sessionKey=$key")
     } catch (err: Throwable) {
       Log.w(tag, "chat.subscribe failed sessionKey=$key err=${err.message ?: err::class.java.simpleName}")
@@ -342,7 +340,7 @@ class TalkModeManager(
     val runId = UUID.randomUUID().toString()
     val params =
       buildJsonObject {
-        put("sessionKey", JsonPrimitive("main"))
+        put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
         put("message", JsonPrimitive(message))
         put("thinking", JsonPrimitive("low"))
         put("timeoutMs", JsonPrimitive(30_000))
@@ -396,7 +394,8 @@ class TalkModeManager(
     bridge: BridgeSession,
     sinceSeconds: Double? = null,
   ): String? {
-    val res = bridge.request("chat.history", "{\"sessionKey\":\"main\"}")
+    val key = mainSessionKey.ifBlank { "main" }
+    val res = bridge.request("chat.history", "{\"sessionKey\":\"$key\"}")
     val root = json.parseToJsonElement(res).asObjectOrNull() ?: return null
     val messages = root["messages"] as? JsonArray ?: return null
     for (item in messages.reversed()) {
@@ -404,7 +403,7 @@ class TalkModeManager(
       if (obj["role"].asStringOrNull() != "assistant") continue
       if (sinceSeconds != null) {
         val timestamp = obj["timestamp"].asDoubleOrNull()
-        if (timestamp != null && timestamp < sinceSeconds - 0.5) continue
+        if (timestamp != null && !TalkModeRuntime.isMessageTimestampAfter(timestamp, sinceSeconds)) continue
       }
       val content = obj["content"] as? JsonArray ?: continue
       val text =
@@ -438,16 +437,15 @@ class TalkModeManager(
       }
     }
 
+    val apiKey =
+      apiKey?.trim()?.takeIf { it.isNotEmpty() }
+        ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
     val voiceId = directive?.voiceId ?: currentVoiceId ?: defaultVoiceId
     if (voiceId.isNullOrBlank()) {
       _statusText.value = "Missing voice ID"
       Log.w(tag, "missing voiceId")
       return
     }
-
-    val apiKey =
-      apiKey?.trim()?.takeIf { it.isNotEmpty() }
-        ?: System.getenv("ELEVENLABS_API_KEY")?.trim()
     if (apiKey.isNullOrEmpty()) {
       _statusText.value = "Missing ELEVENLABS_API_KEY"
       Log.w(tag, "missing ELEVENLABS_API_KEY")
@@ -465,7 +463,8 @@ class TalkModeManager(
         ElevenLabsRequest(
           text = cleaned,
           modelId = directive?.modelId ?: currentModelId ?: defaultModelId,
-          outputFormat = directive?.outputFormat ?: defaultOutputFormat,
+          outputFormat =
+            TalkModeRuntime.validatedOutputFormat(directive?.outputFormat ?: defaultOutputFormat),
           speed = TalkModeRuntime.resolveSpeed(directive?.speed, directive?.rateWpm),
           stability = TalkModeRuntime.validatedUnit(directive?.stability),
           similarity = TalkModeRuntime.validatedUnit(directive?.similarity),
@@ -564,12 +563,15 @@ class TalkModeManager(
       val root = json.parseToJsonElement(res).asObjectOrNull()
       val config = root?.get("config").asObjectOrNull()
       val talk = config?.get("talk").asObjectOrNull()
+      val sessionCfg = config?.get("session").asObjectOrNull()
+      val mainKey = sessionCfg?.get("mainKey").asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "main"
       val voice = talk?.get("voiceId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val model = talk?.get("modelId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val outputFormat = talk?.get("outputFormat")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val key = talk?.get("apiKey")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val interrupt = talk?.get("interruptOnSpeech")?.asBooleanOrNull()
 
+      mainSessionKey = mainKey
       defaultVoiceId = voice ?: envVoice?.takeIf { it.isNotEmpty() } ?: sagVoice?.takeIf { it.isNotEmpty() }
       if (!voiceOverrideActive) currentVoiceId = defaultVoiceId
       defaultModelId = model
@@ -593,6 +595,8 @@ class TalkModeManager(
       val url = URL("https://api.elevenlabs.io/v1/text-to-speech/$voiceId")
       val conn = url.openConnection() as HttpURLConnection
       conn.requestMethod = "POST"
+      conn.connectTimeout = 30_000
+      conn.readTimeout = 30_000
       conn.setRequestProperty("Content-Type", "application/json")
       conn.setRequestProperty("Accept", "audio/mpeg")
       conn.setRequestProperty("xi-api-key", apiKey)
@@ -688,6 +692,21 @@ class TalkModeManager(
       if (normalized.length != 2) return null
       if (!normalized.all { it in 'a'..'z' }) return null
       return normalized
+    }
+
+    fun validatedOutputFormat(value: String?): String? {
+      val trimmed = value?.trim()?.lowercase() ?: return null
+      if (trimmed.isEmpty()) return null
+      return if (trimmed.startsWith("mp3_")) trimmed else null
+    }
+
+    fun isMessageTimestampAfter(timestamp: Double, sinceSeconds: Double): Boolean {
+      val sinceMs = sinceSeconds * 1000
+      return if (timestamp > 10_000_000_000) {
+        timestamp >= sinceMs - 500
+      } else {
+        timestamp >= sinceSeconds - 0.5
+      }
     }
   }
 

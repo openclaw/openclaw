@@ -70,7 +70,7 @@ class NodeRuntime(context: Context) {
           payloadJson =
             buildJsonObject {
               put("message", JsonPrimitive(command))
-              put("sessionKey", JsonPrimitive("main"))
+              put("sessionKey", JsonPrimitive(mainSessionKey.value))
               put("thinking", JsonPrimitive(chatThinkingLevel.value))
               put("deliver", JsonPrimitive(false))
             }.toString(),
@@ -103,6 +103,9 @@ class NodeRuntime(context: Context) {
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+  private val _mainSessionKey = MutableStateFlow("main")
+  val mainSessionKey: StateFlow<String> = _mainSessionKey.asStateFlow()
 
   private val cameraHudSeq = AtomicLong(0)
   private val _cameraHud = MutableStateFlow<CameraHudState?>(null)
@@ -161,6 +164,7 @@ class NodeRuntime(context: Context) {
     _remoteAddress.value = null
     _isConnected.value = false
     _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+    _mainSessionKey.value = "main"
     chat.onDisconnected(message)
     showLocalCanvasOnDisconnect()
   }
@@ -632,8 +636,12 @@ class NodeRuntime(context: Context) {
       val config = root?.get("config").asObjectOrNull()
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      val parsed = parseHexColorArgb(raw) ?: return
-      _seamColorArgb.value = parsed
+      val sessionCfg = config?.get("session").asObjectOrNull()
+      val rawMainKey = sessionCfg?.get("mainKey").asStringOrNull()?.trim()
+      _mainSessionKey.value = rawMainKey?.takeIf { it.isNotEmpty() } ?: "main"
+
+      val parsed = parseHexColorArgb(raw)
+      _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
     } catch (_: Throwable) {
       // ignore
     }

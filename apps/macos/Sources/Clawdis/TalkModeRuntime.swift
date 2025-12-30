@@ -378,7 +378,7 @@ actor TalkModeRuntime {
                 guard message.role == "assistant" else { return false }
                 guard let since else { return true }
                 guard let timestamp = message.timestamp else { return false }
-                return timestamp >= since - 0.5
+                return Self.isMessageTimestampAfter(timestamp, sinceSeconds: since)
             }
             guard let assistant else { return nil }
             let text = assistant.content.compactMap { $0.text }.joined(separator: "\n")
@@ -738,6 +738,14 @@ actor TalkModeRuntime {
             return nil
         }
         return trimmed
+    }
+
+    private static func isMessageTimestampAfter(_ timestamp: Double, sinceSeconds: Double) -> Bool {
+        let sinceMs = sinceSeconds * 1000
+        if timestamp > 10_000_000_000 {
+            return timestamp >= sinceMs - 500
+        }
+        return timestamp >= sinceSeconds - 0.5
     }
 }
 

@@ -150,9 +150,36 @@ public final class ClawdisChatViewModel {
     }
 
     private static func decodeMessages(_ raw: [AnyCodable]) -> [ClawdisChatMessage] {
-        raw.compactMap { item in
+        let decoded = raw.compactMap { item in
             (try? ChatPayloadDecoding.decode(item, as: ClawdisChatMessage.self))
         }
+        return Self.dedupeMessages(decoded)
+    }
+
+    private static func dedupeMessages(_ messages: [ClawdisChatMessage]) -> [ClawdisChatMessage] {
+        var result: [ClawdisChatMessage] = []
+        result.reserveCapacity(messages.count)
+        var seen = Set<String>()
+
+        for message in messages {
+            guard let key = Self.dedupeKey(for: message) else {
+                result.append(message)
+                continue
+            }
+            if seen.contains(key) { continue }
+            seen.insert(key)
+            result.append(message)
+        }
+
+        return result
+    }
+
+    private static func dedupeKey(for message: ClawdisChatMessage) -> String? {
+        guard let timestamp = message.timestamp else { return nil }
+        let text = message.content.compactMap { $0.text }.joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        return "\(message.role)|\(timestamp)|\(text)"
     }
 
     private func performSend() async {

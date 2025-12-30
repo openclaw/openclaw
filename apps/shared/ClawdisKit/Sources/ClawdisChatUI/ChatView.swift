@@ -13,6 +13,7 @@ public struct ClawdisChatView: View {
     @State private var hasPerformedInitialScroll = false
     private let showsSessionSwitcher: Bool
     private let style: Style
+    private let userAccent: Color?
 
     private enum Layout {
         #if os(macOS)
@@ -37,11 +38,13 @@ public struct ClawdisChatView: View {
     public init(
         viewModel: ClawdisChatViewModel,
         showsSessionSwitcher: Bool = false,
-        style: Style = .standard)
+        style: Style = .standard,
+        userAccent: Color? = nil)
     {
         self._viewModel = State(initialValue: viewModel)
         self.showsSessionSwitcher = showsSessionSwitcher
         self.style = style
+        self.userAccent = userAccent
     }
 
     public var body: some View {
@@ -74,7 +77,7 @@ public struct ClawdisChatView: View {
                 ScrollView {
                     LazyVStack(spacing: Layout.messageSpacing) {
                         ForEach(self.visibleMessages) { msg in
-                            ChatMessageBubble(message: msg, style: self.style)
+                            ChatMessageBubble(message: msg, style: self.style, userAccent: self.userAccent)
                                 .frame(
                                     maxWidth: .infinity,
                                     alignment: msg.role.lowercased() == "user" ? .trailing : .leading)

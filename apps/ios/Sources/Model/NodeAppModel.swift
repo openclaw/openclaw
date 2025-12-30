@@ -23,6 +23,7 @@ final class NodeAppModel {
     var bridgeRemoteAddress: String?
     var connectedBridgeID: String?
     var seamColorHex: String?
+    var mainSessionKey: String = "main"
 
     private let bridge = BridgeSession()
     private var bridgeTask: Task<Void, Never>?
@@ -42,7 +43,7 @@ final class NodeAppModel {
     init() {
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
-            let sessionKey = "main"
+            let sessionKey = self.mainSessionKey
             do {
                 try await self.sendVoiceTranscript(text: cmd, sessionKey: sessionKey)
             } catch {
@@ -267,6 +268,7 @@ final class NodeAppModel {
                 self.bridgeRemoteAddress = nil
                 self.connectedBridgeID = nil
                 self.seamColorHex = nil
+                self.mainSessionKey = "main"
                 self.showLocalCanvasOnDisconnect()
             }
         }
@@ -283,6 +285,7 @@ final class NodeAppModel {
         self.bridgeRemoteAddress = nil
         self.connectedBridgeID = nil
         self.seamColorHex = nil
+        self.mainSessionKey = "main"
         self.showLocalCanvasOnDisconnect()
     }
 
@@ -310,8 +313,12 @@ final class NodeAppModel {
             guard let config = json["config"] as? [String: Any] else { return }
             let ui = config["ui"] as? [String: Any]
             let raw = (ui?["seamColor"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let session = config["session"] as? [String: Any]
+            let rawMainKey = (session?["mainKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let mainKey = rawMainKey.isEmpty ? "main" : rawMainKey
             await MainActor.run {
                 self.seamColorHex = raw.isEmpty ? nil : raw
+                self.mainSessionKey = mainKey
             }
         } catch {
             // ignore

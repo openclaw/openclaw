@@ -51,7 +51,10 @@ struct RootCanvas: View {
             case .settings:
                 SettingsTab()
             case .chat:
-                ChatSheet(bridge: self.appModel.bridgeSession)
+                ChatSheet(
+                    bridge: self.appModel.bridgeSession,
+                    sessionKey: self.appModel.mainSessionKey,
+                    userAccent: self.appModel.seamColor)
             }
         }
         .onAppear { self.updateIdleTimer() }

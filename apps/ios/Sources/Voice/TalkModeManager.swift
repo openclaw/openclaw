@@ -34,6 +34,7 @@ final class TalkModeManager: NSObject {
     private var defaultOutputFormat: String?
     private var apiKey: String?
     private var interruptOnSpeech: Bool = true
+    private var mainSessionKey: String = "main"
 
     private var bridge: BridgeSession?
     private let silenceWindow: TimeInterval = 0.7
@@ -84,7 +85,7 @@ final class TalkModeManager: NSObject {
             self.isListening = true
             self.statusText = "Listening"
             self.startSilenceMonitor()
-            await self.subscribeChatIfNeeded(sessionKey: "main")
+            await self.subscribeChatIfNeeded(sessionKey: self.mainSessionKey)
             self.logger.info("listening")
         } catch {
             self.isListening = false
@@ -227,25 +228,22 @@ final class TalkModeManager: NSObject {
 
         do {
             let startedAt = Date().timeIntervalSince1970
-            await self.subscribeChatIfNeeded(sessionKey: "main")
-            self.logger.info("chat.send start chars=\(prompt.count, privacy: .public)")
+            let sessionKey = self.mainSessionKey
+            await self.subscribeChatIfNeeded(sessionKey: sessionKey)
+            self.logger.info("chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             let runId = try await self.sendChat(prompt, bridge: bridge)
             self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
             let completion = await self.waitForChatCompletion(runId: runId, bridge: bridge, timeoutSeconds: 120)
-            guard completion == .final else {
-                switch completion {
-                case .timeout:
-                    self.statusText = "No reply"
-                    self.logger.warning("chat completion timeout runId=\(runId, privacy: .public)")
-                case .aborted:
-                    self.statusText = "Aborted"
-                    self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
-                case .error:
-                    self.statusText = "Chat error"
-                    self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
-                case .final:
-                    break
-                }
+            if completion == .timeout {
+                self.logger.warning("chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
+            } else if completion == .aborted {
+                self.statusText = "Aborted"
+                self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
+                await self.start()
+                return
+            } else if completion == .error {
+                self.statusText = "Chat error"
+                self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
                 await self.start()
                 return
             }
@@ -253,7 +251,7 @@ final class TalkModeManager: NSObject {
             guard let assistantText = try await self.waitForAssistantText(
                 bridge: bridge,
                 since: startedAt,
-                timeoutSeconds: 12)
+                timeoutSeconds: completion == .final ? 12 : 25)
             else {
                 self.statusText = "No reply"
                 self.logger.warning("assistant text timeout runId=\(runId, privacy: .public)")
@@ -338,7 +336,7 @@ final class TalkModeManager: NSObject {
     private func sendChat(_ message: String, bridge: BridgeSession) async throws -> String {
         struct SendResponse: Decodable { let runId: String }
         let payload: [String: Any] = [
-            "sessionKey": "main",
+            "sessionKey": self.mainSessionKey,
             "message": message,
             "thinking": "low",
             "timeoutMs": 30000,
@@ -404,13 +402,15 @@ final class TalkModeManager: NSObject {
     private func fetchLatestAssistantText(bridge: BridgeSession, since: Double? = nil) async throws -> String? {
         let res = try await bridge.request(
             method: "chat.history",
-            paramsJSON: "{\"sessionKey\":\"main\"}",
+            paramsJSON: "{\"sessionKey\":\"\(self.mainSessionKey)\"}",
             timeoutSeconds: 15)
         guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return nil }
         guard let messages = json["messages"] as? [[String: Any]] else { return nil }
         for msg in messages.reversed() {
             guard (msg["role"] as? String) == "assistant" else { continue }
-            if let since, let timestamp = msg["timestamp"] as? Double, timestamp < since - 0.5 {
+            if let since, let timestamp = msg["timestamp"] as? Double,
+               TalkModeRuntime.isMessageTimestampAfter(timestamp, sinceSeconds: since) == false
+            {
                 continue
             }
             guard let content = msg["content"] as? [[String: Any]] else { continue }
@@ -560,6 +560,9 @@ final class TalkModeManager: NSObject {
             guard let json = try JSONSerialization.jsonObject(with: res) as? [String: Any] else { return }
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]
+            let session = config["session"] as? [String: Any]
+            let rawMainKey = (session?["mainKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            self.mainSessionKey = rawMainKey.isEmpty ? "main" : rawMainKey
             self.defaultVoiceId = (talk?["voiceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if !self.voiceOverrideActive {
                 self.currentVoiceId = self.defaultVoiceId
@@ -720,5 +723,13 @@ private enum TalkModeRuntime {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmed.isEmpty else { return nil }
         return trimmed.hasPrefix("mp3_") ? trimmed : nil
+    }
+
+    static func isMessageTimestampAfter(_ timestamp: Double, sinceSeconds: Double) -> Bool {
+        let sinceMs = sinceSeconds * 1000
+        if timestamp > 10_000_000_000 {
+            return timestamp >= sinceMs - 500
+        }
+        return timestamp >= sinceSeconds - 0.5
     }
 }
