@@ -47,6 +47,7 @@
 - iOS/Android nodes: status pill now surfaces camera activity instead of overlay toasts.
 - iOS/Android/macOS nodes: camera snaps recompress to keep base64 payloads under 5 MB.
 - iOS/Android nodes: status pill now surfaces pairing, screen recording, voice wake, and foreground-required states.
+- iOS/Android nodes: avoid duplicating “Gateway reconnecting…” when the bridge is already connecting.
 - iOS/Android nodes: Talk Mode now lives on a side bubble (with an iOS toggle to hide it), and Android settings no longer show the Talk Mode switch.
 - macOS menu: top status line now shows pending node pairing approvals (incl. repairs).
 - CLI: avoid spurious gateway close errors after successful request/response cycles.
