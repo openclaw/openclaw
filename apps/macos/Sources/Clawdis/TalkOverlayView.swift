@@ -4,6 +4,7 @@ struct TalkOverlayView: View {
     var controller: TalkOverlayController
     @State private var appState = AppStateStore.shared
     @State private var hoveringWindow = false
+    private static let orbCornerNudge: CGFloat = 12
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
@@ -12,8 +13,8 @@ struct TalkOverlayView: View {
                 level: self.controller.model.level,
                 accent: self.seamColor)
                 .frame(width: 96, height: 96)
-                .padding(.top, 6 + TalkOverlayController.windowInset)
-                .padding(.trailing, 6 + TalkOverlayController.windowInset)
+                .padding(.top, 6 + TalkOverlayController.windowInset - Self.orbCornerNudge)
+                .padding(.trailing, 6 + TalkOverlayController.windowInset - Self.orbCornerNudge)
                 .contentShape(Circle())
                 .onTapGesture {
                     TalkModeController.shared.stopSpeaking(reason: .userTap)
