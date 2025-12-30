@@ -14,6 +14,24 @@ import Testing
 
         #expect(true)
     }
+
+    @MainActor
+    @Test func playDoesNotHangWhenPlayIsCalledTwice() async throws {
+        let wav = makeWav16Mono(sampleRate: 8000, samples: 800)
+        defer { _ = TalkAudioPlayer.shared.stop() }
+
+        let first = Task { @MainActor in
+            await TalkAudioPlayer.shared.play(data: wav)
+        }
+
+        await Task.yield()
+        _ = await TalkAudioPlayer.shared.play(data: wav)
+
+        _ = try await withTimeout(seconds: 2.0) {
+            await first.value
+        }
+        #expect(true)
+    }
 }
 
 private struct TimeoutError: Error {}

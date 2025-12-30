@@ -2,8 +2,8 @@ import AVFAudio
 import ClawdisKit
 import Foundation
 import Observation
-import Speech
 import OSLog
+import Speech
 
 @MainActor
 @Observable
@@ -29,6 +29,8 @@ final class TalkModeManager: NSObject {
     private var currentVoiceId: String?
     private var defaultModelId: String?
     private var currentModelId: String?
+    private var voiceOverrideActive = false
+    private var modelOverrideActive = false
     private var defaultOutputFormat: String?
     private var apiKey: String?
     private var interruptOnSpeech: Bool = true
@@ -101,6 +103,12 @@ final class TalkModeManager: NSObject {
         self.silenceTask = nil
         self.stopRecognition()
         self.stopSpeaking()
+        self.lastInterruptedAtSeconds = nil
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: [.notifyOthersOnDeactivation])
+        } catch {
+            self.logger.warning("audio session deactivate failed: \(error.localizedDescription, privacy: .public)")
+        }
         Task { await self.unsubscribeAllChats() }
     }
 
@@ -109,6 +117,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func startRecognition() throws {
+        self.stopRecognition()
         self.speechRecognizer = SFSpeechRecognizer()
         guard let recognizer = self.speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
@@ -132,7 +141,10 @@ final class TalkModeManager: NSObject {
         self.recognitionTask = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
             if let error {
-                self.statusText = "Speech error: \(error.localizedDescription)"
+                if !self.isSpeaking {
+                    self.statusText = "Speech error: \(error.localizedDescription)"
+                }
+                self.logger.debug("speech recognition error: \(error.localizedDescription, privacy: .public)")
             }
             guard let result else { return }
             let transcript = result.bestTranscription.formattedString
@@ -189,7 +201,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func checkSilence() async {
-        guard self.isListening else { return }
+        guard self.isListening, !self.isSpeaking else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
         guard let lastHeard else { return }
@@ -219,10 +231,21 @@ final class TalkModeManager: NSObject {
             self.logger.info("chat.send start chars=\(prompt.count, privacy: .public)")
             let runId = try await self.sendChat(prompt, bridge: bridge)
             self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
-            let ok = await self.waitForChatFinal(runId: runId, bridge: bridge)
-            if !ok {
-                self.statusText = "No reply"
-                self.logger.warning("chat final timeout runId=\(runId, privacy: .public)")
+            let completion = await self.waitForChatCompletion(runId: runId, bridge: bridge, timeoutSeconds: 120)
+            guard completion == .final else {
+                switch completion {
+                case .timeout:
+                    self.statusText = "No reply"
+                    self.logger.warning("chat completion timeout runId=\(runId, privacy: .public)")
+                case .aborted:
+                    self.statusText = "Aborted"
+                    self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
+                case .error:
+                    self.statusText = "Chat error"
+                    self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
+                case .final:
+                    break
+                }
                 await self.start()
                 return
             }
@@ -259,7 +282,9 @@ final class TalkModeManager: NSObject {
             self.chatSubscribedSessionKeys.insert(key)
             self.logger.info("chat.subscribe ok sessionKey=\(key, privacy: .public)")
         } catch {
-            self.logger.warning("chat.subscribe failed sessionKey=\(key, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
+            self.logger
+                .warning(
+                    "chat.subscribe failed sessionKey=\(key, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -294,6 +319,22 @@ final class TalkModeManager: NSObject {
         return lines.joined(separator: "\n")
     }
 
+    private enum ChatCompletionState: CustomStringConvertible {
+        case final
+        case aborted
+        case error
+        case timeout
+
+        var description: String {
+            switch self {
+            case .final: "final"
+            case .aborted: "aborted"
+            case .error: "error"
+            case .timeout: "timeout"
+            }
+        }
+    }
+
     private func sendChat(_ message: String, bridge: BridgeSession) async throws -> String {
         struct SendResponse: Decodable { let runId: String }
         let payload: [String: Any] = [
@@ -310,20 +351,39 @@ final class TalkModeManager: NSObject {
         return decoded.runId
     }
 
-    private func waitForChatFinal(runId: String, bridge: BridgeSession) async -> Bool {
+    private func waitForChatCompletion(
+        runId: String,
+        bridge: BridgeSession,
+        timeoutSeconds: Int = 120) async -> ChatCompletionState
+    {
         let stream = await bridge.subscribeServerEvents(bufferingNewest: 200)
-        let timeout = Date().addingTimeInterval(120)
-        for await evt in stream {
-            if Date() > timeout { return false }
-            guard evt.event == "chat", let payload = evt.payloadJSON else { continue }
-            guard let data = payload.data(using: .utf8) else { continue }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
-            if (json["runId"] as? String) != runId { continue }
-            if let state = json["state"] as? String, state == "final" {
-                return true
+        return await withTaskGroup(of: ChatCompletionState.self) { group in
+            group.addTask { [runId] in
+                for await evt in stream {
+                    if Task.isCancelled { return .timeout }
+                    guard evt.event == "chat", let payload = evt.payloadJSON else { continue }
+                    guard let data = payload.data(using: .utf8) else { continue }
+                    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { continue }
+                    if (json["runId"] as? String) != runId { continue }
+                    if let state = json["state"] as? String {
+                        switch state {
+                        case "final": return .final
+                        case "aborted": return .aborted
+                        case "error": return .error
+                        default: break
+                        }
+                    }
+                }
+                return .timeout
             }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
+                return .timeout
+            }
+            let result = await group.next() ?? .timeout
+            group.cancelAll()
+            return result
         }
-        return false
     }
 
     private func waitForAssistantText(
@@ -370,11 +430,13 @@ final class TalkModeManager: NSObject {
         if let voice = directive?.voiceId {
             if directive?.once != true {
                 self.currentVoiceId = voice
+                self.voiceOverrideActive = true
             }
         }
         if let model = directive?.modelId {
             if directive?.once != true {
                 self.currentModelId = model
+                self.modelOverrideActive = true
             }
         }
 
@@ -394,16 +456,21 @@ final class TalkModeManager: NSObject {
             return
         }
 
-        self.statusText = "Speaking…"
+        self.statusText = "Generating voice…"
         self.isSpeaking = true
         self.lastSpokenText = cleaned
 
         do {
             let started = Date()
+            let desiredOutputFormat = directive?.outputFormat ?? self.defaultOutputFormat
+            let outputFormat = TalkModeRuntime.validatedOutputFormat(desiredOutputFormat)
+            if outputFormat == nil, let desiredOutputFormat, !desiredOutputFormat.isEmpty {
+                self.logger.warning("talk output_format unsupported for local playback: \(desiredOutputFormat, privacy: .public)")
+            }
             let request = ElevenLabsRequest(
                 text: cleaned,
                 modelId: directive?.modelId ?? self.currentModelId ?? self.defaultModelId,
-                outputFormat: directive?.outputFormat ?? self.defaultOutputFormat,
+                outputFormat: outputFormat,
                 speed: TalkModeRuntime.resolveSpeed(
                     speed: directive?.speed,
                     rateWPM: directive?.rateWPM),
@@ -414,16 +481,43 @@ final class TalkModeManager: NSObject {
                 seed: TalkModeRuntime.validatedSeed(directive?.seed),
                 normalize: TalkModeRuntime.validatedNormalize(directive?.normalize),
                 language: TalkModeRuntime.validatedLanguage(directive?.language))
-            let audio = try await ElevenLabsClient(apiKey: apiKey).synthesize(
-                voiceId: voiceId,
-                request: request)
-            self.logger.info("elevenlabs ok bytes=\(audio.count, privacy: .public) dur=\(Date().timeIntervalSince(started), privacy: .public)s")
+
+            let synthTimeoutSeconds = max(20.0, min(90.0, Double(cleaned.count) * 0.12))
+            let client = ElevenLabsClient(apiKey: apiKey)
+            let audio = try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask {
+                    try await client.synthesize(voiceId: voiceId, request: request)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(synthTimeoutSeconds * 1_000_000_000))
+                    throw NSError(domain: "TalkTTS", code: 408, userInfo: [
+                        NSLocalizedDescriptionKey: "ElevenLabs TTS timed out after \(synthTimeoutSeconds)s",
+                    ])
+                }
+                let data = try await group.next()!
+                group.cancelAll()
+                return data
+            }
+            self.logger
+                .info(
+                    "elevenlabs ok bytes=\(audio.count, privacy: .public) dur=\(Date().timeIntervalSince(started), privacy: .public)s")
+
+            if self.interruptOnSpeech {
+                do {
+                    try self.startRecognition()
+                } catch {
+                    self.logger.warning("startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
+                }
+            }
+
+            self.statusText = "Speaking…"
             try await self.playAudio(data: audio)
         } catch {
             self.statusText = "Speak failed: \(error.localizedDescription)"
             self.logger.error("speak failed: \(error.localizedDescription, privacy: .public)")
         }
 
+        self.stopRecognition()
         self.isSpeaking = false
     }
 
@@ -440,9 +534,11 @@ final class TalkModeManager: NSObject {
         self.logger.info("play done")
     }
 
-    private func stopSpeaking() {
+    private func stopSpeaking(storeInterruption: Bool = true) {
         guard self.isSpeaking else { return }
-        self.lastInterruptedAtSeconds = self.player?.currentTime
+        if storeInterruption {
+            self.lastInterruptedAtSeconds = self.player?.currentTime
+        }
         self.player?.stop()
         self.player = nil
         self.isSpeaking = false
@@ -465,9 +561,13 @@ final class TalkModeManager: NSObject {
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]
             self.defaultVoiceId = (talk?["voiceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.currentVoiceId = self.defaultVoiceId
+            if !self.voiceOverrideActive {
+                self.currentVoiceId = self.defaultVoiceId
+            }
             self.defaultModelId = (talk?["modelId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.currentModelId = self.defaultModelId
+            if !self.modelOverrideActive {
+                self.currentModelId = self.defaultModelId
+            }
             self.defaultOutputFormat = (talk?["outputFormat"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             self.apiKey = (talk?["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -561,6 +661,7 @@ private struct ElevenLabsClient {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.httpBody = body
+        req.timeoutInterval = 45
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
         req.setValue(self.apiKey, forHTTPHeaderField: "xi-api-key")
@@ -613,5 +714,11 @@ private enum TalkModeRuntime {
         let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard normalized.count == 2, normalized.allSatisfy({ $0 >= "a" && $0 <= "z" }) else { return nil }
         return normalized
+    }
+
+    static func validatedOutputFormat(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        return trimmed.hasPrefix("mp3_") ? trimmed : nil
     }
 }

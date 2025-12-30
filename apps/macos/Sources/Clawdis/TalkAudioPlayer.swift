@@ -106,8 +106,13 @@ final class TalkAudioPlayer: NSObject, @preconcurrency AVAudioPlayerDelegate {
     }
 
     private func stopInternal() {
-        self.playback?.cancelWatchdog()
-        self.playback = nil
+        if let playback = self.playback {
+            let interruptedAt = self.player?.currentTime
+            self.finish(
+                playback: playback,
+                result: TalkPlaybackResult(finished: false, interruptedAt: interruptedAt))
+            return
+        }
         self.player?.stop()
         self.player = nil
     }

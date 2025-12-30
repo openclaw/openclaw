@@ -38,8 +38,7 @@ struct TalkOrbOverlay: View {
                     .frame(width: 136, height: 136)
                     .overlay(
                         Circle()
-                            .stroke(seam.opacity(0.35), lineWidth: 1)
-                    )
+                            .stroke(seam.opacity(0.35), lineWidth: 1))
                     .shadow(color: seam.opacity(0.32), radius: 26, x: 0, y: 0)
                     .shadow(color: Color.black.opacity(0.50), radius: 22, x: 0, y: 10)
             }
@@ -58,9 +57,7 @@ struct TalkOrbOverlay: View {
                         Capsule()
                             .fill(Color.black.opacity(0.40))
                             .overlay(
-                                Capsule().stroke(seam.opacity(0.22), lineWidth: 1)
-                            )
-                    )
+                                Capsule().stroke(seam.opacity(0.22), lineWidth: 1)))
             }
         }
         .padding(28)
@@ -71,4 +68,3 @@ struct TalkOrbOverlay: View {
         .accessibilityLabel("Talk Mode \(status)")
     }
 }
-

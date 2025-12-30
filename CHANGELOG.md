@@ -13,8 +13,13 @@
 - macOS Talk Mode: orb overlay refresh, ElevenLabs request logging, API key status in settings, and auto-select first voice when none is configured.
 - macOS Talk Mode: add hard timeout around ElevenLabs TTS synthesis to avoid getting stuck “speaking” forever on hung requests.
 - macOS Talk Mode: avoid stuck playback when the audio player never starts (fail-fast + watchdog).
+- macOS Talk Mode: fix audio stop ordering so disabling Talk Mode always stops in-flight playback.
+- macOS Talk Mode: throttle audio-level updates (avoid per-buffer task creation) to reduce CPU/task churn.
 - macOS Talk Mode: increase overlay window size so wave rings don’t clip; close button is hover-only and closer to the orb.
 - Talk Mode: wait for chat history to surface the assistant reply before starting TTS (macOS/iOS/Android).
+- iOS Talk Mode: fix chat completion wait to time out even if no events arrive (prevents “Thinking…” hangs).
+- iOS Talk Mode: keep recognition running during playback to support interrupt-on-speech.
+- iOS Talk Mode: preserve directive voice/model overrides across config reloads and add ElevenLabs request timeouts.
 - iOS/Android Talk Mode: explicitly `chat.subscribe` when Talk Mode is active, so completion events arrive even if the Chat UI isn’t open.
 - Chat UI: refresh history when another client finishes a run in the same session, so Talk Mode + Voice Wake transcripts appear consistently.
 - Gateway: `voice.transcript` now also maps agent bus output to `chat` events, ensuring chat UIs refresh for voice-triggered runs.
