@@ -38,6 +38,7 @@
 - iOS/Android nodes: enable scrolling for loaded web pages in the Canvas WebView (default scaffold stays touch-first).
 - macOS menu: device list now uses `node.list` (devices only; no agent/tool presence entries).
 - macOS menu: device list now shows connected nodes only.
+- macOS menu: device rows now pack platform/version on the first line, and command lists wrap in submenus.
 - iOS node: fix ReplayKit screen recording crash caused by queue isolation assertions during capture.
 - iOS Talk Mode: avoid audio tap queue assertions when starting recognition.
 - iOS/Android nodes: bridge auto-connect refreshes stale tokens and settings now show richer bridge/device details.
