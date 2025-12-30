@@ -6,12 +6,14 @@ struct TalkOverlayView: View {
     @State private var hoveringWindow = false
 
     var body: some View {
-        ZStack {
+        ZStack(alignment: .topTrailing) {
             TalkOrbView(
                 phase: self.controller.model.phase,
                 level: self.controller.model.level,
                 accent: self.seamColor)
                 .frame(width: 96, height: 96)
+                .padding(.top, 6)
+                .padding(.trailing, 6)
                 .contentShape(Circle())
                 .onTapGesture {
                     TalkModeController.shared.stopSpeaking(reason: .userTap)

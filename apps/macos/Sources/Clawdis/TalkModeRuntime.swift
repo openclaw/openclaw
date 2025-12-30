@@ -245,6 +245,7 @@ actor TalkModeRuntime {
         let prompt = self.buildPrompt(transcript: transcript)
         let runId = UUID().uuidString
         let startedAt = Date().timeIntervalSince1970
+        self.logger.info("talk send start runId=\(runId, privacy: .public) chars=\(prompt.count, privacy: .public)")
 
         do {
             let response = try await GatewayConnection.shared.chatSend(
@@ -253,9 +254,11 @@ actor TalkModeRuntime {
                 thinking: "low",
                 idempotencyKey: runId,
                 attachments: [])
+            self.logger.info("talk chat.send ok runId=\(response.runId, privacy: .public)")
             let completion = await self.waitForChatCompletion(
                 runId: response.runId,
                 timeoutSeconds: 120)
+            self.logger.info("talk chat completion runId=\(response.runId, privacy: .public) state=\(String(describing: completion), privacy: .public)")
             guard completion == .final else {
                 await self.startListening()
                 await self.startRecognition()
@@ -267,11 +270,13 @@ actor TalkModeRuntime {
                 since: startedAt,
                 timeoutSeconds: 12)
             else {
+                self.logger.warning("talk assistant text missing after completion")
                 await self.startListening()
                 await self.startRecognition()
                 return
             }
 
+            self.logger.info("talk assistant text len=\(assistantText.count, privacy: .public)")
             await self.playAssistant(text: assistantText)
             await self.startListening()
             await self.startRecognition()
@@ -301,11 +306,20 @@ actor TalkModeRuntime {
         return lines.joined(separator: "\n")
     }
 
-    private enum ChatCompletionState {
+    private enum ChatCompletionState: CustomStringConvertible {
         case final
         case aborted
         case error
         case timeout
+
+        var description: String {
+            switch self {
+            case .final: return "final"
+            case .aborted: return "aborted"
+            case .error: return "error"
+            case .timeout: return "timeout"
+            }
+        }
     }
 
     private func waitForChatCompletion(runId: String, timeoutSeconds: Int) async -> ChatCompletionState {
@@ -421,6 +435,7 @@ actor TalkModeRuntime {
             self.logger.error("talk missing voiceId; set talk.voiceId or ELEVENLABS_VOICE_ID")
             return
         }
+        self.ttsLogger.info("talk TTS request voiceId=\(voiceId, privacy: .public) chars=\(cleaned.count, privacy: .public)")
 
         await self.startRecognition()
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
@@ -445,11 +460,28 @@ actor TalkModeRuntime {
             normalize: Self.validatedNormalize(directive?.normalize, logger: self.logger),
             language: Self.validatedLanguage(directive?.language, logger: self.logger))
 
+        let synthTimeoutSeconds = max(20.0, min(90.0, Double(cleaned.count) * 0.12))
+        self.ttsLogger.info("talk TTS synth timeout=\(synthTimeoutSeconds, privacy: .public)s")
+
         do {
-            let audio = try await ElevenLabsClient(apiKey: apiKey, logger: self.ttsLogger).synthesize(
-                voiceId: voiceId,
-                request: request)
+            let client = ElevenLabsClient(apiKey: apiKey, logger: self.ttsLogger)
+            let audio = try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask {
+                    try await client.synthesize(voiceId: voiceId, request: request)
+                }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(synthTimeoutSeconds * 1_000_000_000))
+                    throw NSError(domain: "TalkTTS", code: 408, userInfo: [
+                        NSLocalizedDescriptionKey: "ElevenLabs TTS timed out after \(synthTimeoutSeconds)s",
+                    ])
+                }
+                let data = try await group.next()!
+                group.cancelAll()
+                return data
+            }
+            self.ttsLogger.info("talk TTS response bytes=\(audio.count, privacy: .public)")
             let result = await TalkAudioPlayer.shared.play(data: audio)
+            self.ttsLogger.info("talk audio result finished=\(result.finished, privacy: .public) interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
             if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
                 if self.interruptOnSpeech {
                     self.lastInterruptedAtSeconds = interruptedAt
@@ -515,6 +547,10 @@ actor TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.apiKey = cfg.apiKey
+        let hasApiKey = (cfg.apiKey?.isEmpty == false)
+        let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
+        let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        self.logger.info("talk config voiceId=\(voiceLabel, privacy: .public) modelId=\(modelLabel, privacy: .public) apiKey=\(hasApiKey, privacy: .public) interrupt=\(cfg.interruptOnSpeech, privacy: .public)")
     }
 
     private struct TalkRuntimeConfig {
@@ -702,6 +738,8 @@ private struct ElevenLabsClient {
     let apiKey: String
     let logger: Logger
     let baseUrl: URL = URL(string: "https://api.elevenlabs.io")!
+    let ttsTimeoutSeconds: TimeInterval = 45
+    let listVoicesTimeoutSeconds: TimeInterval = 15
 
     func synthesize(voiceId: String, request: ElevenLabsRequest) async throws -> Data {
         var url = self.baseUrl
@@ -746,6 +784,7 @@ private struct ElevenLabsClient {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.httpBody = body
+        req.timeoutInterval = self.ttsTimeoutSeconds
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("audio/mpeg", forHTTPHeaderField: "Accept")
         req.setValue(self.apiKey, forHTTPHeaderField: "xi-api-key")
@@ -772,6 +811,7 @@ private struct ElevenLabsClient {
         self.logger.info("elevenlabs voices list request")
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
+        req.timeoutInterval = self.listVoicesTimeoutSeconds
         req.setValue(self.apiKey, forHTTPHeaderField: "xi-api-key")
 
         let (data, response) = try await URLSession.shared.data(for: req)
