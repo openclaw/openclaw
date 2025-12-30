@@ -4,21 +4,58 @@ struct TalkOverlayView: View {
     var controller: TalkOverlayController
     @State private var appState = AppStateStore.shared
     @State private var hoveringWindow = false
+    @State private var dragStartOrigin: CGPoint?
+    @State private var didDrag: Bool = false
     private static let orbCornerNudge: CGFloat = 12
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
+            let isPaused = self.controller.model.isPaused
             TalkOrbView(
                 phase: self.controller.model.phase,
                 level: self.controller.model.level,
-                accent: self.seamColor)
+                accent: self.seamColor,
+                isPaused: isPaused)
                 .frame(width: 96, height: 96)
                 .padding(.top, 6 + TalkOverlayController.windowInset - Self.orbCornerNudge)
                 .padding(.trailing, 6 + TalkOverlayController.windowInset - Self.orbCornerNudge)
                 .contentShape(Circle())
-                .onTapGesture {
-                    TalkModeController.shared.stopSpeaking(reason: .userTap)
-                }
+                .opacity(isPaused ? 0.55 : 1)
+                .highPriorityGesture(
+                    TapGesture(count: 2).onEnded {
+                        TalkModeController.shared.stopSpeaking(reason: .userTap)
+                    })
+                .highPriorityGesture(
+                    TapGesture().onEnded {
+                        if self.didDrag { return }
+                        TalkModeController.shared.togglePaused()
+                    })
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 1, coordinateSpace: .global)
+                        .onChanged { value in
+                            if self.dragStartOrigin == nil {
+                                self.dragStartOrigin = self.controller.currentWindowOrigin()
+                                self.didDrag = false
+                                TalkModeController.shared.setPaused(true)
+                            }
+
+                            if abs(value.translation.width) + abs(value.translation.height) > 2 {
+                                self.didDrag = true
+                            }
+
+                            guard let start = self.dragStartOrigin else { return }
+                            let origin = CGPoint(
+                                x: start.x + value.translation.width,
+                                y: start.y - value.translation.height)
+                            self.controller.setWindowOrigin(origin)
+                        }
+                        .onEnded { _ in
+                            self.dragStartOrigin = nil
+                            Task { @MainActor in
+                                try? await Task.sleep(nanoseconds: 80_000_000)
+                                self.didDrag = false
+                            }
+                        })
                 .overlay(alignment: .topLeading) {
                     Button {
                         TalkModeController.shared.exitTalkMode()
@@ -65,24 +102,32 @@ private struct TalkOrbView: View {
     let phase: TalkModePhase
     let level: Double
     let accent: Color
+    let isPaused: Bool
 
     var body: some View {
-        TimelineView(.animation) { context in
-            let t = context.date.timeIntervalSinceReferenceDate
-            let listenScale = phase == .listening ? (1 + CGFloat(self.level) * 0.12) : 1
-            let pulse = phase == .speaking ? (1 + 0.06 * sin(t * 6)) : 1
+        if self.isPaused {
+            Circle()
+                .fill(self.orbGradient)
+                .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 1))
+                .shadow(color: Color.black.opacity(0.18), radius: 10, x: 0, y: 5)
+        } else {
+            TimelineView(.animation) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let listenScale = phase == .listening ? (1 + CGFloat(self.level) * 0.12) : 1
+                let pulse = phase == .speaking ? (1 + 0.06 * sin(t * 6)) : 1
 
-            ZStack {
-                Circle()
-                    .fill(self.orbGradient)
-                    .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 1))
-                    .shadow(color: Color.black.opacity(0.22), radius: 10, x: 0, y: 5)
-                    .scaleEffect(pulse * listenScale)
+                ZStack {
+                    Circle()
+                        .fill(self.orbGradient)
+                        .overlay(Circle().stroke(Color.white.opacity(0.45), lineWidth: 1))
+                        .shadow(color: Color.black.opacity(0.22), radius: 10, x: 0, y: 5)
+                        .scaleEffect(pulse * listenScale)
 
-                TalkWaveRings(phase: phase, level: level, time: t, accent: self.accent)
+                    TalkWaveRings(phase: phase, level: level, time: t, accent: self.accent)
 
-                if phase == .thinking {
-                    TalkOrbitArcs(time: t)
+                    if phase == .thinking {
+                        TalkOrbitArcs(time: t)
+                    }
                 }
             }
         }

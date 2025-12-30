@@ -15,6 +15,7 @@ final class TalkOverlayController {
     struct Model {
         var isVisible: Bool = false
         var phase: TalkModePhase = .idle
+        var isPaused: Bool = false
         var level: Double = 0
     }
 
@@ -73,9 +74,24 @@ final class TalkOverlayController {
         self.model.phase = phase
     }
 
+    func updatePaused(_ paused: Bool) {
+        guard self.model.isPaused != paused else { return }
+        self.logger.info("talk overlay paused=\(paused)")
+        self.model.isPaused = paused
+    }
+
     func updateLevel(_ level: Double) {
         guard self.model.isVisible else { return }
         self.model.level = max(0, min(1, level))
+    }
+
+    func currentWindowOrigin() -> CGPoint? {
+        self.window?.frame.origin
+    }
+
+    func setWindowOrigin(_ origin: CGPoint) {
+        guard let window else { return }
+        window.setFrameOrigin(origin)
     }
 
     // MARK: - Private
