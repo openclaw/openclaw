@@ -243,6 +243,10 @@ public final class ClawdisChatViewModel {
                 content: userContent,
                 timestamp: Date().timeIntervalSince1970 * 1000))
 
+        // Clear input immediately for responsive UX (before network await)
+        self.input = ""
+        self.attachments = []
+
         do {
             let response = try await self.transport.sendMessage(
                 sessionKey: self.sessionKey,
@@ -261,8 +265,6 @@ public final class ClawdisChatViewModel {
             chatUILogger.error("chat.send failed \(error.localizedDescription, privacy: .public)")
         }
 
-        self.input = ""
-        self.attachments = []
         self.isSending = false
     }
 
