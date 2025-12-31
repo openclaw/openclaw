@@ -5,6 +5,8 @@ import UserNotifications
 
 @MainActor
 struct NotificationManager {
+    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "notifications")
+
     private static let hasTimeSensitiveEntitlement: Bool = {
         guard let task = SecTaskCreateFromSelf(nil) else { return false }
         let key = "com.apple.developer.usernotifications.time-sensitive" as CFString
@@ -17,8 +19,12 @@ struct NotificationManager {
         let status = await center.notificationSettings()
         if status.authorizationStatus == .notDetermined {
             let granted = try? await center.requestAuthorization(options: [.alert, .sound, .badge])
-            if granted != true { return false }
+            if granted != true {
+                self.logger.warning("notification permission denied (request)")
+                return false
+            }
         } else if status.authorizationStatus != .authorized {
+            self.logger.warning("notification permission denied status=\(status.authorizationStatus.rawValue)")
             return false
         }
 
@@ -37,15 +43,22 @@ struct NotificationManager {
             case .active:
                 content.interruptionLevel = .active
             case .timeSensitive:
-                content.interruptionLevel = Self.hasTimeSensitiveEntitlement ? .timeSensitive : .active
+                if Self.hasTimeSensitiveEntitlement {
+                    content.interruptionLevel = .timeSensitive
+                } else {
+                    self.logger.debug("time-sensitive notification requested without entitlement; falling back to active")
+                    content.interruptionLevel = .active
+                }
             }
         }
 
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         do {
             try await center.add(req)
+            self.logger.debug("notification queued")
             return true
         } catch {
+            self.logger.error("notification send failed: \(error.localizedDescription)")
             return false
         }
     }

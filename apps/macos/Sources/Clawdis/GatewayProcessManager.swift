@@ -42,6 +42,7 @@ final class GatewayProcessManager {
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
+    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.process")
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30
@@ -53,8 +54,10 @@ final class GatewayProcessManager {
             self.stop()
             self.status = .stopped
             self.appendLog("[gateway] remote mode active; skipping local gateway\n")
+            self.logger.info("gateway process skipped: remote mode active")
             return
         }
+        self.logger.debug("gateway active requested active=\(active)")
         self.desiredActive = active
         self.refreshEnvironmentStatus()
         if active {
@@ -86,6 +89,7 @@ final class GatewayProcessManager {
             return
         }
         self.status = .starting
+        self.logger.debug("gateway start requested")
 
         // First try to latch onto an already-running gateway to avoid spawning a duplicate.
         Task { [weak self] in
@@ -98,6 +102,7 @@ final class GatewayProcessManager {
                 await MainActor.run {
                     self.status = .failed("Attach-only enabled; no gateway to attach")
                     self.appendLog("[gateway] attach-only enabled; not spawning local gateway\n")
+                    self.logger.warning("gateway attach-only enabled; not spawning")
                 }
                 return
             }
@@ -110,6 +115,7 @@ final class GatewayProcessManager {
         self.existingGatewayDetails = nil
         self.lastFailureReason = nil
         self.status = .stopped
+        self.logger.info("gateway stop requested")
         let bundlePath = Bundle.main.bundleURL.path
         Task {
             _ = await GatewayLaunchAgentManager.set(
@@ -182,6 +188,7 @@ final class GatewayProcessManager {
                 self.existingGatewayDetails = details
                 self.status = .attachedExisting(details: details)
                 self.appendLog("[gateway] using existing instance: \(details)\n")
+                self.logger.info("gateway using existing instance details=\(details)")
                 self.refreshControlChannelIfNeeded(reason: "attach existing")
                 self.refreshLog()
                 return true
@@ -197,6 +204,7 @@ final class GatewayProcessManager {
                     self.status = .failed(reason)
                     self.lastFailureReason = reason
                     self.appendLog("[gateway] existing listener on port \(port) but attach failed: \(reason)\n")
+                    self.logger.warning("gateway attach failed reason=\(reason)")
                     return true
                 }
 
@@ -268,16 +276,19 @@ final class GatewayProcessManager {
             await MainActor.run {
                 self.status = .failed(resolution.status.message)
             }
+            self.logger.error("gateway command resolve failed: \(resolution.status.message)")
             return
         }
 
         let bundlePath = Bundle.main.bundleURL.path
         let port = GatewayEnvironment.gatewayPort()
         self.appendLog("[gateway] enabling launchd job (\(gatewayLaunchdLabel)) on port \(port)\n")
+        self.logger.info("gateway enabling launchd port=\(port)")
         let err = await GatewayLaunchAgentManager.set(enabled: true, bundlePath: bundlePath, port: port)
         if let err {
             self.status = .failed(err)
             self.lastFailureReason = err
+            self.logger.error("gateway launchd enable failed: \(err)")
             return
         }
 
@@ -290,6 +301,7 @@ final class GatewayProcessManager {
                 let instance = await PortGuardian.shared.describe(port: port)
                 let details = instance.map { "pid \($0.pid)" }
                 self.status = .running(details: details)
+                self.logger.info("gateway started details=\(details ?? "ok")")
                 self.refreshControlChannelIfNeeded(reason: "gateway started")
                 self.refreshLog()
                 return
@@ -300,6 +312,7 @@ final class GatewayProcessManager {
 
         self.status = .failed("Gateway did not start in time")
         self.lastFailureReason = "launchd start timeout"
+        self.logger.warning("gateway start timed out")
     }
 
     private func appendLog(_ chunk: String) {
@@ -317,6 +330,7 @@ final class GatewayProcessManager {
             break
         }
         self.appendLog("[gateway] refreshing control channel (\(reason))\n")
+        self.logger.debug("gateway control channel refresh reason=\(reason)")
         Task { await ControlChannel.shared.configure() }
     }
 
@@ -332,12 +346,14 @@ final class GatewayProcessManager {
             }
         }
         self.appendLog("[gateway] readiness wait timed out\n")
+        self.logger.warning("gateway readiness wait timed out")
         return false
     }
 
     func clearLog() {
         self.log = ""
         try? FileManager.default.removeItem(atPath: LogLocator.launchdGatewayLogPath)
+        self.logger.debug("gateway log cleared")
     }
 
     func setProjectRoot(path: String) {

@@ -4,18 +4,23 @@ import JavaScriptCore
 enum ModelCatalogLoader {
     static let defaultPath: String = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Projects/pi-mono/packages/ai/src/models.generated.ts").path
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "models")
 
     static func load(from path: String) async throws -> [ModelChoice] {
         let expanded = (path as NSString).expandingTildeInPath
+        self.logger.debug("model catalog load start file=\(URL(fileURLWithPath: expanded).lastPathComponent)")
         let source = try String(contentsOfFile: expanded, encoding: .utf8)
         let sanitized = self.sanitize(source: source)
 
         let ctx = JSContext()
         ctx?.exceptionHandler = { _, exception in
-            if let exception { print("JS exception: \(exception)") }
+            if let exception {
+                self.logger.warning("model catalog JS exception: \(exception)")
+            }
         }
         ctx?.evaluateScript(sanitized)
         guard let rawModels = ctx?.objectForKeyedSubscript("MODELS")?.toDictionary() as? [String: Any] else {
+            self.logger.error("model catalog parse failed: MODELS missing")
             throw NSError(
                 domain: "ModelCatalogLoader",
                 code: 1,
@@ -33,12 +38,14 @@ enum ModelCatalogLoader {
             }
         }
 
-        return choices.sorted { lhs, rhs in
+        let sorted = choices.sorted { lhs, rhs in
             if lhs.provider == rhs.provider {
                 return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
             }
             return lhs.provider.localizedCaseInsensitiveCompare(rhs.provider) == .orderedAscending
         }
+        self.logger.debug("model catalog loaded providers=\(rawModels.count) models=\(sorted.count)")
+        return sorted
     }
 
     private static func sanitize(source: String) -> String {

@@ -1,6 +1,7 @@
 import Foundation
 
 enum GatewayLaunchAgentManager {
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.launchd")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
 
     private static var plistURL: URL {
@@ -26,12 +27,16 @@ enum GatewayLaunchAgentManager {
         if enabled {
             let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
             guard FileManager.default.isExecutableFile(atPath: gatewayBin) else {
+                self.logger.error("launchd enable failed: gateway missing at \(gatewayBin)")
                 return "Embedded gateway missing in bundle; rebuild via scripts/package-mac-app.sh"
             }
+            self.logger.info("launchd enable requested port=\(port)")
             self.writePlist(bundlePath: bundlePath, port: port)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
             let bootstrap = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             if bootstrap.status != 0 {
+                let msg = bootstrap.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                self.logger.error("launchd bootstrap failed: \(msg)")
                 return bootstrap.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                     ? "Failed to bootstrap gateway launchd job"
                     : bootstrap.output.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -42,6 +47,7 @@ enum GatewayLaunchAgentManager {
             return nil
         }
 
+        self.logger.info("launchd disable requested")
         _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
         try? FileManager.default.removeItem(at: self.plistURL)
         return nil
@@ -103,7 +109,11 @@ enum GatewayLaunchAgentManager {
         </dict>
         </plist>
         """
-        try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+        do {
+            try plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
+        } catch {
+            self.logger.error("launchd plist write failed: \(error.localizedDescription)")
+        }
     }
 
     private static func preferredGatewayBind() -> String? {

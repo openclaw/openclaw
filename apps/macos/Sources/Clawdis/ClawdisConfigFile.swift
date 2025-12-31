@@ -1,6 +1,8 @@
 import Foundation
 
 enum ClawdisConfigFile {
+    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "config")
+
     static func url() -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".clawdis")
@@ -15,8 +17,18 @@ enum ClawdisConfigFile {
 
     static func loadDict() -> [String: Any] {
         let url = self.url()
-        guard let data = try? Data(contentsOf: url) else { return [:] }
-        return (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
+        do {
+            let data = try Data(contentsOf: url)
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                self.logger.warning("config JSON root invalid")
+                return [:]
+            }
+            return root
+        } catch {
+            self.logger.warning("config read failed: \(error.localizedDescription)")
+            return [:]
+        }
     }
 
     static func saveDict(_ dict: [String: Any]) {
@@ -27,7 +39,9 @@ enum ClawdisConfigFile {
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true)
             try data.write(to: url, options: [.atomic])
-        } catch {}
+        } catch {
+            self.logger.error("config save failed: \(error.localizedDescription)")
+        }
     }
 
     static func loadGatewayDict() -> [String: Any] {
@@ -59,6 +73,7 @@ enum ClawdisConfigFile {
         browser["enabled"] = enabled
         root["browser"] = browser
         self.saveDict(root)
+        self.logger.debug("browser control updated enabled=\(enabled)")
     }
 
     static func agentWorkspace() -> String? {
@@ -78,5 +93,6 @@ enum ClawdisConfigFile {
         }
         root["agent"] = agent
         self.saveDict(root)
+        self.logger.debug("agent workspace updated set=\(!trimmed.isEmpty)")
     }
 }
