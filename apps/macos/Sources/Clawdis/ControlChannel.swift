@@ -1,7 +1,6 @@
 import ClawdisProtocol
 import Foundation
 import Observation
-import OSLog
 import SwiftUI
 
 struct ControlHeartbeatEvent: Codable {

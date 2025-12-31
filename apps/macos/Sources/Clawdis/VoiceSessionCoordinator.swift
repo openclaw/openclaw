@@ -1,7 +1,6 @@
 import AppKit
 import Foundation
 import Observation
-import OSLog
 
 @MainActor
 @Observable

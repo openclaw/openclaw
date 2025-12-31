@@ -1,5 +1,4 @@
 import Observation
-import OSLog
 
 @MainActor
 @Observable

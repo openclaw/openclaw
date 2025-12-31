@@ -7,11 +7,12 @@ read_when:
 # Logging (macOS)
 
 ## Rolling diagnostics file log (Debug pane)
-Clawdis can write a local, rotating diagnostics log to disk (useful when macOS unified logging is impractical during iterative repros).
+Clawdis routes macOS app logs through swift-log (unified logging by default) and can write a local, rotating file log to disk when you need a durable capture.
 
-- Enable: **Debug pane → Diagnostics log → “Write rolling diagnostics log (JSONL)”**
+- Verbosity: **Debug pane → Logs → App logging → Verbosity**
+- Enable: **Debug pane → Logs → App logging → “Write rolling diagnostics log (JSONL)”**
 - Location: `~/Library/Logs/Clawdis/diagnostics.jsonl` (rotates automatically; old files are suffixed with `.1`, `.2`, …)
-- Clear: **Debug pane → Diagnostics log → “Clear”**
+- Clear: **Debug pane → Logs → App logging → “Clear”**
 
 Notes:
 - This is **off by default**. Enable only while actively debugging.

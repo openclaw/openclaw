@@ -15,6 +15,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
         .package(url: "https://github.com/swiftlang/swift-subprocess.git", from: "0.1.0"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.8.0"),
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.8.1"),
         .package(path: "../shared/ClawdisKit"),
         .package(path: "../../Swabble"),
@@ -45,6 +46,7 @@ let package = Package(
                 .product(name: "SwabbleKit", package: "swabble"),
                 .product(name: "MenuBarExtraAccess", package: "MenuBarExtraAccess"),
                 .product(name: "Subprocess", package: "swift-subprocess"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "Sparkle", package: "Sparkle"),
                 .product(name: "PeekabooBridge", package: "PeekabooCore"),
                 .product(name: "PeekabooAutomationKit", package: "PeekabooAutomationKit"),

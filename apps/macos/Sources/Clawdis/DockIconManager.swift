@@ -1,5 +1,4 @@
 import AppKit
-import OSLog
 
 /// Central manager for Dock icon visibility.
 /// Shows the Dock icon while any windows are visible, regardless of user preference.

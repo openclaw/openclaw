@@ -1,6 +1,5 @@
 import AppKit
 import Observation
-import OSLog
 import SwiftUI
 
 /// Lightweight, borderless panel that shows the current voice wake transcript near the menu bar.

@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import OSLog
 import Speech
 import SwabbleKit
 

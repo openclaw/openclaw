@@ -7,6 +7,7 @@
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
 - Agent runtime: accept legacy `Z_AI_API_KEY` for Z.AI provider auth (maps to `ZAI_API_KEY`).
 - Tests: add a Z.AI live test gate for smoke validation when keys are present.
+- macOS Debug: add app log verbosity and rolling file log toggle for swift-log-backed app logs.
 
 ### Fixes
 - Docs/agent tools: clarify that browser `wait` should be avoided by default and used only in exceptional cases.

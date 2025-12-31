@@ -3,7 +3,6 @@ import Darwin
 import Foundation
 import MenuBarExtraAccess
 import Observation
-import OSLog
 import Security
 import SwiftUI
 
@@ -30,6 +29,7 @@ struct ClawdisApp: App {
     }
 
     init() {
+        ClawdisLogging.bootstrapIfNeeded()
         _state = State(initialValue: AppStateStore.shared)
     }
 

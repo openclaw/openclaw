@@ -5,7 +5,6 @@ import ClawdisIPC
 import CoreGraphics
 import Foundation
 import Observation
-import OSLog
 import Speech
 import UserNotifications
 

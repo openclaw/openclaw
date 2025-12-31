@@ -30,6 +30,7 @@ struct DebugSettings: View {
     @State private var pendingKill: DebugActions.PortListener?
     @AppStorage(attachExistingGatewayOnlyKey) private var attachExistingGatewayOnly: Bool = false
     @AppStorage(debugFileLogEnabledKey) private var diagnosticsFileLogEnabled: Bool = false
+    @AppStorage(appLogLevelKey) private var appLogLevelRaw: String = AppLogLevel.default.rawValue
 
     @State private var canvasSessionKey: String = "main"
     @State private var canvasStatus: String?
@@ -232,13 +233,23 @@ struct DebugSettings: View {
                 }
 
                 GridRow {
-                    self.gridLabel("Diagnostics")
-                    VStack(alignment: .leading, spacing: 6) {
+                    self.gridLabel("App logging")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Picker("Verbosity", selection: self.$appLogLevelRaw) {
+                            ForEach(AppLogLevel.allCases) { level in
+                                Text(level.title).tag(level.rawValue)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .labelsHidden()
+                        .help("Controls the macOS app log verbosity.")
+
                         Toggle("Write rolling diagnostics log (JSONL)", isOn: self.$diagnosticsFileLogEnabled)
                             .toggleStyle(.checkbox)
                             .help(
-                                "Writes a rotating, local-only diagnostics log under ~/Library/Logs/Clawdis/. " +
+                                "Writes a rotating, local-only log under ~/Library/Logs/Clawdis/. " +
                                     "Enable only while actively debugging.")
+
                         HStack(spacing: 8) {
                             Button("Open folder") {
                                 NSWorkspace.shared.open(DiagnosticsFileLog.logDirectoryURL())

@@ -1,5 +1,4 @@
 import AppKit
-import OSLog
 
 let canvasWindowLogger = Logger(subsystem: "com.steipete.clawdis", category: "Canvas")
 
