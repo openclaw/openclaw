@@ -28,6 +28,7 @@
 - Talk Mode: treat history timestamps as seconds or milliseconds to avoid stale assistant picks (macOS/iOS/Android).
 - Chat UI: clear streaming/tool bubbles when external runs finish, preventing duplicate assistant bubbles.
 - Chat UI: user bubbles use `ui.seamColor` (fallback to a calmer default blue).
+- Android Chat UI: use `onPrimary` for user bubble text to preserve contrast (thanks @Syhids).
 - Control UI: sync sidebar navigation with the URL for deep-linking, and auto-scroll chat to the latest message.
 - Control UI: disable Web Chat + Talk when no iOS/Android node is connected; refreshed Web Chat styling and keyboard send.
 - Talk Mode: wait for chat history to surface the assistant reply before starting TTS (macOS/iOS/Android).
