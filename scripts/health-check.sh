@@ -3,7 +3,7 @@
 # Usage: ./health-check.sh [--verbose] [--json]
 # Returns: 0 = healthy, 1 = unhealthy
 
-set -euo pipefail
+set -uo pipefail
 
 VERBOSE=false
 JSON_OUTPUT=false
@@ -11,6 +11,57 @@ GATEWAY_PORT=18789
 BRIDGE_PORT=18790
 BROWSER_PORT=18791
 CANVAS_PORT=18793
+
+get_telegram_proxy() {
+    local proxy=""
+    if command -v python3 >/dev/null 2>&1; then
+        proxy=$(python3 - <<'PY' 2>/dev/null
+import json, os, sys
+path = os.path.expanduser("~/.clawdis/clawdis.json")
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    proxy = cfg.get("telegram", {}).get("proxy") or ""
+    if isinstance(proxy, str):
+        sys.stdout.write(proxy)
+except Exception:
+    pass
+PY
+)
+    elif command -v node >/dev/null 2>&1; then
+        proxy=$(node - <<'NODE' 2>/dev/null
+const fs = require("fs");
+const path = require("path");
+try {
+  const cfgPath = path.join(process.env.HOME || "", ".clawdis", "clawdis.json");
+  const cfg = JSON.parse(fs.readFileSync(cfgPath, "utf8"));
+  const proxy = (cfg.telegram && cfg.telegram.proxy) || "";
+  if (typeof proxy === "string") process.stdout.write(proxy);
+} catch {}
+NODE
+)
+    fi
+    echo "$proxy"
+}
+
+find_gateway_pid() {
+    local pid=""
+    pid=$(pgrep -f "clawdis gateway" | head -1 || true)
+    if [ -n "$pid" ]; then
+        echo "$pid"
+        return
+    fi
+    pid=$(pgrep -f "src/index.ts gateway" | head -1 || true)
+    if [ -n "$pid" ]; then
+        echo "$pid"
+        return
+    fi
+    pid=$(pgrep -f "gateway --port 18789" | head -1 || true)
+    if [ -n "$pid" ]; then
+        echo "$pid"
+        return
+    fi
+}
 
 # Parse arguments
 for arg in "$@"; do
@@ -38,10 +89,12 @@ check_port() {
 }
 
 check_process() {
-    if pgrep -f "clawdis gateway" > /dev/null; then
+    local pid
+    pid=$(find_gateway_pid)
+    if [ -n "$pid" ]; then
         CHECKS["process"]="ok"
         # Get memory usage
-        local mem=$(ps -o rss= -p $(pgrep -f "clawdis gateway" | head -1) 2>/dev/null | awk '{print int($1/1024)"MB"}')
+        local mem=$(ps -o rss= -p "$pid" 2>/dev/null | awk '{print int($1/1024)"MB"}')
         CHECKS["memory"]="${mem:-unknown}"
         return 0
     else
@@ -56,12 +109,24 @@ check_telegram_api() {
     if [ -z "$token" ]; then
         # Try to read from .env
         if [ -f "/home/almaz/zoo_flow/clawdis/.env" ]; then
-            token=$(grep TELEGRAM_BOT_TOKEN /home/almaz/zoo_flow/clawdis/.env | cut -d= -f2)
+            token=$(grep TELEGRAM_BOT_TOKEN /home/almaz/zoo_flow/clawdis/.env | cut -d= -f2- || true)
+        fi
+    fi
+    if [ -z "$token" ]; then
+        # Try to read from secrets.env
+        if [ -f "/home/almaz/.clawdis/secrets.env" ]; then
+            token=$(grep TELEGRAM_BOT_TOKEN /home/almaz/.clawdis/secrets.env | cut -d= -f2- || true)
         fi
     fi
 
     if [ -n "$token" ]; then
-        local response=$(curl -s --max-time 5 "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo "error")
+        local proxy
+        local -a proxy_args=()
+        proxy=$(get_telegram_proxy)
+        if [ -n "$proxy" ]; then
+            proxy_args=(--proxy "$proxy")
+        fi
+        local response=$(curl -s --max-time 5 "${proxy_args[@]}" "https://api.telegram.org/bot${token}/getMe" 2>/dev/null || echo "error")
         if echo "$response" | grep -q '"ok":true'; then
             CHECKS["telegram_api"]="ok"
             return 0
@@ -99,7 +164,8 @@ check_log_size() {
 }
 
 get_uptime() {
-    local pid=$(pgrep -f "clawdis gateway" | head -1)
+    local pid
+    pid=$(find_gateway_pid)
     if [ -n "$pid" ]; then
         local start_time=$(ps -o lstart= -p "$pid" 2>/dev/null)
         if [ -n "$start_time" ]; then
