@@ -259,6 +259,8 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 If `modelAliases` is configured, you may also use the alias key (e.g. `Opus`).
 If you omit the provider, CLAWDIS currently assumes `anthropic` as a temporary
 deprecation fallback.
+Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
+`ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
 
 `agent.heartbeat` configures periodic heartbeat runs:
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set
