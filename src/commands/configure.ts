@@ -106,9 +106,17 @@ async function promptGatewayConfig(
     await select({
       message: "Tailscale exposure",
       options: [
-        { value: "off", label: "Off" },
-        { value: "serve", label: "Serve" },
-        { value: "funnel", label: "Funnel" },
+        { value: "off", label: "Off", hint: "No Tailscale exposure" },
+        {
+          value: "serve",
+          label: "Serve",
+          hint: "Private HTTPS for your tailnet (devices on Tailscale)",
+        },
+        {
+          value: "funnel",
+          label: "Funnel",
+          hint: "Public HTTPS via Tailscale Funnel (internet)",
+        },
       ],
     }),
     runtime,
