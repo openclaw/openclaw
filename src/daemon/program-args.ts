@@ -56,7 +56,13 @@ function resolveRepoRootForDev(): string {
 }
 
 async function resolveTsxCliPath(repoRoot: string): Promise<string> {
-  const candidate = path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
+  const candidate = path.join(
+    repoRoot,
+    "node_modules",
+    "tsx",
+    "dist",
+    "cli.mjs",
+  );
   await fs.access(candidate);
   return candidate;
 }

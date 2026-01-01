@@ -134,7 +134,9 @@ export function buildProgram() {
 
   program
     .command("onboard")
-    .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .description(
+      "Interactive wizard to set up the gateway, workspace, and skills",
+    )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
     .option("--non-interactive", "Run without prompts", false)
     .option("--mode <mode>", "Wizard mode: local|remote")
@@ -166,7 +168,10 @@ export function buildProgram() {
               | "skip"
               | undefined,
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
-            gatewayPort: Number.parseInt(String(opts.gatewayPort ?? "18789"), 10),
+            gatewayPort: Number.parseInt(
+              String(opts.gatewayPort ?? "18789"),
+              10,
+            ),
             gatewayBind: opts.gatewayBind as
               | "loopback"
               | "lan"

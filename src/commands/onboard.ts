@@ -7,23 +7,22 @@ import {
   confirm,
   intro,
   isCancel,
+  multiselect,
   note,
   outro,
   select,
   spinner,
   text,
-  multiselect,
 } from "@clack/prompts";
 import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
-
+import { resolveClawdisAgentDir } from "../agents/agent-paths.js";
+import { installSkill } from "../agents/skills-install.js";
+import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import { resolveClawdisAgentDir } from "../agents/agent-paths.js";
-import { installSkill } from "../agents/skills-install.js";
-import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdisConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDIS,
@@ -207,7 +206,10 @@ function upsertSkillEntry(
   };
 }
 
-function resolveNodeManagerOptions(): Array<{ value: "npm" | "pnpm" | "bun"; label: string }> {
+function resolveNodeManagerOptions(): Array<{
+  value: "npm" | "pnpm" | "bun";
+  label: string;
+}> {
   return [
     { value: "npm", label: "npm" },
     { value: "pnpm", label: "pnpm" },
@@ -215,7 +217,10 @@ function resolveNodeManagerOptions(): Array<{ value: "npm" | "pnpm" | "bun"; lab
   ];
 }
 
-async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<void> {
+async function moveToTrash(
+  pathname: string,
+  runtime: RuntimeEnv,
+): Promise<void> {
   if (!pathname) return;
   try {
     await fs.access(pathname);
@@ -382,8 +387,11 @@ export async function onboardCommand(
     }
 
     const workspaceDir = resolveUserPath(
-      (opts.workspace ?? baseConfig.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR)
-        .trim(),
+      (
+        opts.workspace ??
+        baseConfig.agent?.workspace ??
+        DEFAULT_AGENT_WORKSPACE_DIR
+      ).trim(),
     );
 
     let nextConfig: ClawdisConfig = {
@@ -513,7 +521,9 @@ export async function onboardCommand(
         PATH: process.env.PATH,
         CLAWDIS_GATEWAY_TOKEN: gatewayToken,
         CLAWDIS_LAUNCHD_LABEL:
-          process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+          process.platform === "darwin"
+            ? GATEWAY_LAUNCH_AGENT_LABEL
+            : undefined,
       };
       await service.install({
         env: process.env,
@@ -555,11 +565,15 @@ export async function onboardCommand(
   let baseConfig: ClawdisConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists) {
-    const title = snapshot.valid ? "Existing config detected" : "Invalid config";
+    const title = snapshot.valid
+      ? "Existing config detected"
+      : "Invalid config";
     note(summarizeExistingConfig(baseConfig), title);
     if (!snapshot.valid && snapshot.issues.length > 0) {
       note(
-        snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`).join("\n"),
+        snapshot.issues
+          .map((iss) => `- ${iss.path}: ${iss.message}`)
+          .join("\n"),
         "Config issues",
       );
     }
@@ -584,8 +598,14 @@ export async function onboardCommand(
           message: "Reset scope",
           options: [
             { value: "config", label: "Config only" },
-            { value: "config+creds+sessions", label: "Config + creds + sessions" },
-            { value: "full", label: "Full reset (config + creds + sessions + workspace)" },
+            {
+              value: "config+creds+sessions",
+              label: "Config + creds + sessions",
+            },
+            {
+              value: "full",
+              label: "Full reset (config + creds + sessions + workspace)",
+            },
           ],
         }),
         runtime,
@@ -636,7 +656,9 @@ export async function onboardCommand(
       runtime,
     ) as string);
 
-  const workspaceDir = resolveUserPath(workspaceInput.trim() || DEFAULT_AGENT_WORKSPACE_DIR);
+  const workspaceDir = resolveUserPath(
+    workspaceInput.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
 
   let nextConfig: ClawdisConfig = {
     ...baseConfig,
@@ -767,7 +789,10 @@ export async function onboardCommand(
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
+    note(
+      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
+      "Note",
+    );
     bind = "loopback";
   }
 
@@ -872,7 +897,10 @@ export async function onboardCommand(
       }
     }
 
-    if (!loaded || (loaded && (await service.isLoaded({ env: process.env })) === false)) {
+    if (
+      !loaded ||
+      (loaded && (await service.isLoaded({ env: process.env })) === false)
+    ) {
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
         process.argv[1]?.endsWith(".ts");
@@ -882,7 +910,9 @@ export async function onboardCommand(
         PATH: process.env.PATH,
         CLAWDIS_GATEWAY_TOKEN: gatewayToken,
         CLAWDIS_LAUNCHD_LABEL:
-          process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+          process.platform === "darwin"
+            ? GATEWAY_LAUNCH_AGENT_LABEL
+            : undefined,
       };
       await service.install({
         env: process.env,

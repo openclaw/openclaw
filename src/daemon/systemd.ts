@@ -13,7 +13,9 @@ function resolveHomeDir(env: Record<string, string | undefined>): string {
   return home;
 }
 
-function resolveSystemdUnitPath(env: Record<string, string | undefined>): string {
+function resolveSystemdUnitPath(
+  env: Record<string, string | undefined>,
+): string {
   const home = resolveHomeDir(env);
   return path.join(
     home,
@@ -143,7 +145,11 @@ async function execSystemctl(
     const { stdout, stderr } = await execFileAsync("systemctl", args, {
       encoding: "utf8",
     });
-    return { stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), code: 0 };
+    return {
+      stdout: String(stdout ?? ""),
+      stderr: String(stderr ?? ""),
+      code: 0,
+    };
   } catch (error) {
     const e = error as {
       stdout?: unknown;
@@ -169,9 +175,13 @@ async function assertSystemdAvailable() {
   if (res.code === 0) return;
   const detail = res.stderr || res.stdout;
   if (detail.toLowerCase().includes("not found")) {
-    throw new Error("systemctl not available; systemd user services are required on Linux.");
+    throw new Error(
+      "systemctl not available; systemd user services are required on Linux.",
+    );
   }
-  throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  throw new Error(
+    `systemctl --user unavailable: ${detail || "unknown error"}`.trim(),
+  );
 }
 
 export async function installSystemdService({
@@ -191,23 +201,33 @@ export async function installSystemdService({
 
   const unitPath = resolveSystemdUnitPath(env);
   await fs.mkdir(path.dirname(unitPath), { recursive: true });
-  const unit = buildSystemdUnit({ programArguments, workingDirectory, environment });
+  const unit = buildSystemdUnit({
+    programArguments,
+    workingDirectory,
+    environment,
+  });
   await fs.writeFile(unitPath, unit, "utf8");
 
   const unitName = `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
   const reload = await execSystemctl(["--user", "daemon-reload"]);
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throw new Error(
+      `systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim(),
+    );
   }
 
   const enable = await execSystemctl(["--user", "enable", unitName]);
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throw new Error(
+      `systemctl enable failed: ${enable.stderr || enable.stdout}`.trim(),
+    );
   }
 
   const restart = await execSystemctl(["--user", "restart", unitName]);
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throw new Error(
+      `systemctl restart failed: ${restart.stderr || restart.stdout}`.trim(),
+    );
   }
 
   stdout.write(`Installed systemd service: ${unitPath}\n`);
@@ -243,7 +263,9 @@ export async function restartSystemdService({
   const unitName = `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
   const res = await execSystemctl(["--user", "restart", unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl restart failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(
+      `systemctl restart failed: ${res.stderr || res.stdout}`.trim(),
+    );
   }
   stdout.write(`Restarted systemd service: ${unitName}\n`);
 }

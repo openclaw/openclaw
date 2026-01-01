@@ -13,7 +13,9 @@ function resolveHomeDir(env: Record<string, string | undefined>): string {
   return home;
 }
 
-function resolveTaskScriptPath(env: Record<string, string | undefined>): string {
+function resolveTaskScriptPath(
+  env: Record<string, string | undefined>,
+): string {
   const home = resolveHomeDir(env);
   return path.join(home, ".clawdis", "gateway.cmd");
 }
@@ -71,7 +73,10 @@ export async function readScheduledTaskCommand(
       if (line.toLowerCase().startsWith("rem ")) continue;
       if (line.toLowerCase().startsWith("set ")) continue;
       if (line.toLowerCase().startsWith("cd /d ")) {
-        workingDirectory = line.slice("cd /d ".length).trim().replace(/^"|"$/g, "");
+        workingDirectory = line
+          .slice("cd /d ".length)
+          .trim()
+          .replace(/^"|"$/g, "");
         continue;
       }
       commandLine = line;
@@ -119,7 +124,11 @@ async function execSchtasks(
       encoding: "utf8",
       windowsHide: true,
     });
-    return { stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), code: 0 };
+    return {
+      stdout: String(stdout ?? ""),
+      stderr: String(stderr ?? ""),
+      code: 0,
+    };
   } catch (error) {
     const e = error as {
       stdout?: unknown;
@@ -184,7 +193,9 @@ export async function installScheduledTask({
     quotedScript,
   ]);
   if (create.code !== 0) {
-    throw new Error(`schtasks create failed: ${create.stderr || create.stdout}`.trim());
+    throw new Error(
+      `schtasks create failed: ${create.stderr || create.stdout}`.trim(),
+    );
   }
 
   await execSchtasks(["/Run", "/TN", GATEWAY_WINDOWS_TASK_NAME]);

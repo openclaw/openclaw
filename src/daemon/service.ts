@@ -38,10 +38,13 @@ export type GatewayService = {
     stdout: NodeJS.WritableStream;
   }) => Promise<void>;
   restart: (args: { stdout: NodeJS.WritableStream }) => Promise<void>;
-  isLoaded: (args: { env: Record<string, string | undefined> }) => Promise<boolean>;
-  readCommand: (
-    env: Record<string, string | undefined>,
-  ) => Promise<{ programArguments: string[]; workingDirectory?: string } | null>;
+  isLoaded: (args: {
+    env: Record<string, string | undefined>;
+  }) => Promise<boolean>;
+  readCommand: (env: Record<string, string | undefined>) => Promise<{
+    programArguments: string[];
+    workingDirectory?: string;
+  } | null>;
 };
 
 export function resolveGatewayService(): GatewayService {
@@ -102,5 +105,7 @@ export function resolveGatewayService(): GatewayService {
     };
   }
 
-  throw new Error(`Gateway service install not supported on ${process.platform}`);
+  throw new Error(
+    `Gateway service install not supported on ${process.platform}`,
+  );
 }

@@ -25,7 +25,9 @@ export function resolveLaunchAgentPlistPath(
   );
 }
 
-export function resolveGatewayLogPaths(env: Record<string, string | undefined>): {
+export function resolveGatewayLogPaths(
+  env: Record<string, string | undefined>,
+): {
   logDir: string;
   stdoutPath: string;
   stderrPath: string;
@@ -160,7 +162,11 @@ async function execLaunchctl(
     const { stdout, stderr } = await execFileAsync("launchctl", args, {
       encoding: "utf8",
     });
-    return { stdout: String(stdout ?? ""), stderr: String(stderr ?? ""), code: 0 };
+    return {
+      stdout: String(stdout ?? ""),
+      stderr: String(stderr ?? ""),
+      code: 0,
+    };
   } catch (error) {
     const e = error as {
       stdout?: unknown;
@@ -257,10 +263,16 @@ export async function installLaunchAgent({
   await execLaunchctl(["unload", plistPath]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);
   if (boot.code !== 0) {
-    throw new Error(`launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim());
+    throw new Error(
+      `launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim(),
+    );
   }
   await execLaunchctl(["enable", `${domain}/${GATEWAY_LAUNCH_AGENT_LABEL}`]);
-  await execLaunchctl(["kickstart", "-k", `${domain}/${GATEWAY_LAUNCH_AGENT_LABEL}`]);
+  await execLaunchctl([
+    "kickstart",
+    "-k",
+    `${domain}/${GATEWAY_LAUNCH_AGENT_LABEL}`,
+  ]);
 
   stdout.write(`Installed LaunchAgent: ${plistPath}\n`);
   stdout.write(`Logs: ${stdoutPath}\n`);
@@ -276,7 +288,9 @@ export async function restartLaunchAgent({
   const label = GATEWAY_LAUNCH_AGENT_LABEL;
   const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (res.code !== 0) {
-    throw new Error(`launchctl kickstart failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(
+      `launchctl kickstart failed: ${res.stderr || res.stdout}`.trim(),
+    );
   }
   stdout.write(`Restarted LaunchAgent: ${domain}/${label}\n`);
 }
