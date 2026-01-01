@@ -13,6 +13,15 @@ import type { ClawdisConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { guardCancel, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
+function summarizeInstallFailure(message: string): string | undefined {
+  const cleaned = message
+    .replace(/^Install failed(?:\s*\([^)]*\))?\s*:?\s*/i, "")
+    .trim();
+  if (!cleaned) return undefined;
+  const maxLen = 140;
+  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen - 1)}…` : cleaned;
+}
+
 function upsertSkillEntry(
   cfg: ClawdisConfig,
   skillKey: string,
@@ -108,9 +117,19 @@ export async function setupSkills(
         installId,
         config: next,
       });
-      spin.stop(result.ok ? `Installed ${name}` : `Install failed: ${name}`);
-      if (!result.ok && result.stderr) {
-        runtime.log(result.stderr.trim());
+      if (result.ok) {
+        spin.stop(`Installed ${name}`);
+      } else {
+        const code = result.code == null ? "" : ` (exit ${result.code})`;
+        const detail = summarizeInstallFailure(result.message);
+        spin.stop(
+          `Install failed: ${name}${code}${detail ? ` — ${detail}` : ""}`,
+        );
+        if (result.stderr) runtime.log(result.stderr.trim());
+        else if (result.stdout) runtime.log(result.stdout.trim());
+        runtime.log(
+          "Tip: run `clawdis doctor` to review skills + requirements.",
+        );
       }
     }
   }
