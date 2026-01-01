@@ -6,9 +6,11 @@ import {
   hasBinary,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
+  resolveBundledAllowlist,
   resolveConfigPath,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
+  isBundledSkillAllowed,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,
@@ -39,6 +41,7 @@ export type SkillStatusEntry = {
   homepage?: string;
   always: boolean;
   disabled: boolean;
+  blockedByAllowlist: boolean;
   eligible: boolean;
   requirements: {
     bins: string[];
@@ -132,6 +135,8 @@ function buildSkillStatus(
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
   const disabled = skillConfig?.enabled === false;
+  const allowBundled = resolveBundledAllowlist(config);
+  const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.clawdis?.always === true;
   const emoji = entry.clawdis?.emoji ?? entry.frontmatter.emoji;
   const homepageRaw =
@@ -173,6 +178,7 @@ function buildSkillStatus(
     : { bins: missingBins, env: missingEnv, config: missingConfig };
   const eligible =
     !disabled &&
+    !blockedByAllowlist &&
     (always ||
       (missing.bins.length === 0 &&
         missing.env.length === 0 &&
@@ -190,6 +196,7 @@ function buildSkillStatus(
     homepage,
     always,
     disabled,
+    blockedByAllowlist,
     eligible,
     requirements: {
       bins: requiredBins,

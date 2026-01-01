@@ -173,7 +173,7 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 export function resolveSkillsInstallPreferences(
   config?: ClawdisConfig,
 ): SkillsInstallPreferences {
-  const raw = config?.skillsInstall;
+  const raw = config?.skills?.install;
   const preferBrew = raw?.preferBrew ?? true;
   const managerRaw =
     typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
@@ -213,11 +213,34 @@ export function resolveSkillConfig(
   config: ClawdisConfig | undefined,
   skillKey: string,
 ): SkillConfig | undefined {
-  const skills = config?.skills;
+  const skills = config?.skills?.entries;
   if (!skills || typeof skills !== "object") return undefined;
   const entry = (skills as Record<string, SkillConfig | undefined>)[skillKey];
   if (!entry || typeof entry !== "object") return undefined;
   return entry;
+}
+
+function normalizeAllowlist(input: unknown): string[] | undefined {
+  if (!input) return undefined;
+  if (!Array.isArray(input)) return undefined;
+  const normalized = input
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isBundledSkill(entry: SkillEntry): boolean {
+  return entry.skill.source === "clawdis-bundled";
+}
+
+export function isBundledSkillAllowed(
+  entry: SkillEntry,
+  allowlist?: string[],
+): boolean {
+  if (!allowlist || allowlist.length === 0) return true;
+  if (!isBundledSkill(entry)) return true;
+  const key = resolveSkillKey(entry.skill, entry);
+  return allowlist.includes(key) || allowlist.includes(entry.skill.name);
 }
 
 export function hasBinary(bin: string): boolean {
@@ -298,8 +321,10 @@ function shouldIncludeSkill(params: {
   const { entry, config } = params;
   const skillKey = resolveSkillKey(entry.skill, entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
+  const allowBundled = normalizeAllowlist(config?.skills?.allowBundled);
 
   if (skillConfig?.enabled === false) return false;
+  if (!isBundledSkillAllowed(entry, allowBundled)) return false;
   if (entry.clawdis?.always === true) {
     return true;
   }
@@ -442,7 +467,7 @@ function loadSkillEntries(
     opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
   const workspaceSkillsDir = path.join(workspaceDir, "skills");
   const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
-  const extraDirsRaw = opts?.config?.skillsLoad?.extraDirs ?? [];
+  const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
   const extraDirs = extraDirsRaw
     .map((d) => (typeof d === "string" ? d.trim() : ""))
     .filter(Boolean);
@@ -547,4 +572,9 @@ export function filterWorkspaceSkillEntries(
   config?: ClawdisConfig,
 ): SkillEntry[] {
   return filterSkillEntries(entries, config);
+}
+export function resolveBundledAllowlist(
+  config?: ClawdisConfig,
+): string[] | undefined {
+  return normalizeAllowlist(config?.skills?.allowBundled);
 }

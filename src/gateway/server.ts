@@ -4821,8 +4821,9 @@ export async function startGatewayServer(
               };
               const cfg = loadConfig();
               const skills = cfg.skills ? { ...cfg.skills } : {};
-              const current = skills[p.skillKey]
-                ? { ...skills[p.skillKey] }
+              const entries = skills.entries ? { ...skills.entries } : {};
+              const current = entries[p.skillKey]
+                ? { ...entries[p.skillKey] }
                 : {};
               if (typeof p.enabled === "boolean") {
                 current.enabled = p.enabled;
@@ -4843,7 +4844,8 @@ export async function startGatewayServer(
                 }
                 current.env = nextEnv;
               }
-              skills[p.skillKey] = current;
+              entries[p.skillKey] = current;
+              skills.entries = entries;
               const nextConfig: ClawdisConfig = {
                 ...cfg,
                 skills,

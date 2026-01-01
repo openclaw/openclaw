@@ -2,6 +2,13 @@
 
 ## 2.0.0-beta5 — Unreleased
 
+### Breaking
+- Skills config schema moved under `skills.*`:
+  - `skillsLoad.extraDirs` → `skills.load.extraDirs`
+  - `skillsInstall.*` → `skills.install.*`
+  - per-skill config map moved to `skills.entries` (e.g. `skills.peekaboo.enabled` → `skills.entries.peekaboo.enabled`)
+  - new optional bundled allowlist: `skills.allowBundled` (only affects bundled skills)
+
 ### Features
 - Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).

@@ -390,11 +390,21 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
 }
 ```
 
-### `skills` (skill config/env)
+### `skills` (skills config)
 
-Configure skill toggles and env injection. Applies to **bundled** skills and `~/.clawdis/skills` (workspace skills still win on name conflicts).
+Controls bundled allowlist, install preferences, extra skill folders, and per-skill
+overrides. Applies to **bundled** skills and `~/.clawdis/skills` (workspace skills
+still win on name conflicts).
 
-Common fields per skill:
+Fields:
+- `allowBundled`: optional allowlist for **bundled** skills only. If set, only those
+  bundled skills are eligible (managed/workspace skills unaffected).
+- `load.extraDirs`: additional skill directories to scan (lowest precedence).
+- `install.preferBrew`: prefer brew installers when available (default: true).
+- `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn`, default: npm).
+- `entries.<skillKey>`: per-skill config overrides.
+
+Per-skill fields:
 - `enabled`: set `false` to disable a skill even if it’s bundled/installed.
 - `env`: environment variables injected for the agent run (only if not already set).
 - `apiKey`: optional convenience for skills that declare a primary env var (e.g. `nano-banana-pro` → `GEMINI_API_KEY`).
@@ -404,44 +414,27 @@ Example:
 ```json5
 {
   skills: {
-    "nano-banana-pro": {
-      apiKey: "GEMINI_KEY_HERE",
-      env: {
-        GEMINI_API_KEY: "GEMINI_KEY_HERE"
-      }
+    allowBundled: ["brave-search", "gemini"],
+    load: {
+      extraDirs: [
+        "~/Projects/agent-scripts/skills",
+        "~/Projects/oss/some-skill-pack/skills"
+      ]
     },
-    peekaboo: { enabled: true },
-    sag: { enabled: false }
-  }
-}
-```
-
-### `skillsInstall` (installer preference)
-
-Controls which installer is surfaced by the macOS Skills UI when a skill offers
-multiple install options. Defaults to **brew when available** and **npm** for
-node installs.
-
-```json5
-{
-  skillsInstall: {
-    preferBrew: true,
-    nodeManager: "npm" // npm | pnpm | yarn
-  }
-}
-```
-
-### `skillsLoad`
-
-Additional skill directories to scan (lowest precedence). This is useful if you keep skills in a separate repo but want Clawdis to pick them up without copying them into the workspace.
-
-```json5
-{
-  skillsLoad: {
-    extraDirs: [
-      "~/Projects/agent-scripts/skills",
-      "~/Projects/oss/some-skill-pack/skills"
-    ]
+    install: {
+      preferBrew: true,
+      nodeManager: "npm"
+    },
+    entries: {
+      "nano-banana-pro": {
+        apiKey: "GEMINI_KEY_HERE",
+        env: {
+          GEMINI_API_KEY: "GEMINI_KEY_HERE"
+        }
+      },
+      peekaboo: { enabled: true },
+      sag: { enabled: false }
+    }
   }
 }
 ```

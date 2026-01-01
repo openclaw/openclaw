@@ -39,7 +39,7 @@ Clawdis loads skills from three locations (workspace wins on name conflict):
 - Managed/local: `~/.clawdis/skills`
 - Workspace: `<workspace>/skills`
 
-Skills can be gated by config/env (see `skills.*` in `docs/configuration.md`).
+Skills can be gated by config/env (see `skills` in `docs/configuration.md`).
 
 ## p-mono integration
 

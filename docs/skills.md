@@ -21,7 +21,8 @@ If a skill name conflicts, precedence is:
 
 `<workspace>/skills` (highest) → `~/.clawdis/skills` → bundled skills (lowest)
 
-Additionally, you can configure extra skill folders (lowest precedence) via `skillsLoad.extraDirs` in `~/.clawdis/clawdis.json`.
+Additionally, you can configure extra skill folders (lowest precedence) via
+`skills.load.extraDirs` in `~/.clawdis/clawdis.json`.
 
 ## Format (AgentSkills + Pi-compatible)
 
@@ -61,7 +62,7 @@ Fields under `metadata.clawdis`:
 - `requires.bins` — list; each must exist on `PATH`.
 - `requires.env` — list; env var must exist **or** be provided in config.
 - `requires.config` — list of `clawdis.json` paths that must be truthy.
-- `primaryEnv` — env var name associated with `skills.<name>.apiKey`.
+- `primaryEnv` — env var name associated with `skills.entries.<name>.apiKey`.
 - `install` — optional array of installer specs used by the macOS Skills UI (brew/node/go/uv).
 
 Installer example:
@@ -76,9 +77,10 @@ metadata: {"clawdis":{"emoji":"♊️","requires":{"bins":["gemini"]},"install":
 
 Notes:
 - If multiple installers are listed, the gateway picks a **single** preferred option (brew when available, otherwise node).
-- Node installs honor `skillsInstall.nodeManager` in `clawdis.json` (default: npm; options: npm/pnpm/yarn).
+- Node installs honor `skills.install.nodeManager` in `clawdis.json` (default: npm; options: npm/pnpm/yarn).
 
-If no `metadata.clawdis` is present, the skill is always eligible (unless disabled in config).
+If no `metadata.clawdis` is present, the skill is always eligible (unless
+disabled in config or blocked by `skills.allowBundled` for bundled skills).
 
 ## Config overrides (`~/.clawdis/clawdis.json`)
 
@@ -87,33 +89,39 @@ Bundled/managed skills can be toggled and supplied with env values:
 ```json5
 {
   skills: {
-    "nano-banana-pro": {
-      enabled: true,
-      apiKey: "GEMINI_KEY_HERE",
-      env: {
-        GEMINI_API_KEY: "GEMINI_KEY_HERE"
-      }
-    },
-    peekaboo: { enabled: true },
-    sag: { enabled: false }
+    entries: {
+      "nano-banana-pro": {
+        enabled: true,
+        apiKey: "GEMINI_KEY_HERE",
+        env: {
+          GEMINI_API_KEY: "GEMINI_KEY_HERE"
+        }
+      },
+      peekaboo: { enabled: true },
+      sag: { enabled: false }
+    }
   }
 }
 ```
 
 Note: if the skill name contains hyphens, quote the key (JSON5 allows quoted keys).
 
-Config keys match the **skill name**. We don’t require a custom `skillKey`.
+Config keys match the **skill name** by default. If a skill defines
+`metadata.clawdis.skillKey`, use that key under `skills.entries`.
 
 Rules:
 - `enabled: false` disables the skill even if it’s bundled/installed.
 - `env`: injected **only if** the variable isn’t already set in the process.
 - `apiKey`: convenience for skills that declare `metadata.clawdis.primaryEnv`.
+- `allowBundled`: optional allowlist for **bundled** skills only. If set, only
+  bundled skills in the list are eligible (managed/workspace skills unaffected).
 
 ## Environment injection (per agent run)
 
 When an agent run starts, Clawdis:
 1) Reads skill metadata.
-2) Applies any `skills.<key>.env` or `skills.<key>.apiKey` to `process.env`.
+2) Applies any `skills.entries.<key>.env` or `skills.entries.<key>.apiKey` to
+   `process.env`.
 3) Builds the system prompt with **eligible** skills.
 4) Restores the original environment after the run ends.
 
@@ -125,7 +133,14 @@ Clawdis snapshots the eligible skills **when a session starts** and reuses that 
 
 ## Managed skills lifecycle
 
-Clawdis ships a baseline set of skills as **bundled skills** as part of the install (npm package or Clawdis.app). `~/.clawdis/skills` exists for local overrides (for example, pinning/patching a skill without changing the bundled copy). Workspace skills are user-owned and override both on name conflicts.
+Clawdis ships a baseline set of skills as **bundled skills** as part of the
+install (npm package or Clawdis.app). `~/.clawdis/skills` exists for local
+overrides (for example, pinning/patching a skill without changing the bundled
+copy). Workspace skills are user-owned and override both on name conflicts.
+
+## Config reference
+
+See `docs/skills-config.md` for the full configuration schema.
 
 ---
 <!-- {% endraw %} -->

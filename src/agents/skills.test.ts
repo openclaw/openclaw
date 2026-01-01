@@ -102,7 +102,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
       bundledSkillsDir: bundledDir,
       managedSkillsDir: managedDir,
-      config: { skillsLoad: { extraDirs: [extraDir] } },
+      config: { skills: { load: { extraDirs: [extraDir] } } },
     });
 
     expect(prompt).toContain("Workspace version");
@@ -148,13 +148,15 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
       const missingPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
-        config: { skills: { "nano-banana-pro": { apiKey: "" } } },
+        config: { skills: { entries: { "nano-banana-pro": { apiKey: "" } } } },
       });
       expect(missingPrompt).not.toContain("nano-banana-pro");
 
       const enabledPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
-        config: { skills: { "nano-banana-pro": { apiKey: "test-key" } } },
+        config: {
+          skills: { entries: { "nano-banana-pro": { apiKey: "test-key" } } },
+        },
       });
       expect(enabledPrompt).toContain("nano-banana-pro");
     } finally {
@@ -252,7 +254,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: {
           browser: { enabled: false },
-          skills: { "env-skill": { apiKey: "ok" } },
+          skills: { entries: { "env-skill": { apiKey: "ok" } } },
         },
       });
       expect(gatedPrompt).toContain("bin-skill");
@@ -276,9 +278,38 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
-      config: { skills: { alias: { enabled: false } } },
+      config: { skills: { entries: { alias: { enabled: false } } } },
     });
     expect(prompt).not.toContain("alias-skill");
+  });
+
+  it("applies bundled allowlist without affecting workspace skills", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const bundledSkillDir = path.join(bundledDir, "peekaboo");
+    const workspaceSkillDir = path.join(workspaceDir, "skills", "demo-skill");
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "peekaboo",
+      description: "Capture UI",
+      body: "# Peekaboo\n",
+    });
+    await writeSkill({
+      dir: workspaceSkillDir,
+      name: "demo-skill",
+      description: "Workspace version",
+      body: "# Workspace\n",
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, {
+      bundledSkillsDir: bundledDir,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      config: { skills: { allowBundled: ["missing-skill"] } },
+    });
+
+    expect(prompt).toContain("Workspace version");
+    expect(prompt).not.toContain("peekaboo");
   });
 });
 
@@ -337,6 +368,39 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.missing.config).toContain("browser.enabled");
     expect(skill?.install[0]?.id).toBe("brew");
   });
+
+  it("marks bundled skills blocked by allowlist", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-"));
+    const bundledDir = path.join(workspaceDir, ".bundled");
+    const bundledSkillDir = path.join(bundledDir, "peekaboo");
+    const originalBundled = process.env.CLAWDIS_BUNDLED_SKILLS_DIR;
+
+    await writeSkill({
+      dir: bundledSkillDir,
+      name: "peekaboo",
+      description: "Capture UI",
+      body: "# Peekaboo\n",
+    });
+
+    try {
+      process.env.CLAWDIS_BUNDLED_SKILLS_DIR = bundledDir;
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, ".managed"),
+        config: { skills: { allowBundled: ["other-skill"] } },
+      });
+      const skill = report.skills.find((entry) => entry.name === "peekaboo");
+
+      expect(skill).toBeDefined();
+      expect(skill?.blockedByAllowlist).toBe(true);
+      expect(skill?.eligible).toBe(false);
+    } finally {
+      if (originalBundled === undefined) {
+        delete process.env.CLAWDIS_BUNDLED_SKILLS_DIR;
+      } else {
+        process.env.CLAWDIS_BUNDLED_SKILLS_DIR = originalBundled;
+      }
+    }
+  });
 });
 
 describe("applySkillEnvOverrides", () => {
@@ -360,7 +424,7 @@ describe("applySkillEnvOverrides", () => {
 
     const restore = applySkillEnvOverrides({
       skills: entries,
-      config: { skills: { "env-skill": { apiKey: "injected" } } },
+      config: { skills: { entries: { "env-skill": { apiKey: "injected" } } } },
     });
 
     try {
@@ -388,7 +452,7 @@ describe("applySkillEnvOverrides", () => {
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
       managedSkillsDir: path.join(workspaceDir, ".managed"),
-      config: { skills: { "env-skill": { apiKey: "snap-key" } } },
+      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
     });
 
     const originalEnv = process.env.ENV_KEY;
@@ -396,7 +460,7 @@ describe("applySkillEnvOverrides", () => {
 
     const restore = applySkillEnvOverridesFromSnapshot({
       snapshot,
-      config: { skills: { "env-skill": { apiKey: "snap-key" } } },
+      config: { skills: { entries: { "env-skill": { apiKey: "snap-key" } } } },
     });
 
     try {

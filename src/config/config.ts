@@ -307,6 +307,14 @@ export type SkillsInstallConfig = {
   nodeManager?: "npm" | "pnpm" | "yarn";
 };
 
+export type SkillsConfig = {
+  /** Optional bundled-skill allowlist (only affects bundled skills). */
+  allowBundled?: string[];
+  load?: SkillsLoadConfig;
+  install?: SkillsInstallConfig;
+  entries?: Record<string, SkillConfig>;
+};
+
 export type ModelApi =
   | "openai-completions"
   | "openai-responses"
@@ -364,8 +372,7 @@ export type ClawdisConfig = {
     /** Accent color for Clawdis UI chrome (hex). */
     seamColor?: string;
   };
-  skillsLoad?: SkillsLoadConfig;
-  skillsInstall?: SkillsInstallConfig;
+  skills?: SkillsConfig;
   models?: ModelsConfig;
   agent?: {
     /** Model id (provider/model), e.g. "anthropic/claude-opus-4-5". */
@@ -424,7 +431,7 @@ export type ClawdisConfig = {
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
-  skills?: Record<string, SkillConfig>;
+  skills?: SkillsConfig;
 };
 
 /**
@@ -880,30 +887,33 @@ const ClawdisSchema = z.object({
         .optional(),
     })
     .optional(),
-  skillsLoad: z
-    .object({
-      extraDirs: z.array(z.string()).optional(),
-    })
-    .optional(),
-  skillsInstall: z
-    .object({
-      preferBrew: z.boolean().optional(),
-      nodeManager: z
-        .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn")])
-        .optional(),
-    })
-    .optional(),
   skills: z
-    .record(
-      z.string(),
-      z
+    .object({
+      allowBundled: z.array(z.string()).optional(),
+      load: z
         .object({
-          enabled: z.boolean().optional(),
-          apiKey: z.string().optional(),
-          env: z.record(z.string(), z.string()).optional(),
+          extraDirs: z.array(z.string()).optional(),
         })
-        .passthrough(),
-    )
+        .optional(),
+      install: z
+        .object({
+          preferBrew: z.boolean().optional(),
+          nodeManager: z
+            .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn")])
+            .optional(),
+        })
+        .optional(),
+      entries: z.record(
+        z.string(),
+        z
+          .object({
+            enabled: z.boolean().optional(),
+            apiKey: z.string().optional(),
+            env: z.record(z.string(), z.string()).optional(),
+          })
+          .passthrough(),
+      ).optional(),
+    })
     .optional(),
 });
 
