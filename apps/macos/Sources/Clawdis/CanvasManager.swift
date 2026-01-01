@@ -151,8 +151,22 @@ final class CanvasManager {
 
     private func handleGatewayPush(_ push: GatewayPush) {
         guard case let .snapshot(snapshot) = push else { return }
-        let a2uiUrl = Self.resolveA2UIHostUrl(from: snapshot.canvashosturl)
-        guard let controller = self.panelController else { return }
+        let raw = snapshot.canvashosturl?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if raw.isEmpty {
+            Self.logger.debug("canvas host url missing in gateway snapshot")
+        } else {
+            Self.logger.debug("canvas host url snapshot=\(raw, privacy: .public)")
+        }
+        let a2uiUrl = Self.resolveA2UIHostUrl(from: raw)
+        if a2uiUrl == nil, !raw.isEmpty {
+            Self.logger.debug("canvas host url invalid; cannot resolve A2UI")
+        }
+        guard let controller = self.panelController else {
+            if a2uiUrl != nil {
+                Self.logger.debug("canvas panel not visible; skipping auto-nav")
+            }
+            return
+        }
         self.maybeAutoNavigateToA2UI(controller: controller, a2uiUrl: a2uiUrl)
     }
 
@@ -169,7 +183,12 @@ final class CanvasManager {
 
     private func maybeAutoNavigateToA2UI(controller: CanvasWindowController, a2uiUrl: String?) {
         guard let a2uiUrl else { return }
-        guard controller.shouldAutoNavigateToA2UI(lastAutoTarget: self.lastAutoA2UIUrl) else { return }
+        let shouldNavigate = controller.shouldAutoNavigateToA2UI(lastAutoTarget: self.lastAutoA2UIUrl)
+        guard shouldNavigate else {
+            Self.logger.debug("canvas auto-nav skipped; target unchanged")
+            return
+        }
+        Self.logger.debug("canvas auto-nav -> \(a2uiUrl, privacy: .public)")
         controller.load(target: a2uiUrl)
         self.lastAutoA2UIUrl = a2uiUrl
     }
@@ -182,8 +201,29 @@ final class CanvasManager {
     func refreshDebugStatus() {
         guard let controller = self.panelController else { return }
         let enabled = AppStateStore.shared.debugPaneEnabled
-        let title = GatewayProcessManager.shared.status.label
-        let subtitle = AppStateStore.shared.connectionMode.rawValue
+        let mode = AppStateStore.shared.connectionMode
+        let title: String?
+        let subtitle: String?
+        switch mode {
+        case .remote:
+            title = "Remote control"
+            switch ControlChannel.shared.state {
+            case .connected:
+                subtitle = "Connected"
+            case .connecting:
+                subtitle = "Connecting…"
+            case .disconnected:
+                subtitle = "Disconnected"
+            case let .degraded(message):
+                subtitle = message.isEmpty ? "Degraded" : message
+            }
+        case .local:
+            title = GatewayProcessManager.shared.status.label
+            subtitle = mode.rawValue
+        case .unconfigured:
+            title = "Unconfigured"
+            subtitle = mode.rawValue
+        }
         controller.updateDebugStatus(enabled: enabled, title: title, subtitle: subtitle)
     }
 

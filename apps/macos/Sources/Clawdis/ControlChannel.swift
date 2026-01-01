@@ -52,7 +52,23 @@ final class ControlChannel {
         case degraded(String)
     }
 
-    private(set) var state: ConnectionState = .disconnected
+    private(set) var state: ConnectionState = .disconnected {
+        didSet {
+            CanvasManager.shared.refreshDebugStatus()
+            guard oldValue != state else { return }
+            switch state {
+            case .connected:
+                self.logger.info("control channel state -> connected")
+            case .connecting:
+                self.logger.info("control channel state -> connecting")
+            case .disconnected:
+                self.logger.info("control channel state -> disconnected")
+            case let .degraded(message):
+                let detail = message.isEmpty ? "degraded" : "degraded: \(message)"
+                self.logger.info("control channel state -> \(detail, privacy: .public)")
+            }
+        }
+    }
     private(set) var lastPingMs: Double?
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
