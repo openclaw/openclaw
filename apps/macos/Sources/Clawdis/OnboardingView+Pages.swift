@@ -297,15 +297,30 @@ extension OnboardingView {
             self.onboardingCard(spacing: 12, padding: 16) {
                 HStack(alignment: .center, spacing: 10) {
                     Circle()
-                        .fill(self.anthropicAuthConnected ? Color.green : Color.orange)
+                        .fill(self.anthropicAuthVerified ? Color.green : Color.orange)
                         .frame(width: 10, height: 10)
-                    Text(self.anthropicAuthConnected ? "Claude connected (OAuth)" : "Not connected yet")
+                    Text(
+                        self.anthropicAuthConnected
+                            ? (self.anthropicAuthVerified
+                                ? "Claude connected (OAuth) — verified"
+                                : "Claude connected (OAuth)")
+                            : "Not connected yet")
                         .font(.headline)
                     Spacer()
                 }
 
-                if !self.anthropicAuthConnected {
+                if self.anthropicAuthConnected, self.anthropicAuthVerifying {
+                    Text("Verifying OAuth…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !self.anthropicAuthConnected {
                     Text(self.anthropicAuthDetectedStatus.shortDescription)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if self.anthropicAuthVerified, let date = self.anthropicAuthVerifiedAt {
+                    Text("Detected working OAuth (\(date.formatted(date: .abbreviated, time: .shortened))).")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -313,7 +328,7 @@ extension OnboardingView {
 
                 Text(
                     "This lets Clawdis use Claude immediately. Credentials are stored at " +
-                        "`~/.clawdis/credentials/oauth.json` (owner-only). You can redo this anytime.")
+                        "`~/.clawdis/credentials/oauth.json` (owner-only).")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -341,20 +356,38 @@ extension OnboardingView {
                 Divider().padding(.vertical, 2)
 
                 HStack(spacing: 12) {
-                    Button {
-                        self.startAnthropicOAuth()
-                    } label: {
-                        if self.anthropicAuthBusy {
-                            ProgressView()
+                    if !self.anthropicAuthVerified {
+                        if self.anthropicAuthConnected {
+                            Button("Verify") {
+                                Task { await self.verifyAnthropicOAuthIfNeeded(force: true) }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(self.anthropicAuthBusy || self.anthropicAuthVerifying)
+
+                            if self.anthropicAuthVerificationFailed {
+                                Button("Re-auth (OAuth)") {
+                                    self.startAnthropicOAuth()
+                                }
+                                .buttonStyle(.bordered)
+                                .disabled(self.anthropicAuthBusy || self.anthropicAuthVerifying)
+                            }
                         } else {
-                            Text("Open Claude sign-in (OAuth)")
+                            Button {
+                                self.startAnthropicOAuth()
+                            } label: {
+                                if self.anthropicAuthBusy {
+                                    ProgressView()
+                                } else {
+                                    Text("Open Claude sign-in (OAuth)")
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(self.anthropicAuthBusy)
                         }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.anthropicAuthBusy)
                 }
 
-                if self.anthropicAuthPKCE != nil {
+                if !self.anthropicAuthVerified, self.anthropicAuthPKCE != nil {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Paste the `code#state` value")
                             .font(.headline)
@@ -405,6 +438,7 @@ extension OnboardingView {
                 }
             }
         }
+        .task { await self.verifyAnthropicOAuthIfNeeded() }
     }
 
     func permissionsPage() -> some View {

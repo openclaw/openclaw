@@ -68,6 +68,11 @@ struct OnboardingView: View {
     @State var anthropicAuthStatus: String?
     @State var anthropicAuthBusy = false
     @State var anthropicAuthConnected = false
+    @State var anthropicAuthVerifying = false
+    @State var anthropicAuthVerified = false
+    @State var anthropicAuthVerificationAttempted = false
+    @State var anthropicAuthVerificationFailed = false
+    @State var anthropicAuthVerifiedAt: Date?
     @State var anthropicAuthDetectedStatus: ClawdisOAuthStore.AnthropicOAuthStatus = .missingFile
     @State var anthropicAuthAutoDetectClipboard = true
     @State var anthropicAuthAutoConnectClipboard = true

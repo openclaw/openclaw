@@ -128,8 +128,51 @@ extension OnboardingView {
 
     func refreshAnthropicOAuthStatus() {
         _ = ClawdisOAuthStore.importLegacyAnthropicOAuthIfNeeded()
+        let previous = self.anthropicAuthDetectedStatus
         let status = ClawdisOAuthStore.anthropicOAuthStatus()
         self.anthropicAuthDetectedStatus = status
         self.anthropicAuthConnected = status.isConnected
+
+        if previous != status {
+            self.anthropicAuthVerified = false
+            self.anthropicAuthVerificationAttempted = false
+            self.anthropicAuthVerificationFailed = false
+            self.anthropicAuthVerifiedAt = nil
+        }
+    }
+
+    @MainActor
+    func verifyAnthropicOAuthIfNeeded(force: Bool = false) async {
+        guard self.state.connectionMode == .local else { return }
+        guard self.anthropicAuthDetectedStatus.isConnected else { return }
+        if self.anthropicAuthVerified, !force { return }
+        if self.anthropicAuthVerifying { return }
+        if self.anthropicAuthVerificationAttempted, !force { return }
+
+        self.anthropicAuthVerificationAttempted = true
+        self.anthropicAuthVerifying = true
+        self.anthropicAuthVerificationFailed = false
+        defer { self.anthropicAuthVerifying = false }
+
+        guard let refresh = ClawdisOAuthStore.loadAnthropicOAuthRefreshToken(), !refresh.isEmpty else {
+            self.anthropicAuthStatus = "OAuth verification failed: missing refresh token."
+            self.anthropicAuthVerificationFailed = true
+            return
+        }
+
+        do {
+            let updated = try await AnthropicOAuth.refresh(refreshToken: refresh)
+            try ClawdisOAuthStore.saveAnthropicOAuth(updated)
+            self.refreshAnthropicOAuthStatus()
+            self.anthropicAuthVerified = true
+            self.anthropicAuthVerifiedAt = Date()
+            self.anthropicAuthVerificationFailed = false
+            self.anthropicAuthStatus = "OAuth detected and verified."
+        } catch {
+            self.anthropicAuthVerified = false
+            self.anthropicAuthVerifiedAt = nil
+            self.anthropicAuthVerificationFailed = true
+            self.anthropicAuthStatus = "OAuth verification failed: \(error.localizedDescription)"
+        }
     }
 }

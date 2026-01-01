@@ -149,6 +149,49 @@ enum AnthropicOAuth {
         self.logger.info("Anthropic OAuth exchange ok; expiresAtMs=\(expiresAtMs, privacy: .public)")
         return AnthropicOAuthCredentials(type: "oauth", refresh: refresh, access: access, expires: expiresAtMs)
     }
+
+    static func refresh(refreshToken: String) async throws -> AnthropicOAuthCredentials {
+        let payload: [String: Any] = [
+            "grant_type": "refresh_token",
+            "client_id": self.clientId,
+            "refresh_token": refreshToken,
+        ]
+        let body = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        var request = URLRequest(url: self.tokenURL)
+        request.httpMethod = "POST"
+        request.httpBody = body
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw URLError(.badServerResponse)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let text = String(data: data, encoding: .utf8) ?? "<non-utf8>"
+            throw NSError(
+                domain: "AnthropicOAuth",
+                code: http.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "Token refresh failed: \(text)"])
+        }
+
+        let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let access = decoded?["access_token"] as? String
+        let refresh = (decoded?["refresh_token"] as? String) ?? refreshToken
+        let expiresIn = decoded?["expires_in"] as? Double
+        guard let access, let expiresIn else {
+            throw NSError(domain: "AnthropicOAuth", code: 0, userInfo: [
+                NSLocalizedDescriptionKey: "Unexpected token response.",
+            ])
+        }
+
+        let expiresAtMs = Int64(Date().timeIntervalSince1970 * 1000)
+            + Int64(expiresIn * 1000)
+            - Int64(5 * 60 * 1000)
+
+        self.logger.info("Anthropic OAuth refresh ok; expiresAtMs=\(expiresAtMs, privacy: .public)")
+        return AnthropicOAuthCredentials(type: "oauth", refresh: refresh, access: access, expires: expiresAtMs)
+    }
 }
 
 enum ClawdisOAuthStore {
@@ -277,6 +320,14 @@ enum ClawdisOAuthStore {
         }
 
         return .connected(expiresAtMs: expiresAtMs)
+    }
+
+    static func loadAnthropicOAuthRefreshToken() -> String? {
+        let url = self.oauthURL()
+        guard let storage = self.loadStorage(at: url) else { return nil }
+        guard let rawEntry = storage[self.providerKey] as? [String: Any] else { return nil }
+        let refresh = self.firstString(in: rawEntry, keys: ["refresh", "refresh_token", "refreshToken"])
+        return refresh?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func firstString(in dict: [String: Any], keys: [String]) -> String? {
