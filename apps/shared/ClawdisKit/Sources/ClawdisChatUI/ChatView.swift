@@ -24,7 +24,7 @@ public struct ClawdisChatView: View {
         static let stackSpacing: CGFloat = 0
         static let messageSpacing: CGFloat = 6
         static let messageListPaddingTop: CGFloat = 0
-        static let messageListPaddingBottom: CGFloat = 4
+        static let messageListPaddingBottom: CGFloat = 16
         static let messageListPaddingHorizontal: CGFloat = 6
         #else
         static let outerPaddingHorizontal: CGFloat = 6
@@ -86,7 +86,7 @@ public struct ClawdisChatView: View {
                     }
 
                     Color.clear
-                        .frame(height: 0)
+                        .frame(height: Layout.messageListPaddingBottom)
                         .id(self.scrollerBottomID)
                 }
                 // Use scroll targets for stable auto-scroll without ScrollViewReader relayout glitches.
