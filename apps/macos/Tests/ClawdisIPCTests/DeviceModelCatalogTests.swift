@@ -30,4 +30,10 @@ struct DeviceModelCatalogTests {
         #expect(DeviceModelCatalog.symbol(deviceFamily: "Android", modelIdentifier: "", friendlyName: nil) == "android")
         #expect(DeviceModelCatalog.symbol(deviceFamily: "Linux", modelIdentifier: "", friendlyName: nil) == "cpu")
     }
+
+    @Test
+    func presentationUsesBundledModelMappings() {
+        let presentation = DeviceModelCatalog.presentation(deviceFamily: "iPhone", modelIdentifier: "iPhone1,1")
+        #expect(presentation?.title == "iPhone")
+    }
 }

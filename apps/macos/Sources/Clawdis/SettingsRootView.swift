@@ -105,8 +105,8 @@ struct SettingsRootView: View {
     }
 
     private var nixManagedBanner: some View {
-        let configPath = ProcessInfo.processInfo.environment["CLAWDIS_CONFIG_PATH"] ?? "~/.clawdis/clawdis.json"
-        let stateDir = ProcessInfo.processInfo.environment["CLAWDIS_STATE_DIR"] ?? "~/.clawdis"
+        let configPath = ClawdisConfigFile.url().path
+        let stateDir = ClawdisConfigFile.stateDirURL().path
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
