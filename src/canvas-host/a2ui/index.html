@@ -123,25 +123,29 @@
         z-index: 3;
       }
       #clawdis-status .card {
-        text-align: center;
-        padding: 16px 18px;
-        border-radius: 14px;
-        background: rgba(18, 18, 22, 0.42);
-        border: 1px solid rgba(255,255,255,0.08);
-        box-shadow: 0 18px 60px rgba(0,0,0,0.55);
-        -webkit-backdrop-filter: blur(14px);
-        backdrop-filter: blur(14px);
+        width: min(560px, 88vw);
+        text-align: left;
+        padding: 14px 16px 12px;
+        border-radius: 16px;
+        background:
+          linear-gradient(140deg, rgba(23, 24, 35, 0.78), rgba(18, 19, 28, 0.55));
+        border: 1px solid rgba(255,255,255,0.12);
+        box-shadow: 0 16px 46px rgba(0,0,0,0.52), inset 0 1px 0 rgba(255,255,255,0.06);
+        -webkit-backdrop-filter: blur(18px) saturate(140%);
+        backdrop-filter: blur(18px) saturate(140%);
       }
       #clawdis-status .title {
-        font: 600 20px -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
-        letter-spacing: 0.2px;
-        color: rgba(255,255,255,0.92);
-        text-shadow: 0 0 22px rgba(42, 113, 255, 0.35);
+        font: 600 12px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        letter-spacing: 0.45px;
+        text-transform: uppercase;
+        color: rgba(255,255,255,0.7);
       }
       #clawdis-status .subtitle {
-        margin-top: 6px;
-        font: 500 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-        color: rgba(255,255,255,0.58);
+        margin-top: 8px;
+        font: 500 13px/1.45 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+        color: rgba(255,255,255,0.9);
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
       }
       clawdis-a2ui-host {
         display: block;

@@ -88,6 +88,7 @@
 - macOS menu: device rows now pack platform/version on the first line, and command lists wrap in submenus.
 - macOS menu: split device platform/version across first and second rows for better fit.
 - macOS Canvas: show remote control status in the debug overlay and log A2UI auto-nav decisions.
+- Canvas A2UI: polish the debug status HUD styling.
 - iOS node: fix ReplayKit screen recording crash caused by queue isolation assertions during capture.
 - iOS Talk Mode: avoid audio tap queue assertions when starting recognition.
 - macOS: use $HOME/Library/pnpm for SSH PATH exports (thanks @mbelinky).
