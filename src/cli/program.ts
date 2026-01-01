@@ -2,6 +2,7 @@ import chalk from "chalk";
 import { Command } from "commander";
 import { agentCommand } from "../commands/agent.js";
 import { healthCommand } from "../commands/health.js";
+import { onboardCommand } from "../commands/onboard.js";
 import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
@@ -105,9 +106,33 @@ export function buildProgram() {
       "--workspace <dir>",
       "Agent workspace directory (default: ~/clawd; stored as agent.workspace)",
     )
+    .option("--wizard", "Run the interactive onboarding wizard", false)
     .action(async (opts) => {
       try {
+        if (opts.wizard) {
+          await onboardCommand(
+            { workspace: opts.workspace as string | undefined },
+            defaultRuntime,
+          );
+          return;
+        }
         await setupCommand(
+          { workspace: opts.workspace as string | undefined },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("onboard")
+    .description("Interactive wizard to set up the gateway, workspace, and skills")
+    .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
+    .action(async (opts) => {
+      try {
+        await onboardCommand(
           { workspace: opts.workspace as string | undefined },
           defaultRuntime,
         );

@@ -50,6 +50,8 @@ function buildNodeInstallCommand(
       return ["pnpm", "add", "-g", packageName];
     case "yarn":
       return ["yarn", "global", "add", packageName];
+    case "bun":
+      return ["bun", "add", "-g", packageName];
     default:
       return ["npm", "install", "-g", packageName];
   }

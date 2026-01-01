@@ -17,6 +17,8 @@
 - Signal: add `signal-cli` JSON-RPC support for send/receive via the Signal provider.
 - Tests: add a Z.AI live test gate for smoke validation when keys are present.
 - macOS Debug: add app log verbosity and rolling file log toggle for swift-log-backed app logs.
+- CLI: add onboarding wizard (gateway + workspace + skills) with daemon installers and Anthropic/Minimax setup paths.
+- Skills: allow `bun` as a node manager for skill installs.
 
 ### Fixes
 - macOS codesign: skip hardened runtime for ad-hoc signing and avoid empty options args (#70) — thanks @petter-b

@@ -77,7 +77,7 @@ metadata: {"clawdis":{"emoji":"♊️","requires":{"bins":["gemini"]},"install":
 
 Notes:
 - If multiple installers are listed, the gateway picks a **single** preferred option (brew when available, otherwise node).
-- Node installs honor `skills.install.nodeManager` in `clawdis.json` (default: npm; options: npm/pnpm/yarn).
+- Node installs honor `skills.install.nodeManager` in `clawdis.json` (default: npm; options: npm/pnpm/yarn/bun).
 
 If no `metadata.clawdis` is present, the skill is always eligible (unless
 disabled in config or blocked by `skills.allowBundled` for bundled skills).

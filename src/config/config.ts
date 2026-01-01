@@ -328,7 +328,7 @@ export type SkillsLoadConfig = {
 
 export type SkillsInstallConfig = {
   preferBrew?: boolean;
-  nodeManager?: "npm" | "pnpm" | "yarn";
+  nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
 };
 
 export type SkillsConfig = {
@@ -945,7 +945,12 @@ const ClawdisSchema = z.object({
         .object({
           preferBrew: z.boolean().optional(),
           nodeManager: z
-            .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn")])
+            .union([
+              z.literal("npm"),
+              z.literal("pnpm"),
+              z.literal("yarn"),
+              z.literal("bun"),
+            ])
             .optional(),
         })
         .optional(),

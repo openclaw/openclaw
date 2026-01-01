@@ -37,7 +37,7 @@ export type ClawdisSkillMetadata = {
 
 export type SkillsInstallPreferences = {
   preferBrew: boolean;
-  nodeManager: "npm" | "pnpm" | "yarn";
+  nodeManager: "npm" | "pnpm" | "yarn" | "bun";
 };
 
 type ParsedSkillFrontmatter = Record<string, string>;
@@ -179,7 +179,10 @@ export function resolveSkillsInstallPreferences(
     typeof raw?.nodeManager === "string" ? raw.nodeManager.trim() : "";
   const manager = managerRaw.toLowerCase();
   const nodeManager =
-    manager === "pnpm" || manager === "yarn" || manager === "npm"
+    manager === "pnpm" ||
+    manager === "yarn" ||
+    manager === "bun" ||
+    manager === "npm"
       ? (manager as SkillsInstallPreferences["nodeManager"])
       : "npm";
   return { preferBrew, nodeManager };

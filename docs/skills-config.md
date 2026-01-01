@@ -20,7 +20,7 @@ All skills-related configuration lives under `skills` in `~/.clawdis/clawdis.jso
     },
     install: {
       preferBrew: true,
-      nodeManager: "npm" // npm | pnpm | yarn
+      nodeManager: "npm" // npm | pnpm | yarn | bun
     },
     entries: {
       "nano-banana-pro": {
@@ -43,7 +43,7 @@ All skills-related configuration lives under `skills` in `~/.clawdis/clawdis.jso
   bundled skills in the list are eligible (managed/workspace skills unaffected).
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `install.preferBrew`: prefer brew installers when available (default: true).
-- `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn`, default: npm).
+- `install.nodeManager`: node installer preference (`npm` | `pnpm` | `yarn` | `bun`, default: npm).
 - `entries.<skillKey>`: per-skill overrides.
 
 Per-skill fields:
