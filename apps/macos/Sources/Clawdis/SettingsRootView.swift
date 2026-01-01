@@ -6,6 +6,7 @@ struct SettingsRootView: View {
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let isNixMode = ProcessInfo.processInfo.isNixMode
@@ -102,13 +103,16 @@ struct SettingsRootView: View {
             guard !self.isPreview else { return }
             await self.refreshPerms()
         }
+        .task(id: self.state.connectionMode) {
+            guard !self.isPreview else { return }
+            await self.refreshSnapshotPaths()
+        }
     }
 
     private var nixManagedBanner: some View {
         // Prefer gateway-resolved paths; fall back to local env defaults if disconnected.
-        let snapshotPaths = GatewayConnection.shared.snapshotPaths()
-        let configPath = snapshotPaths.configPath ?? ClawdisPaths.configURL.path
-        let stateDir = snapshotPaths.stateDir ?? ClawdisPaths.stateDirURL.path
+        let configPath = self.snapshotPaths.configPath ?? ClawdisPaths.configURL.path
+        let stateDir = self.snapshotPaths.stateDir ?? ClawdisPaths.stateDirURL.path
 
         return VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
@@ -138,6 +142,12 @@ struct SettingsRootView: View {
     private func validTab(for requested: SettingsTab) -> SettingsTab {
         if requested == .debug, !self.state.debugPaneEnabled { return .general }
         return requested
+    }
+
+    @MainActor
+    private func refreshSnapshotPaths() async {
+        let paths = await GatewayConnection.shared.snapshotPaths()
+        self.snapshotPaths = paths
     }
 
     @MainActor

@@ -3,10 +3,10 @@ import Foundation
 enum ConfigStore {
     struct Overrides: Sendable {
         var isRemoteMode: (@Sendable () async -> Bool)?
-        var loadLocal: (@Sendable () -> [String: Any])?
-        var saveLocal: (@Sendable ([String: Any]) -> Void)?
-        var loadRemote: (@Sendable () async -> [String: Any])?
-        var saveRemote: (@Sendable ([String: Any]) async throws -> Void)?
+        var loadLocal: (@MainActor @Sendable () -> [String: Any])?
+        var saveLocal: (@MainActor @Sendable ([String: Any]) -> Void)?
+        var loadRemote: (@MainActor @Sendable () async -> [String: Any])?
+        var saveRemote: (@MainActor @Sendable ([String: Any]) async throws -> Void)?
     }
 
     private actor OverrideStore {
@@ -24,9 +24,10 @@ enum ConfigStore {
         if let override = overrides.isRemoteMode {
             return await override()
         }
-        await MainActor.run { AppStateStore.shared.connectionMode == .remote }
+        return await MainActor.run { AppStateStore.shared.connectionMode == .remote }
     }
 
+    @MainActor
     static func load() async -> [String: Any] {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
@@ -41,6 +42,7 @@ enum ConfigStore {
         return ClawdisConfigFile.loadDict()
     }
 
+    @MainActor
     static func save(_ root: [String: Any]) async throws {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
@@ -58,6 +60,7 @@ enum ConfigStore {
         }
     }
 
+    @MainActor
     private static func loadFromGateway() async -> [String: Any] {
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
@@ -70,6 +73,7 @@ enum ConfigStore {
         }
     }
 
+    @MainActor
     private static func saveToGateway(_ root: [String: Any]) async throws {
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         guard let raw = String(data: data, encoding: .utf8) else {

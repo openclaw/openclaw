@@ -73,6 +73,7 @@ extension OnboardingView {
         return agent?["workspace"] as? String
     }
 
+    @discardableResult
     func saveAgentWorkspace(_ workspace: String?) async -> Bool {
         var root = await ConfigStore.load()
         var agent = root["agent"] as? [String: Any] ?? [:]
