@@ -26,6 +26,7 @@
 - macOS: Voice Wake now fully tears down the Speech pipeline when disabled (cancel pending restarts, drop stale callbacks) to avoid high CPU in the background.
 - macOS menu: add a Talk Mode action alongside the Open Dashboard/Chat/Canvas entries.
 - macOS Debug: hide “Restart Gateway” when the app won’t start a local gateway (remote mode / attach-only).
+- macOS Debug: add an icon for the App Logging submenu.
 - macOS Talk Mode: orb overlay refresh, ElevenLabs request logging, API key status in settings, and auto-select first voice when none is configured.
 - macOS Talk Mode: add hard timeout around ElevenLabs TTS synthesis to avoid getting stuck “speaking” forever on hung requests.
 - macOS Talk Mode: avoid stuck playback when the audio player never starts (fail-fast + watchdog).
