@@ -12,6 +12,7 @@
   --chrome: rgba(10, 14, 20, 0.75);
   --chrome-strong: rgba(10, 14, 20, 0.82);
   --text: rgba(246, 248, 252, 0.95);
+  --chat-text: rgba(246, 248, 252, 0.88);
   --muted: rgba(210, 218, 230, 0.62);
   --border: rgba(255, 255, 255, 0.08);
   --accent: #ff7a3d;
@@ -40,6 +41,7 @@
   --chrome: rgba(255, 255, 255, 0.72);
   --chrome-strong: rgba(255, 255, 255, 0.82);
   --text: rgba(20, 24, 36, 0.96);
+  --chat-text: rgba(20, 24, 36, 0.82);
   --muted: rgba(50, 58, 76, 0.6);
   --border: rgba(16, 24, 40, 0.12);
   --accent: #ff7a3d;

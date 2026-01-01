@@ -168,6 +168,7 @@ export class ClawdisApp extends LitElement {
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
+  private chatScrollTimeout: number | null = null;
   private nodesPollInterval: number | null = null;
   basePath = "";
   private popStateHandler = () => this.onPopState();
@@ -202,6 +203,7 @@ export class ClawdisApp extends LitElement {
       (changed.has("chatMessages") ||
         changed.has("chatStream") ||
         changed.has("chatLoading") ||
+        changed.has("chatMessage") ||
         changed.has("tab"))
     ) {
       this.scheduleChatScroll();
@@ -241,11 +243,21 @@ export class ClawdisApp extends LitElement {
 
   private scheduleChatScroll() {
     if (this.chatScrollFrame) cancelAnimationFrame(this.chatScrollFrame);
+    if (this.chatScrollTimeout != null) {
+      clearTimeout(this.chatScrollTimeout);
+      this.chatScrollTimeout = null;
+    }
     this.chatScrollFrame = requestAnimationFrame(() => {
       this.chatScrollFrame = null;
       const container = this.querySelector(".chat-thread") as HTMLElement | null;
       if (!container) return;
       container.scrollTop = container.scrollHeight;
+      this.chatScrollTimeout = window.setTimeout(() => {
+        this.chatScrollTimeout = null;
+        const latest = this.querySelector(".chat-thread") as HTMLElement | null;
+        if (!latest) return;
+        latest.scrollTop = latest.scrollHeight;
+      }, 120);
     });
   }
 

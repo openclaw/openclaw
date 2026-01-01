@@ -213,6 +213,7 @@ export function renderApp(state: AppViewState) {
               onPasswordChange: (next) => (state.password = next),
               onSessionKeyChange: (next) => {
                 state.sessionKey = next;
+                state.chatMessage = "";
                 state.applySettings({ ...state.settings, sessionKey: next });
               },
               onRefresh: () => state.loadOverview(),

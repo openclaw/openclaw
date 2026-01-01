@@ -46,6 +46,7 @@ export async function sendChat(state: ChatState) {
   if (!msg) return;
 
   state.chatSending = true;
+  state.chatMessage = "";
   state.lastError = null;
   const runId = crypto.randomUUID();
   state.chatRunId = runId;
@@ -57,10 +58,10 @@ export async function sendChat(state: ChatState) {
       deliver: false,
       idempotencyKey: runId,
     });
-    state.chatMessage = "";
   } catch (err) {
     state.chatRunId = null;
     state.chatStream = null;
+    state.chatMessage = msg;
     state.lastError = String(err);
   } finally {
     state.chatSending = false;
