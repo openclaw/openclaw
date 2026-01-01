@@ -29,6 +29,11 @@ export type DiscordSendResult = {
   channelId: string;
 };
 
+export type DiscordReactOpts = {
+  token?: string;
+  rest?: REST;
+};
+
 function resolveToken(explicit?: string) {
   const cfgToken = loadConfig().discord?.token;
   const token = normalizeDiscordToken(
@@ -40,6 +45,16 @@ function resolveToken(explicit?: string) {
     );
   }
   return token;
+}
+
+function normalizeReactionEmoji(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    throw new Error("emoji required");
+  }
+  const customMatch = trimmed.match(/^<a?:([^:>]+):(\d+)>$/);
+  const identifier = customMatch ? `${customMatch[1]}:${customMatch[2]}` : trimmed;
+  return encodeURIComponent(identifier);
 }
 
 function parseRecipient(raw: string): DiscordRecipient {
@@ -163,4 +178,17 @@ export async function sendMessageDiscord(
     messageId: result.id ? String(result.id) : "unknown",
     channelId: String(result.channel_id ?? channelId),
   };
+}
+
+export async function reactMessageDiscord(
+  channelId: string,
+  messageId: string,
+  emoji: string,
+  opts: DiscordReactOpts = {},
+) {
+  const token = resolveToken(opts.token);
+  const rest = opts.rest ?? new REST({ version: "10" }).setToken(token);
+  const encoded = normalizeReactionEmoji(emoji);
+  await rest.put(Routes.channelMessageReaction(channelId, messageId, encoded));
+  return { ok: true };
 }

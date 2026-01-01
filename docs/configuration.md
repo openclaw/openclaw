@@ -179,7 +179,8 @@ Configure the Discord bot by setting the bot token and optional gating:
     },
     requireMention: true,                   // require @bot mentions in guilds
     mediaMaxMb: 8,                          // clamp inbound media size
-    historyLimit: 20                        // include last N guild messages as context
+    historyLimit: 20,                       // include last N guild messages as context
+    enableReactions: false                  // allow agent-triggered reactions
   }
 }
 ```

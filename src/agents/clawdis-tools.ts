@@ -41,6 +41,7 @@ import {
 } from "../cli/nodes-screen.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
+import { reactMessageDiscord } from "../discord/send.js";
 import { callGateway } from "../gateway/call.js";
 import { detectMime } from "../media/mime.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -1422,6 +1423,48 @@ const GatewayToolSchema = Type.Union([
   }),
 ]);
 
+const DiscordToolSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal("react"),
+    channelId: Type.String(),
+    messageId: Type.String(),
+    emoji: Type.String(),
+  }),
+]);
+
+function createDiscordTool(): AnyAgentTool {
+  return {
+    label: "Clawdis Discord",
+    name: "clawdis_discord",
+    description:
+      "React to Discord messages. Requires discord.enableReactions=true in config.",
+    parameters: DiscordToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const action = readStringParam(params, "action", { required: true });
+      if (action !== "react") throw new Error(`Unknown action: ${action}`);
+
+      const cfg = loadConfig();
+      if (!cfg.discord?.enableReactions) {
+        throw new Error(
+          "Discord reactions are disabled (set discord.enableReactions=true).",
+        );
+      }
+
+      const channelId = readStringParam(params, "channelId", {
+        required: true,
+      });
+      const messageId = readStringParam(params, "messageId", {
+        required: true,
+      });
+      const emoji = readStringParam(params, "emoji", { required: true });
+
+      await reactMessageDiscord(channelId, messageId, emoji);
+      return jsonResult({ ok: true });
+    },
+  };
+}
+
 function createGatewayTool(): AnyAgentTool {
   return {
     label: "Clawdis Gateway",
@@ -1470,6 +1513,7 @@ export function createClawdisTools(): AnyAgentTool[] {
     createCanvasTool(),
     createNodesTool(),
     createCronTool(),
+    createDiscordTool(),
     createGatewayTool(),
   ];
 }

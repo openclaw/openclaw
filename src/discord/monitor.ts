@@ -44,6 +44,7 @@ type DiscordHistoryEntry = {
   sender: string;
   body: string;
   timestamp?: number;
+  messageId?: string;
 };
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -122,6 +123,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           sender: message.member?.displayName ?? message.author.tag,
           body: baseText,
           timestamp: message.createdTimestamp,
+          messageId: message.id,
         });
         while (history.length > historyLimit) history.shift();
         guildHistories.set(message.channelId, history);
@@ -196,11 +198,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const fromLabel = isDirectMessage
         ? buildDirectLabel(message)
         : buildGuildLabel(message);
+      const textWithId = `${text}\n[discord message id: ${message.id} channel: ${message.channelId}]`;
       let combinedBody = formatAgentEnvelope({
         surface: "Discord",
         from: fromLabel,
         timestamp: message.createdTimestamp,
-        body: text,
+        body: textWithId,
       });
       let shouldClearHistory = false;
       if (!isDirectMessage) {
@@ -215,7 +218,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
                 surface: "Discord",
                 from: fromLabel,
                 timestamp: entry.timestamp,
-                body: `${entry.sender}: ${entry.body}`,
+                body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
               }),
             )
             .join("\n");
