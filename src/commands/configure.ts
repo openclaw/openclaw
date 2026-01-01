@@ -37,6 +37,7 @@ import {
   guardCancel,
   openUrl,
   printWizardHeader,
+  probeGatewayReachable,
   randomToken,
   summarizeExistingConfig,
 } from "./onboard-helpers.js";
@@ -384,12 +385,42 @@ export async function runConfigureWizard(
     }
   }
 
+  const localUrl = "ws://127.0.0.1:18789";
+  const localProbe = await probeGatewayReachable({
+    url: localUrl,
+    token: process.env.CLAWDIS_GATEWAY_TOKEN,
+    password:
+      baseConfig.gateway?.auth?.password ??
+      process.env.CLAWDIS_GATEWAY_PASSWORD,
+  });
+  const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
+  const remoteProbe = remoteUrl
+    ? await probeGatewayReachable({
+        url: remoteUrl,
+        token: baseConfig.gateway?.remote?.token,
+      })
+    : null;
+
   const mode = guardCancel(
     await select({
       message: "Where will the Gateway run?",
       options: [
-        { value: "local", label: "Local (this machine)" },
-        { value: "remote", label: "Remote (info-only)" },
+        {
+          value: "local",
+          label: "Local (this machine)",
+          hint: localProbe.ok
+            ? `Gateway reachable (${localUrl})`
+            : `No gateway detected (${localUrl})`,
+        },
+        {
+          value: "remote",
+          label: "Remote (info-only)",
+          hint: !remoteUrl
+            ? "No remote URL configured yet"
+            : remoteProbe?.ok
+              ? `Gateway reachable (${remoteUrl})`
+              : `Configured but unreachable (${remoteUrl})`,
+        },
       ],
     }),
     runtime,

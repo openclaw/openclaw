@@ -11,6 +11,7 @@ import {
 import type { ClawdisConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDIS } from "../config/config.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
+import { callGateway } from "../gateway/call.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -169,6 +170,38 @@ export async function detectBinary(name: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export async function probeGatewayReachable(params: {
+  url: string;
+  token?: string;
+  password?: string;
+  timeoutMs?: number;
+}): Promise<{ ok: boolean; detail?: string }> {
+  const url = params.url.trim();
+  const timeoutMs = params.timeoutMs ?? 1500;
+  try {
+    await callGateway({
+      url,
+      token: params.token,
+      password: params.password,
+      method: "health",
+      timeoutMs,
+    });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, detail: summarizeError(err) };
+  }
+}
+
+function summarizeError(err: unknown): string {
+  const raw = String(err ?? "unknown error");
+  const line =
+    raw
+      .split("\n")
+      .map((s) => s.trim())
+      .find(Boolean) ?? raw;
+  return line.length > 120 ? `${line.slice(0, 119)}…` : line;
 }
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
