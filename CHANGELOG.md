@@ -49,6 +49,7 @@
 - macOS menu: split device platform/version across first and second rows for better fit.
 - iOS node: fix ReplayKit screen recording crash caused by queue isolation assertions during capture.
 - iOS Talk Mode: avoid audio tap queue assertions when starting recognition.
+- macOS: use $HOME/Library/pnpm for SSH PATH exports (thanks @mbelinky).
 - iOS/Android nodes: bridge auto-connect refreshes stale tokens and settings now show richer bridge/device details.
 - iOS/Android nodes: status pill now surfaces camera activity instead of overlay toasts.
 - iOS/Android/macOS nodes: camera snaps recompress to keep base64 payloads under 5 MB.
