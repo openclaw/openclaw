@@ -144,6 +144,7 @@ import { probeSignal, type SignalProbe } from "../signal/probe.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
 import { sendMessageTelegram } from "../telegram/send.js";
+import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164, resolveUserPath } from "../utils.js";
 import type { WebProviderStatus } from "../web/auto-reply.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
@@ -291,33 +292,6 @@ const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
 const telegramRuntimeEnv = runtimeForLogger(logTelegram);
 const discordRuntimeEnv = runtimeForLogger(logDiscord);
 const signalRuntimeEnv = runtimeForLogger(logSignal);
-
-function loadTelegramToken(
-  config: ClawdisConfig,
-  opts: { logMissing?: boolean } = {},
-): string {
-  if (process.env.TELEGRAM_BOT_TOKEN) {
-    return process.env.TELEGRAM_BOT_TOKEN.trim();
-  }
-  if (config.telegram?.tokenFile) {
-    const filePath = config.telegram.tokenFile;
-    if (!fs.existsSync(filePath)) {
-      if (opts.logMissing) {
-        logTelegram.warn(`telegram.tokenFile not found: ${filePath}`);
-      }
-      return "";
-    }
-    try {
-      return fs.readFileSync(filePath, "utf-8").trim();
-    } catch (err) {
-      if (opts.logMissing) {
-        logTelegram.warn(`telegram.tokenFile read failed: ${String(err)}`);
-      }
-      return "";
-    }
-  }
-  return config.telegram?.botToken?.trim() ?? "";
-}
 
 function resolveBonjourCliPath(): string | undefined {
   const envPath = process.env.CLAWDIS_CLI_PATH?.trim();
@@ -1956,7 +1930,9 @@ export async function startGatewayServer(
       logTelegram.info("skipping provider start (telegram.enabled=false)");
       return;
     }
-    const telegramToken = loadTelegramToken(cfg, { logMissing: true });
+    const { token: telegramToken } = resolveTelegramToken(cfg, {
+      logMissingFile: (message) => logTelegram.warn(message),
+    });
     if (!telegramToken.trim()) {
       telegramRuntime = {
         ...telegramRuntime,
@@ -1964,7 +1940,7 @@ export async function startGatewayServer(
         lastError: "not configured",
       };
       logTelegram.info(
-        "skipping provider start (no TELEGRAM_BOT_TOKEN/config)",
+        "skipping provider start (no TELEGRAM_BOT_TOKEN/telegram config)",
       );
       return;
     }
@@ -4058,14 +4034,8 @@ export async function startGatewayServer(
                   ? Math.max(1000, timeoutMsRaw)
                   : 10_000;
               const cfg = loadConfig();
-              const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim();
-              const configToken = cfg.telegram?.botToken?.trim();
-              const telegramToken = envToken || configToken || "";
-              const tokenSource = envToken
-                ? "env"
-                : configToken
-                  ? "config"
-                  : "none";
+              const { token: telegramToken, source: tokenSource } =
+                resolveTelegramToken(cfg);
               let telegramProbe: TelegramProbe | undefined;
               let lastProbeAt: number | null = null;
               if (probe && telegramToken) {
@@ -6023,7 +5993,7 @@ export async function startGatewayServer(
               try {
                 if (provider === "telegram") {
                   const cfg = loadConfig();
-                  const token = loadTelegramToken(cfg);
+                  const { token } = resolveTelegramToken(cfg);
                   const result = await sendMessageTelegram(to, message, {
                     mediaUrl: params.mediaUrl,
                     verbose: isVerbose(),

@@ -4,6 +4,11 @@ import type { CliDeps } from "../cli/deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sendCommand } from "./send.js";
 
+let testConfig: Record<string, unknown> = {};
+vi.mock("../config/config.js", () => ({
+  loadConfig: () => testConfig,
+}));
+
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
@@ -16,6 +21,7 @@ const originalDiscordToken = process.env.DISCORD_BOT_TOKEN;
 beforeEach(() => {
   process.env.TELEGRAM_BOT_TOKEN = "token-abc";
   process.env.DISCORD_BOT_TOKEN = "token-discord";
+  testConfig = {};
 });
 
 afterAll(() => {
@@ -75,6 +81,7 @@ describe("sendCommand", () => {
         .fn()
         .mockResolvedValue({ messageId: "t1", chatId: "123" }),
     });
+    testConfig = { telegram: { botToken: "token-abc" } };
     await sendCommand(
       { to: "123", message: "hi", provider: "telegram" },
       deps,
@@ -86,6 +93,26 @@ describe("sendCommand", () => {
       expect.objectContaining({ token: "token-abc" }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("uses config token for telegram when env is missing", async () => {
+    process.env.TELEGRAM_BOT_TOKEN = "";
+    testConfig = { telegram: { botToken: "cfg-token" } };
+    const deps = makeDeps({
+      sendMessageTelegram: vi
+        .fn()
+        .mockResolvedValue({ messageId: "t1", chatId: "123" }),
+    });
+    await sendCommand(
+      { to: "123", message: "hi", provider: "telegram" },
+      deps,
+      runtime,
+    );
+    expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({ token: "cfg-token" }),
+    );
   });
 
   it("routes to discord provider", async () => {

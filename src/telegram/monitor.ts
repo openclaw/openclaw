@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTelegramBot } from "./bot.js";
 import { makeProxyFetch } from "./proxy.js";
+import { resolveTelegramToken } from "./token.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -17,10 +18,12 @@ export type MonitorTelegramOpts = {
 };
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const token = (opts.token ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();
+  const { token } = resolveTelegramToken(loadConfig(), {
+    envToken: opts.token,
+  });
   if (!token) {
     throw new Error(
-      "TELEGRAM_BOT_TOKEN or telegram.botToken is required for Telegram gateway",
+      "TELEGRAM_BOT_TOKEN or telegram.botToken/tokenFile is required for Telegram gateway",
     );
   }
 

@@ -38,6 +38,7 @@ import {
 } from "../config/sessions.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 
 type AgentCommandOpts = {
@@ -217,6 +218,8 @@ export async function agentCommand(
   const skillsSnapshot = needsSkillsSnapshot
     ? buildWorkspaceSkillSnapshot(workspaceDir, { config: cfg })
     : sessionEntry?.skillsSnapshot;
+
+  const { token: telegramToken } = resolveTelegramToken(cfg);
 
   if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
     const current = sessionEntry ?? {
@@ -544,6 +547,7 @@ export async function agentCommand(
           for (const chunk of chunkText(text, 4000)) {
             await deps.sendMessageTelegram(telegramTarget, chunk, {
               verbose: false,
+              token: telegramToken || undefined,
             });
           }
         } else {
@@ -554,6 +558,7 @@ export async function agentCommand(
             await deps.sendMessageTelegram(telegramTarget, caption, {
               verbose: false,
               mediaUrl: url,
+              token: telegramToken || undefined,
             });
           }
         }

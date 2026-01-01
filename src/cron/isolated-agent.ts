@@ -24,6 +24,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
+import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import type { CronJob } from "./types.js";
 
@@ -206,6 +207,7 @@ export async function runCronIsolatedAgentTurn(params: {
         ? params.job.payload.to
         : undefined,
   });
+  const { token: telegramToken } = resolveTelegramToken(params.cfg);
 
   const base =
     `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
@@ -352,6 +354,7 @@ export async function runCronIsolatedAgentTurn(params: {
             for (const chunk of chunkText(payload.text ?? "", 4000)) {
               await params.deps.sendMessageTelegram(chatId, chunk, {
                 verbose: false,
+                token: telegramToken || undefined,
               });
             }
           } else {
@@ -362,6 +365,7 @@ export async function runCronIsolatedAgentTurn(params: {
               await params.deps.sendMessageTelegram(chatId, caption, {
                 verbose: false,
                 mediaUrl: url,
+                token: telegramToken || undefined,
               });
             }
           }

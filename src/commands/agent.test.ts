@@ -51,6 +51,7 @@ function mockConfig(
   storePath: string,
   routingOverrides?: Partial<NonNullable<ClawdisConfig["routing"]>>,
   agentOverrides?: Partial<NonNullable<ClawdisConfig["agent"]>>,
+  telegramOverrides?: Partial<NonNullable<ClawdisConfig["telegram"]>>,
 ) {
   configSpy.mockReturnValue({
     agent: {
@@ -60,6 +61,7 @@ function mockConfig(
     },
     session: { store: storePath, mainKey: "main" },
     routing: routingOverrides ? { ...routingOverrides } : undefined,
+    telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
   });
 }
 
@@ -196,6 +198,48 @@ describe("agentCommand", () => {
 
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.prompt).toBe("ping");
+    });
+  });
+
+  it("passes telegram token when delivering", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, undefined, undefined, { botToken: "t-1" });
+      const deps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi
+          .fn()
+          .mockResolvedValue({ messageId: "t1", chatId: "123" }),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+      };
+
+      const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
+      process.env.TELEGRAM_BOT_TOKEN = "";
+      try {
+        await agentCommand(
+          {
+            message: "hi",
+            to: "123",
+            deliver: true,
+            provider: "telegram",
+          },
+          runtime,
+          deps,
+        );
+
+        expect(deps.sendMessageTelegram).toHaveBeenCalledWith(
+          "123",
+          "ok",
+          expect.objectContaining({ token: "t-1" }),
+        );
+      } finally {
+        if (prevTelegramToken === undefined) {
+          delete process.env.TELEGRAM_BOT_TOKEN;
+        } else {
+          process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
+        }
+      }
     });
   });
 });

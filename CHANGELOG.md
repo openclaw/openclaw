@@ -32,6 +32,7 @@
 - macOS packaging: move rpath config into swift build for reliability (#69) — thanks @petter-b
 - macOS: prioritize main bundle for device resources to prevent crash (#73) — thanks @petter-b
 - macOS remote: route settings through gateway config and avoid local config reads in remote mode.
+- Telegram: align token resolution for cron/agent/CLI sends (env/config/tokenFile) to prevent isolated delivery failures (#76).
 - Chat UI: clear composer input immediately and allow clear while editing to prevent duplicate sends (#72) — thanks @hrdwdmrbl
 - Restart: use systemd on Linux (and report actual restart method) instead of always launchctl.
 - Gateway relay: detect Bun binaries via execPath to resolve packaged assets on macOS.

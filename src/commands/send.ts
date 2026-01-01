@@ -1,7 +1,9 @@
 import type { CliDeps } from "../cli/deps.js";
+import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveTelegramToken } from "../telegram/token.js";
 
 export async function sendCommand(
   opts: {
@@ -25,8 +27,9 @@ export async function sendCommand(
   }
 
   if (provider === "telegram") {
+    const { token } = resolveTelegramToken(loadConfig());
     const result = await deps.sendMessageTelegram(opts.to, opts.message, {
-      token: process.env.TELEGRAM_BOT_TOKEN,
+      token: token || undefined,
       mediaUrl: opts.media,
     });
     runtime.log(

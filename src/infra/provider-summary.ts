@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import chalk from "chalk";
 import { type ClawdisConfig, loadConfig } from "../config/config.js";
+import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import {
   getWebAuthAgeMs,
@@ -35,12 +35,8 @@ export async function buildProviderSummary(
   if (!telegramEnabled) {
     lines.push(chalk.cyan("Telegram: disabled"));
   } else {
-    const telegramToken =
-      process.env.TELEGRAM_BOT_TOKEN ?? effective.telegram?.botToken;
-    const telegramTokenFile = effective.telegram?.tokenFile?.trim();
-    const telegramConfigured =
-      Boolean(telegramToken) ||
-      Boolean(telegramTokenFile ? fs.existsSync(telegramTokenFile) : false);
+    const { token: telegramToken } = resolveTelegramToken(effective);
+    const telegramConfigured = Boolean(telegramToken);
     lines.push(
       telegramConfigured
         ? chalk.green("Telegram: configured")
