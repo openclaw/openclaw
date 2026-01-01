@@ -100,20 +100,33 @@ async function connectBrowser(endpoint: string): Promise<ConnectedBrowser> {
   if (cached?.endpoint === endpoint) return cached;
   if (connecting) return await connecting;
 
-  connecting = chromium
-    .connectOverCDP(endpoint, { timeout: 5000 })
-    .then((browser) => {
-      const connected: ConnectedBrowser = { browser, endpoint };
-      cached = connected;
-      observeBrowser(browser);
-      browser.on("disconnected", () => {
-        if (cached?.browser === browser) cached = null;
-      });
-      return connected;
-    })
-    .finally(() => {
-      connecting = null;
-    });
+  const connectWithRetry = async (): Promise<ConnectedBrowser> => {
+    let lastErr: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const timeout = 5000 + attempt * 2000;
+        const browser = await chromium.connectOverCDP(endpoint, { timeout });
+        const connected: ConnectedBrowser = { browser, endpoint };
+        cached = connected;
+        observeBrowser(browser);
+        browser.on("disconnected", () => {
+          if (cached?.browser === browser) cached = null;
+        });
+        return connected;
+      } catch (err) {
+        lastErr = err;
+        const delay = 250 + attempt * 250;
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    }
+    throw lastErr instanceof Error
+      ? lastErr
+      : new Error(String(lastErr ?? "CDP connect failed"));
+  };
+
+  connecting = connectWithRetry().finally(() => {
+    connecting = null;
+  });
 
   return await connecting;
 }

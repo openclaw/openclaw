@@ -4,6 +4,7 @@ import {
   browserCloseTab,
   browserFocusTab,
   browserOpenTab,
+  browserResetProfile,
   browserStart,
   browserStatus,
   browserStop,
@@ -81,6 +82,32 @@ export function registerBrowserManageCommands(
           return;
         }
         defaultRuntime.log(info(`🦞 clawd browser running: ${status.running}`));
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("reset-profile")
+    .description("Reset clawd browser profile (moves it to Trash)")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const result = await browserResetProfile(baseUrl);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        if (!result.moved) {
+          defaultRuntime.log(info("🦞 clawd browser profile already missing."));
+          return;
+        }
+        const dest = result.to ?? result.from;
+        defaultRuntime.log(
+          info(`🦞 clawd browser profile moved to Trash (${dest})`),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

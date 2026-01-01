@@ -2,6 +2,7 @@ import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import WebSocket from "ws";
 
 import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -306,18 +307,84 @@ export async function isChromeReachable(
   cdpPort: number,
   timeoutMs = 500,
 ): Promise<boolean> {
+  const version = await fetchChromeVersion(cdpPort, timeoutMs);
+  return Boolean(version);
+}
+
+type ChromeVersion = {
+  webSocketDebuggerUrl?: string;
+  Browser?: string;
+  "User-Agent"?: string;
+};
+
+async function fetchChromeVersion(
+  cdpPort: number,
+  timeoutMs = 500,
+): Promise<ChromeVersion | null> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
     const res = await fetch(`http://127.0.0.1:${cdpPort}/json/version`, {
       signal: ctrl.signal,
     });
-    return res.ok;
+    if (!res.ok) return null;
+    const data = (await res.json()) as ChromeVersion;
+    if (!data || typeof data !== "object") return null;
+    return data;
   } catch {
-    return false;
+    return null;
   } finally {
     clearTimeout(t);
   }
+}
+
+export async function getChromeWebSocketUrl(
+  cdpPort: number,
+  timeoutMs = 500,
+): Promise<string | null> {
+  const version = await fetchChromeVersion(cdpPort, timeoutMs);
+  const wsUrl = String(version?.webSocketDebuggerUrl ?? "").trim();
+  return wsUrl ? wsUrl : null;
+}
+
+async function canOpenWebSocket(
+  wsUrl: string,
+  timeoutMs = 800,
+): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const ws = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
+    const timer = setTimeout(() => {
+      try {
+        ws.terminate();
+      } catch {
+        // ignore
+      }
+      resolve(false);
+    }, Math.max(50, timeoutMs + 25));
+    ws.once("open", () => {
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        // ignore
+      }
+      resolve(true);
+    });
+    ws.once("error", () => {
+      clearTimeout(timer);
+      resolve(false);
+    });
+  });
+}
+
+export async function isChromeCdpReady(
+  cdpPort: number,
+  timeoutMs = 500,
+  handshakeTimeoutMs = 800,
+): Promise<boolean> {
+  const wsUrl = await getChromeWebSocketUrl(cdpPort, timeoutMs);
+  if (!wsUrl) return false;
+  return await canOpenWebSocket(wsUrl, handshakeTimeoutMs);
 }
 
 export async function launchClawdChrome(

@@ -77,6 +77,7 @@ vi.mock("../config/config.js", () => ({
 
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
+  isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
   launchClawdChrome: vi.fn(async (resolved: { cdpPort: number }) => {
     launchCalls.push({ port: resolved.cdpPort });
@@ -90,6 +91,7 @@ vi.mock("./chrome.js", () => ({
       proc,
     };
   }),
+  resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
   stopClawdChrome: vi.fn(async () => {
     reachable = false;
   }),
