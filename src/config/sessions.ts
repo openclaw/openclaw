@@ -27,7 +27,7 @@ export type SessionEntry = {
   totalTokens?: number;
   model?: string;
   contextTokens?: number;
-  lastChannel?: "whatsapp" | "telegram" | "discord" | "webchat";
+  lastChannel?: "whatsapp" | "telegram" | "discord" | "signal" | "webchat";
   lastTo?: string;
   skillsSnapshot?: SessionSkillSnapshot;
 };

@@ -1871,6 +1871,61 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("agent routes main last-channel signal", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-signal",
+            updatedAt: Date.now(),
+            lastChannel: "signal",
+            lastTo: "+15551234567",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "agent-last-signal",
+        method: "agent",
+        params: {
+          message: "hi",
+          sessionKey: "main",
+          channel: "last",
+          deliver: true,
+          idempotencyKey: "idem-agent-last-signal",
+        },
+      }),
+    );
+    await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "agent-last-signal",
+    );
+
+    const spy = vi.mocked(agentCommand);
+    expect(spy).toHaveBeenCalled();
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.provider).toBe("signal");
+    expect(call.to).toBe("+15551234567");
+    expect(call.deliver).toBe(true);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-signal");
+
+    ws.close();
+    await server.close();
+  });
+
   test("agent ignores webchat last-channel for routing", async () => {
     testAllowFrom = ["+1555"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
@@ -2134,6 +2189,11 @@ describe("gateway server", () => {
         probe?: unknown;
         lastProbeAt?: unknown;
       };
+      signal?: {
+        configured?: boolean;
+        probe?: unknown;
+        lastProbeAt?: unknown;
+      };
     }>(ws, "providers.status", { probe: false, timeoutMs: 2000 });
     expect(res.ok).toBe(true);
     expect(res.payload?.whatsapp).toBeTruthy();
@@ -2141,6 +2201,9 @@ describe("gateway server", () => {
     expect(res.payload?.telegram?.tokenSource).toBe("none");
     expect(res.payload?.telegram?.probe).toBeUndefined();
     expect(res.payload?.telegram?.lastProbeAt).toBeNull();
+    expect(res.payload?.signal?.configured).toBe(false);
+    expect(res.payload?.signal?.probe).toBeUndefined();
+    expect(res.payload?.signal?.lastProbeAt).toBeNull();
 
     ws.close();
     await server.close();

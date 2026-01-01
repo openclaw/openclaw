@@ -165,12 +165,36 @@ export type DiscordConfig = {
   mediaMaxMb?: number;
 };
 
+export type SignalConfig = {
+  /** If false, do not start the Signal provider. Default: true. */
+  enabled?: boolean;
+  /** Optional explicit E.164 account for signal-cli. */
+  account?: string;
+  /** Optional full base URL for signal-cli HTTP daemon. */
+  httpUrl?: string;
+  /** HTTP host for signal-cli daemon (default 127.0.0.1). */
+  httpHost?: string;
+  /** HTTP port for signal-cli daemon (default 8080). */
+  httpPort?: number;
+  /** signal-cli binary path (default: signal-cli). */
+  cliPath?: string;
+  /** Auto-start signal-cli daemon (default: true if httpUrl not set). */
+  autoStart?: boolean;
+  receiveMode?: "on-start" | "manual";
+  ignoreAttachments?: boolean;
+  ignoreStories?: boolean;
+  sendReadReceipts?: boolean;
+  allowFrom?: Array<string | number>;
+  mediaMaxMb?: number;
+};
+
 export type QueueMode = "queue" | "interrupt";
 
 export type QueueModeBySurface = {
   whatsapp?: QueueMode;
   telegram?: QueueMode;
   discord?: QueueMode;
+  signal?: QueueMode;
   webchat?: QueueMode;
 };
 
@@ -399,8 +423,8 @@ export type ClawdisConfig = {
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
-      /** Delivery target (last|whatsapp|telegram|discord|none). */
-      target?: "last" | "whatsapp" | "telegram" | "discord" | "none";
+      /** Delivery target (last|whatsapp|telegram|discord|signal|none). */
+      target?: "last" | "whatsapp" | "telegram" | "discord" | "signal" | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
       /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
@@ -424,6 +448,7 @@ export type ClawdisConfig = {
   web?: WebConfig;
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
+  signal?: SignalConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
   bridge?: BridgeConfig;
@@ -518,6 +543,7 @@ const QueueModeBySurfaceSchema = z
     whatsapp: QueueModeSchema.optional(),
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
+    signal: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
   })
   .optional();
@@ -563,6 +589,7 @@ const HeartbeatSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
+        z.literal("signal"),
         z.literal("none"),
       ])
       .optional(),
@@ -621,6 +648,7 @@ const HookMappingSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
+        z.literal("signal"),
       ])
       .optional(),
     to: z.string().optional(),
@@ -811,6 +839,23 @@ const ClawdisSchema = z.object({
         })
         .optional(),
       requireMention: z.boolean().optional(),
+      mediaMaxMb: z.number().positive().optional(),
+    })
+    .optional(),
+  signal: z
+    .object({
+      enabled: z.boolean().optional(),
+      account: z.string().optional(),
+      httpUrl: z.string().optional(),
+      httpHost: z.string().optional(),
+      httpPort: z.number().int().positive().optional(),
+      cliPath: z.string().optional(),
+      autoStart: z.boolean().optional(),
+      receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
+      ignoreAttachments: z.boolean().optional(),
+      ignoreStories: z.boolean().optional(),
+      sendReadReceipts: z.boolean().optional(),
+      allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
       mediaMaxMb: z.number().positive().optional(),
     })
     .optional(),

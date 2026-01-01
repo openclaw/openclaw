@@ -35,6 +35,7 @@ const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
   sendMessageTelegram: vi.fn(),
   sendMessageDiscord: vi.fn(),
+  sendMessageSignal: vi.fn(),
   ...overrides,
 });
 
@@ -102,6 +103,23 @@ describe("sendCommand", () => {
       "channel:chan",
       "hi",
       expect.objectContaining({ token: "token-discord" }),
+    );
+    expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("routes to signal provider", async () => {
+    const deps = makeDeps({
+      sendMessageSignal: vi.fn().mockResolvedValue({ messageId: "s1" }),
+    });
+    await sendCommand(
+      { to: "+15551234567", message: "hi", provider: "signal" },
+      deps,
+      runtime,
+    );
+    expect(deps.sendMessageSignal).toHaveBeenCalledWith(
+      "+15551234567",
+      "hi",
+      expect.objectContaining({ mediaUrl: undefined }),
     );
     expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
   });

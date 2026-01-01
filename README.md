@@ -40,7 +40,7 @@ Your surfaces
 ## What Clawdis does
 
 - **Personal assistant** — one user, one identity, one memory surface.
-- **Multi-surface inbox** — WhatsApp, Telegram, Discord, WebChat, macOS, iOS.
+- **Multi-surface inbox** — WhatsApp, Telegram, Discord, WebChat, macOS, iOS. Signal support via `signal-cli` (see `docs/signal.md`).
 - **Voice wake + push-to-talk** — local speech recognition on macOS/iOS.
 - **Canvas** — a live visual workspace you can drive from the agent.
 - **Automation-ready** — browser control, media handling, and tool streaming.

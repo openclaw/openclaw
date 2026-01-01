@@ -48,6 +48,22 @@ export async function buildProviderSummary(
     );
   }
 
+  const signalEnabled = effective.signal?.enabled !== false;
+  if (!signalEnabled) {
+    lines.push(chalk.cyan("Signal: disabled"));
+  } else {
+    const signalConfigured = Boolean(
+      effective.signal?.httpUrl ||
+        effective.signal?.cliPath ||
+        effective.signal?.account,
+    );
+    lines.push(
+      signalConfigured
+        ? chalk.green("Signal: configured")
+        : chalk.cyan("Signal: not configured"),
+    );
+  }
+
   const allowFrom = effective.routing?.allowFrom?.length
     ? effective.routing.allowFrom.map(normalizeE164).filter(Boolean)
     : [];

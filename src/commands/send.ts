@@ -82,6 +82,31 @@ export async function sendCommand(
     return;
   }
 
+  if (provider === "signal") {
+    const result = await deps.sendMessageSignal(opts.to, opts.message, {
+      mediaUrl: opts.media,
+    });
+    runtime.log(
+      success(`✅ Sent via signal. Message ID: ${result.messageId}`),
+    );
+    if (opts.json) {
+      runtime.log(
+        JSON.stringify(
+          {
+            provider: "signal",
+            via: "direct",
+            to: opts.to,
+            messageId: result.messageId,
+            mediaUrl: opts.media ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    return;
+  }
+
   // Always send via gateway over WS to avoid multi-session corruption.
   const sendViaGateway = async () =>
     callGateway<{
@@ -93,6 +118,7 @@ export async function sendCommand(
         to: opts.to,
         message: opts.message,
         mediaUrl: opts.media,
+        provider,
         idempotencyKey: randomIdempotencyKey(),
       },
       timeoutMs: 10_000,

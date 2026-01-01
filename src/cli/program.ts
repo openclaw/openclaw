@@ -149,10 +149,10 @@ export function buildProgram() {
 
   program
     .command("send")
-    .description("Send a message (WhatsApp Web, Telegram bot, or Discord)")
+    .description("Send a message (WhatsApp Web, Telegram bot, Discord, Signal)")
     .requiredOption(
       "-t, --to <number>",
-      "Recipient: E.164 for WhatsApp, Telegram chat id/@username, or Discord channel/user",
+      "Recipient: E.164 for WhatsApp/Signal, Telegram chat id/@username, or Discord channel/user",
     )
     .requiredOption("-m, --message <text>", "Message body")
     .option(
@@ -161,7 +161,7 @@ export function buildProgram() {
     )
     .option(
       "--provider <provider>",
-      "Delivery provider: whatsapp|telegram|discord (default: whatsapp)",
+      "Delivery provider: whatsapp|telegram|discord|signal (default: whatsapp)",
     )
     .option("--dry-run", "Print payload and skip sending", false)
     .option("--json", "Output result as JSON", false)
@@ -189,7 +189,7 @@ Examples:
   program
     .command("agent")
     .description(
-      "Talk directly to the configured agent (no chat send; optional WhatsApp delivery)",
+      "Talk directly to the configured agent (no chat send; optional delivery)",
     )
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option(
@@ -204,7 +204,7 @@ Examples:
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--provider <provider>",
-      "Delivery provider: whatsapp|telegram|discord (default: whatsapp)",
+      "Delivery provider: whatsapp|telegram|discord|signal (default: whatsapp)",
     )
     .option(
       "--deliver",
@@ -253,7 +253,7 @@ Examples:
     .option("--json", "Output JSON instead of text", false)
     .option(
       "--deep",
-      "Probe providers (WhatsApp Web + Telegram + Discord)",
+      "Probe providers (WhatsApp Web + Telegram + Discord + Signal)",
       false,
     )
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
@@ -264,7 +264,7 @@ Examples:
 Examples:
   clawdis status                   # show linked account + session store summary
   clawdis status --json            # machine-readable output
-  clawdis status --deep            # run provider probes (WA + Telegram + Discord)
+  clawdis status --deep            # run provider probes (WA + Telegram + Discord + Signal)
   clawdis status --deep --timeout 5000 # tighten probe timeout`,
     )
     .action(async (opts) => {
