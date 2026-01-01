@@ -19,7 +19,9 @@ It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, Web
 
 If you want a private, single-user assistant that feels local, fast, and always-on, this is it.
 
-Preferred setup: run the onboarding wizard (`clawdis onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux** (see `docs/wizard.md`).
+Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · Wizard: [`docs/wizard.md`](docs/wizard.md)
+
+Preferred setup: run the onboarding wizard (`clawdis onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
 Using Claude Pro/Max subscription? See `docs/onboarding.md` for the Anthropic OAuth setup.
 
@@ -65,6 +67,9 @@ Runtime: **Node ≥22** + **pnpm**.
 pnpm install
 pnpm build
 pnpm ui:build
+
+# Recommended: run the onboarding wizard
+pnpm clawdis onboard
 
 # Link WhatsApp (stores creds in ~/.clawdis/credentials)
 pnpm clawdis login
@@ -210,6 +215,7 @@ Browser control (optional):
 - [`docs/discovery.md`](docs/discovery.md)
 - [`docs/agent.md`](docs/agent.md)
 - [`docs/discord.md`](docs/discord.md)
+- [`docs/wizard.md`](docs/wizard.md)
 - Webhooks + external triggers: [`docs/webhook.md`](docs/webhook.md)
 - Gmail hooks (email → wake): [`docs/gmail-pubsub.md`](docs/gmail-pubsub.md)
 

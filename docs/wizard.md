@@ -1,222 +1,150 @@
 ---
-summary: "CLI onboarding wizard spec (gateway + workspace + skills + daemon)"
+summary: "CLI onboarding wizard: guided setup for gateway, workspace, providers, and skills"
 read_when:
-  - Designing or implementing the onboarding wizard
-  - Changing gateway install/setup flow
+  - Running or configuring the onboarding wizard
+  - Setting up a new machine
 ---
 
 # Onboarding Wizard (CLI)
 
-Goal: interactive wizards for first-run onboarding **and** ongoing reconfiguration.
-Uses `@clack/prompts` for arrow-key selection and step UX.
+The onboarding wizard is the **recommended** way to set up Clawdis on any OS.
+It configures a local Gateway or a remote Gateway connection, plus providers, skills,
+and workspace defaults in one guided flow.
 
-Scope: local gateway setup plus **remote gateway client config** (no remote-side installs).
+Primary entrypoint:
 
-## Entry points
+```bash
+clawdis onboard
+```
 
-First run:
-- `clawdis onboard` (primary)
-- `clawdis setup --wizard` (alias)
+Follow‑up reconfiguration:
 
-Ongoing:
-- `clawdis configure` (models/providers/skills/gateway/workspace)
-- `clawdis doctor` (health + quick fixes)
-- `clawdis update` (audit + modernize config defaults)
+```bash
+clawdis configure
+```
 
-## Non-interactive mode
+## What the wizard does
 
-`--non-interactive` + flags to skip prompts. `--json` outputs a machine summary.
+**Local mode (default)** walks you through:
+- Model/auth (Anthropic OAuth recommended, API key optional, Minimax M2.1 via LM Studio)
+- Workspace location + bootstrap files
+- Gateway settings (port/bind/auth/tailscale)
+- Providers (WhatsApp, Telegram, Discord, Signal)
+- Daemon install (LaunchAgent / systemd user unit / Scheduled Task)
+- Health check
+- Skills (recommended)
 
-## Preflight
+**Remote mode** only configures the local client to connect to a Gateway elsewhere.
+It does **not** install or change anything on the remote host.
 
-- Runtime: Node >=22 (reuse `runtime-guard`).
-- Detect existing files:
-  - config: `~/.clawdis/clawdis.json`
-  - creds: `~/.clawdis/credentials/`
-  - sessions: `~/.clawdis/sessions/`
-  - workspace: `~/clawd` (or configured)
-- Detect available package managers: `npm`, `pnpm`, `bun`.
-- Detect optional tools: `brew`, `uv`, `go`.
+## Flow details (local)
 
-If config exists:
-- Prompt: **Keep / Modify / Reset**
+1) **Existing config detection**
+   - If `~/.clawdis/clawdis.json` exists, choose **Keep / Modify / Reset**.
+   - Reset uses `trash` (never `rm`) and offers scopes:
+     - Config only
+     - Config + credentials + sessions
+     - Full reset (also removes workspace)
 
-Reset uses `trash` (never `rm`).
+2) **Model/Auth**
+   - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
+   - **API key**: stores the key for you.
+   - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
+   - **Skip**: no auth configured yet.
 
-## Flow (interactive)
+3) **Workspace**
+   - Default `~/clawd` (configurable).
+   - Seeds the workspace files needed for the agent bootstrap ritual.
 
-1) **Mode**
-   - Local (full wizard)
-   - Remote (configure client connection only)
+4) **Gateway**
+   - Port, bind, auth mode, tailscale exposure.
+   - Non‑loopback binds require auth.
 
-2) **Model/Auth (local only)**
-   - Anthropic OAuth (recommended)
-   - API key
-   - Minimax M2.1 (LM Studio; recommended local model)
-   - Skip
+5) **Providers**
+   - WhatsApp: optional QR login.
+   - Telegram: bot token.
+   - Discord: bot token.
+   - Signal: optional `signal-cli` install + account config.
 
-3) **Workspace + config**
-   - Default workspace: `~/clawd`
-   - Writes `agent.workspace` into `~/.clawdis/clawdis.json`
-   - Ensures sessions dir exists
-
-4) **Gateway config**
-   - Port (default 18789)
-   - Bind: loopback | lan | tailnet | auto
-   - Auth: token | password | off
-   - Tailscale: off | serve | funnel
-
-5) **Providers (optional)**
-   - WhatsApp: optional `clawdis login` QR flow
-   - Telegram: bot token (config or env)
-   - Discord: bot token (config or env)
-   - Signal: `signal-cli` detection + account config + install option
-
-6) **Daemon install (local only)**
+6) **Daemon install**
    - macOS: LaunchAgent
    - Linux: systemd user unit
    - Windows: Scheduled Task
 
-7) **Health**
-   - Start/restart daemon
-   - `clawdis health` summary
+7) **Health check**
+   - Starts the Gateway (if needed) and runs `clawdis health`.
 
 8) **Skills (recommended)**
-   - Read from `buildWorkspaceSkillStatus`
-   - Show eligible vs missing requirements
-   - Offer installs via preferred installer
-   - Allow skip
+   - Reads the available skills and checks requirements.
+   - Lets you choose a node manager: **npm / pnpm / bun**.
+   - Installs optional dependencies (some use Homebrew on macOS).
 
 9) **Finish**
-   - Summary + next steps
-   - Reminder: iOS/Android/macOS node apps add canvas/camera/screen/system features.
+   - Summary + next steps, including iOS/Android/macOS apps for extra features.
 
-## Remote mode (client config)
+## Remote mode
 
-- Optional Bonjour discovery (macOS: `dns-sd`, Linux: `avahi-browse`)
-- Save `gateway.remote.url` (+ optional `gateway.remote.token`)
-- Token optional; omit for no-auth gateways
-- Provide SSH tunnel hint when the gateway is loopback-only
-- No remote installs or daemon changes from this machine
+Remote mode configures a local client to connect to a Gateway elsewhere.
 
-## Config writes
-
-Wizard writes:
-- `~/.clawdis/clawdis.json`
-  - `agent.workspace`
-  - `agent.model` + `models.providers` (if Minimax selected)
-  - `skills.install.nodeManager` (npm | pnpm | bun)
-  - `skills.entries.<key>.env` / `.apiKey` (if set in skills step)
-  - `telegram.botToken`, `discord.token`, `signal.*` (if set in providers step)
-  - `wizard.lastRunAt`, `wizard.lastRunVersion`, `wizard.lastRunCommit`, `wizard.lastRunCommand`, `wizard.lastRunMode`
-  - `gateway.remote.url`, `gateway.remote.token` (remote mode)
-
-WhatsApp login writes credentials to `~/.clawdis/credentials/creds.json`.
-
-## Configure / Doctor / Update flows
-
-`clawdis configure` offers a menu of sections:
-- Model/auth
-- Providers (incl Signal install)
-- Gateway + daemon
-- Workspace + bootstrap files
-- Skills
-- Health check (optional at end)
-
-`clawdis doctor`:
-- Gateway reachability
-- Provider probes
-- Skills status
-- Quick fixes (start gateway, relink WhatsApp, prompt missing tokens)
-
-`clawdis update`:
-- Audit config vs defaults
-- Suggest upgrades/changes
-- Re-run key steps as needed
-
-Each wizard run updates `wizard.*` metadata.
-
-## Signal CLI install (wizard)
-
-Wizard can install signal-cli from GitHub releases:
-- Fetch latest release from `https://github.com/AsamK/signal-cli/releases/latest`
-- Download platform asset (Linux native preferred)
-- Extract under `~/.clawdis/tools/signal-cli/<version>/`
-- Set `signal.cliPath` to the detected `signal-cli` binary
+What you’ll set:
+- Remote Gateway URL (`ws://...`)
+- Optional token
 
 Notes:
-- signal-cli requires Java 21 for JVM builds.
-- Native builds are available for some platforms; fallback to JVM build if native not found.
-- Auto-install is not supported on Windows yet.
+- No remote installs or daemon changes are performed.
+- If the Gateway is loopback‑only, use SSH tunneling or a tailnet.
+- Discovery hints:
+  - macOS: Bonjour (`dns-sd`)
+  - Linux: Avahi (`avahi-browse`)
 
-## Minimax M2.1 (LM Studio) config snippet
+## Non‑interactive mode
 
-```json5
-{
-  agent: {
-    model: "Minimax",
-    allowedModels: [
-      "anthropic/claude-opus-4-5",
-      "lmstudio/minimax-m2.1-gs32"
-    ],
-    modelAliases: {
-      Opus: "anthropic/claude-opus-4-5",
-      Minimax: "lmstudio/minimax-m2.1-gs32"
-    }
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      lmstudio: {
-        baseUrl: "http://127.0.0.1:1234/v1",
-        apiKey: "lmstudio",
-        api: "openai-responses",
-        models: [
-          {
-            id: "minimax-m2.1-gs32",
-            name: "MiniMax M2.1 GS32",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 196608,
-            maxTokens: 8192
-          }
-        ]
-      }
-    }
-  }
-}
+Use `--non-interactive` to automate or script onboarding:
+
+```bash
+clawdis onboard --non-interactive \
+  --mode local \
+  --auth-choice apiKey \
+  --anthropic-api-key "$ANTHROPIC_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback \
+  --skip-skills
 ```
 
-## Skills install preferences
+Add `--json` for a machine‑readable summary.
 
-Prompt for node manager:
-- npm
-- pnpm
-- bun
+## Signal setup (signal-cli)
 
-Writes:
+The wizard can install `signal-cli` from GitHub releases:
+- Downloads the appropriate release asset.
+- Stores it under `~/.clawdis/tools/signal-cli/<version>/`.
+- Writes `signal.cliPath` to your config.
 
-```json5
-{
-  skills: {
-    install: {
-      nodeManager: "npm" // npm | pnpm | bun
-    }
-  }
-}
-```
+Notes:
+- JVM builds require **Java 21**.
+- Native builds are used when available.
+- Windows auto‑install is not supported yet (manual install required).
 
-## Reset scope (decision required)
+## What the wizard writes
 
-Options:
-- A) Config only (`~/.clawdis/clawdis.json`)
-- B) Config + credentials + sessions
-- C) Full reset: config + credentials + sessions + workspace
+Typical fields in `~/.clawdis/clawdis.json`:
+- `agent.workspace`
+- `agent.model` / `models.providers` (if Minimax chosen)
+- `gateway.*` (mode, bind, auth, tailscale)
+- `telegram.botToken`, `discord.token`, `signal.*`
+- `skills.install.nodeManager`
+- `wizard.lastRunAt`
+- `wizard.lastRunVersion`
+- `wizard.lastRunCommit`
+- `wizard.lastRunCommand`
+- `wizard.lastRunMode`
 
-Wizard should clearly list what will be removed and use `trash`.
+WhatsApp credentials go to `~/.clawdis/credentials/`.
+Sessions are stored under `~/.clawdis/sessions/`.
 
-## Open questions
+## Related docs
 
-- Confirm “Remote = info-only” is final.
-- Confirm reset scope default (A/B/C).
+- macOS app onboarding: `docs/onboarding.md`
+- Config reference: `docs/configuration.md`
+- Providers: `docs/whatsapp.md`, `docs/telegram.md`, `docs/discord.md`, `docs/signal.md`
+- Skills: `docs/skills.md`, `docs/skills-config.md`
