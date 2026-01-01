@@ -1,4 +1,4 @@
-import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentTool, AgentToolResult } from "@mariozechner/pi-ai";
 import { codingTools, readTool } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 

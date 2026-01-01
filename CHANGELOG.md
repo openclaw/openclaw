@@ -86,7 +86,7 @@
 - macOS menu: top status line now shows pending node pairing approvals (incl. repairs).
 - CLI: avoid spurious gateway close errors after successful request/response cycles.
 - Agent runtime: clamp tool-result images to the 5MB Anthropic limit to avoid hard request rejections.
-- Agent runtime: align pi-agent-core imports and write v2 session headers so Pi session branching stays in the Clawdis sessions dir.
+- Agent runtime: write v2 session headers so Pi session branching stays in the Clawdis sessions dir.
 - Tests: add Swift Testing coverage for camera errors and Kotest coverage for Android bridge endpoints.
 
 ## 2.0.0-beta4 — 2025-12-27

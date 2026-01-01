@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentEvent, AppMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
@@ -234,7 +234,7 @@ export function subscribeEmbeddedPiSession(params: {
       }
 
       if (evt.type === "message_update") {
-        const msg = (evt as AgentEvent & { message: AgentMessage }).message;
+        const msg = (evt as AgentEvent & { message: AppMessage }).message;
         if (msg?.role === "assistant") {
           const assistantEvent = (
             evt as AgentEvent & { assistantMessageEvent?: unknown }
@@ -298,7 +298,7 @@ export function subscribeEmbeddedPiSession(params: {
       }
 
       if (evt.type === "message_end") {
-        const msg = (evt as AgentEvent & { message: AgentMessage }).message;
+        const msg = (evt as AgentEvent & { message: AppMessage }).message;
         if (msg?.role === "assistant") {
           const cleaned = params.enforceFinalTag
             ? stripThinkingSegments(

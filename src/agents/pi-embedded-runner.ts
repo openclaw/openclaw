@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type { AppMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import {
   type Api,
   type AssistantMessage,
@@ -501,7 +501,7 @@ export async function runEmbeddedPiAgent(params: {
           Math.max(1, params.timeoutMs),
         );
 
-        let messagesSnapshot: AgentMessage[] = [];
+        let messagesSnapshot: AppMessage[] = [];
         let sessionIdUsed = session.sessionId;
         const onAbort = () => {
           abortRun();
@@ -542,7 +542,7 @@ export async function runEmbeddedPiAgent(params: {
         const lastAssistant = messagesSnapshot
           .slice()
           .reverse()
-          .find((m) => (m as AgentMessage)?.role === "assistant") as
+          .find((m) => (m as AppMessage)?.role === "assistant") as
           | AssistantMessage
           | undefined;
 
