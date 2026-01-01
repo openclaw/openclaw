@@ -122,12 +122,13 @@ enum DeviceModelCatalog {
     }
 
     private static func locateResourceBundle() -> Bundle? {
-        // Prefer module bundle (SwiftPM/tests), then main app bundle (packaged app).
-        if let bundle = self.bundleIfContainsDeviceModels(Bundle.module) {
+        // Prefer main bundle (packaged app), then module bundle (SwiftPM/tests).
+        // Accessing Bundle.module in the packaged app can crash if the bundle isn't where SwiftPM expects it.
+        if let bundle = self.bundleIfContainsDeviceModels(Bundle.main) {
             return bundle
         }
 
-        if let bundle = self.bundleIfContainsDeviceModels(Bundle.main) {
+        if let bundle = self.bundleIfContainsDeviceModels(Bundle.module) {
             return bundle
         }
         return nil
