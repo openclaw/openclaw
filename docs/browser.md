@@ -158,6 +158,7 @@ Basics:
 - `clawdis browser status`
 - `clawdis browser start`
 - `clawdis browser stop`
+- `clawdis browser reset-profile`
 - `clawdis browser tabs`
 - `clawdis browser open https://example.com`
 - `clawdis browser focus abcd1234`
