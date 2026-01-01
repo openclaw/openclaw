@@ -886,10 +886,10 @@ export async function getReplyFromConfig(
       cleanupTyping();
       return undefined;
     }
-    triggerClawdisRestart();
+    const restartMethod = triggerClawdisRestart();
     cleanupTyping();
     return {
-      text: "⚙️ Restarting clawdis via launchctl; give me a few seconds to come back online.",
+      text: `⚙️ Restarting clawdis via ${restartMethod}; give me a few seconds to come back online.`,
     };
   }
 
