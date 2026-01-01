@@ -31,12 +31,19 @@ export type MonitorDiscordOpts = {
   };
   requireMention?: boolean;
   mediaMaxMb?: number;
+  historyLimit?: number;
 };
 
 type DiscordMediaInfo = {
   path: string;
   contentType?: string;
   placeholder: string;
+};
+
+type DiscordHistoryEntry = {
+  sender: string;
+  body: string;
+  timestamp?: number;
 };
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -67,6 +74,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     opts.requireMention ?? cfg.discord?.requireMention ?? true;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
+  const historyLimit = Math.max(
+    0,
+    opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
+  );
 
   const client = new Client({
     intents: [
@@ -79,6 +90,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
 
   const logger = getChildLogger({ module: "discord-auto-reply" });
+  const guildHistories = new Map<string, DiscordHistoryEntry[]>();
 
   client.once(Events.ClientReady, () => {
     runtime.log?.(`discord: logged in as ${client.user?.tag ?? "unknown"}`);
@@ -97,6 +109,24 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botId = client.user?.id;
       const wasMentioned =
         !isDirectMessage && Boolean(botId && message.mentions.has(botId));
+      const attachment = message.attachments.first();
+      const baseText =
+        message.content?.trim() ||
+        (attachment ? inferPlaceholder(attachment) : "") ||
+        message.embeds[0]?.description ||
+        "";
+
+      if (!isDirectMessage && historyLimit > 0 && baseText) {
+        const history = guildHistories.get(message.channelId) ?? [];
+        history.push({
+          sender: message.member?.displayName ?? message.author.tag,
+          body: baseText,
+          timestamp: message.createdTimestamp,
+        });
+        while (history.length > historyLimit) history.shift();
+        guildHistories.set(message.channelId, history);
+      }
+
       if (!isDirectMessage && requireMention) {
         if (botId && !wasMentioned) {
           logger.info(
@@ -166,15 +196,37 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const fromLabel = isDirectMessage
         ? buildDirectLabel(message)
         : buildGuildLabel(message);
-      const body = formatAgentEnvelope({
+      let combinedBody = formatAgentEnvelope({
         surface: "Discord",
         from: fromLabel,
         timestamp: message.createdTimestamp,
         body: text,
       });
+      let shouldClearHistory = false;
+      if (!isDirectMessage) {
+        const history =
+          historyLimit > 0 ? (guildHistories.get(message.channelId) ?? []) : [];
+        const historyWithoutCurrent =
+          history.length > 0 ? history.slice(0, -1) : [];
+        if (historyWithoutCurrent.length > 0) {
+          const historyText = historyWithoutCurrent
+            .map((entry) =>
+              formatAgentEnvelope({
+                surface: "Discord",
+                from: fromLabel,
+                timestamp: entry.timestamp,
+                body: `${entry.sender}: ${entry.body}`,
+              }),
+            )
+            .join("\n");
+          combinedBody = `[Chat messages since your last reply - for context]\n${historyText}\n\n[Current message - respond to this]\n${combinedBody}`;
+        }
+        combinedBody = `${combinedBody}\n[from: ${message.member?.displayName ?? message.author.tag}]`;
+        shouldClearHistory = true;
+      }
 
       const ctxPayload = {
-        Body: body,
+        Body: combinedBody,
         From: isDirectMessage
           ? `discord:${message.author.id}`
           : `group:${message.channelId}`,
@@ -209,7 +261,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
 
       if (isVerbose()) {
-        const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+        const preview = combinedBody.slice(0, 200).replace(/\n/g, "\\n");
         logVerbose(
           `discord inbound: channel=${message.channelId} from=${ctxPayload.From} preview="${preview}"`,
         );
@@ -235,6 +287,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         token,
         runtime,
       });
+      if (!isDirectMessage && shouldClearHistory && historyLimit > 0) {
+        guildHistories.set(message.channelId, []);
+      }
     } catch (err) {
       runtime.error?.(danger(`Discord handler failed: ${String(err)}`));
     }

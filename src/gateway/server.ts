@@ -2098,6 +2098,7 @@ export async function startGatewayServer(
       guildAllowFrom: cfg.discord?.guildAllowFrom,
       requireMention: cfg.discord?.requireMention,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
+      historyLimit: cfg.discord?.historyLimit,
     })
       .catch((err) => {
         discordRuntime = {

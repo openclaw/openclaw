@@ -169,6 +169,8 @@ export type DiscordConfig = {
   };
   requireMention?: boolean;
   mediaMaxMb?: number;
+  /** Number of recent guild messages to include for context (default: 20). */
+  historyLimit?: number;
 };
 
 export type SignalConfig = {
@@ -874,6 +876,7 @@ const ClawdisSchema = z.object({
         .optional(),
       requireMention: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
+      historyLimit: z.number().int().min(0).optional(),
     })
     .optional(),
   signal: z
