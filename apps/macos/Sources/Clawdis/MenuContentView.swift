@@ -77,8 +77,8 @@ struct MenuContent: View {
             Toggle(isOn: self.voiceWakeBinding) {
                 Label("Voice Wake", systemImage: "mic.fill")
             }
-                .disabled(!voiceWakeSupported)
-                .opacity(voiceWakeSupported ? 1 : 0.5)
+            .disabled(!voiceWakeSupported)
+            .opacity(voiceWakeSupported ? 1 : 0.5)
             if self.showVoiceWakeMicPicker {
                 self.voiceWakeMicMenu
             }
@@ -184,7 +184,7 @@ struct MenuContent: View {
                             : "Verbose Logging (Main): Off",
                         systemImage: "text.alignleft")
                 }
-                Menu("App Logging") {
+                Menu {
                     Picker("Verbosity", selection: self.$appLogLevelRaw) {
                         ForEach(AppLogLevel.allCases) { level in
                             Text(level.title).tag(level.rawValue)
@@ -197,6 +197,8 @@ struct MenuContent: View {
                                 : "File Logging: Off",
                             systemImage: "doc.text.magnifyingglass")
                     }
+                } label: {
+                    Label("App Logging", systemImage: "doc.text")
                 }
                 Button {
                     DebugActions.openSessionStore()
