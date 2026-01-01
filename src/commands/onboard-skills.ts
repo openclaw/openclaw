@@ -95,16 +95,26 @@ export async function setupSkills(
     const toInstall = guardCancel(
       await multiselect({
         message: "Install missing skill dependencies",
-        options: installable.map((skill) => ({
-          value: skill.name,
-          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
-          hint: skill.install[0]?.label ?? "install",
-        })),
+        options: [
+          {
+            value: "__skip__",
+            label: "Skip for now",
+            hint: "Continue without installing dependencies",
+          },
+          ...installable.map((skill) => ({
+            value: skill.name,
+            label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+            hint: skill.install[0]?.label ?? "install",
+          })),
+        ],
       }),
       runtime,
     );
 
-    for (const name of toInstall as string[]) {
+    const selected = (toInstall as string[]).filter(
+      (name) => name !== "__skip__",
+    );
+    for (const name of selected) {
       const target = installable.find((s) => s.name === name);
       if (!target || target.install.length === 0) continue;
       const installId = target.install[0]?.id;
