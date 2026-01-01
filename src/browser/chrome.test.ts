@@ -158,13 +158,19 @@ describe("browser chrome helpers", () => {
   it("reports reachability based on /json/version", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: true } as unknown as Response),
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+      } as unknown as Response),
     );
     await expect(isChromeReachable(12345, 50)).resolves.toBe(true);
 
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ ok: false } as unknown as Response),
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      } as unknown as Response),
     );
     await expect(isChromeReachable(12345, 50)).resolves.toBe(false);
 
