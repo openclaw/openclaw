@@ -4,13 +4,13 @@ import type { ClawdisConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
+  isBundledSkillAllowed,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
   resolveBundledAllowlist,
   resolveConfigPath,
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
-  isBundledSkillAllowed,
   type SkillEntry,
   type SkillInstallSpec,
   type SkillsInstallPreferences,

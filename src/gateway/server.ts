@@ -46,11 +46,11 @@ import { getStatusSummary } from "../commands/status.js";
 import {
   type ClawdisConfig,
   CONFIG_PATH_CLAWDIS,
-  STATE_DIR_CLAWDIS,
   isNixMode,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
+  STATE_DIR_CLAWDIS,
   validateConfigObject,
   writeConfigFile,
 } from "../config/config.js";
@@ -74,8 +74,6 @@ import {
   sendMessageDiscord,
 } from "../discord/index.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
-import { monitorSignalProvider, sendMessageSignal } from "../signal/index.js";
-import { type SignalProbe, probeSignal } from "../signal/probe.js";
 import { isVerbose } from "../globals.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
@@ -141,6 +139,8 @@ import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { runExec } from "../process/exec.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
+import { monitorSignalProvider, sendMessageSignal } from "../signal/index.js";
+import { probeSignal, type SignalProbe } from "../signal/probe.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
 import { sendMessageTelegram } from "../telegram/send.js";
@@ -4097,7 +4097,8 @@ export async function startGatewayServer(
               const signalHost = signalCfg?.httpHost?.trim() || "127.0.0.1";
               const signalPort = signalCfg?.httpPort ?? 8080;
               const signalBaseUrl =
-                signalCfg?.httpUrl?.trim() || `http://${signalHost}:${signalPort}`;
+                signalCfg?.httpUrl?.trim() ||
+                `http://${signalHost}:${signalPort}`;
               const signalConfigured = Boolean(signalCfg) && signalEnabled;
               let signalProbe: SignalProbe | undefined;
               let signalLastProbeAt: number | null = null;
@@ -6518,9 +6519,9 @@ export async function startGatewayServer(
         await stopBrowserControlServerIfStarted().catch(() => {});
       }
       await Promise.allSettled(
-        [whatsappTask, telegramTask, signalTask].filter(
-          Boolean,
-        ) as Array<Promise<unknown>>,
+        [whatsappTask, telegramTask, signalTask].filter(Boolean) as Array<
+          Promise<unknown>
+        >,
       );
       await new Promise<void>((resolve) => wss.close(() => resolve()));
       await new Promise<void>((resolve, reject) =>

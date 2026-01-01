@@ -427,7 +427,7 @@ export async function agentCommand(
             ? discordTarget
             : deliveryProvider === "signal"
               ? signalTarget
-            : undefined;
+              : undefined;
     const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
     if (!runtime.error) runtime.log(message);

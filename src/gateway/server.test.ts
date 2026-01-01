@@ -8,8 +8,8 @@ import { WebSocket } from "ws";
 import { agentCommand } from "../commands/agent.js";
 import {
   CONFIG_PATH_CLAWDIS,
-  STATE_DIR_CLAWDIS,
   readConfigFileSnapshot,
+  STATE_DIR_CLAWDIS,
   writeConfigFile,
 } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -2108,7 +2108,10 @@ describe("gateway server", () => {
     );
     expect(res.ok).toBe(true);
     const payload = res.payload as
-      | { type?: unknown; snapshot?: { configPath?: string; stateDir?: string } }
+      | {
+          type?: unknown;
+          snapshot?: { configPath?: string; stateDir?: string };
+        }
       | undefined;
     expect(payload?.type).toBe("hello-ok");
     expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH_CLAWDIS);

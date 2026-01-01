@@ -223,9 +223,7 @@ export function resolveSkillConfig(
 function normalizeAllowlist(input: unknown): string[] | undefined {
   if (!input) return undefined;
   if (!Array.isArray(input)) return undefined;
-  const normalized = input
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
+  const normalized = input.map((entry) => String(entry).trim()).filter(Boolean);
   return normalized.length > 0 ? normalized : undefined;
 }
 

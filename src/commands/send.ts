@@ -86,9 +86,7 @@ export async function sendCommand(
     const result = await deps.sendMessageSignal(opts.to, opts.message, {
       mediaUrl: opts.media,
     });
-    runtime.log(
-      success(`✅ Sent via signal. Message ID: ${result.messageId}`),
-    );
+    runtime.log(success(`✅ Sent via signal. Message ID: ${result.messageId}`));
     if (opts.json) {
       runtime.log(
         JSON.stringify(
