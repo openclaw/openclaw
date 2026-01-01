@@ -1,8 +1,9 @@
 import fs from "node:fs";
+import type { Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
-import type { Server } from "node:http";
 
+import { runExec } from "../process/exec.js";
 import { createTargetViaCdp } from "./cdp.js";
 import {
   isChromeCdpReady,
@@ -14,7 +15,6 @@ import {
 } from "./chrome.js";
 import type { ResolvedBrowserConfig } from "./config.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
-import { runExec } from "../process/exec.js";
 
 export type BrowserTab = {
   targetId: string;
@@ -223,9 +223,7 @@ export function createBrowserRouteContext(
     attachRunning(relaunched);
 
     if (!(await isReachable(600))) {
-      throw new Error(
-        "Chrome CDP websocket is not reachable after restart.",
-      );
+      throw new Error("Chrome CDP websocket is not reachable after restart.");
     }
   };
 

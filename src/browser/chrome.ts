@@ -353,14 +353,17 @@ async function canOpenWebSocket(
 ): Promise<boolean> {
   return await new Promise<boolean>((resolve) => {
     const ws = new WebSocket(wsUrl, { handshakeTimeout: timeoutMs });
-    const timer = setTimeout(() => {
-      try {
-        ws.terminate();
-      } catch {
-        // ignore
-      }
-      resolve(false);
-    }, Math.max(50, timeoutMs + 25));
+    const timer = setTimeout(
+      () => {
+        try {
+          ws.terminate();
+        } catch {
+          // ignore
+        }
+        resolve(false);
+      },
+      Math.max(50, timeoutMs + 25),
+    );
     ws.once("open", () => {
       clearTimeout(timer);
       try {
