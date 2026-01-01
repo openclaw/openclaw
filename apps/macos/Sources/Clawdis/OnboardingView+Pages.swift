@@ -671,10 +671,86 @@ extension OnboardingView {
                 {
                     self.openSettings(tab: .skills)
                 }
+                self.skillsOverview
                 Toggle("Launch at login", isOn: self.$state.launchAtLogin)
                     .onChange(of: self.state.launchAtLogin) { _, newValue in
                         AppStateStore.updateLaunchAtLogin(enabled: newValue)
                     }
+            }
+        }
+        .task { await self.maybeLoadOnboardingSkills() }
+    }
+
+    private func maybeLoadOnboardingSkills() async {
+        guard !self.didLoadOnboardingSkills else { return }
+        self.didLoadOnboardingSkills = true
+        await self.onboardingSkillsModel.refresh()
+    }
+
+    private var skillsOverview: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Divider()
+                .padding(.vertical, 6)
+
+            HStack(spacing: 10) {
+                Text("Skills included")
+                    .font(.headline)
+                Spacer(minLength: 0)
+                if self.onboardingSkillsModel.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    Button("Refresh") {
+                        Task { await self.onboardingSkillsModel.refresh() }
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
+            if let error = self.onboardingSkillsModel.error {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Couldn’t load skills from the Gateway.")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.orange)
+                    Text("Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("Details: \(error)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else if self.onboardingSkillsModel.skills.isEmpty {
+                Text("No skills reported yet.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(self.onboardingSkillsModel.skills) { skill in
+                            HStack(alignment: .top, spacing: 10) {
+                                Text(skill.emoji ?? "✨")
+                                    .font(.callout)
+                                    .frame(width: 22, alignment: .leading)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(skill.name)
+                                        .font(.callout.weight(.semibold))
+                                    Text(skill.description)
+                                        .font(.footnote)
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 0)
+                            }
+                        }
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(Color(NSColor.windowBackgroundColor)))
+                }
+                .frame(maxHeight: 160)
             }
         }
     }
