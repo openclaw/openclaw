@@ -83,7 +83,10 @@ case "$TIMESTAMP_MODE" in
     ;;
 esac
 
-options_args=("--options" "runtime")
+options_args=()
+if [[ "$IDENTITY" != "-" ]]; then
+  options_args=("--options" "runtime")
+fi
 timestamp_args=("$timestamp_arg")
 
 cat > "$ENT_TMP_BASE" <<'PLIST'
@@ -157,12 +160,12 @@ xattr -cr "$APP_BUNDLE" 2>/dev/null || true
 sign_item() {
   local target="$1"
   local entitlements="$2"
-  codesign --force "${options_args[@]}" "${timestamp_args[@]}" --entitlements "$entitlements" --sign "$IDENTITY" "$target"
+  codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --entitlements "$entitlements" --sign "$IDENTITY" "$target"
 }
 
 sign_plain_item() {
   local target="$1"
-  codesign --force "${options_args[@]}" "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
+  codesign --force ${options_args+"${options_args[@]}"} "${timestamp_args[@]}" --sign "$IDENTITY" "$target"
 }
 
 # Sign main binary
