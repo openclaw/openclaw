@@ -11,6 +11,7 @@
 <p align="center">
   <a href="https://github.com/steipete/clawdis/actions/workflows/ci.yml?branch=main"><img src="https://img.shields.io/github/actions/workflow/status/steipete/clawdis/ci.yml?branch=main&style=for-the-badge" alt="CI status"></a>
   <a href="https://github.com/steipete/clawdis/releases"><img src="https://img.shields.io/github/v/release/steipete/clawdis?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
+  <a href="https://discord.gg/qkhbAGHRBT"><img src="https://img.shields.io/discord/1456350064065904867?label=Discord&logo=discord&logoColor=white&color=5865F2&style=for-the-badge" alt="Discord"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
@@ -19,7 +20,7 @@ It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, Web
 
 If you want a private, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · Wizard: [`docs/wizard.md`](docs/wizard.md)
+Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Discord: https://discord.gg/qkhbAGHRBT
 
 Preferred setup: run the onboarding wizard (`clawdis onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
