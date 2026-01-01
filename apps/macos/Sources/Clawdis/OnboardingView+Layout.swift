@@ -54,8 +54,8 @@ extension OnboardingView {
         .task {
             await self.refreshPerms()
             self.refreshCLIStatus()
-            self.loadWorkspaceDefaults()
-            self.ensureDefaultWorkspace()
+            await self.loadWorkspaceDefaults()
+            await self.ensureDefaultWorkspace()
             self.refreshAnthropicOAuthStatus()
             self.refreshBootstrapStatus()
             self.preferredGatewayID = BridgeDiscoveryPreferences.preferredStableID()

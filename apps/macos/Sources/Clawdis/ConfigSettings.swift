@@ -49,7 +49,7 @@ struct ConfigSettings: View {
                 guard !self.hasLoaded else { return }
                 guard !self.isPreview else { return }
                 self.hasLoaded = true
-                self.loadConfig()
+                await self.loadConfig()
                 await self.loadModels()
                 await self.refreshGatewayTalkApiKey()
                 self.allowAutosave = true
@@ -369,8 +369,8 @@ struct ConfigSettings: View {
         .padding(.top, 2)
     }
 
-    private func loadConfig() {
-        let parsed = self.loadConfigDict()
+    private func loadConfig() async {
+        let parsed = await ConfigStore.load()
         let agent = parsed["agent"] as? [String: Any]
         let heartbeatMinutes = agent?["heartbeatMinutes"] as? Int
         let heartbeatBody = agent?["heartbeatBody"] as? String
@@ -429,7 +429,7 @@ struct ConfigSettings: View {
         self.configSaving = true
         defer { self.configSaving = false }
 
-        var root = self.loadConfigDict()
+        var root = await ConfigStore.load()
         var agent = root["agent"] as? [String: Any] ?? [:]
         var browser = root["browser"] as? [String: Any] ?? [:]
         var talk = root["talk"] as? [String: Any] ?? [:]
@@ -473,11 +473,11 @@ struct ConfigSettings: View {
         talk["interruptOnSpeech"] = self.talkInterruptOnSpeech
         root["talk"] = talk
 
-        ClawdisConfigFile.saveDict(root)
-    }
-
-    private func loadConfigDict() -> [String: Any] {
-        ClawdisConfigFile.loadDict()
+        do {
+            try await ConfigStore.save(root)
+        } catch {
+            self.modelError = error.localizedDescription
+        }
     }
 
     private var browserColor: Color {

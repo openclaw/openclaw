@@ -104,7 +104,7 @@ struct TailscaleIntegrationSection: View {
         .disabled(self.connectionMode != .local)
         .task {
             guard !self.hasLoaded else { return }
-            self.loadConfig()
+            await self.loadConfig()
             self.hasLoaded = true
             await self.effectiveService.checkTailscaleStatus()
             self.startStatusTimer()
@@ -113,10 +113,10 @@ struct TailscaleIntegrationSection: View {
             self.stopStatusTimer()
         }
         .onChange(of: self.tailscaleMode) { _, _ in
-            self.applySettings()
+            Task { await self.applySettings() }
         }
         .onChange(of: self.requireCredentialsForServe) { _, _ in
-            self.applySettings()
+            Task { await self.applySettings() }
         }
     }
 
@@ -233,17 +233,18 @@ struct TailscaleIntegrationSection: View {
         SecureField("Password", text: self.$password)
             .textFieldStyle(.roundedBorder)
             .frame(maxWidth: 240)
-            .onSubmit { self.applySettings() }
+            .onSubmit { Task { await self.applySettings() } }
         Text("Stored in ~/.clawdis/clawdis.json. Prefer CLAWDIS_GATEWAY_PASSWORD for production.")
             .font(.caption)
             .foregroundStyle(.secondary)
-        Button("Update password") { self.applySettings() }
+        Button("Update password") { Task { await self.applySettings() } }
             .buttonStyle(.bordered)
             .controlSize(.small)
     }
 
-    private func loadConfig() {
-        let gateway = ClawdisConfigFile.loadGatewayDict()
+    private func loadConfig() async {
+        let root = await ConfigStore.load()
+        let gateway = root["gateway"] as? [String: Any] ?? [:]
         let tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
         let modeRaw = (tailscale["mode"] as? String) ?? "serve"
         self.tailscaleMode = GatewayTailscaleMode(rawValue: modeRaw) ?? .off
@@ -266,7 +267,7 @@ struct TailscaleIntegrationSection: View {
         }
     }
 
-    private func applySettings() {
+    private func applySettings() async {
         guard self.hasLoaded else { return }
         self.validationMessage = nil
         self.statusMessage = nil
@@ -279,18 +280,20 @@ struct TailscaleIntegrationSection: View {
             return
         }
 
-        ClawdisConfigFile.updateGatewayDict { gateway in
-            var tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
-            tailscale["mode"] = self.tailscaleMode.rawValue
-            gateway["tailscale"] = tailscale
+        var root = await ConfigStore.load()
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
+        tailscale["mode"] = self.tailscaleMode.rawValue
+        gateway["tailscale"] = tailscale
 
-            if self.tailscaleMode != .off {
-                gateway["bind"] = "loopback"
-            }
+        if self.tailscaleMode != .off {
+            gateway["bind"] = "loopback"
+        }
 
-            guard self.tailscaleMode != .off else { return }
+        if self.tailscaleMode == .off {
+            gateway.removeValue(forKey: "auth")
+        } else {
             var auth = gateway["auth"] as? [String: Any] ?? [:]
-
             if self.tailscaleMode == .serve, !self.requireCredentialsForServe {
                 auth["allowTailscale"] = true
                 auth.removeValue(forKey: "mode")
@@ -306,6 +309,19 @@ struct TailscaleIntegrationSection: View {
             } else {
                 gateway["auth"] = auth
             }
+        }
+
+        if gateway.isEmpty {
+            root.removeValue(forKey: "gateway")
+        } else {
+            root["gateway"] = gateway
+        }
+
+        do {
+            try await ConfigStore.save(root)
+        } catch {
+            self.statusMessage = error.localizedDescription
+            return
         }
 
         if self.connectionMode == .local, !self.isPaused {

@@ -219,6 +219,9 @@ enum GatewayEnvironment {
     }
 
     private static func preferredGatewayBind() -> String? {
+        if CommandResolver.connectionModeIsRemote() {
+            return nil
+        }
         if let env = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_BIND"] {
             let trimmed = env.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if self.supportedBindModes.contains(trimmed) {

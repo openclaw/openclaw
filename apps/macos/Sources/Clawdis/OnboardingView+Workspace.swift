@@ -1,24 +1,24 @@
 import Foundation
 
 extension OnboardingView {
-    func loadWorkspaceDefaults() {
+    func loadWorkspaceDefaults() async {
         guard self.workspacePath.isEmpty else { return }
-        let configured = ClawdisConfigFile.agentWorkspace()
+        let configured = await self.loadAgentWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
         self.workspacePath = AgentWorkspace.displayPath(for: url)
         self.refreshBootstrapStatus()
     }
 
-    func ensureDefaultWorkspace() {
+    func ensureDefaultWorkspace() async {
         guard self.state.connectionMode == .local else { return }
-        let configured = ClawdisConfigFile.agentWorkspace()
+        let configured = await self.loadAgentWorkspace()
         let url = AgentWorkspace.resolveWorkspaceURL(from: configured)
         switch AgentWorkspace.bootstrapSafety(for: url) {
         case .safe:
             do {
                 _ = try AgentWorkspace.bootstrap(workspaceURL: url)
                 if (configured ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    ClawdisConfigFile.setAgentWorkspace(AgentWorkspace.displayPath(for: url))
+                    await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                 }
             } catch {
                 self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
@@ -64,6 +64,35 @@ extension OnboardingView {
             self.refreshBootstrapStatus()
         } catch {
             self.workspaceStatus = "Failed to create workspace: \(error.localizedDescription)"
+        }
+    }
+
+    private func loadAgentWorkspace() async -> String? {
+        let root = await ConfigStore.load()
+        let agent = root["agent"] as? [String: Any]
+        return agent?["workspace"] as? String
+    }
+
+    func saveAgentWorkspace(_ workspace: String?) async -> Bool {
+        var root = await ConfigStore.load()
+        var agent = root["agent"] as? [String: Any] ?? [:]
+        let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if trimmed.isEmpty {
+            agent.removeValue(forKey: "workspace")
+        } else {
+            agent["workspace"] = trimmed
+        }
+        if agent.isEmpty {
+            root.removeValue(forKey: "agent")
+        } else {
+            root["agent"] = agent
+        }
+        do {
+            try await ConfigStore.save(root)
+            return true
+        } catch {
+            self.workspaceStatus = "Failed to save config: \(error.localizedDescription)"
+            return false
         }
     }
 }

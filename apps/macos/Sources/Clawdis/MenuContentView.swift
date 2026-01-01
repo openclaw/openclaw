@@ -59,7 +59,7 @@ struct MenuContent: View {
                     get: { self.browserControlEnabled },
                     set: { enabled in
                         self.browserControlEnabled = enabled
-                        ClawdisConfigFile.setBrowserControlEnabled(enabled)
+                        Task { await self.saveBrowserControlEnabled(enabled) }
                     })) {
                 Label("Browser Control", systemImage: "globe")
             }
@@ -140,8 +140,8 @@ struct MenuContent: View {
         .onChange(of: self.state.voicePushToTalkEnabled) { _, enabled in
             VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && enabled)
         }
-        .onAppear {
-            self.browserControlEnabled = ClawdisConfigFile.browserControlEnabled()
+        .task(id: self.state.connectionMode) {
+            await self.loadBrowserControlEnabled()
         }
     }
 
@@ -153,6 +153,25 @@ struct MenuContent: View {
             "Remote Clawdis Active"
         case .local:
             "Clawdis Active"
+        }
+    }
+
+    private func loadBrowserControlEnabled() async {
+        let root = await ConfigStore.load()
+        let browser = root["browser"] as? [String: Any]
+        let enabled = browser?["enabled"] as? Bool ?? true
+        await MainActor.run { self.browserControlEnabled = enabled }
+    }
+
+    private func saveBrowserControlEnabled(_ enabled: Bool) async {
+        var root = await ConfigStore.load()
+        var browser = root["browser"] as? [String: Any] ?? [:]
+        browser["enabled"] = enabled
+        root["browser"] = browser
+        do {
+            try await ConfigStore.save(root)
+        } catch {
+            await self.loadBrowserControlEnabled()
         }
     }
 

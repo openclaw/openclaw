@@ -45,6 +45,13 @@ enum DebugActions {
 
     @MainActor
     static func openSessionStore() {
+        if AppStateStore.shared.connectionMode == .remote {
+            let alert = NSAlert()
+            alert.messageText = "Remote mode"
+            alert.informativeText = "Session store lives on the gateway host in remote mode."
+            alert.runModal()
+            return
+        }
         let path = self.resolveSessionStorePath()
         let url = URL(fileURLWithPath: path)
         if FileManager.default.fileExists(atPath: path) {

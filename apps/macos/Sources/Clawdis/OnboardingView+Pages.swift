@@ -564,9 +564,14 @@ extension OnboardingView {
                             .disabled(self.workspaceApplying)
 
                             Button("Save in config") {
-                                let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
-                                ClawdisConfigFile.setAgentWorkspace(AgentWorkspace.displayPath(for: url))
-                                self.workspaceStatus = "Saved to ~/.clawdis/clawdis.json (agent.workspace)"
+                                Task {
+                                    let url = AgentWorkspace.resolveWorkspaceURL(from: self.workspacePath)
+                                    let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
+                                    if saved {
+                                        self.workspaceStatus =
+                                            "Saved to ~/.clawdis/clawdis.json (agent.workspace)"
+                                    }
+                                }
                             }
                             .buttonStyle(.bordered)
                             .disabled(self.workspaceApplying)
