@@ -20,10 +20,10 @@ import {
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { healthCommand } from "./health.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import { healthCommand } from "./health.js";
 import {
   applyMinimaxConfig,
   setAnthropicApiKey,
@@ -66,11 +66,15 @@ export async function runInteractiveOnboarding(
   let baseConfig: ClawdisConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists) {
-    const title = snapshot.valid ? "Existing config detected" : "Invalid config";
+    const title = snapshot.valid
+      ? "Existing config detected"
+      : "Invalid config";
     note(summarizeExistingConfig(baseConfig), title);
     if (!snapshot.valid && snapshot.issues.length > 0) {
       note(
-        snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`).join("\n"),
+        snapshot.issues
+          .map((iss) => `- ${iss.path}: ${iss.message}`)
+          .join("\n"),
         "Config issues",
       );
     }
@@ -94,7 +98,10 @@ export async function runInteractiveOnboarding(
           message: "Reset scope",
           options: [
             { value: "config", label: "Config only" },
-            { value: "config+creds+sessions", label: "Config + creds + sessions" },
+            {
+              value: "config+creds+sessions",
+              label: "Config + creds + sessions",
+            },
             {
               value: "full",
               label: "Full reset (config + creds + sessions + workspace)",
@@ -285,7 +292,10 @@ export async function runInteractiveOnboarding(
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
-    note("Tailscale requires bind=loopback. Adjusting bind to loopback.", "Note");
+    note(
+      "Tailscale requires bind=loopback. Adjusting bind to loopback.",
+      "Note",
+    );
     bind = "loopback";
   }
 
@@ -392,7 +402,10 @@ export async function runInteractiveOnboarding(
       }
     }
 
-    if (!loaded || (loaded && (await service.isLoaded({ env: process.env })) === false)) {
+    if (
+      !loaded ||
+      (loaded && (await service.isLoaded({ env: process.env })) === false)
+    ) {
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
         process.argv[1]?.endsWith(".ts");
@@ -402,7 +415,9 @@ export async function runInteractiveOnboarding(
         PATH: process.env.PATH,
         CLAWDIS_GATEWAY_TOKEN: gatewayToken,
         CLAWDIS_LAUNCHD_LABEL:
-          process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+          process.platform === "darwin"
+            ? GATEWAY_LAUNCH_AGENT_LABEL
+            : undefined,
       };
       await service.install({
         env: process.env,

@@ -1,17 +1,17 @@
 import path from "node:path";
 
 import {
+  type ClawdisConfig,
   CONFIG_PATH_CLAWDIS,
   readConfigFileSnapshot,
   writeConfigFile,
-  type ClawdisConfig,
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { resolveUserPath, sleep } from "../utils.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveUserPath, sleep } from "../utils.js";
 import { healthCommand } from "./health.js";
 import { applyMinimaxConfig, setAnthropicApiKey } from "./onboard-auth.js";
 import {
@@ -19,7 +19,11 @@ import {
   ensureWorkspaceAndSessions,
   randomToken,
 } from "./onboard-helpers.js";
-import type { AuthChoice, OnboardMode, OnboardOptions } from "./onboard-types.js";
+import type {
+  AuthChoice,
+  OnboardMode,
+  OnboardOptions,
+} from "./onboard-types.js";
 
 export async function runNonInteractiveOnboarding(
   opts: OnboardOptions,

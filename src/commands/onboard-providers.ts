@@ -286,7 +286,7 @@ export async function setupProviders(
 
     note(
       [
-        "Link device with: signal-cli link -n \"Clawdis\"",
+        'Link device with: signal-cli link -n "Clawdis"',
         "Scan QR in Signal → Linked Devices",
         "Then run: clawdis gateway call providers.status --params '{\"probe\":true}'",
       ].join("\n"),

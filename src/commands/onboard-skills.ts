@@ -1,4 +1,11 @@
-import { confirm, multiselect, note, select, spinner, text } from "@clack/prompts";
+import {
+  confirm,
+  multiselect,
+  note,
+  select,
+  spinner,
+  text,
+} from "@clack/prompts";
 
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
@@ -121,8 +128,8 @@ export async function setupSkills(
     const apiKey = String(
       guardCancel(
         await text({
-        message: `Enter ${skill.primaryEnv}`,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+          message: `Enter ${skill.primaryEnv}`,
+          validate: (value) => (value?.trim() ? undefined : "Required"),
         }),
         runtime,
       ),
