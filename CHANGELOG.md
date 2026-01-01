@@ -28,6 +28,7 @@
 - Tests: harden wizard E2E flows for reset, providers, skills, and remote non-interactive runs.
 
 ### Fixes
+- Skills: switch imsg installer to brew tap formula.
 - macOS codesign: skip hardened runtime for ad-hoc signing and avoid empty options args (#70) — thanks @petter-b
 - macOS packaging: move rpath config into swift build for reliability (#69) — thanks @petter-b
 - macOS: prioritize main bundle for device resources to prevent crash (#73) — thanks @petter-b
