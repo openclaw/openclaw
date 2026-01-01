@@ -35,6 +35,7 @@
 - Onboarding: auto-verify Claude OAuth tokens, show “verified” when detected working, and avoid re-auth prompts unless verification fails.
 - CLI onboarding: include exit code + a useful one-line summary when skill dependency installs fail.
 - CLI onboarding: explain Tailscale exposure options (Off/Serve/Funnel) and colorize provider status (linked/configured/needs setup).
+- CLI onboarding: allow skipping the “install missing skill dependencies” selection without canceling the wizard.
 - macOS settings: colorize provider status subtitles to distinguish healthy vs degraded states.
 - macOS codesign: skip hardened runtime for ad-hoc signing and avoid empty options args (#70) — thanks @petter-b
 - macOS packaging: move rpath config into swift build for reliability (#69) — thanks @petter-b
