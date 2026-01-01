@@ -58,6 +58,7 @@
 - macOS Talk Mode: fix audio stop ordering so disabling Talk Mode always stops in-flight playback.
 - macOS Talk Mode: throttle audio-level updates (avoid per-buffer task creation) to reduce CPU/task churn.
 - macOS Talk Mode: increase overlay window size so wave rings don’t clip; close button is hover-only and closer to the orb.
+- WebChat: preserve chat run ordering per session so concurrent runs don’t strand the typing indicator.
 - Talk Mode: fall back to system TTS when ElevenLabs is unavailable, returns non-audio, or playback fails (macOS/iOS/Android).
 - Talk Mode: stream PCM on macOS/iOS for lower latency (incremental playback); Android continues MP3 streaming.
 - Talk Mode: validate ElevenLabs v3 stability and latency tier directives before sending requests.

@@ -3187,6 +3187,121 @@ describe("gateway server", () => {
     await server.close();
   });
 
+  test("chat.send preserves run ordering for queued runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "chat-1",
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "first",
+          idempotencyKey: "idem-1",
+        },
+      }),
+    );
+    const res1 = await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "chat-1",
+    );
+    expect(res1.ok).toBe(true);
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "chat-2",
+        method: "chat.send",
+        params: {
+          sessionKey: "main",
+          message: "second",
+          idempotencyKey: "idem-2",
+        },
+      }),
+    );
+    const res2 = await onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "chat-2",
+    );
+    expect(res2.ok).toBe(true);
+
+    const final1P = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: unknown;
+    }>(
+      ws,
+      (o) => {
+        if (o.type !== "event" || o.event !== "chat") return false;
+        const payload = o.payload as { state?: unknown } | undefined;
+        return payload?.state === "final";
+      },
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: "sess-main",
+      stream: "job",
+      data: { state: "done" },
+    });
+
+    const final1 = await final1P;
+    const run1 =
+      final1.payload && typeof final1.payload === "object"
+        ? (final1.payload as { runId?: string }).runId
+        : undefined;
+    expect(run1).toBe("idem-1");
+
+    const final2P = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: unknown;
+    }>(
+      ws,
+      (o) => {
+        if (o.type !== "event" || o.event !== "chat") return false;
+        const payload = o.payload as { state?: unknown } | undefined;
+        return payload?.state === "final";
+      },
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: "sess-main",
+      stream: "job",
+      data: { state: "done" },
+    });
+
+    const final2 = await final2P;
+    const run2 =
+      final2.payload && typeof final2.payload === "object"
+        ? (final2.payload as { runId?: string }).runId
+        : undefined;
+    expect(run2).toBe("idem-2");
+
+    ws.close();
+    await server.close();
+  });
+
   test("bridge RPC chat.history returns session messages", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
     testSessionStorePath = path.join(dir, "sessions.json");

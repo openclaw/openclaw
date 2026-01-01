@@ -1770,11 +1770,48 @@ export async function startGatewayServer(
   // Track per-run sequence to detect out-of-order/lost agent events.
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, DedupeEntry>();
-  // Map agent sessionId -> {sessionKey, clientRunId} for chat events (WS WebChat clients).
+  // Map agent sessionId -> pending chat runs for WebChat clients.
   const chatRunSessions = new Map<
     string,
-    { sessionKey: string; clientRunId: string }
+    Array<{ sessionKey: string; clientRunId: string }>
   >();
+  const addChatRun = (
+    sessionId: string,
+    entry: { sessionKey: string; clientRunId: string },
+  ) => {
+    const queue = chatRunSessions.get(sessionId);
+    if (queue) {
+      queue.push(entry);
+    } else {
+      chatRunSessions.set(sessionId, [entry]);
+    }
+  };
+  const peekChatRun = (sessionId: string) =>
+    chatRunSessions.get(sessionId)?.[0];
+  const shiftChatRun = (sessionId: string) => {
+    const queue = chatRunSessions.get(sessionId);
+    if (!queue || queue.length === 0) return undefined;
+    const entry = queue.shift();
+    if (!queue.length) chatRunSessions.delete(sessionId);
+    return entry;
+  };
+  const removeChatRun = (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => {
+    const queue = chatRunSessions.get(sessionId);
+    if (!queue || queue.length === 0) return undefined;
+    const idx = queue.findIndex(
+      (entry) =>
+        entry.clientRunId === clientRunId &&
+        (sessionKey ? entry.sessionKey === sessionKey : true),
+    );
+    if (idx < 0) return undefined;
+    const [entry] = queue.splice(idx, 1);
+    if (!queue.length) chatRunSessions.delete(sessionId);
+    return entry;
+  };
   const chatRunBuffers = new Map<string, string>();
   const chatDeltaSentAt = new Map<string, number>();
   const chatAbortControllers = new Map<
@@ -2948,13 +2985,7 @@ export async function startGatewayServer(
           chatAbortControllers.delete(runId);
           chatRunBuffers.delete(runId);
           chatDeltaSentAt.delete(runId);
-          const current = chatRunSessions.get(active.sessionId);
-          if (
-            current?.clientRunId === runId &&
-            current.sessionKey === sessionKey
-          ) {
-            chatRunSessions.delete(active.sessionId);
-          }
+          removeChatRun(active.sessionId, runId, sessionKey);
 
           const payload = {
             runId,
@@ -3072,10 +3103,7 @@ export async function startGatewayServer(
               sessionId,
               sessionKey: p.sessionKey,
             });
-            chatRunSessions.set(sessionId, {
-              sessionKey: p.sessionKey,
-              clientRunId,
-            });
+            addChatRun(sessionId, { sessionKey: p.sessionKey, clientRunId });
 
             if (store) {
               store[p.sessionKey] = sessionEntry;
@@ -3192,7 +3220,7 @@ export async function startGatewayServer(
 
         // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
         // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
-        chatRunSessions.set(sessionId, {
+        addChatRun(sessionId, {
           sessionKey,
           clientRunId: `voice-${randomUUID()}`,
         });
@@ -3556,18 +3584,18 @@ export async function startGatewayServer(
     agentRunSeq.set(evt.runId, evt.seq);
     broadcast("agent", evt);
 
-    const chatLink = chatRunSessions.get(evt.runId);
+    const chatLink = peekChatRun(evt.runId);
     if (chatLink) {
       // Map agent bus events to chat events for WS WebChat clients.
       // Use clientRunId so the webchat can correlate with its pending promise.
       const { sessionKey, clientRunId } = chatLink;
       bridgeSendToSession(sessionKey, "agent", evt);
-      const base = {
-        runId: clientRunId,
-        sessionKey,
-        seq: evt.seq,
-      };
       if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
+        const base = {
+          runId: clientRunId,
+          sessionKey,
+          seq: evt.seq,
+        };
         chatRunBuffers.set(clientRunId, evt.data.text);
         const now = Date.now();
         const last = chatDeltaSentAt.get(clientRunId) ?? 0;
@@ -3591,9 +3619,20 @@ export async function startGatewayServer(
         typeof evt.data?.state === "string" &&
         (evt.data.state === "done" || evt.data.state === "error")
       ) {
-        const text = chatRunBuffers.get(clientRunId)?.trim() ?? "";
-        chatRunBuffers.delete(clientRunId);
-        chatDeltaSentAt.delete(clientRunId);
+        const finished = shiftChatRun(evt.runId);
+        if (!finished) {
+          return;
+        }
+        const { sessionKey: finishedSessionKey, clientRunId: finishedRunId } =
+          finished;
+        const base = {
+          runId: finishedRunId,
+          sessionKey: finishedSessionKey,
+          seq: evt.seq,
+        };
+        const text = chatRunBuffers.get(finishedRunId)?.trim() ?? "";
+        chatRunBuffers.delete(finishedRunId);
+        chatDeltaSentAt.delete(finishedRunId);
         if (evt.data.state === "done") {
           const payload = {
             ...base,
@@ -3607,7 +3646,7 @@ export async function startGatewayServer(
               : undefined,
           };
           broadcast("chat", payload);
-          bridgeSendToSession(sessionKey, "chat", payload);
+          bridgeSendToSession(finishedSessionKey, "chat", payload);
         } else {
           const payload = {
             ...base,
@@ -3617,9 +3656,8 @@ export async function startGatewayServer(
               : undefined,
           };
           broadcast("chat", payload);
-          bridgeSendToSession(sessionKey, "chat", payload);
+          bridgeSendToSession(finishedSessionKey, "chat", payload);
         }
-        chatRunSessions.delete(evt.runId);
       }
     }
   });
@@ -4221,13 +4259,7 @@ export async function startGatewayServer(
               chatAbortControllers.delete(runId);
               chatRunBuffers.delete(runId);
               chatDeltaSentAt.delete(runId);
-              const current = chatRunSessions.get(active.sessionId);
-              if (
-                current?.clientRunId === runId &&
-                current.sessionKey === sessionKey
-              ) {
-                chatRunSessions.delete(active.sessionId);
-              }
+              removeChatRun(active.sessionId, runId, sessionKey);
 
               const payload = {
                 runId,
@@ -4352,7 +4384,7 @@ export async function startGatewayServer(
                   sessionId,
                   sessionKey: p.sessionKey,
                 });
-                chatRunSessions.set(sessionId, {
+                addChatRun(sessionId, {
                   sessionKey: p.sessionKey,
                   clientRunId,
                 });
@@ -6152,7 +6184,7 @@ export async function startGatewayServer(
                 const mainKey =
                   (cfg.session?.mainKey ?? "main").trim() || "main";
                 if (requestedSessionKey === mainKey) {
-                  chatRunSessions.set(sessionId, {
+                  addChatRun(sessionId, {
                     sessionKey: requestedSessionKey,
                     clientRunId: idem,
                   });
