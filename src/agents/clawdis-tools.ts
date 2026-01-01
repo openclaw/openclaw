@@ -1463,6 +1463,253 @@ function createGatewayTool(): AnyAgentTool {
   };
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Send Message Tool
+// ─────────────────────────────────────────────────────────────────────────────
+
+const SendMessageSchema = Type.Object({
+  to: Type.String({ description: "Recipient phone (E.164) or channel ID" }),
+  message: Type.String({ description: "Message text to send" }),
+  provider: Type.Optional(
+    Type.Union([
+      Type.Literal("whatsapp"),
+      Type.Literal("telegram"),
+      Type.Literal("discord"),
+    ]),
+  ),
+  mediaUrl: Type.Optional(
+    Type.String({ description: "Media URL to attach (image, audio, video)" }),
+  ),
+  gatewayUrl: Type.Optional(Type.String()),
+  gatewayToken: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
+});
+
+function createSendMessageTool(): AnyAgentTool {
+  return {
+    label: "Send Message",
+    name: "clawdis_send",
+    description:
+      "Send a message to a user via WhatsApp, Telegram, or Discord. Use this to proactively reach out to users without waiting for them to message first.",
+    parameters: SendMessageSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const to = readStringParam(params, "to", { required: true });
+      const message = readStringParam(params, "message", { required: true });
+      const provider = readStringParam(params, "provider") ?? "whatsapp";
+      const mediaUrl = readStringParam(params, "mediaUrl");
+      const gatewayOpts: GatewayCallOptions = {
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
+        timeoutMs:
+          typeof params.timeoutMs === "number" ? params.timeoutMs : undefined,
+      };
+
+      const result = await callGatewayTool("send", gatewayOpts, {
+        to,
+        message,
+        provider,
+        mediaUrl,
+        idempotencyKey: crypto.randomUUID(),
+      });
+
+      return jsonResult(result);
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Home Assistant Tool
+// ─────────────────────────────────────────────────────────────────────────────
+
+const HomeAssistantSchema = Type.Object({
+  action: Type.Union([
+    Type.Literal("call_service"),
+    Type.Literal("get_state"),
+    Type.Literal("get_states"),
+  ]),
+  domain: Type.Optional(
+    Type.String({ description: "Service domain (light, switch, climate)" }),
+  ),
+  service: Type.Optional(
+    Type.String({ description: "Service name (turn_on, turn_off, toggle)" }),
+  ),
+  entity_id: Type.Optional(
+    Type.Union([Type.String(), Type.Array(Type.String())]),
+  ),
+  data: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+  haUrl: Type.Optional(Type.String()),
+  haToken: Type.Optional(Type.String()),
+});
+
+function createHomeAssistantTool(): AnyAgentTool {
+  return {
+    label: "Home Assistant",
+    name: "home_assistant",
+    description:
+      "Control Home Assistant smart home devices. Can turn on/off lights, switches, get device states, call any HA service.",
+    parameters: HomeAssistantSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const action = readStringParam(params, "action", { required: true });
+
+      const haUrl =
+        readStringParam(params, "haUrl") ??
+        process.env.HA_URL ??
+        "http://192.168.178.26:8123";
+      const haToken =
+        readStringParam(params, "haToken") ?? process.env.HA_TOKEN;
+
+      if (!haToken) {
+        throw new Error(
+          "HA_TOKEN environment variable or haToken parameter required",
+        );
+      }
+
+      const headers = {
+        Authorization: `Bearer ${haToken}`,
+        "Content-Type": "application/json",
+      };
+
+      if (action === "get_state") {
+        const entityId = params.entity_id;
+        if (typeof entityId !== "string" || !entityId.trim()) {
+          throw new Error("entity_id required for get_state");
+        }
+        const res = await fetch(`${haUrl}/api/states/${entityId.trim()}`, {
+          headers,
+        });
+        if (!res.ok) throw new Error(`HA API error: ${res.status}`);
+        return jsonResult(await res.json());
+      }
+
+      if (action === "get_states") {
+        const res = await fetch(`${haUrl}/api/states`, { headers });
+        if (!res.ok) throw new Error(`HA API error: ${res.status}`);
+        const states = (await res.json()) as Array<{ entity_id: string }>;
+        return jsonResult({
+          count: states.length,
+          domains: [...new Set(states.map((s) => s.entity_id.split(".")[0]))],
+          entities: states.slice(0, 50).map((s) => s.entity_id),
+        });
+      }
+
+      if (action === "call_service") {
+        const domain = readStringParam(params, "domain", { required: true });
+        const service = readStringParam(params, "service", { required: true });
+        const entityId = params.entity_id;
+        const data = (params.data as Record<string, unknown>) ?? {};
+
+        const body: Record<string, unknown> = { ...data };
+        if (entityId) body.entity_id = entityId;
+
+        const res = await fetch(`${haUrl}/api/services/${domain}/${service}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        });
+        if (!res.ok) throw new Error(`HA API error: ${res.status}`);
+        return jsonResult({
+          success: true,
+          domain,
+          service,
+          entity_id: entityId ?? null,
+        });
+      }
+
+      throw new Error(`Unknown action: ${action}`);
+    },
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Text-to-Speech Tool (ElevenLabs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const TTSSchema = Type.Object({
+  text: Type.String({ description: "Text to convert to speech" }),
+  voice: Type.Optional(
+    Type.String({
+      description:
+        "ElevenLabs voice ID (default: Rachel - 21m00Tcm4TlvDq8ikWAM)",
+    }),
+  ),
+  to: Type.Optional(
+    Type.String({ description: "Send voice note to this recipient (E.164)" }),
+  ),
+  provider: Type.Optional(Type.String()),
+  gatewayUrl: Type.Optional(Type.String()),
+  gatewayToken: Type.Optional(Type.String()),
+});
+
+function createTTSTool(): AnyAgentTool {
+  return {
+    label: "Text to Speech",
+    name: "clawdis_tts",
+    description:
+      "Convert text to speech using ElevenLabs and optionally send as a voice note via WhatsApp/Telegram.",
+    parameters: TTSSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const text = readStringParam(params, "text", { required: true });
+      const voice = readStringParam(params, "voice") ?? "21m00Tcm4TlvDq8ikWAM"; // Rachel
+      const to = readStringParam(params, "to");
+      const provider = readStringParam(params, "provider") ?? "whatsapp";
+
+      const apiKey = process.env.ELEVENLABS_API_KEY;
+      if (!apiKey) {
+        throw new Error("ELEVENLABS_API_KEY environment variable required");
+      }
+
+      // Generate audio via ElevenLabs API
+      const ttsRes = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voice}`,
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": apiKey,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            text,
+            model_id: "eleven_monolingual_v1",
+          }),
+        },
+      );
+
+      if (!ttsRes.ok) {
+        throw new Error(`ElevenLabs API error: ${ttsRes.status}`);
+      }
+
+      const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+      const tmpFile = `/tmp/clawdis-tts-${crypto.randomUUID()}.mp3`;
+      await fs.writeFile(tmpFile, audioBuffer);
+
+      if (to) {
+        // Send as voice note
+        const gatewayOpts: GatewayCallOptions = {
+          gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+          gatewayToken: readStringParam(params, "gatewayToken", {
+            trim: false,
+          }),
+        };
+
+        const result = (await callGatewayTool("send", gatewayOpts, {
+          to,
+          message: "",
+          provider,
+          mediaUrl: `file://${tmpFile}`,
+          idempotencyKey: crypto.randomUUID(),
+        })) as Record<string, unknown>;
+
+        return jsonResult({ ...result, audioGenerated: true, voice });
+      }
+
+      return jsonResult({ audioPath: tmpFile, voice, textLength: text.length });
+    },
+  };
+}
+
 export function createClawdisTools(): AnyAgentTool[] {
   return [
     createBrowserTool(),
@@ -1470,5 +1717,8 @@ export function createClawdisTools(): AnyAgentTool[] {
     createNodesTool(),
     createCronTool(),
     createGatewayTool(),
+    createSendMessageTool(),
+    createHomeAssistantTool(),
+    createTTSTool(),
   ];
 }
