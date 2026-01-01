@@ -13,6 +13,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { getReplyFromConfig } from "./reply.js";
+import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 const webMocks = vi.hoisted(() => ({
   webAuthExists: vi.fn().mockResolvedValue(true),
@@ -157,6 +158,31 @@ describe("trigger handling", () => {
       const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
       expect(call?.model).toBe("claude-haiku-4-5-20251001");
+    });
+  });
+
+  it("suppresses HEARTBEAT_OK replies outside heartbeat runs", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: HEARTBEAT_TOKEN }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });
   });
 

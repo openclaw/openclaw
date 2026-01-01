@@ -1415,7 +1415,7 @@ describe("web auto-reply", () => {
     resetLoadConfigMock();
   });
 
-  it("skips responsePrefix for HEARTBEAT_OK responses", async () => {
+  it("does not deliver HEARTBEAT_OK responses", async () => {
     setLoadConfigMock(() => ({
       routing: {
         allowFrom: ["*"],
@@ -1456,8 +1456,7 @@ describe("web auto-reply", () => {
       sendMedia: vi.fn(),
     });
 
-    // HEARTBEAT_OK should NOT have prefix - clawdis needs exact match
-    expect(reply).toHaveBeenCalledWith(HEARTBEAT_TOKEN);
+    expect(reply).not.toHaveBeenCalled();
     resetLoadConfigMock();
   });
 

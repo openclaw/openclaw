@@ -185,6 +185,7 @@ export { stripHeartbeatToken };
 function isSilentReply(payload?: ReplyPayload): boolean {
   if (!payload) return false;
   const text = payload.text?.trim();
+  if (text?.includes(HEARTBEAT_TOKEN)) return true;
   if (!text || text !== SILENT_REPLY_TOKEN) return false;
   if (payload.mediaUrl || payload.mediaUrls?.length) return false;
   return true;

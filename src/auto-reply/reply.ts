@@ -61,7 +61,7 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
-import { SILENT_REPLY_TOKEN } from "./tokens.js";
+import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
@@ -1190,6 +1190,7 @@ export async function getReplyFromConfig(
     return undefined;
   }
 
+  let suppressedByHeartbeatAck = false;
   try {
     if (shouldEagerType) {
       await startTypingLoop();
@@ -1216,6 +1217,17 @@ export async function getReplyFromConfig(
         runId,
         onPartialReply: opts?.onPartialReply
           ? async (payload) => {
+              if (
+                !opts?.isHeartbeat &&
+                payload.text?.includes(HEARTBEAT_TOKEN)
+              ) {
+                suppressedByHeartbeatAck = true;
+                logVerbose(
+                  "Suppressing partial reply: detected HEARTBEAT_OK token",
+                );
+                return;
+              }
+              if (suppressedByHeartbeatAck) return;
               await startTypingOnText(payload.text);
               await opts.onPartialReply?.({
                 text: payload.text,
@@ -1226,6 +1238,17 @@ export async function getReplyFromConfig(
         shouldEmitToolResult,
         onToolResult: opts?.onToolResult
           ? async (payload) => {
+              if (
+                !opts?.isHeartbeat &&
+                payload.text?.includes(HEARTBEAT_TOKEN)
+              ) {
+                suppressedByHeartbeatAck = true;
+                logVerbose(
+                  "Suppressing tool result: detected HEARTBEAT_OK token",
+                );
+                return;
+              }
+              if (suppressedByHeartbeatAck) return;
               await startTypingOnText(payload.text);
               await opts.onToolResult?.({
                 text: payload.text,
@@ -1261,9 +1284,22 @@ export async function getReplyFromConfig(
 
     const payloadArray = runResult.payloads ?? [];
     if (payloadArray.length === 0) return undefined;
+    if (
+      suppressedByHeartbeatAck ||
+      (!opts?.isHeartbeat &&
+        payloadArray.some((payload) => payload.text?.includes(HEARTBEAT_TOKEN)))
+    ) {
+      logVerbose("Suppressing reply: detected HEARTBEAT_OK token");
+      return undefined;
+    }
     const shouldSignalTyping = payloadArray.some((payload) => {
       const trimmed = payload.text?.trim();
-      if (trimmed && trimmed !== SILENT_REPLY_TOKEN) return true;
+      if (
+        trimmed &&
+        trimmed !== SILENT_REPLY_TOKEN &&
+        !trimmed.includes(HEARTBEAT_TOKEN)
+      )
+        return true;
       if (payload.mediaUrl) return true;
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
