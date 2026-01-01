@@ -42,6 +42,14 @@ export async function callGateway<T = unknown>(
     (typeof remote?.token === "string" && remote.token.trim().length > 0
       ? remote.token.trim()
       : undefined);
+  const password =
+    (typeof opts.password === "string" && opts.password.trim().length > 0
+      ? opts.password.trim()
+      : undefined) ||
+    process.env.CLAWDIS_GATEWAY_PASSWORD ||
+    (typeof remote?.password === "string" && remote.password.trim().length > 0
+      ? remote.password.trim()
+      : undefined);
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -56,7 +64,7 @@ export async function callGateway<T = unknown>(
     const client = new GatewayClient({
       url,
       token,
-      password: opts.password,
+      password,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? "cli",
       clientVersion: opts.clientVersion ?? "dev",
