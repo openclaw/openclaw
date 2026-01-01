@@ -131,6 +131,10 @@
   "pnpm": {
     "overrides": {
       "@sinclair/typebox": "0.34.45"
+    },
+    "patchedDependencies": {
+      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
+      "@mariozechner/pi-coding-agent@0.30.2": "patches/@[redacted-email]"
     }
   },
   "vitest": {
