@@ -321,26 +321,30 @@ struct ConnectionsSettings: View {
 
     private var whatsAppTint: Color {
         guard let status = self.store.snapshot?.whatsapp else { return .secondary }
+        if !status.configured { return .secondary }
         if !status.linked { return .red }
-        if status.connected { return .green }
         if status.lastError != nil { return .orange }
-        return .green
+        if status.connected { return .green }
+        if status.running { return .orange }
+        return .orange
     }
 
     private var telegramTint: Color {
         guard let status = self.store.snapshot?.telegram else { return .secondary }
         if !status.configured { return .secondary }
-        if status.running { return .green }
         if status.lastError != nil { return .orange }
-        return .secondary
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     private var discordTint: Color {
         guard let status = self.store.snapshot?.discord else { return .secondary }
         if !status.configured { return .secondary }
-        if status.running { return .green }
         if status.lastError != nil { return .orange }
-        return .secondary
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
     }
 
     private var whatsAppSummary: String {
@@ -472,7 +476,7 @@ struct ConnectionsSettings: View {
                     .font(.headline)
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(color)
             }
             Spacer()
         }
