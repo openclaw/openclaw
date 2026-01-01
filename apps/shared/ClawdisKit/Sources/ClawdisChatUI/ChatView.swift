@@ -129,6 +129,9 @@ public struct ClawdisChatView: View {
             self.scrollPosition = self.scrollerBottomID
             self.hasPerformedInitialScroll = true
         }
+        .onChange(of: self.viewModel.sessionKey) { _, _ in
+            self.hasPerformedInitialScroll = false
+        }
         .onChange(of: self.viewModel.messages.count) { _, _ in
             guard self.hasPerformedInitialScroll else { return }
             withAnimation(.snappy(duration: 0.22)) {
