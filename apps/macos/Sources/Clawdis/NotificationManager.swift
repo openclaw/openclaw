@@ -46,7 +46,8 @@ struct NotificationManager {
                 if Self.hasTimeSensitiveEntitlement {
                     content.interruptionLevel = .timeSensitive
                 } else {
-                    self.logger.debug("time-sensitive notification requested without entitlement; falling back to active")
+                    self.logger.debug(
+                        "time-sensitive notification requested without entitlement; falling back to active")
                     content.interruptionLevel = .active
                 }
             }

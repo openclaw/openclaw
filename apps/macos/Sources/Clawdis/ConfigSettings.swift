@@ -332,7 +332,9 @@ struct ConfigSettings: View {
                             Text("Using ELEVENLABS_API_KEY from the environment.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
-                        } else if self.gatewayApiKeyFound && self.talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        } else if self.gatewayApiKeyFound
+                            && self.talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        {
                             Text("Using API key from the gateway profile.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)

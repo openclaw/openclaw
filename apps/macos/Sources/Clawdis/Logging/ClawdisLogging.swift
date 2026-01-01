@@ -114,6 +114,7 @@ struct ClawdisOSLogHandler: LogHandler {
         set { self.metadata[key] = newValue }
     }
 
+    // swiftlint:disable:next function_parameter_count
     func log(
         level: Logger.Level,
         message: Logger.Message,
@@ -188,6 +189,7 @@ struct ClawdisFileLogHandler: LogHandler {
         set { self.metadata[key] = newValue }
     }
 
+    // swiftlint:disable:next function_parameter_count
     func log(
         level: Logger.Level,
         message: Logger.Message,

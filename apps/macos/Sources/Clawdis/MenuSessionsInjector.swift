@@ -207,17 +207,25 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
 
         if let error = self.nodesStore.lastError?.nonEmpty {
-            menu.insertItem(self.makeMessageItem(text: "Error: \(error)", symbolName: "exclamationmark.triangle",
-                width: width), at: cursor)
+            menu.insertItem(
+                self.makeMessageItem(
+                    text: "Error: \(error)",
+                    symbolName: "exclamationmark.triangle",
+                    width: width),
+                at: cursor)
             cursor += 1
         } else if let status = self.nodesStore.statusMessage?.nonEmpty {
-            menu.insertItem(self.makeMessageItem(text: status, symbolName: "info.circle", width: width), at: cursor)
+            menu.insertItem(
+                self.makeMessageItem(text: status, symbolName: "info.circle", width: width),
+                at: cursor)
             cursor += 1
         }
 
         if entries.isEmpty {
             let title = self.nodesStore.isLoading ? "Loading devices..." : "No devices yet"
-            menu.insertItem(self.makeMessageItem(text: title, symbolName: "circle.dashed", width: width), at: cursor)
+            menu.insertItem(
+                self.makeMessageItem(text: title, symbolName: "circle.dashed", width: width),
+                at: cursor)
             cursor += 1
         } else {
             for entry in entries.prefix(8) {

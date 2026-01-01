@@ -746,7 +746,9 @@ extension OnboardingView {
                     Text("Couldn’t load skills from the Gateway.")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.orange)
-                    Text("Make sure the Gateway is running and connected, then hit Refresh (or open Settings → Skills).")
+                    Text(
+                        "Make sure the Gateway is running and connected, " +
+                            "then hit Refresh (or open Settings → Skills).")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

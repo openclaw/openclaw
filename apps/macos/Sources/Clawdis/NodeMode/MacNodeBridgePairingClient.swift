@@ -17,29 +17,35 @@ actor MacNodeBridgePairingClient {
         let connection = NWConnection(to: endpoint, using: .tcp)
         let queue = DispatchQueue(label: "com.steipete.clawdis.macos.bridge-client")
         defer { connection.cancel() }
-        try await AsyncTimeout.withTimeout(seconds: 8, onTimeout: {
-            NSError(domain: "Bridge", code: 0, userInfo: [
-                NSLocalizedDescriptionKey: "connect timed out",
-            ])
-        }) {
-            try await self.startAndWaitForReady(connection, queue: queue)
-        }
+        try await AsyncTimeout.withTimeout(
+            seconds: 8,
+            onTimeout: {
+                NSError(domain: "Bridge", code: 0, userInfo: [
+                    NSLocalizedDescriptionKey: "connect timed out",
+                ])
+            },
+            operation: {
+                try await self.startAndWaitForReady(connection, queue: queue)
+            })
 
         onStatus?("Authenticating…")
         try await self.send(hello, over: connection)
 
-        let first = try await AsyncTimeout.withTimeout(seconds: 10, onTimeout: {
-            NSError(domain: "Bridge", code: 0, userInfo: [
-                NSLocalizedDescriptionKey: "hello timed out",
-            ])
-        }) { () -> ReceivedFrame in
-            guard let frame = try await self.receiveFrame(over: connection) else {
-                throw NSError(domain: "Bridge", code: 0, userInfo: [
-                    NSLocalizedDescriptionKey: "Bridge closed connection during hello",
+        let first = try await AsyncTimeout.withTimeout(
+            seconds: 10,
+            onTimeout: {
+                NSError(domain: "Bridge", code: 0, userInfo: [
+                    NSLocalizedDescriptionKey: "hello timed out",
                 ])
-            }
-            return frame
-        }
+            },
+            operation: { () -> ReceivedFrame in
+                guard let frame = try await self.receiveFrame(over: connection) else {
+                    throw NSError(domain: "Bridge", code: 0, userInfo: [
+                        NSLocalizedDescriptionKey: "Bridge closed connection during hello",
+                    ])
+                }
+                return frame
+            })
 
         switch first.base.type {
         case "hello-ok":
@@ -68,28 +74,31 @@ actor MacNodeBridgePairingClient {
                 over: connection)
 
             onStatus?("Waiting for approval…")
-            let ok = try await AsyncTimeout.withTimeout(seconds: 60, onTimeout: {
-                NSError(domain: "Bridge", code: 0, userInfo: [
-                    NSLocalizedDescriptionKey: "pairing approval timed out",
-                ])
-            }) {
-                while let next = try await self.receiveFrame(over: connection) {
-                    switch next.base.type {
-                    case "pair-ok":
-                        return try self.decoder.decode(BridgePairOk.self, from: next.data)
-                    case "error":
-                        let e = try self.decoder.decode(BridgeErrorFrame.self, from: next.data)
-                        throw NSError(domain: "Bridge", code: 2, userInfo: [
-                            NSLocalizedDescriptionKey: "\(e.code): \(e.message)",
-                        ])
-                    default:
-                        continue
+            let ok = try await AsyncTimeout.withTimeout(
+                seconds: 60,
+                onTimeout: {
+                    NSError(domain: "Bridge", code: 0, userInfo: [
+                        NSLocalizedDescriptionKey: "pairing approval timed out",
+                    ])
+                },
+                operation: {
+                    while let next = try await self.receiveFrame(over: connection) {
+                        switch next.base.type {
+                        case "pair-ok":
+                            return try self.decoder.decode(BridgePairOk.self, from: next.data)
+                        case "error":
+                            let e = try self.decoder.decode(BridgeErrorFrame.self, from: next.data)
+                            throw NSError(domain: "Bridge", code: 2, userInfo: [
+                                NSLocalizedDescriptionKey: "\(e.code): \(e.message)",
+                            ])
+                        default:
+                            continue
+                        }
                     }
-                }
-                throw NSError(domain: "Bridge", code: 3, userInfo: [
-                    NSLocalizedDescriptionKey: "Pairing failed: bridge closed connection",
-                ])
-            }
+                    throw NSError(domain: "Bridge", code: 3, userInfo: [
+                        NSLocalizedDescriptionKey: "Pairing failed: bridge closed connection",
+                    ])
+                })
 
             return ok.token
 

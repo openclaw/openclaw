@@ -48,17 +48,23 @@ actor MacNodeBridgeSession {
 
         try await Self.waitForReady(stateStream, timeoutSeconds: 6)
 
-        try await AsyncTimeout.withTimeout(seconds: 6, onTimeout: {
-            TimeoutError(message: "operation timed out")
-        }) {
-            try await self.send(hello)
-        }
+        try await AsyncTimeout.withTimeout(
+            seconds: 6,
+            onTimeout: {
+                TimeoutError(message: "operation timed out")
+            },
+            operation: {
+                try await self.send(hello)
+            })
 
-        guard let line = try await AsyncTimeout.withTimeout(seconds: 6, onTimeout: {
-            TimeoutError(message: "operation timed out")
-        }, operation: {
-            try await self.receiveLine()
-        }),
+        guard let line = try await AsyncTimeout.withTimeout(
+            seconds: 6,
+            onTimeout: {
+                TimeoutError(message: "operation timed out")
+            },
+            operation: {
+                try await self.receiveLine()
+            }),
             let data = line.data(using: .utf8),
             let base = try? self.decoder.decode(BridgeBaseFrame.self, from: data)
         else {
@@ -294,28 +300,31 @@ actor MacNodeBridgeSession {
         _ stream: AsyncStream<NWConnection.State>,
         timeoutSeconds: Double) async throws
     {
-        try await AsyncTimeout.withTimeout(seconds: timeoutSeconds, onTimeout: {
-            TimeoutError(message: "operation timed out")
-        }) {
-            for await state in stream {
-                switch state {
-                case .ready:
-                    return
-                case let .failed(err):
-                    throw err
-                case .cancelled:
-                    throw NSError(domain: "Bridge", code: 20, userInfo: [
-                        NSLocalizedDescriptionKey: "Connection cancelled",
-                    ])
-                default:
-                    continue
+        try await AsyncTimeout.withTimeout(
+            seconds: timeoutSeconds,
+            onTimeout: {
+                TimeoutError(message: "operation timed out")
+            },
+            operation: {
+                for await state in stream {
+                    switch state {
+                    case .ready:
+                        return
+                    case let .failed(err):
+                        throw err
+                    case .cancelled:
+                        throw NSError(domain: "Bridge", code: 20, userInfo: [
+                            NSLocalizedDescriptionKey: "Connection cancelled",
+                        ])
+                    default:
+                        continue
+                    }
                 }
-            }
-            throw NSError(domain: "Bridge", code: 21, userInfo: [
-                NSLocalizedDescriptionKey: "Connection closed",
-            ])
-        }
+                throw NSError(domain: "Bridge", code: 21, userInfo: [
+                    NSLocalizedDescriptionKey: "Connection closed",
+                ])
+            })
     }
 
-    
+
 }

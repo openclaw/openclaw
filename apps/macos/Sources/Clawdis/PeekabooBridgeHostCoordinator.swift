@@ -76,7 +76,10 @@ final class PeekabooBridgeHostCoordinator {
         }
 
         var infoCF: CFDictionary?
-        guard SecCodeCopySigningInformation(staticCode, SecCSFlags(rawValue: kSecCSSigningInformation), &infoCF) == errSecSuccess,
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &infoCF) == errSecSuccess,
               let info = infoCF as? [String: Any]
         else {
             return nil

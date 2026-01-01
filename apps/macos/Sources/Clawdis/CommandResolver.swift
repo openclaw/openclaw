@@ -184,7 +184,11 @@ enum CommandResolver {
     static func hasAnyClawdisInvoker(searchPaths: [String]? = nil) -> Bool {
         if self.clawdisExecutable(searchPaths: searchPaths) != nil { return true }
         if self.findExecutable(named: "pnpm", searchPaths: searchPaths) != nil { return true }
-        if self.findExecutable(named: "node", searchPaths: searchPaths) != nil, self.nodeCliPath() != nil { return true }
+        if self.findExecutable(named: "node", searchPaths: searchPaths) != nil,
+           self.nodeCliPath() != nil
+        {
+            return true
+        }
         return false
     }
 
@@ -244,7 +248,11 @@ enum CommandResolver {
         defaults: UserDefaults = .standard,
         searchPaths: [String]? = nil) -> [String]
     {
-        self.clawdisNodeCommand(subcommand: subcommand, extraArgs: extraArgs, defaults: defaults, searchPaths: searchPaths)
+        self.clawdisNodeCommand(
+            subcommand: subcommand,
+            extraArgs: extraArgs,
+            defaults: defaults,
+            searchPaths: searchPaths)
     }
 
     // MARK: - SSH helpers
