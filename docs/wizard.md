@@ -60,22 +60,28 @@ Reset uses `trash` (never `rm`).
    - Auth: token | password | off
    - Tailscale: off | serve | funnel
 
-5) **Daemon install (local only)**
+5) **Providers (optional)**
+   - WhatsApp: optional `clawdis login` QR flow
+   - Telegram: bot token (config or env)
+   - Discord: bot token (config or env)
+   - Signal: `signal-cli` detection + account config
+
+6) **Daemon install (local only)**
    - macOS: LaunchAgent
    - Linux: systemd user unit
    - Windows: Scheduled Task
 
-6) **Health**
+7) **Health**
    - Start/restart daemon
    - `clawdis health` summary
 
-7) **Skills (recommended)**
+8) **Skills (recommended)**
    - Read from `buildWorkspaceSkillStatus`
    - Show eligible vs missing requirements
    - Offer installs via preferred installer
    - Allow skip
 
-8) **Finish**
+9) **Finish**
    - Summary + next steps
    - Reminder: iOS/Android/macOS node apps add canvas/camera/screen/system features.
 
@@ -97,6 +103,9 @@ Wizard writes:
   - `agent.model` + `models.providers` (if Minimax selected)
   - `skills.install.nodeManager` (npm | pnpm | bun)
   - `skills.entries.<key>.env` / `.apiKey` (if set in skills step)
+  - `telegram.botToken`, `discord.token`, `signal.*` (if set in providers step)
+
+WhatsApp login writes credentials to `~/.clawdis/credentials/creds.json`.
 
 ## Minimax M2.1 (LM Studio) config snippet
 
