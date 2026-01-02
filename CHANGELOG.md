@@ -69,6 +69,7 @@
 - Chat UI: clear composer input immediately and allow clear while editing to prevent duplicate sends (#72) — thanks @hrdwdmrbl
 - Restart: use systemd on Linux (and report actual restart method) instead of always launchctl.
 - Gateway relay: detect Bun binaries via execPath to resolve packaged assets on macOS.
+- Cron: prevent `every` schedules without an anchor from firing in a tight loop (thanks @jamesgroat).
 - Docs: add manual OAuth setup for remote/headless deployments (#67) — thanks @wstock
 - Docs/agent tools: clarify that browser `wait` should be avoided by default and used only in exceptional cases.
 - Browser tools: `upload` supports auto-click refs, direct `inputRef`/`element` file inputs, and emits input/change after `setFiles` so JS-heavy sites pick up attachments.
