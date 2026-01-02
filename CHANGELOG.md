@@ -52,6 +52,7 @@
 - Control UI: refine Web Chat session selector styling (chevron spacing + background).
 - WebChat: stream live updates for sessions even when runs start outside the chat UI.
 - Gateway CLI: read `CLAWDIS_GATEWAY_PASSWORD` from environment in `callGateway()` — allows `doctor`/`health` commands to auth without explicit `--password` flag.
+- Gateway: add password auth support for remote gateway connections (thanks @jeffersonwarrior).
 - Auto-reply: strip stray leading/trailing `HEARTBEAT_OK` from normal replies; drop short (≤ 30 chars) heartbeat acks.
 - Logging: trim provider prefix duplication in Discord/Signal/Telegram runtime log lines.
 - Logging/Signal: treat signal-cli "Failed …" lines as errors in gateway logs.
