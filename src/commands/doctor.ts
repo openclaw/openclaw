@@ -4,8 +4,8 @@ import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdisConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDIS,
+  migrateLegacyConfig,
   readConfigFileSnapshot,
-  validateConfigObject,
   writeConfigFile,
 } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -19,65 +19,6 @@ import {
   guardCancel,
   printWizardHeader,
 } from "./onboard-helpers.js";
-
-type LegacyMigration = {
-  id: string;
-  describe: string;
-  apply: (raw: Record<string, unknown>, changes: string[]) => void;
-};
-
-const LEGACY_MIGRATIONS: LegacyMigration[] = [
-  // Legacy migration (2026-01-02, commit: 0766c5e3) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
-  {
-    id: "routing.allowFrom->whatsapp.allowFrom",
-    describe: "Move routing.allowFrom to whatsapp.allowFrom",
-    apply: (raw, changes) => {
-      const routing = raw.routing;
-      if (!routing || typeof routing !== "object") return;
-      const allowFrom = (routing as Record<string, unknown>).allowFrom;
-      if (allowFrom === undefined) return;
-
-      const whatsapp =
-        raw.whatsapp && typeof raw.whatsapp === "object"
-          ? (raw.whatsapp as Record<string, unknown>)
-          : {};
-
-      if (whatsapp.allowFrom === undefined) {
-        whatsapp.allowFrom = allowFrom;
-        changes.push("Moved routing.allowFrom → whatsapp.allowFrom.");
-      } else {
-        changes.push("Removed routing.allowFrom (whatsapp.allowFrom already set).");
-      }
-
-      delete (routing as Record<string, unknown>).allowFrom;
-      if (Object.keys(routing as Record<string, unknown>).length === 0) {
-        delete raw.routing;
-      }
-      raw.whatsapp = whatsapp;
-    },
-  },
-];
-
-function applyLegacyMigrations(raw: unknown): {
-  config: ClawdisConfig | null;
-  changes: string[];
-} {
-  if (!raw || typeof raw !== "object") return { config: null, changes: [] };
-  const next = structuredClone(raw) as Record<string, unknown>;
-  const changes: string[] = [];
-  for (const migration of LEGACY_MIGRATIONS) {
-    migration.apply(next, changes);
-  }
-  if (changes.length === 0) return { config: null, changes: [] };
-  const validated = validateConfigObject(next);
-  if (!validated.ok) {
-    changes.push(
-      "Migration applied, but config still invalid; fix remaining issues manually.",
-    );
-    return { config: null, changes };
-  }
-  return { config: validated.config, changes };
-}
 
 function resolveMode(cfg: ClawdisConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -108,9 +49,8 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
       runtime,
     );
     if (migrate) {
-      const { config: migrated, changes } = applyLegacyMigrations(
-        snapshot.parsed,
-      );
+      // Legacy migration (2026-01-02, commit: 0766c5e3) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
+      const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
       if (changes.length > 0) {
         note(changes.join("\n"), "Doctor changes");
       }
@@ -144,7 +84,12 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
     healthOk = true;
   } catch (err) {
-    runtime.error(`Health check failed: ${String(err)}`);
+    const message = String(err);
+    if (message.includes("gateway closed")) {
+      note("Gateway not running.", "Gateway");
+    } else {
+      runtime.error(`Health check failed: ${message}`);
+    }
   }
 
   if (!healthOk) {
@@ -166,7 +111,12 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
         try {
           await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
         } catch (err) {
-          runtime.error(`Health check failed: ${String(err)}`);
+          const message = String(err);
+          if (message.includes("gateway closed")) {
+            note("Gateway not running.", "Gateway");
+          } else {
+            runtime.error(`Health check failed: ${message}`);
+          }
         }
       }
     }

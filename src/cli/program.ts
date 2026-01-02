@@ -79,7 +79,7 @@ export function buildProgram() {
       .join("\n");
     defaultRuntime.error(
       danger(
-        `Legacy config entries detected. Ask your agent to run \"clawdis doctor\" to migrate.\n${issues}`,
+        `Legacy config entries detected. Run \"clawdis doctor\" (or ask your agent) to migrate.\n${issues}`,
       ),
     );
     process.exit(1);

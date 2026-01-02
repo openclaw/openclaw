@@ -502,6 +502,17 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      routing: { allowFrom: ["+15555550123"] },
+    });
+    expect(res.changes).toContain("Moved routing.allowFrom → whatsapp.allowFrom.");
+    expect(res.config?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(res.config?.routing?.allowFrom).toBeUndefined();
+  });
+
   it("surfaces legacy issues in snapshot", async () => {
     await withTempHome(async (home) => {
       const configPath = path.join(home, ".clawdis", "clawdis.json");

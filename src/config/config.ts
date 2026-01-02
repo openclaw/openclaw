@@ -1161,11 +1161,48 @@ type LegacyConfigRule = {
   message: string;
 };
 
+type LegacyConfigMigration = {
+  id: string;
+  describe: string;
+  apply: (raw: Record<string, unknown>, changes: string[]) => void;
+};
+
 const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "allowFrom"],
     message:
       "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdis doctor` to migrate).",
+  },
+];
+
+const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
+  {
+    id: "routing.allowFrom->whatsapp.allowFrom",
+    describe: "Move routing.allowFrom to whatsapp.allowFrom",
+    apply: (raw, changes) => {
+      const routing = raw.routing;
+      if (!routing || typeof routing !== "object") return;
+      const allowFrom = (routing as Record<string, unknown>).allowFrom;
+      if (allowFrom === undefined) return;
+
+      const whatsapp =
+        raw.whatsapp && typeof raw.whatsapp === "object"
+          ? (raw.whatsapp as Record<string, unknown>)
+          : {};
+
+      if (whatsapp.allowFrom === undefined) {
+        whatsapp.allowFrom = allowFrom;
+        changes.push("Moved routing.allowFrom → whatsapp.allowFrom.");
+      } else {
+        changes.push("Removed routing.allowFrom (whatsapp.allowFrom already set).");
+      }
+
+      delete (routing as Record<string, unknown>).allowFrom;
+      if (Object.keys(routing as Record<string, unknown>).length === 0) {
+        delete raw.routing;
+      }
+      raw.whatsapp = whatsapp;
+    },
   },
 ];
 
@@ -1187,6 +1224,27 @@ function findLegacyConfigIssues(raw: unknown): LegacyConfigIssue[] {
     }
   }
   return issues;
+}
+
+export function migrateLegacyConfig(raw: unknown): {
+  config: ClawdisConfig | null;
+  changes: string[];
+} {
+  if (!raw || typeof raw !== "object") return { config: null, changes: [] };
+  const next = structuredClone(raw) as Record<string, unknown>;
+  const changes: string[] = [];
+  for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+    migration.apply(next, changes);
+  }
+  if (changes.length === 0) return { config: null, changes: [] };
+  const validated = validateConfigObject(next);
+  if (!validated.ok) {
+    changes.push(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+    return { config: null, changes };
+  }
+  return { config: validated.config, changes };
 }
 
 function escapeRegExp(text: string): string {

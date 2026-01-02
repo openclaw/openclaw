@@ -2,9 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshot = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
-const validateConfigObject = vi.fn((raw: unknown) => ({
-  ok: true as const,
+const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
+  changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
 }));
 
 vi.mock("@clack/prompts", () => ({
@@ -22,7 +22,7 @@ vi.mock("../config/config.js", () => ({
   CONFIG_PATH_CLAWDIS: "/tmp/clawdis.json",
   readConfigFileSnapshot,
   writeConfigFile,
-  validateConfigObject,
+  migrateLegacyConfig,
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -80,6 +80,11 @@ describe("doctor", () => {
       error: vi.fn(),
       exit: vi.fn(),
     };
+
+    migrateLegacyConfig.mockReturnValue({
+      config: { whatsapp: { allowFrom: ["+15555550123"] } },
+      changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+    });
 
     await doctorCommand(runtime);
 
