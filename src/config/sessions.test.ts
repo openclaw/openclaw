@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
   resolveSessionKey,
@@ -49,6 +50,18 @@ describe("sessions", () => {
         "main",
       ),
     ).toBe("discord:group:12345");
+  });
+
+  it("builds discord display name with guild+channel slugs", () => {
+    expect(
+      buildGroupDisplayName({
+        surface: "discord",
+        room: "#general",
+        space: "friends-of-clawd",
+        id: "123",
+        key: "discord:group:123",
+      }),
+    ).toBe("discord:friends-of-clawd#general");
   });
 
   it("collapses direct chats to main by default", () => {

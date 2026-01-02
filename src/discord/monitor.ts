@@ -42,13 +42,13 @@ type DiscordHistoryEntry = {
   messageId?: string;
 };
 
-type DiscordAllowList = {
+export type DiscordAllowList = {
   allowAll: boolean;
   ids: Set<string>;
   names: Set<string>;
 };
 
-type DiscordGuildEntryResolved = {
+export type DiscordGuildEntryResolved = {
   id?: string;
   slug?: string;
   requireMention?: boolean;
@@ -56,7 +56,7 @@ type DiscordGuildEntryResolved = {
   channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
 };
 
-type DiscordChannelConfigResolved = {
+export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
 };
@@ -440,7 +440,7 @@ function buildGuildLabel(message: import("discord.js").Message) {
   return `${message.guild?.name ?? "Guild"} #${channelName} id:${message.channelId}`;
 }
 
-function normalizeDiscordAllowList(
+export function normalizeDiscordAllowList(
   raw: Array<string | number> | undefined,
   prefixes: string[],
 ): DiscordAllowList | null {
@@ -490,7 +490,7 @@ function normalizeDiscordName(value?: string | null) {
   return value.trim().toLowerCase();
 }
 
-function normalizeDiscordSlug(value?: string | null) {
+export function normalizeDiscordSlug(value?: string | null) {
   if (!value) return "";
   let text = value.trim().toLowerCase();
   if (!text) return "";
@@ -501,7 +501,7 @@ function normalizeDiscordSlug(value?: string | null) {
   return text;
 }
 
-function allowListMatches(
+export function allowListMatches(
   allowList: DiscordAllowList,
   candidates: {
     id?: string;
@@ -523,7 +523,7 @@ function allowListMatches(
   return false;
 }
 
-function resolveDiscordGuildEntry(params: {
+export function resolveDiscordGuildEntry(params: {
   guild: import("discord.js").Guild | null;
   guildEntries: Record<string, DiscordGuildEntryResolved> | undefined;
 }): DiscordGuildEntryResolved | null {
@@ -570,7 +570,7 @@ function resolveDiscordGuildEntry(params: {
   return null;
 }
 
-function resolveDiscordChannelConfig(params: {
+export function resolveDiscordChannelConfig(params: {
   guildInfo: DiscordGuildEntryResolved | null;
   channelId: string;
   channelName?: string;
@@ -594,7 +594,7 @@ function resolveDiscordChannelConfig(params: {
   return { allowed: true };
 }
 
-function resolveGroupDmAllow(params: {
+export function resolveGroupDmAllow(params: {
   channels: Array<string | number> | undefined;
   channelId: string;
   channelName?: string;
