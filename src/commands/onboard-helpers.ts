@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspect } from "node:util";
 
 import { cancel, isCancel } from "@clack/prompts";
 
@@ -196,7 +197,14 @@ export async function probeGatewayReachable(params: {
 }
 
 function summarizeError(err: unknown): string {
-  const raw = String(err ?? "unknown error");
+  let raw = "unknown error";
+  if (err instanceof Error) {
+    raw = err.message || raw;
+  } else if (typeof err === "string") {
+    raw = err || raw;
+  } else if (err !== undefined) {
+    raw = inspect(err, { depth: 2 });
+  }
   const line =
     raw
       .split("\n")

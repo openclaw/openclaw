@@ -68,7 +68,7 @@ function setRoutingAllowFrom(cfg: ClawdisConfig, allowFrom?: string[]) {
   return {
     ...cfg,
     routing: {
-      ...(cfg.routing ?? {}),
+      ...cfg.routing,
       allowFrom,
     },
   };
