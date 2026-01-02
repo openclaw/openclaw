@@ -41,6 +41,7 @@
 - Auto-reply: strip stray leading/trailing `HEARTBEAT_OK` from normal replies; drop short (≤ 30 chars) heartbeat acks.
 - Logging: trim provider prefix duplication in Discord/Signal/Telegram runtime log lines.
 - Discord: include recent guild context when replying to mentions and add `discord.historyLimit` to tune how many messages are captured.
+- Discord: include author tag + id in group context `[from:]` lines for ping-ready replies (thanks @thewilloftheshadow).
 - Skills: switch imsg installer to brew tap formula.
 - Skills: gate macOS-only skills by OS and surface block reasons in the Skills UI.
 - Onboarding: show skill descriptions in the macOS setup flow and surface clearer Gateway/skills error messages.
