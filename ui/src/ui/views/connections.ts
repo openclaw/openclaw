@@ -2,7 +2,13 @@ import { html, nothing } from "lit";
 
 import { formatAgo } from "../format";
 import type { ProvidersStatusSnapshot } from "../types";
-import type { DiscordForm, IMessageForm, SignalForm, TelegramForm } from "../ui-types";
+import type {
+  DiscordActionForm,
+  DiscordForm,
+  IMessageForm,
+  SignalForm,
+  TelegramForm,
+} from "../ui-types";
 
 export type ConnectionsProps = {
   connected: boolean;
@@ -48,6 +54,24 @@ export function renderConnections(props: ConnectionsProps) {
   const discord = props.snapshot?.discord ?? null;
   const signal = props.snapshot?.signal ?? null;
   const imessage = props.snapshot?.imessage ?? null;
+  const discordActionOptions: Array<{ key: keyof DiscordActionForm; label: string }> =
+    [
+      { key: "reactions", label: "Reactions" },
+      { key: "stickers", label: "Stickers" },
+      { key: "polls", label: "Polls" },
+      { key: "permissions", label: "Permissions" },
+      { key: "messages", label: "Messages" },
+      { key: "threads", label: "Threads" },
+      { key: "pins", label: "Pins" },
+      { key: "search", label: "Search" },
+      { key: "memberInfo", label: "Member info" },
+      { key: "roleInfo", label: "Role info" },
+      { key: "channelInfo", label: "Channel info" },
+      { key: "voiceStatus", label: "Voice status" },
+      { key: "events", label: "Events" },
+      { key: "roles", label: "Role changes" },
+      { key: "moderation", label: "Moderation" },
+    ];
   const providerOrder: ProviderKey[] = [
     "whatsapp",
     "telegram",
@@ -570,6 +594,28 @@ function renderProvider(
                 <option value="no">No</option>
               </select>
             </label>
+          </div>
+
+          <div class="card-sub" style="margin-top: 16px;">Tool actions</div>
+          <div class="form-grid" style="margin-top: 8px;">
+            ${discordActionOptions.map(
+              (action) => html`<label class="field">
+                <span>${action.label}</span>
+                <select
+                  .value=${props.discordForm.actions[action.key] ? "yes" : "no"}
+                  @change=${(e: Event) =>
+                    props.onDiscordChange({
+                      actions: {
+                        ...props.discordForm.actions,
+                        [action.key]: (e.target as HTMLSelectElement).value === "yes",
+                      },
+                    })}
+                >
+                  <option value="yes">Enabled</option>
+                  <option value="no">Disabled</option>
+                </select>
+              </label>`,
+            )}
           </div>
 
           ${props.discordTokenLocked

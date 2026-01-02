@@ -334,6 +334,105 @@ struct ConnectionsSettings: View {
                     }
                 }
 
+                Divider().padding(.vertical, 2)
+
+                Text("Tool actions")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        self.gridLabel("Reactions")
+                        Toggle("", isOn: self.$store.discordActionReactions)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Stickers")
+                        Toggle("", isOn: self.$store.discordActionStickers)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Polls")
+                        Toggle("", isOn: self.$store.discordActionPolls)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Permissions")
+                        Toggle("", isOn: self.$store.discordActionPermissions)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Messages")
+                        Toggle("", isOn: self.$store.discordActionMessages)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Threads")
+                        Toggle("", isOn: self.$store.discordActionThreads)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Pins")
+                        Toggle("", isOn: self.$store.discordActionPins)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Search")
+                        Toggle("", isOn: self.$store.discordActionSearch)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Member info")
+                        Toggle("", isOn: self.$store.discordActionMemberInfo)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Role info")
+                        Toggle("", isOn: self.$store.discordActionRoleInfo)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Channel info")
+                        Toggle("", isOn: self.$store.discordActionChannelInfo)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Voice status")
+                        Toggle("", isOn: self.$store.discordActionVoiceStatus)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Events")
+                        Toggle("", isOn: self.$store.discordActionEvents)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Role changes")
+                        Toggle("", isOn: self.$store.discordActionRoles)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Moderation")
+                        Toggle("", isOn: self.$store.discordActionModeration)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                }
+
                 if self.isDiscordTokenLocked {
                     Text("Token set via DISCORD_BOT_TOKEN env; config edits won’t override it.")
                         .font(.caption)

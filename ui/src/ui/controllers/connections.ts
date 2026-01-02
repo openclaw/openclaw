@@ -1,7 +1,14 @@
 import type { GatewayBrowserClient } from "../gateway";
 import { parseList } from "../format";
 import type { ConfigSnapshot, ProvidersStatusSnapshot } from "../types";
-import type { DiscordForm, IMessageForm, SignalForm, TelegramForm } from "../ui-types";
+import {
+  defaultDiscordActions,
+  type DiscordActionForm,
+  type DiscordForm,
+  type IMessageForm,
+  type SignalForm,
+  type TelegramForm,
+} from "../ui-types";
 
 export type ConnectionsState = {
   client: GatewayBrowserClient | null;
@@ -116,6 +123,14 @@ export function updateDiscordForm(
   state: ConnectionsState,
   patch: Partial<DiscordForm>,
 ) {
+  if (patch.actions) {
+    state.discordForm = {
+      ...state.discordForm,
+      ...patch,
+      actions: { ...state.discordForm.actions, ...patch.actions },
+    };
+    return;
+  }
   state.discordForm = { ...state.discordForm, ...patch };
 }
 
@@ -244,6 +259,32 @@ export async function saveDiscordConfig(state: ConnectionsState) {
       } else {
         delete discord.historyLimit;
       }
+    }
+
+    const actions: Partial<DiscordActionForm> = {};
+    const applyAction = (key: keyof DiscordActionForm) => {
+      const value = form.actions[key];
+      if (value !== defaultDiscordActions[key]) actions[key] = value;
+    };
+    applyAction("reactions");
+    applyAction("stickers");
+    applyAction("polls");
+    applyAction("permissions");
+    applyAction("messages");
+    applyAction("threads");
+    applyAction("pins");
+    applyAction("search");
+    applyAction("memberInfo");
+    applyAction("roleInfo");
+    applyAction("channelInfo");
+    applyAction("voiceStatus");
+    applyAction("events");
+    applyAction("roles");
+    applyAction("moderation");
+    if (Object.keys(actions).length > 0) {
+      discord.actions = actions;
+    } else {
+      delete discord.actions;
     }
 
     const slash = { ...(discord.slashCommand ?? {}) } as Record<string, unknown>;

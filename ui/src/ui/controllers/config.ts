@@ -1,6 +1,13 @@
 import type { GatewayBrowserClient } from "../gateway";
 import type { ConfigSnapshot } from "../types";
-import type { DiscordForm, IMessageForm, SignalForm, TelegramForm } from "../ui-types";
+import {
+  defaultDiscordActions,
+  type DiscordActionForm,
+  type DiscordForm,
+  type IMessageForm,
+  type SignalForm,
+  type TelegramForm,
+} from "../ui-types";
 
 export type ConfigState = {
   client: GatewayBrowserClient | null;
@@ -88,6 +95,11 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
 
   const discordDm = (discord.dm ?? {}) as Record<string, unknown>;
   const slash = (discord.slashCommand ?? {}) as Record<string, unknown>;
+  const discordActions = (discord.actions ?? {}) as Record<string, unknown>;
+  const readAction = (key: keyof DiscordActionForm) =>
+    typeof discordActions[key] === "boolean"
+      ? (discordActions[key] as boolean)
+      : defaultDiscordActions[key];
   state.discordForm = {
     enabled: typeof discord.enabled === "boolean" ? discord.enabled : true,
     token: typeof discord.token === "string" ? discord.token : "",
@@ -99,6 +111,23 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       typeof discord.mediaMaxMb === "number" ? String(discord.mediaMaxMb) : "",
     historyLimit:
       typeof discord.historyLimit === "number" ? String(discord.historyLimit) : "",
+    actions: {
+      reactions: readAction("reactions"),
+      stickers: readAction("stickers"),
+      polls: readAction("polls"),
+      permissions: readAction("permissions"),
+      messages: readAction("messages"),
+      threads: readAction("threads"),
+      pins: readAction("pins"),
+      search: readAction("search"),
+      memberInfo: readAction("memberInfo"),
+      roleInfo: readAction("roleInfo"),
+      channelInfo: readAction("channelInfo"),
+      voiceStatus: readAction("voiceStatus"),
+      events: readAction("events"),
+      roles: readAction("roles"),
+      moderation: readAction("moderation"),
+    },
     slashEnabled: typeof slash.enabled === "boolean" ? slash.enabled : false,
     slashName: typeof slash.name === "string" ? slash.name : "",
     slashSessionPrefix:
