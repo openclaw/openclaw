@@ -231,6 +231,12 @@ clawdis hooks gmail run
 - [`docs/ios/connect.md`](docs/ios/connect.md)
 - [`docs/clawdis-mac.md`](docs/clawdis-mac.md)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
+
+AI/vibe-coded PRs welcome! 🤖
+
 ## Clawd
 
 Clawdis was built for **Clawd**, a space lobster AI assistant.
