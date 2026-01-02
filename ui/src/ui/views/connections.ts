@@ -298,7 +298,7 @@ function renderProvider(
               />
             </label>
             <label class="field">
-              <span>Require mention</span>
+              <span>Require mention in groups</span>
               <select
                 .value=${props.telegramForm.requireMention ? "yes" : "no"}
                 @change=${(e: Event) =>

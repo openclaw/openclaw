@@ -147,7 +147,24 @@ export async function saveTelegramConfig(state: ConnectionsState) {
       if (token) telegram.botToken = token;
       else delete telegram.botToken;
     }
-    telegram.requireMention = state.telegramForm.requireMention;
+    const groups =
+      telegram.groups && typeof telegram.groups === "object"
+        ? ({ ...(telegram.groups as Record<string, unknown>) } as Record<
+            string,
+            unknown
+          >)
+        : {};
+    const defaultGroup =
+      groups["*"] && typeof groups["*"] === "object"
+        ? ({ ...(groups["*"] as Record<string, unknown>) } as Record<
+            string,
+            unknown
+          >)
+        : {};
+    defaultGroup.requireMention = state.telegramForm.requireMention;
+    groups["*"] = defaultGroup;
+    telegram.groups = groups;
+    delete telegram.requireMention;
     const allowFrom = parseList(state.telegramForm.allowFrom);
     if (allowFrom.length > 0) telegram.allowFrom = allowFrom;
     else delete telegram.allowFrom;

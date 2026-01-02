@@ -58,6 +58,14 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
           .filter((v) => v.length > 0)
           .join(", ")
       : "";
+  const telegramGroups =
+    telegram.groups && typeof telegram.groups === "object"
+      ? (telegram.groups as Record<string, unknown>)
+      : {};
+  const telegramDefaultGroup =
+    telegramGroups["*"] && typeof telegramGroups["*"] === "object"
+      ? (telegramGroups["*"] as Record<string, unknown>)
+      : {};
   const allowFrom = Array.isArray(telegram.allowFrom)
     ? toList(telegram.allowFrom)
     : typeof telegram.allowFrom === "string"
@@ -67,7 +75,9 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.telegramForm = {
     token: typeof telegram.botToken === "string" ? telegram.botToken : "",
     requireMention:
-      typeof telegram.requireMention === "boolean" ? telegram.requireMention : true,
+      typeof telegramDefaultGroup.requireMention === "boolean"
+        ? telegramDefaultGroup.requireMention
+        : true,
     allowFrom,
     proxy: typeof telegram.proxy === "string" ? telegram.proxy : "",
     webhookUrl: typeof telegram.webhookUrl === "string" ? telegram.webhookUrl : "",

@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot } from "./bot.js";
 
-const loadConfig = vi.fn(() => ({}));
+const { loadConfig } = vi.hoisted(() => ({
+  loadConfig: vi.fn(() => ({})),
+}));
 vi.mock("../config/config.js", () => ({
   loadConfig,
 }));

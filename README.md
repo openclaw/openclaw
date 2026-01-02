@@ -171,7 +171,7 @@ Minimal `~/.clawdis/clawdis.json`:
 ### Telegram
 
 - Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
-- Optional: set `telegram.requireMention`, `telegram.allowFrom`, or `telegram.webhookUrl` as needed.
+- Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`), `telegram.allowFrom`, or `telegram.webhookUrl` as needed.
 
 ```json5
 {

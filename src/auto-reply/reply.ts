@@ -995,8 +995,8 @@ export async function getReplyFromConfig(
     const webAuthAgeMs = getWebAuthAgeMs();
     const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
     const groupActivation = isGroup
-      ? normalizeGroupActivation(sessionEntry?.groupActivation) ??
-        defaultGroupActivation()
+      ? (normalizeGroupActivation(sessionEntry?.groupActivation) ??
+        defaultGroupActivation())
       : undefined;
     const statusText = buildStatusMessage({
       agent: {

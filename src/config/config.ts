@@ -1235,7 +1235,7 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["telegram", "requireMention"],
     message:
-      "telegram.requireMention was removed; use telegram.groups.\"*\".requireMention instead (run `clawdis doctor` to migrate).",
+      'telegram.requireMention was removed; use telegram.groups."*".requireMention instead (run `clawdis doctor` to migrate).',
   },
 ];
 
@@ -1280,8 +1280,10 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       const groupChat =
         (routing as Record<string, unknown>).groupChat &&
         typeof (routing as Record<string, unknown>).groupChat === "object"
-          ? ((routing as Record<string, unknown>)
-              .groupChat as Record<string, unknown>)
+          ? ((routing as Record<string, unknown>).groupChat as Record<
+              string,
+              unknown
+            >)
           : null;
       if (!groupChat) return;
       const requireMention = groupChat.requireMention;
@@ -1331,18 +1333,22 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
   },
   {
     id: "telegram.requireMention->telegram.groups.*.requireMention",
-    describe: "Move telegram.requireMention to telegram.groups.*.requireMention",
+    describe:
+      "Move telegram.requireMention to telegram.groups.*.requireMention",
     apply: (raw, changes) => {
       const telegram = raw.telegram;
       if (!telegram || typeof telegram !== "object") return;
-      const requireMention = (telegram as Record<string, unknown>).requireMention;
+      const requireMention = (telegram as Record<string, unknown>)
+        .requireMention;
       if (requireMention === undefined) return;
 
       const groups =
         (telegram as Record<string, unknown>).groups &&
         typeof (telegram as Record<string, unknown>).groups === "object"
-          ? ((telegram as Record<string, unknown>)
-              .groups as Record<string, unknown>)
+          ? ((telegram as Record<string, unknown>).groups as Record<
+              string,
+              unknown
+            >)
           : {};
       const defaultKey = "*";
       const entry =
