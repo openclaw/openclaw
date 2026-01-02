@@ -107,6 +107,25 @@ export function extensionForMime(mime?: string | null): string | undefined {
   return EXT_BY_MIME[mime.toLowerCase()];
 }
 
+export function imageMimeFromFormat(
+  format?: string | null,
+): string | undefined {
+  if (!format) return undefined;
+  switch (format.toLowerCase()) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "webp":
+      return "image/webp";
+    case "gif":
+      return "image/gif";
+    default:
+      return undefined;
+  }
+}
+
 export function kindFromMime(mime?: string | null): MediaKind {
   return mediaKindFromMime(mime);
 }

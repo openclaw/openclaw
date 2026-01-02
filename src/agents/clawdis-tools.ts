@@ -43,7 +43,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
 import { reactMessageDiscord } from "../discord/send.js";
 import { callGateway } from "../gateway/call.js";
-import { detectMime } from "../media/mime.js";
+import { detectMime, imageMimeFromFormat } from "../media/mime.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-ai uses a different module instance.
@@ -875,7 +875,7 @@ function createCanvasTool(): AnyAgentTool {
           });
           await writeBase64ToFile(filePath, payload.base64);
           const mimeType =
-            payload.format === "jpeg" ? "image/jpeg" : "image/png";
+            imageMimeFromFormat(payload.format) ?? "image/png";
           return await imageResult({
             label: "canvas:snapshot",
             path: filePath,
@@ -1141,7 +1141,8 @@ function createNodesTool(): AnyAgentTool {
             content.push({
               type: "image",
               data: payload.base64,
-              mimeType: payload.format === "jpeg" ? "image/jpeg" : "image/png",
+              mimeType:
+                imageMimeFromFormat(payload.format) ?? "image/png",
             });
             details.push({
               facing,
