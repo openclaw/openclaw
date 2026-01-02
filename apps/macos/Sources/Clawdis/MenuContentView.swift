@@ -164,14 +164,23 @@ struct MenuContent: View {
     }
 
     private func saveBrowserControlEnabled(_ enabled: Bool) async {
+        let (success, _) = await MenuContent.buildAndSaveBrowserEnabled(enabled)
+
+        if !success {
+            await self.loadBrowserControlEnabled()
+        }
+    }
+
+    private nonisolated static func buildAndSaveBrowserEnabled(_ enabled: Bool) async -> (Bool,()) {
         var root = await ConfigStore.load()
         var browser = root["browser"] as? [String: Any] ?? [:]
         browser["enabled"] = enabled
         root["browser"] = browser
         do {
             try await ConfigStore.save(root)
+            return (true, ())
         } catch {
-            await self.loadBrowserControlEnabled()
+            return (false, ())
         }
     }
 

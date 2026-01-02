@@ -97,4 +97,13 @@ enum ClawdisConfigFile {
         self.logger.debug("agent workspace updated set=\(!trimmed.isEmpty)")
     }
 
+    static func gatewayPassword() -> String? {
+        let root = self.loadDict()
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any] else {
+            return nil
+        }
+        return remote["password"] as? String
+    }
+
 }

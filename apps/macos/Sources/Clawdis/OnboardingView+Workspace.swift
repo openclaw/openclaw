@@ -75,6 +75,15 @@ extension OnboardingView {
 
     @discardableResult
     func saveAgentWorkspace(_ workspace: String?) async -> Bool {
+        let (success, errorMessage) = await OnboardingView.buildAndSaveWorkspace(workspace)
+
+        if let errorMessage {
+            self.workspaceStatus = errorMessage
+        }
+        return success
+    }
+
+    private nonisolated static func buildAndSaveWorkspace(_ workspace: String?) async -> (Bool, String?) {
         var root = await ConfigStore.load()
         var agent = root["agent"] as? [String: Any] ?? [:]
         let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -90,10 +99,10 @@ extension OnboardingView {
         }
         do {
             try await ConfigStore.save(root)
-            return true
-        } catch {
-            self.workspaceStatus = "Failed to save config: \(error.localizedDescription)"
-            return false
+            return (true, nil)
+        } catch let error {
+            let errorMessage = "Failed to save config: \(error.localizedDescription)"
+            return (false, errorMessage)
         }
     }
 }
