@@ -46,7 +46,7 @@ export async function callGateway<T = unknown>(
     (typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
       : undefined) ||
-    process.env.CLAWDIS_GATEWAY_PASSWORD ||
+    (process.env.CLAWDIS_GATEWAY_PASSWORD?.trim()) ||
     (typeof remote?.password === "string" && remote.password.trim().length > 0
       ? remote.password.trim()
       : undefined);

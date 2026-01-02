@@ -431,12 +431,56 @@ struct ConfigSettings: View {
         self.configSaving = true
         defer { self.configSaving = false }
 
+        let configModel = self.configModel
+        let customModel = self.customModel
+        let heartbeatMinutes = self.heartbeatMinutes
+        let heartbeatBody = self.heartbeatBody
+        let browserEnabled = self.browserEnabled
+        let browserControlUrl = self.browserControlUrl
+        let browserColorHex = self.browserColorHex
+        let browserAttachOnly = self.browserAttachOnly
+        let talkVoiceId = self.talkVoiceId
+        let talkApiKey = self.talkApiKey
+        let talkInterruptOnSpeech = self.talkInterruptOnSpeech
+
+        let errorMessage = await ConfigSettings.buildAndSaveConfig(
+            configModel: configModel,
+            customModel: customModel,
+            heartbeatMinutes: heartbeatMinutes,
+            heartbeatBody: heartbeatBody,
+            browserEnabled: browserEnabled,
+            browserControlUrl: browserControlUrl,
+            browserColorHex: browserColorHex,
+            browserAttachOnly: browserAttachOnly,
+            talkVoiceId: talkVoiceId,
+            talkApiKey: talkApiKey,
+            talkInterruptOnSpeech: talkInterruptOnSpeech
+        )
+
+        if let errorMessage {
+            self.modelError = errorMessage
+        }
+    }
+
+    private nonisolated static func buildAndSaveConfig(
+        configModel: String,
+        customModel: String,
+        heartbeatMinutes: Int?,
+        heartbeatBody: String,
+        browserEnabled: Bool,
+        browserControlUrl: String,
+        browserColorHex: String,
+        browserAttachOnly: Bool,
+        talkVoiceId: String,
+        talkApiKey: String,
+        talkInterruptOnSpeech: Bool
+    ) async -> String? {
         var root = await ConfigStore.load()
         var agent = root["agent"] as? [String: Any] ?? [:]
         var browser = root["browser"] as? [String: Any] ?? [:]
         var talk = root["talk"] as? [String: Any] ?? [:]
 
-        let chosenModel = (self.configModel == "__custom__" ? self.customModel : self.configModel)
+        let chosenModel = (configModel == "__custom__" ? customModel : configModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = chosenModel
         if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
@@ -445,40 +489,41 @@ struct ConfigSettings: View {
             agent["heartbeatMinutes"] = heartbeatMinutes
         }
 
-        let trimmedBody = self.heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBody = heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedBody.isEmpty {
             agent["heartbeatBody"] = trimmedBody
         }
 
         root["agent"] = agent
 
-        browser["enabled"] = self.browserEnabled
-        let trimmedUrl = self.browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        browser["enabled"] = browserEnabled
+        let trimmedUrl = browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedUrl.isEmpty { browser["controlUrl"] = trimmedUrl }
-        let trimmedColor = self.browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedColor = browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedColor.isEmpty { browser["color"] = trimmedColor }
-        browser["attachOnly"] = self.browserAttachOnly
+        browser["attachOnly"] = browserAttachOnly
         root["browser"] = browser
 
-        let trimmedVoice = self.talkVoiceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedVoice = talkVoiceId.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedVoice.isEmpty {
             talk.removeValue(forKey: "voiceId")
         } else {
             talk["voiceId"] = trimmedVoice
         }
-        let trimmedApiKey = self.talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedApiKey = talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedApiKey.isEmpty {
             talk.removeValue(forKey: "apiKey")
         } else {
             talk["apiKey"] = trimmedApiKey
         }
-        talk["interruptOnSpeech"] = self.talkInterruptOnSpeech
+        talk["interruptOnSpeech"] = talkInterruptOnSpeech
         root["talk"] = talk
 
         do {
             try await ConfigStore.save(root)
-        } catch {
-            self.modelError = error.localizedDescription
+            return nil
+        } catch let error {
+            return error.localizedDescription
         }
     }
 

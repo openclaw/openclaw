@@ -43,7 +43,7 @@ enum ConfigStore {
     }
 
     @MainActor
-    static func save(_ root: [String: Any]) async throws {
+    static func save(_ root: sending [String: Any]) async throws {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
             if let override = overrides.saveRemote {

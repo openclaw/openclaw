@@ -64,6 +64,7 @@ enum GatewayLaunchAgentManager {
             .joined(separator: ":")
         let bind = self.preferredGatewayBind() ?? "loopback"
         let token = self.preferredGatewayToken()
+        let password = self.preferredGatewayPassword()
         var envEntries = """
             <key>PATH</key>
             <string>\(preferredPath)</string>
@@ -74,6 +75,12 @@ enum GatewayLaunchAgentManager {
             envEntries += """
                 <key>CLAWDIS_GATEWAY_TOKEN</key>
                 <string>\(token)</string>
+            """
+        }
+        if let password {
+            envEntries += """
+                <key>CLAWDIS_GATEWAY_PASSWORD</key>
+                <string>\(password)</string>
             """
         }
         let plist = """
@@ -144,6 +151,24 @@ enum GatewayLaunchAgentManager {
         let raw = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func preferredGatewayPassword() -> String? {
+        // First check environment variable
+        let raw = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_PASSWORD"] ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        // Then check config file (gateway.auth.password)
+        let root = ClawdisConfigFile.loadDict()
+        if let gateway = root["gateway"] as? [String: Any],
+           let auth = gateway["auth"] as? [String: Any],
+           let password = auth["password"] as? String
+        {
+            return password.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
     }
 
     private struct LaunchctlResult {

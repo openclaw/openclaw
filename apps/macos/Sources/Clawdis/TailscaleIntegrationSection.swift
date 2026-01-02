@@ -280,28 +280,56 @@ struct TailscaleIntegrationSection: View {
             return
         }
 
+        let (success, errorMessage) = await TailscaleIntegrationSection.buildAndSaveTailscaleConfig(
+            tailscaleMode: self.tailscaleMode,
+            requireCredentialsForServe: self.requireCredentialsForServe,
+            password: trimmedPassword,
+            connectionMode: self.connectionMode,
+            isPaused: self.isPaused
+        )
+
+        if !success, let errorMessage {
+            self.statusMessage = errorMessage
+            return
+        }
+
+        if self.connectionMode == .local, !self.isPaused {
+            self.statusMessage = "Saved to ~/.clawdis/clawdis.json. Restarting gateway…"
+        } else {
+            self.statusMessage = "Saved to ~/.clawdis/clawdis.json. Restart the gateway to apply."
+        }
+        self.restartGatewayIfNeeded()
+    }
+
+    private nonisolated static func buildAndSaveTailscaleConfig(
+        tailscaleMode: GatewayTailscaleMode,
+        requireCredentialsForServe: Bool,
+        password: String,
+        connectionMode: AppState.ConnectionMode,
+        isPaused: Bool
+    ) async -> (Bool, String?) {
         var root = await ConfigStore.load()
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
-        tailscale["mode"] = self.tailscaleMode.rawValue
+        tailscale["mode"] = tailscaleMode.rawValue
         gateway["tailscale"] = tailscale
 
-        if self.tailscaleMode != .off {
+        if tailscaleMode != .off {
             gateway["bind"] = "loopback"
         }
 
-        if self.tailscaleMode == .off {
+        if tailscaleMode == .off {
             gateway.removeValue(forKey: "auth")
         } else {
             var auth = gateway["auth"] as? [String: Any] ?? [:]
-            if self.tailscaleMode == .serve, !self.requireCredentialsForServe {
+            if tailscaleMode == .serve, !requireCredentialsForServe {
                 auth["allowTailscale"] = true
                 auth.removeValue(forKey: "mode")
                 auth.removeValue(forKey: "password")
             } else {
                 auth["allowTailscale"] = false
                 auth["mode"] = "password"
-                auth["password"] = trimmedPassword
+                auth["password"] = password
             }
 
             if auth.isEmpty {
@@ -319,17 +347,10 @@ struct TailscaleIntegrationSection: View {
 
         do {
             try await ConfigStore.save(root)
-        } catch {
-            self.statusMessage = error.localizedDescription
-            return
+            return (true, nil)
+        } catch let error {
+            return (false, error.localizedDescription)
         }
-
-        if self.connectionMode == .local, !self.isPaused {
-            self.statusMessage = "Saved to ~/.clawdis/clawdis.json. Restarting gateway…"
-        } else {
-            self.statusMessage = "Saved to ~/.clawdis/clawdis.json. Restart the gateway to apply."
-        }
-        self.restartGatewayIfNeeded()
     }
 
     private func restartGatewayIfNeeded() {

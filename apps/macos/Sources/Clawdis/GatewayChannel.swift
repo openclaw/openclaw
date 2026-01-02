@@ -66,6 +66,7 @@ actor GatewayChannelActor {
     private var connectWaiters: [CheckedContinuation<Void, Error>] = []
     private var url: URL
     private var token: String?
+    private var password: String?
     private let session: WebSocketSessioning
     private var backoffMs: Double = 500
     private var shouldReconnect = true
@@ -82,11 +83,13 @@ actor GatewayChannelActor {
     init(
         url: URL,
         token: String?,
+        password: String? = nil,
         session: WebSocketSessionBox? = nil,
         pushHandler: (@Sendable (GatewayPush) async -> Void)? = nil)
     {
         self.url = url
         self.token = token
+        self.password = password
         self.session = session?.session ?? URLSession(configuration: .default)
         self.pushHandler = pushHandler
         Task { [weak self] in
@@ -213,13 +216,9 @@ actor GatewayChannelActor {
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
         ]
         if let token = self.token {
-            // Send both 'token' and 'password' to support both auth modes.
-            // Gateway checks the field matching its auth.mode configuration.
-            let authDict: [String: ProtoAnyCodable] = [
-                "token": ProtoAnyCodable(token),
-                "password": ProtoAnyCodable(token),
-            ]
-            params["auth"] = ProtoAnyCodable(authDict)
+            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
+        } else if let password = self.password {
+            params["auth"] = ProtoAnyCodable(["password": ProtoAnyCodable(password)])
         }
 
         let frame = RequestFrame(

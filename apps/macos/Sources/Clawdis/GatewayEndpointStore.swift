@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 enum GatewayEndpointState: Sendable, Equatable {
-    case ready(mode: AppState.ConnectionMode, url: URL, token: String?)
+    case ready(mode: AppState.ConnectionMode, url: URL, token: String?, password: String?)
     case unavailable(mode: AppState.ConnectionMode, reason: String)
 }
 
@@ -17,18 +17,44 @@ actor GatewayEndpointStore {
     struct Deps: Sendable {
         let mode: @Sendable () async -> AppState.ConnectionMode
         let token: @Sendable () -> String?
+        let password: @Sendable () -> String?
         let localPort: @Sendable () -> Int
         let remotePortIfRunning: @Sendable () async -> UInt16?
         let ensureRemoteTunnel: @Sendable () async throws -> UInt16
 
         static let live = Deps(
             mode: { await MainActor.run { AppStateStore.shared.connectionMode } },
-            token: {
-                // First check env var, fallback to config file
-                if let envToken = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"], !envToken.isEmpty {
-                    return envToken
+            token: { ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"] },
+            password: {
+                // First check environment variable
+                let raw = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_PASSWORD"] ?? ""
+                let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    return trimmed
                 }
-                return ClawdisConfigFile.gatewayPassword()
+                // Then check config file based on connection mode
+                let root = ClawdisConfigFile.loadDict()
+                // Check gateway.auth.password (for local gateway auth)
+                if let gateway = root["gateway"] as? [String: Any],
+                   let auth = gateway["auth"] as? [String: Any],
+                   let password = auth["password"] as? String
+                {
+                    let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !pw.isEmpty {
+                        return pw
+                    }
+                }
+                // Check gateway.remote.password (for remote gateway auth)
+                if let gateway = root["gateway"] as? [String: Any],
+                   let remote = gateway["remote"] as? [String: Any],
+                   let password = remote["password"] as? String
+                {
+                    let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !pw.isEmpty {
+                        return pw
+                    }
+                }
+                return nil
             },
             localPort: { GatewayEnvironment.gatewayPort() },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
@@ -53,9 +79,11 @@ actor GatewayEndpointStore {
         }
 
         let port = deps.localPort()
+        let token = deps.token()
+        let password = deps.password()
         switch initialMode {
         case .local:
-            self.state = .ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: deps.token())
+            self.state = .ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: token, password: password)
         case .remote:
             self.state = .unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel")
         case .unconfigured:
@@ -83,17 +111,18 @@ actor GatewayEndpointStore {
 
     func setMode(_ mode: AppState.ConnectionMode) async {
         let token = self.deps.token()
+        let password = self.deps.password()
         switch mode {
         case .local:
             let port = self.deps.localPort()
-            self.setState(.ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: token))
+            self.setState(.ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: token, password: password))
         case .remote:
             let port = await self.deps.remotePortIfRunning()
             guard let port else {
                 self.setState(.unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel"))
                 return
             }
-            self.setState(.ready(mode: .remote, url: URL(string: "ws://127.0.0.1:\(Int(port))")!, token: token))
+            self.setState(.ready(mode: .remote, url: URL(string: "ws://127.0.0.1:\(Int(port))")!, token: token, password: password))
         case .unconfigured:
             self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))
         }
@@ -116,8 +145,8 @@ actor GatewayEndpointStore {
     func requireConfig() async throws -> GatewayConnection.Config {
         await self.refresh()
         switch self.state {
-        case let .ready(_, url, token):
-            return (url, token)
+        case let .ready(_, url, token, password):
+            return (url, token, password)
         case let .unavailable(mode, reason):
             guard mode == .remote else {
                 throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
@@ -128,9 +157,10 @@ actor GatewayEndpointStore {
             do {
                 let forwarded = try await self.deps.ensureRemoteTunnel()
                 let token = self.deps.token()
+                let password = self.deps.password()
                 let url = URL(string: "ws://127.0.0.1:\(Int(forwarded))")!
-                self.setState(.ready(mode: .remote, url: url, token: token))
-                return (url, token)
+                self.setState(.ready(mode: .remote, url: url, token: token, password: password))
+                return (url, token, password)
             } catch {
                 let msg = "\(reason) (\(error.localizedDescription))"
                 self.setState(.unavailable(mode: .remote, reason: msg))
@@ -150,7 +180,7 @@ actor GatewayEndpointStore {
             continuation.yield(next)
         }
         switch next {
-        case let .ready(mode, url, _):
+        case let .ready(mode, url, _, _):
             let modeDesc = String(describing: mode)
             let urlDesc = url.absoluteString
             self.logger
