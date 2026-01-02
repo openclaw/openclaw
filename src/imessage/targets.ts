@@ -52,6 +52,23 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
   if (!trimmed) throw new Error("iMessage target is required");
   const lower = trimmed.toLowerCase();
 
+  for (const { prefix, service } of SERVICE_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      const remainder = stripPrefix(trimmed, prefix);
+      if (!remainder) throw new Error(`${prefix} target is required`);
+      const remainderLower = remainder.toLowerCase();
+      const isChatTarget =
+        CHAT_ID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+        CHAT_GUID_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+        CHAT_IDENTIFIER_PREFIXES.some((p) => remainderLower.startsWith(p)) ||
+        remainderLower.startsWith("group:");
+      if (isChatTarget) {
+        return parseIMessageTarget(remainder);
+      }
+      return { kind: "handle", to: remainder, service };
+    }
+  }
+
   for (const prefix of CHAT_ID_PREFIXES) {
     if (lower.startsWith(prefix)) {
       const value = stripPrefix(trimmed, prefix);
@@ -89,14 +106,6 @@ export function parseIMessageTarget(raw: string): IMessageTarget {
     return { kind: "chat_guid", chatGuid: value };
   }
 
-  for (const { prefix, service } of SERVICE_PREFIXES) {
-    if (lower.startsWith(prefix)) {
-      const to = stripPrefix(trimmed, prefix);
-      if (!to) throw new Error(`${prefix} target is required`);
-      return { kind: "handle", to, service };
-    }
-  }
-
   return { kind: "handle", to: trimmed, service: "auto" };
 }
 
@@ -104,6 +113,14 @@ export function parseIMessageAllowTarget(raw: string): IMessageAllowTarget {
   const trimmed = raw.trim();
   if (!trimmed) return { kind: "handle", handle: "" };
   const lower = trimmed.toLowerCase();
+
+  for (const { prefix } of SERVICE_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      const remainder = stripPrefix(trimmed, prefix);
+      if (!remainder) return { kind: "handle", handle: "" };
+      return parseIMessageAllowTarget(remainder);
+    }
+  }
 
   for (const prefix of CHAT_ID_PREFIXES) {
     if (lower.startsWith(prefix)) {

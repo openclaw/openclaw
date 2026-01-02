@@ -12,6 +12,8 @@ export type MsgContext = {
   Transcript?: string;
   ChatType?: string;
   GroupSubject?: string;
+  GroupRoom?: string;
+  GroupSpace?: string;
   GroupMembers?: string;
   SenderName?: string;
   SenderE164?: string;

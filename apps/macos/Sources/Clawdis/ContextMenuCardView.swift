@@ -79,7 +79,7 @@ struct ContextMenuCardView: View {
                 height: self.barHeight)
 
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(row.key)
+                Text(row.label)
                     .font(.caption.weight(row.key == "main" ? .semibold : .regular))
                     .lineLimit(1)
                     .truncationMode(.middle)

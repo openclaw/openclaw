@@ -62,6 +62,8 @@ fun ChatComposer(
   var showSessionMenu by remember { mutableStateOf(false) }
 
   val sessionOptions = resolveSessionChoices(sessionKey, sessions)
+  val currentSessionLabel =
+    sessionOptions.firstOrNull { it.key == sessionKey }?.displayName ?: sessionKey
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
 
@@ -82,13 +84,13 @@ fun ChatComposer(
             onClick = { showSessionMenu = true },
             contentPadding = ButtonDefaults.ContentPadding,
           ) {
-            Text("Session: $sessionKey")
+            Text("Session: $currentSessionLabel")
           }
 
           DropdownMenu(expanded = showSessionMenu, onDismissRequest = { showSessionMenu = false }) {
             for (entry in sessionOptions) {
               DropdownMenuItem(
-                text = { Text(entry.key) },
+                text = { Text(entry.displayName ?: entry.key) },
                 onClick = {
                   onSelectSession(entry.key)
                   showSessionMenu = false

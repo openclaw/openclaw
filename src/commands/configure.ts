@@ -39,6 +39,7 @@ import {
   printWizardHeader,
   probeGatewayReachable,
   randomToken,
+  resolveControlUiLinks,
   summarizeExistingConfig,
 } from "./onboard-helpers.js";
 import { setupProviders } from "./onboard-providers.js";
@@ -548,6 +549,30 @@ export async function runConfigureWizard(
     } catch (err) {
       runtime.error(`Health check failed: ${String(err)}`);
     }
+  }
+
+  note(
+    (() => {
+      const bind = nextConfig.gateway?.bind ?? "loopback";
+      const links = resolveControlUiLinks({ bind, port: gatewayPort });
+      return [`Web UI: ${links.httpUrl}`, `Gateway WS: ${links.wsUrl}`].join(
+        "\n",
+      );
+    })(),
+    "Control UI",
+  );
+
+  const wantsOpen = guardCancel(
+    await confirm({
+      message: "Open Control UI now?",
+      initialValue: false,
+    }),
+    runtime,
+  );
+  if (wantsOpen) {
+    const bind = nextConfig.gateway?.bind ?? "loopback";
+    const links = resolveControlUiLinks({ bind, port: gatewayPort });
+    await openUrl(links.httpUrl);
   }
 
   outro("Configure complete.");

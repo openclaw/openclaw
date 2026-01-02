@@ -173,20 +173,32 @@ Configure the Discord bot by setting the bot token and optional gating:
   discord: {
     enabled: true,
     token: "your-bot-token",
-    allowFrom: ["discord:1234567890", "*"], // optional DM allowlist (user ids)
-    guildAllowFrom: {
-      guilds: ["123456789012345678"],      // optional guild allowlist (ids)
-      users: ["987654321098765432"]        // optional user allowlist (ids)
-    },
-    requireMention: true,                   // require @bot mentions in guilds
     mediaMaxMb: 8,                          // clamp inbound media size
-    historyLimit: 20,                       // include last N guild messages as context
-    enableReactions: true                   // allow agent-triggered reactions
+    enableReactions: true,                  // allow agent-triggered reactions
+    dm: {
+      enabled: true,                        // disable all DMs when false
+      allowFrom: ["1234567890", "steipete"], // optional DM allowlist (ids or names)
+      groupEnabled: false,                 // enable group DMs
+      groupChannels: ["clawd-dm"]          // optional group DM allowlist
+    },
+    guilds: {
+      "123456789012345678": {               // guild id (preferred) or slug
+        slug: "friends-of-clawd",
+        requireMention: false,              // per-guild default
+        users: ["987654321098765432"],      // optional per-guild user allowlist
+        channels: {
+          general: { allow: true },
+          help: { allow: true, requireMention: true }
+        }
+      }
+    },
+    historyLimit: 20                        // include last N guild messages as context
   }
 }
 ```
 
 Clawdis reads `DISCORD_BOT_TOKEN` or `discord.token` to start the provider (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
+Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 
 ### `imessage` (imsg CLI)
 

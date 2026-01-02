@@ -103,7 +103,7 @@ struct ClawdisChatComposer: View {
                 set: { next in self.viewModel.switchSession(to: next) }))
         {
             ForEach(self.viewModel.sessionChoices, id: \.key) { session in
-                Text(session.key)
+                Text(session.displayName ?? session.key)
                     .font(.system(.caption, design: .monospaced))
                     .tag(session.key)
             }

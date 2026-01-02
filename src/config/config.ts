@@ -164,21 +164,40 @@ export type TelegramConfig = {
   webhookPath?: string;
 };
 
+export type DiscordDmConfig = {
+  /** If false, ignore all incoming Discord DMs. Default: true. */
+  enabled?: boolean;
+  /** Allowlist for DM senders (ids or names). */
+  allowFrom?: Array<string | number>;
+  /** If true, allow group DMs (default: false). */
+  groupEnabled?: boolean;
+  /** Optional allowlist for group DM channels (ids or slugs). */
+  groupChannels?: Array<string | number>;
+};
+
+export type DiscordGuildChannelConfig = {
+  allow?: boolean;
+  requireMention?: boolean;
+};
+
+export type DiscordGuildEntry = {
+  slug?: string;
+  requireMention?: boolean;
+  users?: Array<string | number>;
+  channels?: Record<string, DiscordGuildChannelConfig>;
+};
+
 export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
   token?: string;
-  allowFrom?: Array<string | number>;
-  guildAllowFrom?: {
-    guilds?: Array<string | number>;
-    users?: Array<string | number>;
-  };
-  requireMention?: boolean;
   mediaMaxMb?: number;
-  /** Number of recent guild messages to include for context (default: 20). */
   historyLimit?: number;
   /** Allow agent-triggered Discord reactions (default: true). */
   enableReactions?: boolean;
+  dm?: DiscordDmConfig;
+  /** New per-guild config keyed by guild id or slug. */
+  guilds?: Record<string, DiscordGuildEntry>;
 };
 
 export type SignalConfig = {
@@ -908,17 +927,53 @@ const ClawdisSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       token: z.string().optional(),
-      allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-      guildAllowFrom: z
-        .object({
-          guilds: z.array(z.union([z.string(), z.number()])).optional(),
-          users: z.array(z.union([z.string(), z.number()])).optional(),
-        })
-        .optional(),
-      requireMention: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),
+      dm: z
+        .object({
+          enabled: z.boolean().optional(),
+          allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+          groupEnabled: z.boolean().optional(),
+          groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+        })
+        .optional(),
+      guilds: z
+        .record(
+          z.string(),
+          z
+            .object({
+              slug: z.string().optional(),
+              requireMention: z.boolean().optional(),
+              users: z.array(z.union([z.string(), z.number()])).optional(),
+              channels: z
+                .record(
+                  z.string(),
+                  z
+                    .object({
+                      allow: z.boolean().optional(),
+                      requireMention: z.boolean().optional(),
+                    })
+                    .optional(),
+                )
+                .optional(),
+            })
+            .optional(),
+        )
+        .optional(),
+      guild: z
+        .object({
+          allowFrom: z
+            .object({
+              guilds: z.array(z.union([z.string(), z.number()])).optional(),
+              users: z.array(z.union([z.string(), z.number()])).optional(),
+            })
+            .optional(),
+          channels: z.array(z.union([z.string(), z.number()])).optional(),
+          requireMention: z.boolean().optional(),
+          historyLimit: z.number().int().min(0).optional(),
+        })
+        .optional(),
     })
     .optional(),
   signal: z

@@ -82,7 +82,7 @@ private fun SessionRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Text(entry.key, style = MaterialTheme.typography.bodyMedium)
+      Text(entry.displayName ?: entry.key, style = MaterialTheme.typography.bodyMedium)
       Spacer(modifier = Modifier.weight(1f))
       if (isCurrent) {
         Text("Current", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -90,4 +90,3 @@ private fun SessionRow(
     }
   }
 }
-

@@ -1015,7 +1015,7 @@ describe("web auto-reply", () => {
       .mockResolvedValueOnce({ text: "ok" });
 
     const { storePath, cleanup } = await makeSessionStore({
-      "group:[redacted-email]": {
+      "whatsapp:group:[redacted-email]": {
         sessionId: "g-1",
         updatedAt: Date.now(),
         groupActivation: "always",

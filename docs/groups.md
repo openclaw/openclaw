@@ -8,9 +8,13 @@ read_when:
 Clawdis treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, iMessage.
 
 ## Session keys
-- Group sessions use `group:<id>` in `ctx.From`.
+- Group sessions use `surface:group:<id>` session keys (rooms/channels use `surface:channel:<id>`).
 - Direct chats use the main session (or per-sender if configured).
 - Heartbeats are skipped for group sessions.
+
+## Display labels
+- UI labels use `displayName` when available, formatted as `surface:<token>`.
+- `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
 ## Mention gating (default)
 Group messages require a mention unless overridden per group.

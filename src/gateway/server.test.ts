@@ -3865,7 +3865,7 @@ describe("gateway server", () => {
             thinkingLevel: "low",
             verboseLevel: "on",
           },
-          "group:dev": {
+          "discord:group:dev": {
             sessionId: "sess-group",
             updatedAt: now - 120_000,
             totalTokens: 50,
@@ -3977,7 +3977,7 @@ describe("gateway server", () => {
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(
       ws,
       "sessions.delete",
-      { key: "group:dev" },
+      { key: "discord:group:dev" },
     );
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
@@ -3986,7 +3986,9 @@ describe("gateway server", () => {
     }>(ws, "sessions.list", {});
     expect(listAfterDelete.ok).toBe(true);
     expect(
-      listAfterDelete.payload?.sessions.some((s) => s.key === "group:dev"),
+      listAfterDelete.payload?.sessions.some(
+        (s) => s.key === "discord:group:dev",
+      ),
     ).toBe(false);
     const filesAfterDelete = await fs.readdir(dir);
     expect(

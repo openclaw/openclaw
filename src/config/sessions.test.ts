@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
   resolveSessionKey,
@@ -29,6 +30,38 @@ describe("sessions", () => {
     expect(deriveSessionKey("per-sender", { From: "[redacted-email]" })).toBe(
       "group:[redacted-email]",
     );
+  });
+
+  it("prefixes group keys with surface when available", () => {
+    expect(
+      deriveSessionKey("per-sender", {
+        From: "[redacted-email]",
+        ChatType: "group",
+        Surface: "whatsapp",
+      }),
+    ).toBe("whatsapp:group:[redacted-email]");
+  });
+
+  it("keeps explicit surface when provided in group key", () => {
+    expect(
+      resolveSessionKey(
+        "per-sender",
+        { From: "group:discord:12345", ChatType: "group" },
+        "main",
+      ),
+    ).toBe("discord:group:12345");
+  });
+
+  it("builds discord display name with guild+channel slugs", () => {
+    expect(
+      buildGroupDisplayName({
+        surface: "discord",
+        room: "#general",
+        space: "friends-of-clawd",
+        id: "123",
+        key: "discord:group:123",
+      }),
+    ).toBe("discord:friends-of-clawd#general");
   });
 
   it("collapses direct chats to main by default", () => {

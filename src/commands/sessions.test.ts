@@ -77,7 +77,7 @@ describe("sessionsCommand", () => {
 
   it("shows placeholder rows when tokens are missing", async () => {
     const store = writeStore({
-      "group:demo": {
+      "discord:group:demo": {
         sessionId: "xyz",
         updatedAt: Date.now() - 5 * 60_000,
         thinkingLevel: "high",
@@ -89,7 +89,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    const row = logs.find((line) => line.includes("group:demo")) ?? "";
+    const row = logs.find((line) => line.includes("discord:group:demo")) ?? "";
     expect(row).toContain("-".padEnd(20));
     expect(row).toContain("think:high");
     expect(row).toContain("5m ago");

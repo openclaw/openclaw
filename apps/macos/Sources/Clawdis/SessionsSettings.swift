@@ -89,7 +89,7 @@ struct SessionsSettings: View {
     private func sessionRow(_ row: SessionRow) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text(row.key)
+                Text(row.label)
                     .font(.subheadline.bold())
                     .lineLimit(1)
                     .truncationMode(.middle)

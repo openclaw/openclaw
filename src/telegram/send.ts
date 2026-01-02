@@ -36,7 +36,7 @@ function normalizeChatId(to: string): string {
 
   // Common internal prefixes that sometimes leak into outbound sends.
   // - ctx.To uses `telegram:<id>`
-  // - group sessions often use `group:<id>`
+  // - group sessions often use `telegram:group:<id>`
   let normalized = trimmed.replace(/^(telegram|tg|group):/i, "").trim();
 
   // Accept t.me links for public chats/channels.

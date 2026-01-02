@@ -8,6 +8,11 @@ struct GatewaySessionDefaultsRecord: Codable {
 
 struct GatewaySessionEntryRecord: Codable {
     let key: String
+    let displayName: String?
+    let surface: String?
+    let subject: String?
+    let room: String?
+    let space: String?
     let updatedAt: Double?
     let sessionId: String?
     let systemSent: Bool?
@@ -65,6 +70,11 @@ struct SessionRow: Identifiable {
     let id: String
     let key: String
     let kind: SessionKind
+    let displayName: String?
+    let surface: String?
+    let subject: String?
+    let room: String?
+    let space: String?
     let updatedAt: Date?
     let sessionId: String?
     let thinkingLevel: String?
@@ -75,6 +85,7 @@ struct SessionRow: Identifiable {
     let model: String?
 
     var ageText: String { relativeAge(from: self.updatedAt) }
+    var label: String { self.displayName ?? self.key }
 
     var flagLabels: [String] {
         var flags: [String] = []
@@ -92,6 +103,8 @@ enum SessionKind {
     static func from(key: String) -> SessionKind {
         if key == "global" { return .global }
         if key.hasPrefix("group:") { return .group }
+        if key.contains(":group:") { return .group }
+        if key.contains(":channel:") { return .group }
         if key == "unknown" { return .unknown }
         return .direct
     }
@@ -127,6 +140,11 @@ extension SessionRow {
                 id: "direct-1",
                 key: "[redacted-email]",
                 kind: .direct,
+                displayName: nil,
+                surface: nil,
+                subject: nil,
+                room: nil,
+                space: nil,
                 updatedAt: Date().addingTimeInterval(-90),
                 sessionId: "sess-direct-1234",
                 thinkingLevel: "low",
@@ -137,8 +155,13 @@ extension SessionRow {
                 model: "claude-3.5-sonnet"),
             SessionRow(
                 id: "group-1",
-                key: "group:engineering",
+                key: "discord:channel:release-squad",
                 kind: .group,
+                displayName: "discord:#release-squad",
+                surface: "discord",
+                subject: nil,
+                room: "#release-squad",
+                space: nil,
                 updatedAt: Date().addingTimeInterval(-3600),
                 sessionId: "sess-group-4321",
                 thinkingLevel: "medium",
@@ -151,6 +174,11 @@ extension SessionRow {
                 id: "global",
                 key: "global",
                 kind: .global,
+                displayName: nil,
+                surface: nil,
+                subject: nil,
+                room: nil,
+                space: nil,
                 updatedAt: Date().addingTimeInterval(-86400),
                 sessionId: nil,
                 thinkingLevel: nil,
@@ -269,6 +297,11 @@ enum SessionLoader {
                 id: entry.key,
                 key: entry.key,
                 kind: SessionKind.from(key: entry.key),
+                displayName: entry.displayName,
+                surface: entry.surface,
+                subject: entry.subject,
+                room: entry.room,
+                space: entry.space,
                 updatedAt: updated,
                 sessionId: entry.sessionId,
                 thinkingLevel: entry.thinkingLevel,

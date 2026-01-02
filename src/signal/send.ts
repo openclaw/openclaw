@@ -43,19 +43,20 @@ function parseTarget(raw: string): SignalTarget {
   let value = raw.trim();
   if (!value) throw new Error("Signal recipient is required");
   const lower = value.toLowerCase();
-  if (lower.startsWith("group:")) {
-    return { type: "group", groupId: value.slice("group:".length).trim() };
-  }
   if (lower.startsWith("signal:")) {
     value = value.slice("signal:".length).trim();
   }
-  if (lower.startsWith("username:")) {
+  const normalized = value.toLowerCase();
+  if (normalized.startsWith("group:")) {
+    return { type: "group", groupId: value.slice("group:".length).trim() };
+  }
+  if (normalized.startsWith("username:")) {
     return {
       type: "username",
       username: value.slice("username:".length).trim(),
     };
   }
-  if (lower.startsWith("u:")) {
+  if (normalized.startsWith("u:")) {
     return { type: "username", username: value.trim() };
   }
   return { type: "recipient", recipient: value };
