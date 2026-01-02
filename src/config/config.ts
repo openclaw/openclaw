@@ -174,6 +174,7 @@ export type DiscordConfig = {
     users?: Array<string | number>;
   };
   requireMention?: boolean;
+  requireMentionGuilds?: Array<string | number>;
   mediaMaxMb?: number;
   /** Number of recent guild messages to include for context (default: 20). */
   historyLimit?: number;
@@ -916,6 +917,7 @@ const ClawdisSchema = z.object({
         })
         .optional(),
       requireMention: z.boolean().optional(),
+      requireMentionGuilds: z.array(z.union([z.string(), z.number()])).optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),

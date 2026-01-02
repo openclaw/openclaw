@@ -20,7 +20,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 3. Configure Clawdis with `DISCORD_BOT_TOKEN` (or `discord.token` in `~/.clawdis/clawdis.json`).
 4. Run the gateway; it auto-starts the Discord provider when the token is set (unless `discord.enabled = false`).
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session.
-6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default; disable with `discord.requireMention = false`.
+6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default; disable with `discord.requireMention = false`, or limit to specific guilds with `discord.requireMentionGuilds`.
 7. Optional DM allowlist: reuse `discord.allowFrom` with user ids (`1234567890` or `discord:1234567890`). Use `"*"` to allow all DMs.
 8. Optional guild allowlist: set `discord.guildAllowFrom` with `guilds` and/or `users` to gate who can invoke the bot in servers.
 9. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
@@ -47,6 +47,7 @@ Note: Discord does not provide a simple username → id lookup without extra gui
       users: ["987654321098765432"]
     },
     requireMention: true,
+    requireMentionGuilds: ["123456789012345678"],
     mediaMaxMb: 8,
     historyLimit: 20,
     enableReactions: true
@@ -57,6 +58,7 @@ Note: Discord does not provide a simple username → id lookup without extra gui
 - `allowFrom`: DM allowlist (user ids). Omit or set to `["*"]` to allow any DM sender.
 - `guildAllowFrom`: Optional allowlist for guild messages. Set `guilds` and/or `users` (ids). When both are set, both must match.
 - `requireMention`: when `true`, messages in guild channels must mention the bot.
+- `requireMentionGuilds`: optional list of guild ids that require mentions; when set, only those guilds require mentions (use `["*"]` to require mentions everywhere).
 - `mediaMaxMb`: clamp inbound media saved to disk.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
 - `enableReactions`: allow agent-triggered reactions via the `clawdis_discord` tool (default `true`).

@@ -30,6 +30,7 @@ export type MonitorDiscordOpts = {
     users?: Array<string | number>;
   };
   requireMention?: boolean;
+  requireMentionGuilds?: Array<string | number>;
   mediaMaxMb?: number;
   historyLimit?: number;
 };
@@ -73,6 +74,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const guildAllowFrom = opts.guildAllowFrom ?? cfg.discord?.guildAllowFrom;
   const requireMention =
     opts.requireMention ?? cfg.discord?.requireMention ?? true;
+  const requireMentionGuilds =
+    opts.requireMentionGuilds ?? cfg.discord?.requireMentionGuilds;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const historyLimit = Math.max(
@@ -129,8 +132,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         guildHistories.set(message.channelId, history);
       }
 
-      if (!isDirectMessage && requireMention) {
-        if (botId && !wasMentioned) {
+      if (!isDirectMessage) {
+        const shouldRequireMention = resolveMentionRequirement({
+          requireMention,
+          requireMentionGuilds,
+          guildId: message.guild?.id ?? "",
+        });
+        if (shouldRequireMention && botId && !wasMentioned) {
           logger.info(
             {
               channelId: message.channelId,
@@ -383,6 +391,25 @@ function normalizeDiscordAllowList(
   const allowAll = cleaned.includes("*");
   const ids = new Set(cleaned.filter((entry) => entry !== "*"));
   return { allowAll, ids };
+}
+
+function resolveMentionRequirement({
+  requireMention,
+  requireMentionGuilds,
+  guildId,
+}: {
+  requireMention: boolean;
+  requireMentionGuilds: Array<string | number> | undefined;
+  guildId: string;
+}): boolean {
+  if (!requireMentionGuilds || requireMentionGuilds.length === 0) {
+    return requireMention;
+  }
+  const allowed = normalizeDiscordAllowList(requireMentionGuilds, []);
+  if (!allowed) return requireMention;
+  if (allowed.allowAll) return true;
+  if (!guildId) return requireMention;
+  return allowed.ids.has(guildId);
 }
 
 async function sendTyping(message: Message) {
