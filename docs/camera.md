@@ -25,12 +25,18 @@ All camera access is gated behind **user-controlled settings**.
 
 ### Commands (via Gateway `node.invoke`)
 
+- `camera.list`
+  - Response payload:
+    - `devices`: array of `{ id, name, position, deviceType }`
+
 - `camera.snap`
   - Params:
     - `facing`: `front|back` (default: `front`)
     - `maxWidth`: number (optional; default `1600` on the iOS node)
     - `quality`: `0..1` (optional; default `0.9`)
     - `format`: currently `jpg`
+    - `delayMs`: number (optional; default `0`)
+    - `deviceId`: string (optional; from `camera.list`)
   - Response payload:
     - `format: "jpg"`
     - `base64: "<...>"`
@@ -43,6 +49,7 @@ All camera access is gated behind **user-controlled settings**.
     - `durationMs`: number (default `3000`, clamped to a max of `60000`)
     - `includeAudio`: boolean (default `true`)
     - `format`: currently `mp4`
+    - `deviceId`: string (optional; from `camera.list`)
   - Response payload:
     - `format: "mp4"`
     - `base64: "<...>"`
@@ -112,15 +119,20 @@ Use the main `clawdis` CLI to invoke camera commands on the macOS node.
 Examples:
 
 ```bash
+clawdis nodes camera list --node <id>            # list camera ids
 clawdis nodes camera snap --node <id>            # prints MEDIA:<path>
 clawdis nodes camera snap --node <id> --max-width 1280
+clawdis nodes camera snap --node <id> --delay-ms 2000
+clawdis nodes camera snap --node <id> --device-id <id>
 clawdis nodes camera clip --node <id> --duration 10s          # prints MEDIA:<path>
 clawdis nodes camera clip --node <id> --duration-ms 3000      # prints MEDIA:<path> (legacy flag)
+clawdis nodes camera clip --node <id> --device-id <id>
 clawdis nodes camera clip --node <id> --no-audio
 ```
 
 Notes:
 - `clawdis nodes camera snap` defaults to `maxWidth=1600` unless overridden.
+- On macOS, `camera.snap` waits `delayMs` (default 2000ms) after warm-up/exposure settle before capturing.
 - Photo payloads are recompressed to keep base64 under 5 MB.
 
 ## Safety + practical limits

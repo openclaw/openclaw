@@ -848,12 +848,67 @@ export function registerNodesCli(program: Command) {
 
   nodesCallOpts(
     camera
+      .command("list")
+      .description("List available cameras on a node")
+      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
+      .action(async (opts: NodesRpcOpts) => {
+        try {
+          const nodeId = await resolveNodeId(opts, String(opts.node ?? ""));
+          const raw = (await callGatewayCli("node.invoke", opts, {
+            nodeId,
+            command: "camera.list",
+            params: {},
+            idempotencyKey: randomIdempotencyKey(),
+          })) as unknown;
+
+          const res =
+            typeof raw === "object" && raw !== null
+              ? (raw as { payload?: unknown })
+              : {};
+          const payload =
+            typeof res.payload === "object" && res.payload !== null
+              ? (res.payload as { devices?: unknown })
+              : {};
+          const devices = Array.isArray(payload.devices)
+            ? (payload.devices as Array<Record<string, unknown>>)
+            : [];
+
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify({ devices }, null, 2));
+            return;
+          }
+
+          if (devices.length === 0) {
+            defaultRuntime.log("No cameras reported.");
+            return;
+          }
+
+          for (const device of devices) {
+            const id = typeof device.id === "string" ? device.id : "";
+            const name =
+              typeof device.name === "string" ? device.name : "Unknown Camera";
+            const position =
+              typeof device.position === "string" ? device.position : "unspecified";
+            defaultRuntime.log(`${name} (${position})${id ? ` — ${id}` : ""}`);
+          }
+        } catch (err) {
+          defaultRuntime.error(`nodes camera list failed: ${String(err)}`);
+          defaultRuntime.exit(1);
+        }
+      }),
+    { timeoutMs: 60_000 },
+  );
+
+  nodesCallOpts(
+    camera
       .command("snap")
       .description("Capture a photo from a node camera (prints MEDIA:<path>)")
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back|both>", "Camera facing", "both")
+      .option("--device-id <id>", "Camera device id (from nodes camera list)")
       .option("--max-width <px>", "Max width in px (optional)")
       .option("--quality <0-1>", "JPEG quality (default 0.9)")
+      .option("--delay-ms <ms>", "Delay before capture in ms (macOS default 2000)")
       .option(
         "--invoke-timeout <ms>",
         "Node invoke timeout in ms (default 20000)",
@@ -882,6 +937,10 @@ export function registerNodesCli(program: Command) {
           const quality = opts.quality
             ? Number.parseFloat(String(opts.quality))
             : undefined;
+          const delayMs = opts.delayMs
+            ? Number.parseInt(String(opts.delayMs), 10)
+            : undefined;
+          const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
           const timeoutMs = opts.invokeTimeout
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
@@ -902,6 +961,8 @@ export function registerNodesCli(program: Command) {
                 maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
                 quality: Number.isFinite(quality) ? quality : undefined,
                 format: "jpg",
+                delayMs: Number.isFinite(delayMs) ? delayMs : undefined,
+                deviceId: deviceId || undefined,
               },
               idempotencyKey: randomIdempotencyKey(),
             };
@@ -955,6 +1016,7 @@ export function registerNodesCli(program: Command) {
       )
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--facing <front|back>", "Camera facing", "front")
+      .option("--device-id <id>", "Camera device id (from nodes camera list)")
       .option(
         "--duration <ms|10s|1m>",
         "Duration (default 3000ms; supports ms/s/m, e.g. 10s)",
@@ -975,18 +1037,20 @@ export function registerNodesCli(program: Command) {
           const timeoutMs = opts.invokeTimeout
             ? Number.parseInt(String(opts.invokeTimeout), 10)
             : undefined;
+          const deviceId = opts.deviceId ? String(opts.deviceId).trim() : undefined;
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command: "camera.clip",
-            params: {
-              facing,
-              durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
-              includeAudio,
-              format: "mp4",
-            },
-            idempotencyKey: randomIdempotencyKey(),
-          };
+              params: {
+                facing,
+                durationMs: Number.isFinite(durationMs) ? durationMs : undefined,
+                includeAudio,
+                format: "mp4",
+                deviceId: deviceId || undefined,
+              },
+              idempotencyKey: randomIdempotencyKey(),
+            };
           if (typeof timeoutMs === "number" && Number.isFinite(timeoutMs)) {
             invokeParams.timeoutMs = timeoutMs;
           }

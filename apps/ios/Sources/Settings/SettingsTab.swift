@@ -333,6 +333,7 @@ struct SettingsTab: View {
 
         let caps = Set(self.currentCaps())
         if caps.contains(ClawdisCapability.camera.rawValue) {
+            commands.append(ClawdisCameraCommand.list.rawValue)
             commands.append(ClawdisCameraCommand.snap.rawValue)
             commands.append(ClawdisCameraCommand.clip.rawValue)
         }

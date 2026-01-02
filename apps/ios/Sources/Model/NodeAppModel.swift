@@ -589,6 +589,14 @@ final class NodeAppModel {
                 let resultJSON = try await self.screen.eval(javaScript: js)
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: resultJSON)
 
+            case ClawdisCameraCommand.list.rawValue:
+                let devices = await self.camera.listDevices()
+                struct Payload: Codable {
+                    var devices: [CameraController.CameraDeviceInfo]
+                }
+                let payload = try Self.encodePayload(Payload(devices: devices))
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
             case ClawdisCameraCommand.snap.rawValue:
                 self.showCameraHUD(text: "Taking photo…", kind: .photo)
                 self.triggerCameraFlash()

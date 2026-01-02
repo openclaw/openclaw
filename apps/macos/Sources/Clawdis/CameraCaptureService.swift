@@ -6,6 +6,13 @@ import Foundation
 import OSLog
 
 actor CameraCaptureService {
+    struct CameraDeviceInfo: Encodable, Sendable {
+        let id: String
+        let name: String
+        let position: String
+        let deviceType: String
+    }
+
     enum CameraError: LocalizedError, Sendable {
         case cameraUnavailable
         case microphoneUnavailable
@@ -31,18 +38,36 @@ actor CameraCaptureService {
 
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "camera")
 
-    func snap(facing: CameraFacing?, maxWidth: Int?, quality: Double?) async throws -> (data: Data, size: CGSize) {
+    func listDevices() -> [CameraDeviceInfo] {
+        Self.availableCameras().map { device in
+            CameraDeviceInfo(
+                id: device.uniqueID,
+                name: device.localizedName,
+                position: Self.positionLabel(device.position),
+                deviceType: device.deviceType.rawValue)
+        }
+    }
+
+    func snap(
+        facing: CameraFacing?,
+        maxWidth: Int?,
+        quality: Double?,
+        deviceId: String?,
+        delayMs: Int) async throws -> (data: Data, size: CGSize)
+    {
         let facing = facing ?? .front
         let normalized = Self.normalizeSnap(maxWidth: maxWidth, quality: quality)
         let maxWidth = normalized.maxWidth
         let quality = normalized.quality
+        let delayMs = max(0, delayMs)
+        let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         try await self.ensureAccess(for: .video)
 
         let session = AVCaptureSession()
         session.sessionPreset = .photo
 
-        guard let device = Self.pickCamera(facing: facing) else {
+        guard let device = Self.pickCamera(facing: facing, deviceId: deviceId) else {
             throw CameraError.cameraUnavailable
         }
 
@@ -63,6 +88,7 @@ actor CameraCaptureService {
         defer { session.stopRunning() }
         await Self.warmUpCaptureSession()
         await self.waitForExposureAndWhiteBalance(device: device)
+        await self.sleepDelayMs(delayMs)
 
         let settings: AVCapturePhotoSettings = {
             if output.availablePhotoCodecTypes.contains(.jpeg) {
@@ -73,7 +99,7 @@ actor CameraCaptureService {
         settings.photoQualityPrioritization = .quality
 
         var delegate: PhotoCaptureDelegate?
-        let rawData: Data = try await withCheckedThrowingContinuation(isolation: nil) { cont in
+        let rawData: Data = try await withCheckedThrowingContinuation { cont in
             let d = PhotoCaptureDelegate(cont)
             delegate = d
             output.capturePhoto(with: settings, delegate: d)
@@ -95,10 +121,12 @@ actor CameraCaptureService {
         facing: CameraFacing?,
         durationMs: Int?,
         includeAudio: Bool,
+        deviceId: String?,
         outPath: String?) async throws -> (path: String, durationMs: Int, hasAudio: Bool)
     {
         let facing = facing ?? .front
         let durationMs = Self.clampDurationMs(durationMs)
+        let deviceId = deviceId?.trimmingCharacters(in: .whitespacesAndNewlines)
 
         try await self.ensureAccess(for: .video)
         if includeAudio {
@@ -108,7 +136,7 @@ actor CameraCaptureService {
         let session = AVCaptureSession()
         session.sessionPreset = .high
 
-        guard let camera = Self.pickCamera(facing: facing) else {
+        guard let camera = Self.pickCamera(facing: facing, deviceId: deviceId) else {
             throw CameraError.cameraUnavailable
         }
         let cameraInput = try AVCaptureDeviceInput(device: camera)
@@ -156,7 +184,7 @@ actor CameraCaptureService {
 
         let logger = self.logger
         var delegate: MovieFileDelegate?
-        let recordedURL: URL = try await withCheckedThrowingContinuation(isolation: nil) { cont in
+        let recordedURL: URL = try await withCheckedThrowingContinuation { cont in
             let d = MovieFileDelegate(cont, logger: logger)
             delegate = d
             output.startRecording(to: tmpMovURL, recordingDelegate: d)
@@ -188,7 +216,28 @@ actor CameraCaptureService {
         }
     }
 
-    private nonisolated static func pickCamera(facing: CameraFacing) -> AVCaptureDevice? {
+    private nonisolated static func availableCameras() -> [AVCaptureDevice] {
+        let types: [AVCaptureDevice.DeviceType] = [
+            .builtInWideAngleCamera,
+            .externalUnknown,
+            .continuityCamera,
+        ]
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: types,
+            mediaType: .video,
+            position: .unspecified)
+        return session.devices
+    }
+
+    private nonisolated static func pickCamera(
+        facing: CameraFacing,
+        deviceId: String?) -> AVCaptureDevice?
+    {
+        if let deviceId, !deviceId.isEmpty {
+            if let match = Self.availableCameras().first(where: { $0.uniqueID == deviceId }) {
+                return match
+            }
+        }
         let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
 
         if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
@@ -267,6 +316,20 @@ actor CameraCaptureService {
                 return
             }
             try? await Task.sleep(nanoseconds: stepNs)
+        }
+    }
+
+    private func sleepDelayMs(_ delayMs: Int) async {
+        guard delayMs > 0 else { return }
+        let ns = UInt64(min(delayMs, 10_000)) * 1_000_000
+        try? await Task.sleep(nanoseconds: ns)
+    }
+
+    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
+        switch position {
+        case .front: "front"
+        case .back: "back"
+        default: "unspecified"
         }
     }
 }

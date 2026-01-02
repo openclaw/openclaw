@@ -50,4 +50,39 @@ describe("clawdis_nodes camera_snap", () => {
     expect(images).toHaveLength(1);
     expect(images[0]?.mimeType).toBe("image/jpeg");
   });
+
+  it("passes deviceId when provided", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return { nodes: [{ nodeId: "mac-1" }] };
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          command: "camera.snap",
+          params: { deviceId: "cam-123" },
+        });
+        return {
+          payload: {
+            format: "jpg",
+            base64: "aGVsbG8=",
+            width: 1,
+            height: 1,
+          },
+        };
+      }
+      throw new Error(`unexpected method: ${String(method)}`);
+    });
+
+    const tool = createClawdisTools().find(
+      (candidate) => candidate.name === "clawdis_nodes",
+    );
+    if (!tool) throw new Error("missing clawdis_nodes tool");
+
+    await tool.execute("call1", {
+      action: "camera_snap",
+      node: "mac-1",
+      facing: "front",
+      deviceId: "cam-123",
+    });
+  });
 });

@@ -746,6 +746,7 @@ const CanvasToolSchema = Type.Union([
     ),
     maxWidth: Type.Optional(Type.Number()),
     quality: Type.Optional(Type.Number()),
+    delayMs: Type.Optional(Type.Number()),
   }),
   Type.Object({
     action: Type.Literal("a2ui_push"),
@@ -864,6 +865,20 @@ function createCanvasTool(): AnyAgentTool {
             Number.isFinite(params.quality)
               ? params.quality
               : undefined;
+          const delayMs =
+            typeof params.delayMs === "number" &&
+            Number.isFinite(params.delayMs)
+              ? params.delayMs
+              : undefined;
+          const deviceId =
+            typeof params.deviceId === "string" && params.deviceId.trim()
+              ? params.deviceId.trim()
+              : undefined;
+          const delayMs =
+            typeof params.delayMs === "number" &&
+            Number.isFinite(params.delayMs)
+              ? params.delayMs
+              : undefined;
           const raw = (await invoke("canvas.snapshot", {
             format,
             maxWidth,
@@ -978,6 +993,15 @@ const NodesToolSchema = Type.Union([
     ),
     maxWidth: Type.Optional(Type.Number()),
     quality: Type.Optional(Type.Number()),
+    delayMs: Type.Optional(Type.Number()),
+    deviceId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("camera_list"),
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+    node: Type.String(),
   }),
   Type.Object({
     action: Type.Literal("camera_clip"),
@@ -991,6 +1015,7 @@ const NodesToolSchema = Type.Union([
     duration: Type.Optional(Type.String()),
     durationMs: Type.Optional(Type.Number()),
     includeAudio: Type.Optional(Type.Boolean()),
+    deviceId: Type.Optional(Type.String()),
   }),
   Type.Object({
     action: Type.Literal("screen_record"),
@@ -1127,6 +1152,8 @@ function createNodesTool(): AnyAgentTool {
                 maxWidth,
                 quality,
                 format: "jpg",
+                delayMs,
+                deviceId,
               },
               idempotencyKey: crypto.randomUUID(),
             })) as { payload?: unknown };
@@ -1155,6 +1182,21 @@ function createNodesTool(): AnyAgentTool {
           const result: AgentToolResult<unknown> = { content, details };
           return await sanitizeToolResultImages(result, "nodes:camera_snap");
         }
+        case "camera_list": {
+          const node = readStringParam(params, "node", { required: true });
+          const nodeId = await resolveNodeId(gatewayOpts, node);
+          const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            nodeId,
+            command: "camera.list",
+            params: {},
+            idempotencyKey: crypto.randomUUID(),
+          })) as { payload?: unknown };
+          const payload =
+            raw && typeof raw.payload === "object" && raw.payload !== null
+              ? raw.payload
+              : {};
+          return jsonResult(payload);
+        }
         case "camera_clip": {
           const node = readStringParam(params, "node", { required: true });
           const nodeId = await resolveNodeId(gatewayOpts, node);
@@ -1176,6 +1218,10 @@ function createNodesTool(): AnyAgentTool {
             typeof params.includeAudio === "boolean"
               ? params.includeAudio
               : true;
+          const deviceId =
+            typeof params.deviceId === "string" && params.deviceId.trim()
+              ? params.deviceId.trim()
+              : undefined;
           const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
             nodeId,
             command: "camera.clip",
@@ -1184,6 +1230,7 @@ function createNodesTool(): AnyAgentTool {
               durationMs,
               includeAudio,
               format: "mp4",
+              deviceId,
             },
             idempotencyKey: crypto.randomUUID(),
           })) as { payload?: unknown };

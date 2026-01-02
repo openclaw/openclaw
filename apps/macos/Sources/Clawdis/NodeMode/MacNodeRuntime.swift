@@ -103,10 +103,13 @@ actor MacNodeRuntime {
                 }
                 let params = (try? Self.decodeParams(ClawdisCameraSnapParams.self, from: req.paramsJSON)) ??
                     ClawdisCameraSnapParams()
+                let delayMs = min(10_000, max(0, params.delayMs ?? 2000))
                 let res = try await self.cameraCapture.snap(
                     facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
                     maxWidth: params.maxWidth,
-                    quality: params.quality)
+                    quality: params.quality,
+                    deviceId: params.deviceId,
+                    delayMs: delayMs)
                 struct SnapPayload: Encodable {
                     var format: String
                     var base64: String
@@ -135,6 +138,7 @@ actor MacNodeRuntime {
                     facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
                     durationMs: params.durationMs,
                     includeAudio: params.includeAudio ?? true,
+                    deviceId: params.deviceId,
                     outPath: nil)
                 defer { try? FileManager.default.removeItem(atPath: res.path) }
                 let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
@@ -149,6 +153,19 @@ actor MacNodeRuntime {
                     base64: data.base64EncodedString(),
                     durationMs: res.durationMs,
                     hasAudio: res.hasAudio))
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisCameraCommand.list.rawValue:
+                guard Self.cameraEnabled() else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "CAMERA_DISABLED: enable Camera in Settings"))
+                }
+                let devices = await self.cameraCapture.listDevices()
+                let payload = try Self.encodePayload(["devices": devices])
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
 
             case MacNodeScreenCommand.record.rawValue:

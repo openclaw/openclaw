@@ -135,6 +135,7 @@ final class MacNodeModeCoordinator {
 
         let capsSet = Set(caps)
         if capsSet.contains(ClawdisCapability.camera.rawValue) {
+            commands.append(ClawdisCameraCommand.list.rawValue)
             commands.append(ClawdisCameraCommand.snap.rawValue)
             commands.append(ClawdisCameraCommand.clip.rawValue)
         }

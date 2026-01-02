@@ -3,6 +3,13 @@ import ClawdisKit
 import Foundation
 
 actor CameraController {
+    struct CameraDeviceInfo: Codable, Sendable {
+        var id: String
+        var name: String
+        var position: String
+        var deviceType: String
+    }
+
     enum CameraError: LocalizedError, Sendable {
         case cameraUnavailable
         case microphoneUnavailable
@@ -41,13 +48,14 @@ actor CameraController {
         // If you need the full-res photo, explicitly request a larger maxWidth.
         let maxWidth = params.maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
         let quality = Self.clampQuality(params.quality)
+        let delayMs = max(0, params.delayMs ?? 0)
 
         try await self.ensureAccess(for: .video)
 
         let session = AVCaptureSession()
         session.sessionPreset = .photo
 
-        guard let device = Self.pickCamera(facing: facing) else {
+        guard let device = Self.pickCamera(facing: facing, deviceId: params.deviceId) else {
             throw CameraError.cameraUnavailable
         }
 
@@ -67,6 +75,7 @@ actor CameraController {
         session.startRunning()
         defer { session.stopRunning() }
         await Self.warmUpCaptureSession()
+        await Self.sleepDelayMs(delayMs)
 
         let settings: AVCapturePhotoSettings = {
             if output.availablePhotoCodecTypes.contains(.jpeg) {
@@ -119,7 +128,7 @@ actor CameraController {
         let session = AVCaptureSession()
         session.sessionPreset = .high
 
-        guard let camera = Self.pickCamera(facing: facing) else {
+        guard let camera = Self.pickCamera(facing: facing, deviceId: params.deviceId) else {
             throw CameraError.cameraUnavailable
         }
         let cameraInput = try AVCaptureDeviceInput(device: camera)
@@ -180,6 +189,24 @@ actor CameraController {
             hasAudio: includeAudio)
     }
 
+    func listDevices() -> [CameraDeviceInfo] {
+        let types: [AVCaptureDevice.DeviceType] = [
+            .builtInWideAngleCamera,
+            .externalUnknown,
+        ]
+        let session = AVCaptureDevice.DiscoverySession(
+            deviceTypes: types,
+            mediaType: .video,
+            position: .unspecified)
+        return session.devices.map { device in
+            CameraDeviceInfo(
+                id: device.uniqueID,
+                name: device.localizedName,
+                position: Self.positionLabel(device.position),
+                deviceType: device.deviceType.rawValue)
+        }
+    }
+
     private func ensureAccess(for mediaType: AVMediaType) async throws {
         let status = AVCaptureDevice.authorizationStatus(for: mediaType)
         switch status {
@@ -201,13 +228,29 @@ actor CameraController {
         }
     }
 
-    private nonisolated static func pickCamera(facing: ClawdisCameraFacing) -> AVCaptureDevice? {
+    private nonisolated static func pickCamera(
+        facing: ClawdisCameraFacing,
+        deviceId: String?) -> AVCaptureDevice?
+    {
+        if let deviceId, !deviceId.isEmpty {
+            if let match = AVCaptureDevice.devices(for: .video).first(where: { $0.uniqueID == deviceId }) {
+                return match
+            }
+        }
         let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
         if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
             return device
         }
         // Fall back to any default camera (e.g. simulator / unusual device configurations).
         return AVCaptureDevice.default(for: .video)
+    }
+
+    private nonisolated static func positionLabel(_ position: AVCaptureDevice.Position) -> String {
+        switch position {
+        case .front: "front"
+        case .back: "back"
+        default: "unspecified"
+        }
     }
 
     nonisolated static func clampQuality(_ quality: Double?) -> Double {
@@ -261,6 +304,12 @@ actor CameraController {
     private nonisolated static func warmUpCaptureSession() async {
         // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
         try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+    }
+
+    private nonisolated static func sleepDelayMs(_ delayMs: Int) async {
+        guard delayMs > 0 else { return }
+        let ns = UInt64(min(delayMs, 10_000)) * 1_000_000
+        try? await Task.sleep(nanoseconds: ns)
     }
 }
 
