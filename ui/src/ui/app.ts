@@ -186,6 +186,7 @@ export class ClawdisApp extends LitElement {
     this.syncThemeWithSettings();
     this.attachThemeListener();
     window.addEventListener("popstate", this.popStateHandler);
+    this.applySettingsFromUrl();
     this.connect();
     this.startNodesPolling();
   }
@@ -332,6 +333,20 @@ export class ClawdisApp extends LitElement {
       this.theme = next.theme;
       this.applyResolvedTheme(resolveTheme(next.theme));
     }
+  }
+
+  private applySettingsFromUrl() {
+    if (!window.location.search) return;
+    const params = new URLSearchParams(window.location.search);
+    const token = params.get("token")?.trim();
+    if (!token) return;
+    if (!this.settings.token) {
+      this.applySettings({ ...this.settings, token });
+    }
+    params.delete("token");
+    const url = new URL(window.location.href);
+    url.search = params.toString();
+    window.history.replaceState({}, "", url.toString());
   }
 
   setTab(next: Tab) {

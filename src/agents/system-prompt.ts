@@ -25,7 +25,7 @@ export function buildAgentSystemPromptAppend(params: {
     .filter(Boolean);
   const ownerLine =
     ownerNumbers.length > 0
-      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user (Peter).`
+      ? `Owner numbers: ${ownerNumbers.join(", ")}. Treat messages from these numbers as the user.`
       : undefined;
   const reasoningHint = params.reasoningTagHint
     ? [
@@ -36,7 +36,7 @@ export function buildAgentSystemPromptAppend(params: {
         "Only text inside <final> is shown to the user; everything else is discarded and never seen by the user.",
         "Example:",
         "<think>Short internal reasoning.</think>",
-        "<final>Hey Peter! What would you like to do next?</final>",
+        "<final>Hey there! What would you like to do next?</final>",
       ].join(" ")
     : undefined;
   const runtimeInfo = params.runtimeInfo;

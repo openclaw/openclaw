@@ -495,9 +495,18 @@ export async function runInteractiveOnboarding(
   note(
     (() => {
       const links = resolveControlUiLinks({ bind, port });
-      return [`Web UI: ${links.httpUrl}`, `Gateway WS: ${links.wsUrl}`].join(
-        "\n",
-      );
+      const tokenParam =
+        authMode === "token" && gatewayToken
+          ? `?token=${encodeURIComponent(gatewayToken)}`
+          : "";
+      const authedUrl = `${links.httpUrl}${tokenParam}`;
+      return [
+        `Web UI: ${links.httpUrl}`,
+        tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
+        `Gateway WS: ${links.wsUrl}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
     })(),
     "Control UI",
   );
@@ -511,7 +520,11 @@ export async function runInteractiveOnboarding(
   );
   if (wantsOpen) {
     const links = resolveControlUiLinks({ bind, port });
-    await openUrl(links.httpUrl);
+    const tokenParam =
+      authMode === "token" && gatewayToken
+        ? `?token=${encodeURIComponent(gatewayToken)}`
+        : "";
+    await openUrl(`${links.httpUrl}${tokenParam}`);
   }
 
   outro("Onboarding complete.");

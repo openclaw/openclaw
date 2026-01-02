@@ -46,6 +46,8 @@
 ### Fixes
 - Chat UI: keep the chat scrolled to the latest message after switching sessions.
 - CLI onboarding: persist gateway token in config so local CLI auth works; recommend auth Off unless you need multi-machine access.
+- Control UI: accept a `?token=` URL param to auto-fill Gateway auth; onboarding now opens the dashboard with token auth when configured.
+- Agent prompt: remove hardcoded user name in system prompt example.
 - Chat UI: add extra top padding before the first message bubble in Web Chat (macOS/iOS/Android).
 - Control UI: refine Web Chat session selector styling (chevron spacing + background).
 - WebChat: stream live updates for sessions even when runs start outside the chat UI.
