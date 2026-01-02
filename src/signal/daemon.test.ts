@@ -16,6 +16,15 @@ describe("classifySignalCliLogLine", () => {
     expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
   });
 
+  it("treats failures without explicit severity as error", () => {
+    expect(
+      classifySignalCliLogLine("Failed to initialize HTTP Server - oops"),
+    ).toBe("error");
+    expect(classifySignalCliLogLine('Exception in thread "main"')).toBe(
+      "error",
+    );
+  });
+
   it("returns null for empty lines", () => {
     expect(classifySignalCliLogLine("")).toBe(null);
     expect(classifySignalCliLogLine("   ")).toBe(null);
