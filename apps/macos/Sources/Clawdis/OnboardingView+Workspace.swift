@@ -83,7 +83,8 @@ extension OnboardingView {
         return success
     }
 
-    private nonisolated static func buildAndSaveWorkspace(_ workspace: String?) async -> (Bool, String?) {
+    @MainActor
+    private static func buildAndSaveWorkspace(_ workspace: String?) async -> (Bool, String?) {
         var root = await ConfigStore.load()
         var agent = root["agent"] as? [String: Any] ?? [:]
         let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

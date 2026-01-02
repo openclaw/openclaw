@@ -301,7 +301,8 @@ struct TailscaleIntegrationSection: View {
         self.restartGatewayIfNeeded()
     }
 
-    private nonisolated static func buildAndSaveTailscaleConfig(
+    @MainActor
+    private static func buildAndSaveTailscaleConfig(
         tailscaleMode: GatewayTailscaleMode,
         requireCredentialsForServe: Bool,
         password: String,
