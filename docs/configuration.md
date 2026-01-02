@@ -145,7 +145,7 @@ Set `web.enabled: false` to keep it off by default.
 
 ### `telegram` (bot transport)
 
-Clawdis reads `TELEGRAM_BOT_TOKEN` or `telegram.botToken` to start the provider.
+Clawdis starts Telegram only when a `telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `telegram.botToken`.
 Set `telegram.enabled: false` to disable automatic startup.
 
 ```json5
@@ -197,7 +197,7 @@ Configure the Discord bot by setting the bot token and optional gating:
 }
 ```
 
-Clawdis reads `DISCORD_BOT_TOKEN` or `discord.token` to start the provider (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
+Clawdis starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 
 ### `imessage` (imsg CLI)

@@ -17,7 +17,8 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 ## How it will work (Bot API)
 1) Create a bot with @BotFather and grab the token.
 2) Configure Clawdis with `TELEGRAM_BOT_TOKEN` (or `telegram.botToken` in `~/.clawdis/clawdis.json`).
-3) Run the gateway; it auto-starts Telegram when the bot token is set (unless `telegram.enabled = false`).
+3) Run the gateway; it auto-starts Telegram only when a `telegram` config section exists **and** a bot token is set (unless `telegram.enabled = false`).
+   - If you prefer env vars, still add `telegram: { enabled: true }` to `~/.clawdis/clawdis.json` and set `TELEGRAM_BOT_TOKEN`.
    - **Long-polling** is the default.
    - **Webhook mode** is enabled by setting `telegram.webhookUrl` (optionally `telegram.webhookSecret` / `telegram.webhookPath`).
      - The webhook listener currently binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
