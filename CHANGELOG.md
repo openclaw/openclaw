@@ -37,6 +37,7 @@
 
 ### Fixes
 - Chat UI: keep the chat scrolled to the latest message after switching sessions.
+- Chat UI: add extra top padding before the first message bubble in Web Chat (macOS/iOS/Android).
 - WebChat: stream live updates for sessions even when runs start outside the chat UI.
 - Gateway CLI: read `CLAWDIS_GATEWAY_PASSWORD` from environment in `callGateway()` — allows `doctor`/`health` commands to auth without explicit `--password` flag.
 - Auto-reply: strip stray leading/trailing `HEARTBEAT_OK` from normal replies; drop short (≤ 30 chars) heartbeat acks.
