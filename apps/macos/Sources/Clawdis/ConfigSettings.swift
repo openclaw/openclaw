@@ -37,6 +37,20 @@ struct ConfigSettings: View {
     @State private var talkApiKey: String = ""
     @State private var gatewayApiKeyFound = false
 
+    private struct ConfigDraft {
+        let configModel: String
+        let customModel: String
+        let heartbeatMinutes: Int?
+        let heartbeatBody: String
+        let browserEnabled: Bool
+        let browserControlUrl: String
+        let browserColorHex: String
+        let browserAttachOnly: Bool
+        let talkVoiceId: String
+        let talkApiKey: String
+        let talkInterruptOnSpeech: Bool
+    }
+
     var body: some View {
         ScrollView { self.content }
             .onChange(of: self.modelCatalogPath) { _, _ in
@@ -443,7 +457,7 @@ struct ConfigSettings: View {
         let talkApiKey = self.talkApiKey
         let talkInterruptOnSpeech = self.talkInterruptOnSpeech
 
-        let errorMessage = await ConfigSettings.buildAndSaveConfig(
+        let draft = ConfigDraft(
             configModel: configModel,
             customModel: customModel,
             heartbeatMinutes: heartbeatMinutes,
@@ -457,67 +471,57 @@ struct ConfigSettings: View {
             talkInterruptOnSpeech: talkInterruptOnSpeech
         )
 
+        let errorMessage = await ConfigSettings.buildAndSaveConfig(draft)
+
         if let errorMessage {
             self.modelError = errorMessage
         }
     }
 
     @MainActor
-    private static func buildAndSaveConfig(
-        configModel: String,
-        customModel: String,
-        heartbeatMinutes: Int?,
-        heartbeatBody: String,
-        browserEnabled: Bool,
-        browserControlUrl: String,
-        browserColorHex: String,
-        browserAttachOnly: Bool,
-        talkVoiceId: String,
-        talkApiKey: String,
-        talkInterruptOnSpeech: Bool
-    ) async -> String? {
+    private static func buildAndSaveConfig(_ draft: ConfigDraft) async -> String? {
         var root = await ConfigStore.load()
         var agent = root["agent"] as? [String: Any] ?? [:]
         var browser = root["browser"] as? [String: Any] ?? [:]
         var talk = root["talk"] as? [String: Any] ?? [:]
 
-        let chosenModel = (configModel == "__custom__" ? customModel : configModel)
+        let chosenModel = (draft.configModel == "__custom__" ? draft.customModel : draft.configModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = chosenModel
         if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
 
-        if let heartbeatMinutes {
+        if let heartbeatMinutes = draft.heartbeatMinutes {
             agent["heartbeatMinutes"] = heartbeatMinutes
         }
 
-        let trimmedBody = heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedBody = draft.heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedBody.isEmpty {
             agent["heartbeatBody"] = trimmedBody
         }
 
         root["agent"] = agent
 
-        browser["enabled"] = browserEnabled
-        let trimmedUrl = browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        browser["enabled"] = draft.browserEnabled
+        let trimmedUrl = draft.browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedUrl.isEmpty { browser["controlUrl"] = trimmedUrl }
-        let trimmedColor = browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedColor = draft.browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedColor.isEmpty { browser["color"] = trimmedColor }
-        browser["attachOnly"] = browserAttachOnly
+        browser["attachOnly"] = draft.browserAttachOnly
         root["browser"] = browser
 
-        let trimmedVoice = talkVoiceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedVoice = draft.talkVoiceId.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedVoice.isEmpty {
             talk.removeValue(forKey: "voiceId")
         } else {
             talk["voiceId"] = trimmedVoice
         }
-        let trimmedApiKey = talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedApiKey = draft.talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedApiKey.isEmpty {
             talk.removeValue(forKey: "apiKey")
         } else {
             talk["apiKey"] = trimmedApiKey
         }
-        talk["interruptOnSpeech"] = talkInterruptOnSpeech
+        talk["interruptOnSpeech"] = draft.talkInterruptOnSpeech
         root["talk"] = talk
 
         do {
