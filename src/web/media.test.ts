@@ -75,4 +75,58 @@ describe("web media loading", () => {
 
     fetchMock.mockRestore();
   });
+
+  it("preserves GIF animation by skipping JPEG optimization", async () => {
+    // Create a minimal valid GIF (1x1 pixel)
+    // GIF89a header + minimal image data
+    const gifBuffer = Buffer.from([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // GIF89a
+      0x01, 0x00, 0x01, 0x00, // 1x1 dimensions
+      0x00, 0x00, 0x00, // no global color table
+      0x2c, 0x00, 0x00, 0x00, 0x00, // image descriptor
+      0x01, 0x00, 0x01, 0x00, 0x00, // 1x1 image
+      0x02, 0x01, 0x44, 0x00, 0x3b, // minimal LZW data + trailer
+    ]);
+
+    const file = path.join(os.tmpdir(), `clawdis-media-${Date.now()}.gif`);
+    tmpFiles.push(file);
+    await fs.writeFile(file, gifBuffer);
+
+    const result = await loadWebMedia(file, 1024 * 1024);
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/gif");
+    // GIF should NOT be converted to JPEG
+    expect(result.buffer.slice(0, 3).toString()).toBe("GIF");
+  });
+
+  it("preserves GIF from URL without JPEG conversion", async () => {
+    const gifBytes = new Uint8Array([
+      0x47, 0x49, 0x46, 0x38, 0x39, 0x61,
+      0x01, 0x00, 0x01, 0x00,
+      0x00, 0x00, 0x00,
+      0x2c, 0x00, 0x00, 0x00, 0x00,
+      0x01, 0x00, 0x01, 0x00, 0x00,
+      0x02, 0x01, 0x44, 0x00, 0x3b,
+    ]);
+
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: true,
+      body: true,
+      arrayBuffer: async () => gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
+      headers: { get: () => "image/gif" },
+      status: 200,
+    } as Response);
+
+    const result = await loadWebMedia(
+      "https://example.com/animation.gif",
+      1024 * 1024,
+    );
+
+    expect(result.kind).toBe("image");
+    expect(result.contentType).toBe("image/gif");
+    expect(result.buffer.slice(0, 3).toString()).toBe("GIF");
+
+    fetchMock.mockRestore();
+  });
 });

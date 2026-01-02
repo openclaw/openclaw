@@ -2,6 +2,9 @@
 
 ## 2.0.0-beta5 — Unreleased
 
+### Fixed
+- Media: preserve GIF animation when uploading to Discord/other providers (skip JPEG optimization for image/gif).
+
 ### Breaking
 - Skills config schema moved under `skills.*`:
   - `skillsLoad.extraDirs` → `skills.load.extraDirs`

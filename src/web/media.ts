@@ -74,6 +74,17 @@ export async function loadWebMedia(
       maxBytesForKind(kind),
     );
     if (kind === "image") {
+      // Skip optimization for GIFs to preserve animation
+      if (contentType === "image/gif") {
+        if (array.length > cap) {
+          throw new Error(
+            `GIF exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+              array.length / (1024 * 1024)
+            ).toFixed(2)}MB)`,
+          );
+        }
+        return { buffer: array, contentType, kind, fileName };
+      }
       return { ...(await optimizeAndClampImage(array, cap)), fileName };
     }
     if (array.length > cap) {
@@ -105,6 +116,17 @@ export async function loadWebMedia(
     maxBytesForKind(kind),
   );
   if (kind === "image") {
+    // Skip optimization for GIFs to preserve animation
+    if (mime === "image/gif") {
+      if (data.length > cap) {
+        throw new Error(
+          `GIF exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+            data.length / (1024 * 1024)
+          ).toFixed(2)}MB)`,
+        );
+      }
+      return { buffer: data, contentType: mime, kind, fileName };
+    }
     return { ...(await optimizeAndClampImage(data, cap)), fileName };
   }
   if (data.length > cap) {
