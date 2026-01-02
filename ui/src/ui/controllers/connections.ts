@@ -1,7 +1,7 @@
 import type { GatewayBrowserClient } from "../gateway";
 import { parseList } from "../format";
 import type { ConfigSnapshot, ProvidersStatusSnapshot } from "../types";
-import type { TelegramForm } from "../ui-types";
+import type { DiscordForm, IMessageForm, SignalForm, TelegramForm } from "../ui-types";
 
 export type ConnectionsState = {
   client: GatewayBrowserClient | null;
@@ -18,6 +18,16 @@ export type ConnectionsState = {
   telegramSaving: boolean;
   telegramTokenLocked: boolean;
   telegramConfigStatus: string | null;
+  discordForm: DiscordForm;
+  discordSaving: boolean;
+  discordTokenLocked: boolean;
+  discordConfigStatus: string | null;
+  signalForm: SignalForm;
+  signalSaving: boolean;
+  signalConfigStatus: string | null;
+  imessageForm: IMessageForm;
+  imessageSaving: boolean;
+  imessageConfigStatus: string | null;
   configSnapshot: ConfigSnapshot | null;
 };
 
@@ -34,6 +44,7 @@ export async function loadProviders(state: ConnectionsState, probe: boolean) {
     state.providersSnapshot = res;
     state.providersLastSuccess = Date.now();
     state.telegramTokenLocked = res.telegram.tokenSource === "env";
+    state.discordTokenLocked = res.discord?.tokenSource === "env";
   } catch (err) {
     state.providersError = String(err);
   } finally {
@@ -101,6 +112,27 @@ export function updateTelegramForm(
   state.telegramForm = { ...state.telegramForm, ...patch };
 }
 
+export function updateDiscordForm(
+  state: ConnectionsState,
+  patch: Partial<DiscordForm>,
+) {
+  state.discordForm = { ...state.discordForm, ...patch };
+}
+
+export function updateSignalForm(
+  state: ConnectionsState,
+  patch: Partial<SignalForm>,
+) {
+  state.signalForm = { ...state.signalForm, ...patch };
+}
+
+export function updateIMessageForm(
+  state: ConnectionsState,
+  patch: Partial<IMessageForm>,
+) {
+  state.imessageForm = { ...state.imessageForm, ...patch };
+}
+
 export async function saveTelegramConfig(state: ConnectionsState) {
   if (!state.client || !state.connected) return;
   if (state.telegramSaving) return;
@@ -143,3 +175,243 @@ export async function saveTelegramConfig(state: ConnectionsState) {
   }
 }
 
+export async function saveDiscordConfig(state: ConnectionsState) {
+  if (!state.client || !state.connected) return;
+  if (state.discordSaving) return;
+  state.discordSaving = true;
+  state.discordConfigStatus = null;
+  try {
+    const base = state.configSnapshot?.config ?? {};
+    const config = { ...base } as Record<string, unknown>;
+    const discord = { ...(config.discord ?? {}) } as Record<string, unknown>;
+    const form = state.discordForm;
+
+    if (form.enabled) {
+      delete discord.enabled;
+    } else {
+      discord.enabled = false;
+    }
+
+    if (!state.discordTokenLocked) {
+      const token = form.token.trim();
+      if (token) discord.token = token;
+      else delete discord.token;
+    }
+
+    const allowFrom = parseList(form.allowFrom);
+    const groupChannels = parseList(form.groupChannels);
+    const dm = { ...(discord.dm ?? {}) } as Record<string, unknown>;
+    if (allowFrom.length > 0) dm.allowFrom = allowFrom;
+    else delete dm.allowFrom;
+    if (form.groupEnabled) dm.groupEnabled = true;
+    else delete dm.groupEnabled;
+    if (groupChannels.length > 0) dm.groupChannels = groupChannels;
+    else delete dm.groupChannels;
+    if (Object.keys(dm).length > 0) discord.dm = dm;
+    else delete discord.dm;
+
+    const mediaMaxMb = Number(form.mediaMaxMb);
+    if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
+      discord.mediaMaxMb = mediaMaxMb;
+    } else {
+      delete discord.mediaMaxMb;
+    }
+
+    const historyLimit = Number(form.historyLimit);
+    if (Number.isFinite(historyLimit) && historyLimit >= 0) {
+      discord.historyLimit = historyLimit;
+    } else {
+      delete discord.historyLimit;
+    }
+
+    if (form.enableReactions) {
+      delete discord.enableReactions;
+    } else {
+      discord.enableReactions = false;
+    }
+
+    const slash = { ...(discord.slashCommand ?? {}) } as Record<string, unknown>;
+    if (form.slashEnabled) {
+      slash.enabled = true;
+    } else {
+      delete slash.enabled;
+    }
+    if (form.slashName.trim()) slash.name = form.slashName.trim();
+    else delete slash.name;
+    if (form.slashSessionPrefix.trim())
+      slash.sessionPrefix = form.slashSessionPrefix.trim();
+    else delete slash.sessionPrefix;
+    if (form.slashEphemeral) {
+      delete slash.ephemeral;
+    } else {
+      slash.ephemeral = false;
+    }
+    if (Object.keys(slash).length > 0) discord.slashCommand = slash;
+    else delete discord.slashCommand;
+
+    if (Object.keys(discord).length > 0) {
+      config.discord = discord;
+    } else {
+      delete config.discord;
+    }
+
+    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
+    await state.client.request("config.set", { raw });
+    state.discordConfigStatus = "Saved. Restart gateway if needed.";
+  } catch (err) {
+    state.discordConfigStatus = String(err);
+  } finally {
+    state.discordSaving = false;
+  }
+}
+
+export async function saveSignalConfig(state: ConnectionsState) {
+  if (!state.client || !state.connected) return;
+  if (state.signalSaving) return;
+  state.signalSaving = true;
+  state.signalConfigStatus = null;
+  try {
+    const base = state.configSnapshot?.config ?? {};
+    const config = { ...base } as Record<string, unknown>;
+    const signal = { ...(config.signal ?? {}) } as Record<string, unknown>;
+    const form = state.signalForm;
+
+    if (form.enabled) {
+      delete signal.enabled;
+    } else {
+      signal.enabled = false;
+    }
+
+    const account = form.account.trim();
+    if (account) signal.account = account;
+    else delete signal.account;
+
+    const httpUrl = form.httpUrl.trim();
+    if (httpUrl) signal.httpUrl = httpUrl;
+    else delete signal.httpUrl;
+
+    const httpHost = form.httpHost.trim();
+    if (httpHost) signal.httpHost = httpHost;
+    else delete signal.httpHost;
+
+    const httpPort = Number(form.httpPort);
+    if (Number.isFinite(httpPort) && httpPort > 0) {
+      signal.httpPort = httpPort;
+    } else {
+      delete signal.httpPort;
+    }
+
+    const cliPath = form.cliPath.trim();
+    if (cliPath) signal.cliPath = cliPath;
+    else delete signal.cliPath;
+
+    if (form.autoStart) {
+      delete signal.autoStart;
+    } else {
+      signal.autoStart = false;
+    }
+
+    if (form.receiveMode === "on-start" || form.receiveMode === "manual") {
+      signal.receiveMode = form.receiveMode;
+    } else {
+      delete signal.receiveMode;
+    }
+
+    if (form.ignoreAttachments) signal.ignoreAttachments = true;
+    else delete signal.ignoreAttachments;
+    if (form.ignoreStories) signal.ignoreStories = true;
+    else delete signal.ignoreStories;
+    if (form.sendReadReceipts) signal.sendReadReceipts = true;
+    else delete signal.sendReadReceipts;
+
+    const allowFrom = parseList(form.allowFrom);
+    if (allowFrom.length > 0) signal.allowFrom = allowFrom;
+    else delete signal.allowFrom;
+
+    const mediaMaxMb = Number(form.mediaMaxMb);
+    if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
+      signal.mediaMaxMb = mediaMaxMb;
+    } else {
+      delete signal.mediaMaxMb;
+    }
+
+    if (Object.keys(signal).length > 0) {
+      config.signal = signal;
+    } else {
+      delete config.signal;
+    }
+
+    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
+    await state.client.request("config.set", { raw });
+    state.signalConfigStatus = "Saved. Restart gateway if needed.";
+  } catch (err) {
+    state.signalConfigStatus = String(err);
+  } finally {
+    state.signalSaving = false;
+  }
+}
+
+export async function saveIMessageConfig(state: ConnectionsState) {
+  if (!state.client || !state.connected) return;
+  if (state.imessageSaving) return;
+  state.imessageSaving = true;
+  state.imessageConfigStatus = null;
+  try {
+    const base = state.configSnapshot?.config ?? {};
+    const config = { ...base } as Record<string, unknown>;
+    const imessage = { ...(config.imessage ?? {}) } as Record<string, unknown>;
+    const form = state.imessageForm;
+
+    if (form.enabled) {
+      delete imessage.enabled;
+    } else {
+      imessage.enabled = false;
+    }
+
+    const cliPath = form.cliPath.trim();
+    if (cliPath) imessage.cliPath = cliPath;
+    else delete imessage.cliPath;
+
+    const dbPath = form.dbPath.trim();
+    if (dbPath) imessage.dbPath = dbPath;
+    else delete imessage.dbPath;
+
+    if (form.service === "auto") {
+      delete imessage.service;
+    } else {
+      imessage.service = form.service;
+    }
+
+    const region = form.region.trim();
+    if (region) imessage.region = region;
+    else delete imessage.region;
+
+    const allowFrom = parseList(form.allowFrom);
+    if (allowFrom.length > 0) imessage.allowFrom = allowFrom;
+    else delete imessage.allowFrom;
+
+    if (form.includeAttachments) imessage.includeAttachments = true;
+    else delete imessage.includeAttachments;
+
+    const mediaMaxMb = Number(form.mediaMaxMb);
+    if (Number.isFinite(mediaMaxMb) && mediaMaxMb > 0) {
+      imessage.mediaMaxMb = mediaMaxMb;
+    } else {
+      delete imessage.mediaMaxMb;
+    }
+
+    if (Object.keys(imessage).length > 0) {
+      config.imessage = imessage;
+    } else {
+      delete config.imessage;
+    }
+
+    const raw = `${JSON.stringify(config, null, 2).trimEnd()}\n`;
+    await state.client.request("config.set", { raw });
+    state.imessageConfigStatus = "Saved. Restart gateway if needed.";
+  } catch (err) {
+    state.imessageConfigStatus = String(err);
+  } finally {
+    state.imessageSaving = false;
+  }
+}

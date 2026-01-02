@@ -44,7 +44,31 @@ struct ConnectionsSettingsSmokeTests {
                     bot: ProvidersStatusSnapshot.TelegramBot(id: 123, username: "clawdisbot"),
                     webhook: ProvidersStatusSnapshot.TelegramWebhook(url: "https://example.com/hook", hasCustomCert: false)),
                 lastProbeAt: 1_700_000_050_000),
-            discord: nil)
+            discord: nil,
+            signal: ProvidersStatusSnapshot.SignalStatus(
+                configured: true,
+                baseUrl: "http://127.0.0.1:8080",
+                running: true,
+                lastStartAt: 1_700_000_000_000,
+                lastStopAt: nil,
+                lastError: nil,
+                probe: ProvidersStatusSnapshot.SignalProbe(
+                    ok: true,
+                    status: 200,
+                    error: nil,
+                    elapsedMs: 140,
+                    version: "0.12.4"),
+                lastProbeAt: 1_700_000_050_000),
+            imessage: ProvidersStatusSnapshot.IMessageStatus(
+                configured: false,
+                running: false,
+                lastStartAt: nil,
+                lastStopAt: nil,
+                lastError: "not configured",
+                cliPath: nil,
+                dbPath: nil,
+                probe: ProvidersStatusSnapshot.IMessageProbe(ok: false, error: "imsg not found (imsg)"),
+                lastProbeAt: 1_700_000_050_000))
 
         store.whatsappLoginMessage = "Scan QR"
         store.whatsappLoginQrDataUrl =
@@ -94,7 +118,31 @@ struct ConnectionsSettingsSmokeTests {
                     bot: nil,
                     webhook: nil),
                 lastProbeAt: 1_700_000_100_000),
-            discord: nil)
+            discord: nil,
+            signal: ProvidersStatusSnapshot.SignalStatus(
+                configured: false,
+                baseUrl: "http://127.0.0.1:8080",
+                running: false,
+                lastStartAt: nil,
+                lastStopAt: nil,
+                lastError: "not configured",
+                probe: ProvidersStatusSnapshot.SignalProbe(
+                    ok: false,
+                    status: 404,
+                    error: "unreachable",
+                    elapsedMs: 200,
+                    version: nil),
+                lastProbeAt: 1_700_000_200_000),
+            imessage: ProvidersStatusSnapshot.IMessageStatus(
+                configured: false,
+                running: false,
+                lastStartAt: nil,
+                lastStopAt: nil,
+                lastError: "not configured",
+                cliPath: "imsg",
+                dbPath: nil,
+                probe: ProvidersStatusSnapshot.IMessageProbe(ok: false, error: "imsg not found (imsg)"),
+                lastProbeAt: 1_700_000_200_000))
 
         let view = ConnectionsSettings(store: store)
         _ = view.body

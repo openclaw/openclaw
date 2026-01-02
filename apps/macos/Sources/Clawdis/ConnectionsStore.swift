@@ -85,10 +85,48 @@ struct ProvidersStatusSnapshot: Codable {
         let lastProbeAt: Double?
     }
 
+    struct SignalProbe: Codable {
+        let ok: Bool
+        let status: Int?
+        let error: String?
+        let elapsedMs: Double?
+        let version: String?
+    }
+
+    struct SignalStatus: Codable {
+        let configured: Bool
+        let baseUrl: String
+        let running: Bool
+        let lastStartAt: Double?
+        let lastStopAt: Double?
+        let lastError: String?
+        let probe: SignalProbe?
+        let lastProbeAt: Double?
+    }
+
+    struct IMessageProbe: Codable {
+        let ok: Bool
+        let error: String?
+    }
+
+    struct IMessageStatus: Codable {
+        let configured: Bool
+        let running: Bool
+        let lastStartAt: Double?
+        let lastStopAt: Double?
+        let lastError: String?
+        let cliPath: String?
+        let dbPath: String?
+        let probe: IMessageProbe?
+        let lastProbeAt: Double?
+    }
+
     let ts: Double
     let whatsapp: WhatsAppStatus
     let telegram: TelegramStatus
     let discord: DiscordStatus?
+    let signal: SignalStatus?
+    let imessage: IMessageStatus?
 }
 
 struct ConfigSnapshot: Codable {
@@ -135,6 +173,27 @@ final class ConnectionsStore {
     var discordGuildAllowFrom: String = ""
     var discordGuildUsersAllowFrom: String = ""
     var discordMediaMaxMb: String = ""
+    var signalEnabled = true
+    var signalAccount: String = ""
+    var signalHttpUrl: String = ""
+    var signalHttpHost: String = ""
+    var signalHttpPort: String = ""
+    var signalCliPath: String = ""
+    var signalAutoStart = true
+    var signalReceiveMode: String = ""
+    var signalIgnoreAttachments = false
+    var signalIgnoreStories = false
+    var signalSendReadReceipts = false
+    var signalAllowFrom: String = ""
+    var signalMediaMaxMb: String = ""
+    var imessageEnabled = true
+    var imessageCliPath: String = ""
+    var imessageDbPath: String = ""
+    var imessageService: String = "auto"
+    var imessageRegion: String = ""
+    var imessageAllowFrom: String = ""
+    var imessageIncludeAttachments = false
+    var imessageMediaMaxMb: String = ""
     var configStatus: String?
     var isSavingConfig = false
 
@@ -364,6 +423,63 @@ final class ConnectionsStore {
             } else {
                 self.discordMediaMaxMb = ""
             }
+
+            let signal = snap.config?["signal"]?.dictionaryValue
+            self.signalEnabled = signal?["enabled"]?.boolValue ?? true
+            self.signalAccount = signal?["account"]?.stringValue ?? ""
+            self.signalHttpUrl = signal?["httpUrl"]?.stringValue ?? ""
+            self.signalHttpHost = signal?["httpHost"]?.stringValue ?? ""
+            if let port = signal?["httpPort"]?.doubleValue ?? signal?["httpPort"]?.intValue.map(Double.init) {
+                self.signalHttpPort = String(Int(port))
+            } else {
+                self.signalHttpPort = ""
+            }
+            self.signalCliPath = signal?["cliPath"]?.stringValue ?? ""
+            self.signalAutoStart = signal?["autoStart"]?.boolValue ?? true
+            self.signalReceiveMode = signal?["receiveMode"]?.stringValue ?? ""
+            self.signalIgnoreAttachments = signal?["ignoreAttachments"]?.boolValue ?? false
+            self.signalIgnoreStories = signal?["ignoreStories"]?.boolValue ?? false
+            self.signalSendReadReceipts = signal?["sendReadReceipts"]?.boolValue ?? false
+            if let allow = signal?["allowFrom"]?.arrayValue {
+                let strings = allow.compactMap { entry -> String? in
+                    if let str = entry.stringValue { return str }
+                    if let intVal = entry.intValue { return String(intVal) }
+                    if let doubleVal = entry.doubleValue { return String(Int(doubleVal)) }
+                    return nil
+                }
+                self.signalAllowFrom = strings.joined(separator: ", ")
+            } else {
+                self.signalAllowFrom = ""
+            }
+            if let media = signal?["mediaMaxMb"]?.doubleValue ?? signal?["mediaMaxMb"]?.intValue.map(Double.init) {
+                self.signalMediaMaxMb = String(Int(media))
+            } else {
+                self.signalMediaMaxMb = ""
+            }
+
+            let imessage = snap.config?["imessage"]?.dictionaryValue
+            self.imessageEnabled = imessage?["enabled"]?.boolValue ?? true
+            self.imessageCliPath = imessage?["cliPath"]?.stringValue ?? ""
+            self.imessageDbPath = imessage?["dbPath"]?.stringValue ?? ""
+            self.imessageService = imessage?["service"]?.stringValue ?? "auto"
+            self.imessageRegion = imessage?["region"]?.stringValue ?? ""
+            if let allow = imessage?["allowFrom"]?.arrayValue {
+                let strings = allow.compactMap { entry -> String? in
+                    if let str = entry.stringValue { return str }
+                    if let intVal = entry.intValue { return String(intVal) }
+                    if let doubleVal = entry.doubleValue { return String(Int(doubleVal)) }
+                    return nil
+                }
+                self.imessageAllowFrom = strings.joined(separator: ", ")
+            } else {
+                self.imessageAllowFrom = ""
+            }
+            self.imessageIncludeAttachments = imessage?["includeAttachments"]?.boolValue ?? false
+            if let media = imessage?["mediaMaxMb"]?.doubleValue ?? imessage?["mediaMaxMb"]?.intValue.map(Double.init) {
+                self.imessageMediaMaxMb = String(Int(media))
+            } else {
+                self.imessageMediaMaxMb = ""
+            }
         } catch {
             self.configStatus = error.localizedDescription
         }
@@ -521,6 +637,220 @@ final class ConnectionsStore {
             self.configRoot.removeValue(forKey: "discord")
         } else {
             self.configRoot["discord"] = discord
+        }
+
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: self.configRoot,
+                options: [.prettyPrinted, .sortedKeys])
+            guard let raw = String(data: data, encoding: .utf8) else {
+                self.configStatus = "Failed to encode config."
+                return
+            }
+            let params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
+            _ = try await GatewayConnection.shared.requestRaw(
+                method: .configSet,
+                params: params,
+                timeoutMs: 10000)
+            self.configStatus = "Saved to ~/.clawdis/clawdis.json."
+            await self.refresh(probe: true)
+        } catch {
+            self.configStatus = error.localizedDescription
+        }
+    }
+
+    func saveSignalConfig() async {
+        guard !self.isSavingConfig else { return }
+        self.isSavingConfig = true
+        defer { self.isSavingConfig = false }
+        if !self.configLoaded {
+            await self.loadConfig()
+        }
+
+        var signal: [String: Any] = (self.configRoot["signal"] as? [String: Any]) ?? [:]
+        if self.signalEnabled {
+            signal.removeValue(forKey: "enabled")
+        } else {
+            signal["enabled"] = false
+        }
+
+        let account = self.signalAccount.trimmingCharacters(in: .whitespacesAndNewlines)
+        if account.isEmpty {
+            signal.removeValue(forKey: "account")
+        } else {
+            signal["account"] = account
+        }
+
+        let httpUrl = self.signalHttpUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+        if httpUrl.isEmpty {
+            signal.removeValue(forKey: "httpUrl")
+        } else {
+            signal["httpUrl"] = httpUrl
+        }
+
+        let httpHost = self.signalHttpHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        if httpHost.isEmpty {
+            signal.removeValue(forKey: "httpHost")
+        } else {
+            signal["httpHost"] = httpHost
+        }
+
+        let httpPort = self.signalHttpPort.trimmingCharacters(in: .whitespacesAndNewlines)
+        if httpPort.isEmpty {
+            signal.removeValue(forKey: "httpPort")
+        } else if let value = Double(httpPort) {
+            signal["httpPort"] = value
+        }
+
+        let cliPath = self.signalCliPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cliPath.isEmpty {
+            signal.removeValue(forKey: "cliPath")
+        } else {
+            signal["cliPath"] = cliPath
+        }
+
+        if self.signalAutoStart {
+            signal.removeValue(forKey: "autoStart")
+        } else {
+            signal["autoStart"] = false
+        }
+
+        let receiveMode = self.signalReceiveMode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if receiveMode.isEmpty {
+            signal.removeValue(forKey: "receiveMode")
+        } else {
+            signal["receiveMode"] = receiveMode
+        }
+
+        if self.signalIgnoreAttachments {
+            signal["ignoreAttachments"] = true
+        } else {
+            signal.removeValue(forKey: "ignoreAttachments")
+        }
+        if self.signalIgnoreStories {
+            signal["ignoreStories"] = true
+        } else {
+            signal.removeValue(forKey: "ignoreStories")
+        }
+        if self.signalSendReadReceipts {
+            signal["sendReadReceipts"] = true
+        } else {
+            signal.removeValue(forKey: "sendReadReceipts")
+        }
+
+        let allow = self.signalAllowFrom
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if allow.isEmpty {
+            signal.removeValue(forKey: "allowFrom")
+        } else {
+            signal["allowFrom"] = allow
+        }
+
+        let media = self.signalMediaMaxMb.trimmingCharacters(in: .whitespacesAndNewlines)
+        if media.isEmpty {
+            signal.removeValue(forKey: "mediaMaxMb")
+        } else if let value = Double(media) {
+            signal["mediaMaxMb"] = value
+        }
+
+        if signal.isEmpty {
+            self.configRoot.removeValue(forKey: "signal")
+        } else {
+            self.configRoot["signal"] = signal
+        }
+
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: self.configRoot,
+                options: [.prettyPrinted, .sortedKeys])
+            guard let raw = String(data: data, encoding: .utf8) else {
+                self.configStatus = "Failed to encode config."
+                return
+            }
+            let params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
+            _ = try await GatewayConnection.shared.requestRaw(
+                method: .configSet,
+                params: params,
+                timeoutMs: 10000)
+            self.configStatus = "Saved to ~/.clawdis/clawdis.json."
+            await self.refresh(probe: true)
+        } catch {
+            self.configStatus = error.localizedDescription
+        }
+    }
+
+    func saveIMessageConfig() async {
+        guard !self.isSavingConfig else { return }
+        self.isSavingConfig = true
+        defer { self.isSavingConfig = false }
+        if !self.configLoaded {
+            await self.loadConfig()
+        }
+
+        var imessage: [String: Any] = (self.configRoot["imessage"] as? [String: Any]) ?? [:]
+        if self.imessageEnabled {
+            imessage.removeValue(forKey: "enabled")
+        } else {
+            imessage["enabled"] = false
+        }
+
+        let cliPath = self.imessageCliPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cliPath.isEmpty {
+            imessage.removeValue(forKey: "cliPath")
+        } else {
+            imessage["cliPath"] = cliPath
+        }
+
+        let dbPath = self.imessageDbPath.trimmingCharacters(in: .whitespacesAndNewlines)
+        if dbPath.isEmpty {
+            imessage.removeValue(forKey: "dbPath")
+        } else {
+            imessage["dbPath"] = dbPath
+        }
+
+        let service = self.imessageService.trimmingCharacters(in: .whitespacesAndNewlines)
+        if service.isEmpty || service == "auto" {
+            imessage.removeValue(forKey: "service")
+        } else {
+            imessage["service"] = service
+        }
+
+        let region = self.imessageRegion.trimmingCharacters(in: .whitespacesAndNewlines)
+        if region.isEmpty {
+            imessage.removeValue(forKey: "region")
+        } else {
+            imessage["region"] = region
+        }
+
+        let allow = self.imessageAllowFrom
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if allow.isEmpty {
+            imessage.removeValue(forKey: "allowFrom")
+        } else {
+            imessage["allowFrom"] = allow
+        }
+
+        if self.imessageIncludeAttachments {
+            imessage["includeAttachments"] = true
+        } else {
+            imessage.removeValue(forKey: "includeAttachments")
+        }
+
+        let media = self.imessageMediaMaxMb.trimmingCharacters(in: .whitespacesAndNewlines)
+        if media.isEmpty {
+            imessage.removeValue(forKey: "mediaMaxMb")
+        } else if let value = Double(media) {
+            imessage["mediaMaxMb"] = value
+        }
+
+        if imessage.isEmpty {
+            self.configRoot.removeValue(forKey: "imessage")
+        } else {
+            self.configRoot["imessage"] = imessage
         }
 
         do {

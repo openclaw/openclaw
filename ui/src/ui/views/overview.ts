@@ -120,7 +120,7 @@ export function renderOverview(props: OverviewProps) {
               ${props.lastError}
             </div>`
           : html`<div class="callout" style="margin-top: 14px;">
-              Use Connections to link WhatsApp and Telegram.
+              Use Connections to link WhatsApp, Telegram, Discord, Signal, or iMessage.
             </div>`}
       </div>
     </section>
