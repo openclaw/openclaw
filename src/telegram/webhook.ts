@@ -46,9 +46,7 @@ export async function startTelegramWebhook(opts: {
     const handled = handler(req, res);
     if (handled && typeof (handled as Promise<void>).catch === "function") {
       void (handled as Promise<void>).catch((err) => {
-        runtime.log?.(
-          `Telegram webhook handler failed: ${formatErrorMessage(err)}`,
-        );
+        runtime.log?.(`webhook handler failed: ${formatErrorMessage(err)}`);
         if (!res.headersSent) res.writeHead(500);
         res.end();
       });
@@ -64,7 +62,7 @@ export async function startTelegramWebhook(opts: {
   });
 
   await new Promise<void>((resolve) => server.listen(port, host, resolve));
-  runtime.log?.(`Telegram webhook listening on ${publicUrl}`);
+  runtime.log?.(`webhook listening on ${publicUrl}`);
 
   const shutdown = () => {
     server.close();

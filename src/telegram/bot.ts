@@ -201,7 +201,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         bot,
       });
     } catch (err) {
-      runtime.error?.(danger(`Telegram handler failed: ${String(err)}`));
+      runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   });
 
@@ -225,7 +225,7 @@ async function deliverReplies(params: {
   const { replies, chatId, runtime, bot } = params;
   for (const reply of replies) {
     if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
-      runtime.error?.(danger("Telegram reply missing text/media"));
+      runtime.error?.(danger("reply missing text/media"));
       continue;
     }
     const mediaList = reply.mediaUrls?.length

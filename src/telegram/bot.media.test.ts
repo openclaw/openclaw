@@ -199,7 +199,7 @@ describe("telegram inbound media", () => {
     expect(replySpy).not.toHaveBeenCalled();
     expect(runtimeError).toHaveBeenCalledTimes(1);
     const msg = String(runtimeError.mock.calls[0]?.[0] ?? "");
-    expect(msg).toContain("Telegram handler failed:");
+    expect(msg).toContain("handler failed:");
     expect(msg).toContain("file_path");
 
     fetchSpy.mockRestore();

@@ -127,7 +127,7 @@ async function waitForSignalDaemonReady(params: {
 
   params.runtime.error?.(
     danger(
-      `signal: daemon not ready after ${params.timeoutMs}ms (${lastError ?? "unknown error"})`,
+      `daemon not ready after ${params.timeoutMs}ms (${lastError ?? "unknown error"})`,
     ),
   );
   throw new Error(`signal daemon not ready (${lastError ?? "unknown error"})`);
@@ -207,7 +207,7 @@ async function deliverReplies(params: {
         });
       }
     }
-    runtime.log?.(`signal: delivered reply to ${target}`);
+    runtime.log?.(`delivered reply to ${target}`);
   }
 }
 
@@ -267,13 +267,11 @@ export async function monitorSignalProvider(
       try {
         payload = JSON.parse(event.data) as SignalReceivePayload;
       } catch (err) {
-        runtime.error?.(`signal: failed to parse event: ${String(err)}`);
+        runtime.error?.(`failed to parse event: ${String(err)}`);
         return;
       }
       if (payload?.exception?.message) {
-        runtime.error?.(
-          `signal: receive exception: ${payload.exception.message}`,
-        );
+        runtime.error?.(`receive exception: ${payload.exception.message}`);
       }
       const envelope = payload?.envelope;
       if (!envelope) return;
@@ -317,9 +315,7 @@ export async function monitorSignalProvider(
               fetched.contentType ?? firstAttachment.contentType ?? undefined;
           }
         } catch (err) {
-          runtime.error?.(
-            danger(`signal: attachment fetch failed: ${String(err)}`),
-          );
+          runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
         }
       }
 
@@ -402,7 +398,7 @@ export async function monitorSignalProvider(
       abortSignal: opts.abortSignal,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {
-          runtime.error?.(`signal: event handler failed: ${String(err)}`);
+          runtime.error?.(`event handler failed: ${String(err)}`);
         });
       },
     });

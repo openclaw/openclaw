@@ -94,11 +94,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const guildHistories = new Map<string, DiscordHistoryEntry[]>();
 
   client.once(Events.ClientReady, () => {
-    runtime.log?.(`discord: logged in as ${client.user?.tag ?? "unknown"}`);
+    runtime.log?.(`logged in as ${client.user?.tag ?? "unknown"}`);
   });
 
   client.on(Events.Error, (err) => {
-    runtime.error?.(danger(`discord client error: ${String(err)}`));
+    runtime.error?.(danger(`client error: ${String(err)}`));
   });
 
   client.on(Events.MessageCreate, async (message) => {
@@ -294,7 +294,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         guildHistories.set(message.channelId, []);
       }
     } catch (err) {
-      runtime.error?.(danger(`Discord handler failed: ${String(err)}`));
+      runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
   });
 
@@ -427,6 +427,6 @@ async function deliverReplies({
         });
       }
     }
-    runtime.log?.(`discord: delivered reply to ${target}`);
+    runtime.log?.(`delivered reply to ${target}`);
   }
 }
