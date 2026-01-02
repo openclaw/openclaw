@@ -23,7 +23,7 @@ public struct ClawdisChatView: View {
         static let composerPaddingHorizontal: CGFloat = 0
         static let stackSpacing: CGFloat = 0
         static let messageSpacing: CGFloat = 6
-        static let messageListPaddingTop: CGFloat = 0
+        static let messageListPaddingTop: CGFloat = 12
         static let messageListPaddingBottom: CGFloat = 16
         static let messageListPaddingHorizontal: CGFloat = 6
         #else
@@ -32,7 +32,7 @@ public struct ClawdisChatView: View {
         static let composerPaddingHorizontal: CGFloat = 6
         static let stackSpacing: CGFloat = 6
         static let messageSpacing: CGFloat = 12
-        static let messageListPaddingTop: CGFloat = 4
+        static let messageListPaddingTop: CGFloat = 10
         static let messageListPaddingBottom: CGFloat = 6
         static let messageListPaddingHorizontal: CGFloat = 8
         #endif

@@ -8,9 +8,9 @@ struct WorkActivityStoreTests {
     @Test func mainSessionJobPreemptsOther() {
         let store = WorkActivityStore()
 
-        store.handleJob(sessionKey: "group:1", state: "started")
+        store.handleJob(sessionKey: "discord:group:1", state: "started")
         #expect(store.iconState == .workingOther(.job))
-        #expect(store.current?.sessionKey == "group:1")
+        #expect(store.current?.sessionKey == "discord:group:1")
 
         store.handleJob(sessionKey: "main", state: "started")
         #expect(store.iconState == .workingMain(.job))
@@ -18,9 +18,9 @@ struct WorkActivityStoreTests {
 
         store.handleJob(sessionKey: "main", state: "finished")
         #expect(store.iconState == .workingOther(.job))
-        #expect(store.current?.sessionKey == "group:1")
+        #expect(store.current?.sessionKey == "discord:group:1")
 
-        store.handleJob(sessionKey: "group:1", state: "finished")
+        store.handleJob(sessionKey: "discord:group:1", state: "finished")
         #expect(store.iconState == .idle)
         #expect(store.current == nil)
     }

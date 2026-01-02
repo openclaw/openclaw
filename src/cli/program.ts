@@ -14,6 +14,7 @@ import { danger, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -68,6 +69,21 @@ export function buildProgram() {
   }
 
   program.addHelpText("beforeAll", `\n${formatIntroLine(PROGRAM_VERSION)}\n`);
+
+  program.hook("preAction", async (_thisCommand, actionCommand) => {
+    if (actionCommand.name() === "doctor") return;
+    const snapshot = await readConfigFileSnapshot();
+    if (snapshot.legacyIssues.length === 0) return;
+    const issues = snapshot.legacyIssues
+      .map((issue) => `- ${issue.path}: ${issue.message}`)
+      .join("\n");
+    defaultRuntime.error(
+      danger(
+        `Legacy config entries detected. Run \"clawdis doctor\" (or ask your agent) to migrate.\n${issues}`,
+      ),
+    );
+    process.exit(1);
+  });
   const examples = [
     [
       "clawdis login --verbose",

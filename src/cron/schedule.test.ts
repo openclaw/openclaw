@@ -23,4 +23,21 @@ describe("cron schedule", () => {
     );
     expect(next).toBe(anchor + 30_000);
   });
+
+  it("computes next run for every schedule when anchorMs is not provided", () => {
+    const now = Date.parse("2025-12-13T00:00:00.000Z");
+    const next = computeNextRunAtMs({ kind: "every", everyMs: 30_000 }, now);
+
+    // Should return nowMs + everyMs, not nowMs (which would cause infinite loop)
+    expect(next).toBe(now + 30_000);
+  });
+
+  it("advances when now matches anchor for every schedule", () => {
+    const anchor = Date.parse("2025-12-13T00:00:00.000Z");
+    const next = computeNextRunAtMs(
+      { kind: "every", everyMs: 30_000, anchorMs: anchor },
+      anchor,
+    );
+    expect(next).toBe(anchor + 30_000);
+  });
 });

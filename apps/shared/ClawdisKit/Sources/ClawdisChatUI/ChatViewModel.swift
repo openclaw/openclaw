@@ -341,6 +341,11 @@ public final class ClawdisChatViewModel {
         ClawdisChatSessionEntry(
             key: key,
             kind: nil,
+            displayName: nil,
+            surface: nil,
+            subject: nil,
+            room: nil,
+            space: nil,
             updatedAt: nil,
             sessionId: nil,
             systemSent: nil,

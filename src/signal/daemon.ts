@@ -23,6 +23,8 @@ export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   if (!trimmed) return null;
   // signal-cli commonly writes all logs to stderr; treat severity explicitly.
   if (/\b(ERROR|WARN|WARNING)\b/.test(trimmed)) return "error";
+  // Some signal-cli failures are not tagged with WARN/ERROR but should still be surfaced loudly.
+  if (/\b(FAILED|SEVERE|EXCEPTION)\b/i.test(trimmed)) return "error";
   return "log";
 }
 

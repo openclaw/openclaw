@@ -130,6 +130,11 @@ let testGatewayBind: "auto" | "lan" | "tailnet" | "loopback" | undefined;
 let testGatewayAuth: Record<string, unknown> | undefined;
 let testHooksConfig: Record<string, unknown> | undefined;
 let testCanvasHostPort: number | undefined;
+let testLegacyIssues: Array<{ path: string; message: string }> = [];
+let testLegacyParsed: Record<string, unknown> = {};
+let testMigrationConfig: Record<string, unknown> | null = null;
+let testMigrationChanges: string[] = [];
+let testIsNixMode = false;
 const sessionStoreSaveDelayMs = vi.hoisted(() => ({ value: 0 }));
 vi.mock("../config/sessions.js", async () => {
   const actual = await vi.importActual<typeof import("../config/sessions.js")>(
@@ -151,6 +156,21 @@ vi.mock("../config/config.js", () => {
     path.join(os.homedir(), ".clawdis", "clawdis.json");
 
   const readConfigFileSnapshot = async () => {
+    if (testLegacyIssues.length > 0) {
+      return {
+        path: resolveConfigPath(),
+        exists: true,
+        raw: JSON.stringify(testLegacyParsed ?? {}),
+        parsed: testLegacyParsed ?? {},
+        valid: false,
+        config: {},
+        issues: testLegacyIssues.map((issue) => ({
+          path: issue.path,
+          message: issue.message,
+        })),
+        legacyIssues: testLegacyIssues,
+      };
+    }
     const configPath = resolveConfigPath();
     try {
       await fs.access(configPath);
@@ -163,6 +183,7 @@ vi.mock("../config/config.js", () => {
         valid: true,
         config: {},
         issues: [],
+        legacyIssues: [],
       };
     }
     try {
@@ -176,6 +197,7 @@ vi.mock("../config/config.js", () => {
         valid: true,
         config: parsed,
         issues: [],
+        legacyIssues: [],
       };
     } catch (err) {
       return {
@@ -186,27 +208,32 @@ vi.mock("../config/config.js", () => {
         valid: false,
         config: {},
         issues: [{ path: "", message: `read failed: ${String(err)}` }],
+        legacyIssues: [],
       };
     }
   };
 
-  const writeConfigFile = async (cfg: Record<string, unknown>) => {
+  const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
     await fs.writeFile(configPath, raw, "utf-8");
-  };
+  });
 
   return {
     CONFIG_PATH_CLAWDIS: resolveConfigPath(),
     STATE_DIR_CLAWDIS: path.dirname(resolveConfigPath()),
-    isNixMode: false,
+    isNixMode: testIsNixMode,
+    migrateLegacyConfig: (raw: unknown) => ({
+      config: testMigrationConfig ?? (raw as Record<string, unknown>),
+      changes: testMigrationChanges,
+    }),
     loadConfig: () => ({
       agent: {
         model: "anthropic/claude-opus-4-5",
         workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
       },
-      routing: {
+      whatsapp: {
         allowFrom: testAllowFrom,
       },
       session: { mainKey: "main", store: testSessionStorePath },
@@ -279,6 +306,11 @@ beforeEach(async () => {
   testGatewayAuth = undefined;
   testHooksConfig = undefined;
   testCanvasHostPort = undefined;
+  testLegacyIssues = [];
+  testLegacyParsed = {};
+  testMigrationConfig = null;
+  testMigrationChanges = [];
+  testIsNixMode = false;
   cronIsolatedRun.mockClear();
   drainSystemEvents();
   resetAgentRunContextForTest();
@@ -515,6 +547,40 @@ describe("gateway server", () => {
       }
     },
   );
+
+  test("auto-migrates legacy config on startup", async () => {
+    (writeConfigFile as unknown as { mockClear?: () => void })?.mockClear?.();
+    testLegacyIssues = [
+      {
+        path: "routing.allowFrom",
+        message: "legacy",
+      },
+    ];
+    testLegacyParsed = { routing: { allowFrom: ["+15555550123"] } };
+    testMigrationConfig = { whatsapp: { allowFrom: ["+15555550123"] } };
+    testMigrationChanges = ["Moved routing.allowFrom → whatsapp.allowFrom."];
+
+    const port = await getFreePort();
+    const server = await startGatewayServer(port);
+    expect(writeConfigFile).toHaveBeenCalledWith(testMigrationConfig);
+    await server.close();
+  });
+
+  test("fails in Nix mode when legacy config is present", async () => {
+    testLegacyIssues = [
+      {
+        path: "routing.allowFrom",
+        message: "legacy",
+      },
+    ];
+    testLegacyParsed = { routing: { allowFrom: ["+15555550123"] } };
+    testIsNixMode = true;
+
+    const port = await getFreePort();
+    await expect(startGatewayServer(port)).rejects.toThrow(
+      "Legacy config entries detected while running in Nix mode",
+    );
+  });
 
   test("models.list returns model catalog", async () => {
     piSdkMock.enabled = true;
@@ -3865,7 +3931,7 @@ describe("gateway server", () => {
             thinkingLevel: "low",
             verboseLevel: "on",
           },
-          "group:dev": {
+          "discord:group:dev": {
             sessionId: "sess-group",
             updatedAt: now - 120_000,
             totalTokens: 50,
@@ -3977,7 +4043,7 @@ describe("gateway server", () => {
     const deleted = await rpcReq<{ ok: true; deleted: boolean }>(
       ws,
       "sessions.delete",
-      { key: "group:dev" },
+      { key: "discord:group:dev" },
     );
     expect(deleted.ok).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
@@ -3986,7 +4052,9 @@ describe("gateway server", () => {
     }>(ws, "sessions.list", {});
     expect(listAfterDelete.ok).toBe(true);
     expect(
-      listAfterDelete.payload?.sessions.some((s) => s.key === "group:dev"),
+      listAfterDelete.payload?.sessions.some(
+        (s) => s.key === "discord:group:dev",
+      ),
     ).toBe(false);
     const filesAfterDelete = await fs.readdir(dir);
     expect(

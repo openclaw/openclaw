@@ -58,6 +58,11 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
+export type WhatsAppConfig = {
+  /** Optional allowlist for WhatsApp direct chats (E.164). */
+  allowFrom?: string[];
+};
+
 export type BrowserConfig = {
   enabled?: boolean;
   /** Base URL of the clawd browser control server. Default: http://127.0.0.1:18791 */
@@ -164,21 +169,52 @@ export type TelegramConfig = {
   webhookPath?: string;
 };
 
+export type DiscordDmConfig = {
+  /** If false, ignore all incoming Discord DMs. Default: true. */
+  enabled?: boolean;
+  /** Allowlist for DM senders (ids or names). */
+  allowFrom?: Array<string | number>;
+  /** If true, allow group DMs (default: false). */
+  groupEnabled?: boolean;
+  /** Optional allowlist for group DM channels (ids or slugs). */
+  groupChannels?: Array<string | number>;
+};
+
+export type DiscordGuildChannelConfig = {
+  allow?: boolean;
+  requireMention?: boolean;
+};
+
+export type DiscordGuildEntry = {
+  slug?: string;
+  requireMention?: boolean;
+  users?: Array<string | number>;
+  channels?: Record<string, DiscordGuildChannelConfig>;
+};
+
+export type DiscordSlashCommandConfig = {
+  /** Enable handling for the configured slash command (default: false). */
+  enabled?: boolean;
+  /** Slash command name (default: "clawd"). */
+  name?: string;
+  /** Session key prefix for slash commands (default: "discord:slash"). */
+  sessionPrefix?: string;
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
+};
+
 export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
   token?: string;
-  allowFrom?: Array<string | number>;
-  guildAllowFrom?: {
-    guilds?: Array<string | number>;
-    users?: Array<string | number>;
-  };
-  requireMention?: boolean;
   mediaMaxMb?: number;
-  /** Number of recent guild messages to include for context (default: 20). */
   historyLimit?: number;
   /** Allow agent-triggered Discord reactions (default: true). */
   enableReactions?: boolean;
+  slashCommand?: DiscordSlashCommandConfig;
+  dm?: DiscordDmConfig;
+  /** New per-guild config keyed by guild id or slug. */
+  guilds?: Record<string, DiscordGuildEntry>;
 };
 
 export type SignalConfig = {
@@ -241,7 +277,6 @@ export type GroupChatConfig = {
 };
 
 export type RoutingConfig = {
-  allowFrom?: string[]; // E.164 numbers allowed to trigger auto-reply (without whatsapp:)
   transcribeAudio?: {
     // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
     command: string[];
@@ -316,6 +351,8 @@ export type GatewayAuthMode = "token" | "password";
 export type GatewayAuthConfig = {
   /** Authentication mode for Gateway connections. Defaults to token when set. */
   mode?: GatewayAuthMode;
+  /** Shared token for token mode (stored locally for CLI auth). */
+  token?: string;
   /** Shared password for password mode (consider env instead). */
   password?: string;
   /** Allow Tailscale identity headers when serve mode is enabled. */
@@ -506,6 +543,7 @@ export type ClawdisConfig = {
   messages?: MessagesConfig;
   session?: SessionConfig;
   web?: WebConfig;
+  whatsapp?: WhatsAppConfig;
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
   signal?: SignalConfig;
@@ -674,7 +712,6 @@ const HeartbeatSchema = z
 
 const RoutingSchema = z
   .object({
-    allowFrom: z.array(z.string()).optional(),
     groupChat: GroupChatSchema,
     transcribeAudio: TranscribeAudioSchema,
     queue: z
@@ -890,6 +927,11 @@ const ClawdisSchema = z.object({
         .optional(),
     })
     .optional(),
+  whatsapp: z
+    .object({
+      allowFrom: z.array(z.string()).optional(),
+    })
+    .optional(),
   telegram: z
     .object({
       enabled: z.boolean().optional(),
@@ -908,17 +950,61 @@ const ClawdisSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       token: z.string().optional(),
-      allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-      guildAllowFrom: z
+      slashCommand: z
         .object({
-          guilds: z.array(z.union([z.string(), z.number()])).optional(),
-          users: z.array(z.union([z.string(), z.number()])).optional(),
+          enabled: z.boolean().optional(),
+          name: z.string().optional(),
+          sessionPrefix: z.string().optional(),
+          ephemeral: z.boolean().optional(),
         })
         .optional(),
-      requireMention: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),
+      dm: z
+        .object({
+          enabled: z.boolean().optional(),
+          allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+          groupEnabled: z.boolean().optional(),
+          groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+        })
+        .optional(),
+      guilds: z
+        .record(
+          z.string(),
+          z
+            .object({
+              slug: z.string().optional(),
+              requireMention: z.boolean().optional(),
+              users: z.array(z.union([z.string(), z.number()])).optional(),
+              channels: z
+                .record(
+                  z.string(),
+                  z
+                    .object({
+                      allow: z.boolean().optional(),
+                      requireMention: z.boolean().optional(),
+                    })
+                    .optional(),
+                )
+                .optional(),
+            })
+            .optional(),
+        )
+        .optional(),
+      guild: z
+        .object({
+          allowFrom: z
+            .object({
+              guilds: z.array(z.union([z.string(), z.number()])).optional(),
+              users: z.array(z.union([z.string(), z.number()])).optional(),
+            })
+            .optional(),
+          channels: z.array(z.union([z.string(), z.number()])).optional(),
+          requireMention: z.boolean().optional(),
+          historyLimit: z.number().int().min(0).optional(),
+        })
+        .optional(),
     })
     .optional(),
   signal: z
@@ -1013,6 +1099,7 @@ const ClawdisSchema = z.object({
       auth: z
         .object({
           mode: z.union([z.literal("token"), z.literal("password")]).optional(),
+          token: z.string().optional(),
           password: z.string().optional(),
           allowTailscale: z.boolean().optional(),
         })
@@ -1076,6 +1163,11 @@ export type ConfigValidationIssue = {
   message: string;
 };
 
+export type LegacyConfigIssue = {
+  path: string;
+  message: string;
+};
+
 export type ConfigFileSnapshot = {
   path: string;
   exists: boolean;
@@ -1084,7 +1176,99 @@ export type ConfigFileSnapshot = {
   valid: boolean;
   config: ClawdisConfig;
   issues: ConfigValidationIssue[];
+  legacyIssues: LegacyConfigIssue[];
 };
+
+type LegacyConfigRule = {
+  path: string[];
+  message: string;
+};
+
+type LegacyConfigMigration = {
+  id: string;
+  describe: string;
+  apply: (raw: Record<string, unknown>, changes: string[]) => void;
+};
+
+const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
+  {
+    path: ["routing", "allowFrom"],
+    message:
+      "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdis doctor` to migrate).",
+  },
+];
+
+const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
+  {
+    id: "routing.allowFrom->whatsapp.allowFrom",
+    describe: "Move routing.allowFrom to whatsapp.allowFrom",
+    apply: (raw, changes) => {
+      const routing = raw.routing;
+      if (!routing || typeof routing !== "object") return;
+      const allowFrom = (routing as Record<string, unknown>).allowFrom;
+      if (allowFrom === undefined) return;
+
+      const whatsapp =
+        raw.whatsapp && typeof raw.whatsapp === "object"
+          ? (raw.whatsapp as Record<string, unknown>)
+          : {};
+
+      if (whatsapp.allowFrom === undefined) {
+        whatsapp.allowFrom = allowFrom;
+        changes.push("Moved routing.allowFrom → whatsapp.allowFrom.");
+      } else {
+        changes.push("Removed routing.allowFrom (whatsapp.allowFrom already set).");
+      }
+
+      delete (routing as Record<string, unknown>).allowFrom;
+      if (Object.keys(routing as Record<string, unknown>).length === 0) {
+        delete raw.routing;
+      }
+      raw.whatsapp = whatsapp;
+    },
+  },
+];
+
+function findLegacyConfigIssues(raw: unknown): LegacyConfigIssue[] {
+  if (!raw || typeof raw !== "object") return [];
+  const root = raw as Record<string, unknown>;
+  const issues: LegacyConfigIssue[] = [];
+  for (const rule of LEGACY_CONFIG_RULES) {
+    let cursor: unknown = root;
+    for (const key of rule.path) {
+      if (!cursor || typeof cursor !== "object") {
+        cursor = undefined;
+        break;
+      }
+      cursor = (cursor as Record<string, unknown>)[key];
+    }
+    if (cursor !== undefined) {
+      issues.push({ path: rule.path.join("."), message: rule.message });
+    }
+  }
+  return issues;
+}
+
+export function migrateLegacyConfig(raw: unknown): {
+  config: ClawdisConfig | null;
+  changes: string[];
+} {
+  if (!raw || typeof raw !== "object") return { config: null, changes: [] };
+  const next = structuredClone(raw) as Record<string, unknown>;
+  const changes: string[] = [];
+  for (const migration of LEGACY_CONFIG_MIGRATIONS) {
+    migration.apply(next, changes);
+  }
+  if (changes.length === 0) return { config: null, changes: [] };
+  const validated = validateConfigObject(next);
+  if (!validated.ok) {
+    changes.push(
+      "Migration applied, but config still invalid; fix remaining issues manually.",
+    );
+    return { config: null, changes };
+  }
+  return { config: validated.config, changes };
+}
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1144,6 +1328,16 @@ export function validateConfigObject(
 ):
   | { ok: true; config: ClawdisConfig }
   | { ok: false; issues: ConfigValidationIssue[] } {
+  const legacyIssues = findLegacyConfigIssues(raw);
+  if (legacyIssues.length > 0) {
+    return {
+      ok: false,
+      issues: legacyIssues.map((iss) => ({
+        path: iss.path,
+        message: iss.message,
+      })),
+    };
+  }
   const validated = ClawdisSchema.safeParse(raw);
   if (!validated.success) {
     return {
@@ -1216,6 +1410,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   const exists = fs.existsSync(configPath);
   if (!exists) {
     const config = applyTalkApiKey({});
+    const legacyIssues: LegacyConfigIssue[] = [];
     return {
       path: configPath,
       exists: false,
@@ -1224,6 +1419,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
       valid: true,
       config,
       issues: [],
+      legacyIssues,
     };
   }
 
@@ -1241,8 +1437,11 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
         issues: [
           { path: "", message: `JSON5 parse failed: ${parsedRes.error}` },
         ],
+        legacyIssues: [],
       };
     }
+
+    const legacyIssues = findLegacyConfigIssues(parsedRes.parsed);
 
     const validated = validateConfigObject(parsedRes.parsed);
     if (!validated.ok) {
@@ -1254,6 +1453,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
         valid: false,
         config: {},
         issues: validated.issues,
+        legacyIssues,
       };
     }
 
@@ -1265,6 +1465,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
       valid: true,
       config: applyTalkApiKey(validated.config),
       issues: [],
+      legacyIssues,
     };
   } catch (err) {
     return {
@@ -1275,6 +1476,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
       valid: false,
       config: {},
       issues: [{ path: "", message: `read failed: ${String(err)}` }],
+      legacyIssues: [],
     };
   }
 }

@@ -17,7 +17,7 @@ You’re putting an agent in a position to:
 - send messages back out via WhatsApp/Telegram/Discord
 
 Start conservative:
-- Always set `routing.allowFrom` (never run open-to-the-world on your personal Mac).
+- Always set `whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
 - Keep heartbeats disabled until you trust the setup (omit `agent.heartbeat` or set `agent.heartbeat.every: "0m"`).
 
@@ -74,7 +74,7 @@ clawdis gateway --port 18789
 
 ```json5
 {
-  routing: {
+  whatsapp: {
     allowFrom: ["+15555550123"]
   }
 }
@@ -124,8 +124,10 @@ Example:
     // Start with 0; enable later.
     heartbeat: { every: "0m" }
   },
+  whatsapp: {
+    allowFrom: ["+15555550123"]
+  },
   routing: {
-    allowFrom: ["+15555550123"],
     groupChat: {
       requireMention: true,
       mentionPatterns: ["@clawd", "clawd"]

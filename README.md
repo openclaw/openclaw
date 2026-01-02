@@ -20,7 +20,7 @@ It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, iMe
 
 If you want a private, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Discord: https://discord.gg/qkhbAGHRBT
+Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · FAQ: [`docs/faq.md`](docs/faq.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Discord: https://discord.gg/qkhbAGHRBT
 
 Preferred setup: run the onboarding wizard (`clawdis onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
@@ -157,7 +157,7 @@ Minimal `~/.clawdis/clawdis.json`:
 
 ```json5
 {
-  routing: {
+  whatsapp: {
     allowFrom: ["+1234567890"]
   }
 }
@@ -166,7 +166,7 @@ Minimal `~/.clawdis/clawdis.json`:
 ### WhatsApp
 
 - Link the device: `pnpm clawdis login` (stores creds in `~/.clawdis/credentials`).
-- Allowlist who can talk to the assistant via `routing.allowFrom`.
+- Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
 
 ### Telegram
 
@@ -184,7 +184,7 @@ Minimal `~/.clawdis/clawdis.json`:
 ### Discord
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
-- Optional: set `discord.requireMention`, `discord.allowFrom`, or `discord.mediaMaxMb` as needed.
+- Optional: set `discord.slashCommand`, `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
 
 ```json5
 {

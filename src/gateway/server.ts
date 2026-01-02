@@ -48,6 +48,7 @@ import {
   CONFIG_PATH_CLAWDIS,
   isNixMode,
   loadConfig,
+  migrateLegacyConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   STATE_DIR_CLAWDIS,
@@ -55,6 +56,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import {
+  buildGroupDisplayName,
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
@@ -455,6 +457,11 @@ type GatewaySessionsDefaults = {
 type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
+  displayName?: string;
+  surface?: string;
+  subject?: string;
+  room?: string;
+  space?: string;
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;
@@ -653,7 +660,6 @@ type DedupeEntry = {
   error?: ErrorShape;
 };
 
-const getGatewayToken = () => process.env.CLAWDIS_GATEWAY_TOKEN;
 
 function formatForLog(value: unknown): string {
   try {
@@ -862,11 +868,39 @@ function loadSessionEntry(sessionKey: string) {
   return { cfg, storePath, store, entry };
 }
 
-function classifySessionKey(key: string): GatewaySessionRow["kind"] {
+function classifySessionKey(
+  key: string,
+  entry?: SessionEntry,
+): GatewaySessionRow["kind"] {
   if (key === "global") return "global";
-  if (key.startsWith("group:")) return "group";
   if (key === "unknown") return "unknown";
+  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
+  if (
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:")
+  ) {
+    return "group";
+  }
   return "direct";
+}
+
+function parseGroupKey(
+  key: string,
+): { surface?: string; kind?: "group" | "channel"; id?: string } | null {
+  if (key.startsWith("group:")) {
+    const raw = key.slice("group:".length);
+    return raw ? { id: raw } : null;
+  }
+  const parts = key.split(":").filter(Boolean);
+  if (parts.length >= 3) {
+    const [surface, kind, ...rest] = parts;
+    if (kind === "group" || kind === "channel") {
+      const id = rest.join(":");
+      return { surface, kind, id };
+    }
+  }
+  return null;
 }
 
 function getSessionDefaults(cfg: ClawdisConfig): GatewaySessionsDefaults {
@@ -913,9 +947,32 @@ function listSessionsFromStore(params: {
       const input = entry?.inputTokens ?? 0;
       const output = entry?.outputTokens ?? 0;
       const total = entry?.totalTokens ?? input + output;
+      const parsed = parseGroupKey(key);
+      const surface = entry?.surface ?? parsed?.surface;
+      const subject = entry?.subject;
+      const room = entry?.room;
+      const space = entry?.space;
+      const id = parsed?.id;
+      const displayName =
+        entry?.displayName ??
+        (surface
+          ? buildGroupDisplayName({
+              surface,
+              subject,
+              room,
+              space,
+              id,
+              key,
+            })
+          : undefined);
       return {
         key,
-        kind: classifySessionKey(key),
+        kind: classifySessionKey(key, entry),
+        displayName,
+        surface,
+        subject,
+        room,
+        space,
         updatedAt,
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,
@@ -1265,6 +1322,31 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const configSnapshot = await readConfigFileSnapshot();
+  if (configSnapshot.legacyIssues.length > 0) {
+    if (isNixMode) {
+      throw new Error(
+        "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      );
+    }
+    const { config: migrated, changes } = migrateLegacyConfig(
+      configSnapshot.parsed,
+    );
+    if (!migrated) {
+      throw new Error(
+        "Legacy config entries detected but auto-migration failed. Run \"clawdis doctor\" to migrate.",
+      );
+    }
+    await writeConfigFile(migrated);
+    if (changes.length > 0) {
+      log.info(
+        `gateway: migrated legacy config entries:\n${changes
+          .map((entry) => `- ${entry}`)
+          .join("\n")}`,
+      );
+    }
+  }
+
   const cfgAtStart = loadConfig();
   const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
   const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
@@ -1288,7 +1370,8 @@ export async function startGatewayServer(
     ...tailscaleOverrides,
   };
   const tailscaleMode = tailscaleConfig.mode ?? "off";
-  const token = getGatewayToken();
+  const token =
+    authConfig.token ?? process.env.CLAWDIS_GATEWAY_TOKEN ?? undefined;
   const password =
     authConfig.password ?? process.env.CLAWDIS_GATEWAY_PASSWORD ?? undefined;
   const authMode: ResolvedGatewayAuth["mode"] =
@@ -2017,6 +2100,15 @@ export async function startGatewayServer(
   const startTelegramProvider = async () => {
     if (telegramTask) return;
     const cfg = loadConfig();
+    if (!cfg.telegram) {
+      telegramRuntime = {
+        ...telegramRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      logTelegram.info("skipping provider start (telegram not configured)");
+      return;
+    }
     if (cfg.telegram?.enabled === false) {
       telegramRuntime = {
         ...telegramRuntime,
@@ -2111,6 +2203,15 @@ export async function startGatewayServer(
   const startDiscordProvider = async () => {
     if (discordTask) return;
     const cfg = loadConfig();
+    if (!cfg.discord) {
+      discordRuntime = {
+        ...discordRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      logDiscord.info("skipping provider start (discord not configured)");
+      return;
+    }
     if (cfg.discord?.enabled === false) {
       discordRuntime = {
         ...discordRuntime,
@@ -2153,9 +2254,7 @@ export async function startGatewayServer(
       token: discordToken.trim(),
       runtime: discordRuntimeEnv,
       abortSignal: discordAbort.signal,
-      allowFrom: cfg.discord?.allowFrom,
-      guildAllowFrom: cfg.discord?.guildAllowFrom,
-      requireMention: cfg.discord?.requireMention,
+      slashCommand: cfg.discord?.slashCommand,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
       historyLimit: cfg.discord?.historyLimit,
     })
@@ -2214,6 +2313,26 @@ export async function startGatewayServer(
         lastError: "disabled",
       };
       logSignal.info("skipping provider start (signal.enabled=false)");
+      return;
+    }
+    const signalCfg = cfg.signal;
+    const signalMeaningfullyConfigured = Boolean(
+      signalCfg.account?.trim() ||
+        signalCfg.httpUrl?.trim() ||
+        signalCfg.cliPath?.trim() ||
+        signalCfg.httpHost?.trim() ||
+        typeof signalCfg.httpPort === "number" ||
+        typeof signalCfg.autoStart === "boolean",
+    );
+    if (!signalMeaningfullyConfigured) {
+      signalRuntime = {
+        ...signalRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      logSignal.info(
+        "skipping provider start (signal config present but missing required fields)",
+      );
       return;
     }
     const host = cfg.signal?.httpHost?.trim() || "127.0.0.1";
@@ -2881,6 +3000,12 @@ export async function startGatewayServer(
             verboseLevel: entry?.verboseLevel,
             model: entry?.model,
             contextTokens: entry?.contextTokens,
+            displayName: entry?.displayName,
+            chatType: entry?.chatType,
+            surface: entry?.surface,
+            subject: entry?.subject,
+            room: entry?.room,
+            space: entry?.space,
             lastChannel: entry?.lastChannel,
             lastTo: entry?.lastTo,
             skillsSnapshot: entry?.skillsSnapshot,
@@ -4285,21 +4410,33 @@ export async function startGatewayServer(
                   ? Math.max(1000, timeoutMsRaw)
                   : 10_000;
               const cfg = loadConfig();
+              const telegramCfg = cfg.telegram;
+              const telegramEnabled =
+                Boolean(telegramCfg) && telegramCfg?.enabled !== false;
               const { token: telegramToken, source: tokenSource } =
-                resolveTelegramToken(cfg);
+                telegramEnabled
+                  ? resolveTelegramToken(cfg)
+                  : { token: "", source: "none" as const };
               let telegramProbe: TelegramProbe | undefined;
               let lastProbeAt: number | null = null;
-              if (probe && telegramToken) {
+              if (probe && telegramToken && telegramEnabled) {
                 telegramProbe = await probeTelegram(
                   telegramToken,
                   timeoutMs,
-                  cfg.telegram?.proxy,
+                  telegramCfg?.proxy,
                 );
                 lastProbeAt = Date.now();
               }
 
-              const discordEnvToken = process.env.DISCORD_BOT_TOKEN?.trim();
-              const discordConfigToken = cfg.discord?.token?.trim();
+              const discordCfg = cfg.discord;
+              const discordEnabled =
+                Boolean(discordCfg) && discordCfg?.enabled !== false;
+              const discordEnvToken = discordEnabled
+                ? process.env.DISCORD_BOT_TOKEN?.trim()
+                : "";
+              const discordConfigToken = discordEnabled
+                ? discordCfg?.token?.trim()
+                : "";
               const discordToken = discordEnvToken || discordConfigToken || "";
               const discordTokenSource = discordEnvToken
                 ? "env"
@@ -4308,7 +4445,7 @@ export async function startGatewayServer(
                   : "none";
               let discordProbe: DiscordProbe | undefined;
               let discordLastProbeAt: number | null = null;
-              if (probe && discordToken) {
+              if (probe && discordToken && discordEnabled) {
                 discordProbe = await probeDiscord(discordToken, timeoutMs);
                 discordLastProbeAt = Date.now();
               }
@@ -4320,7 +4457,17 @@ export async function startGatewayServer(
               const signalBaseUrl =
                 signalCfg?.httpUrl?.trim() ||
                 `http://${signalHost}:${signalPort}`;
-              const signalConfigured = Boolean(signalCfg) && signalEnabled;
+              const signalConfigured =
+                Boolean(signalCfg) &&
+                signalEnabled &&
+                Boolean(
+                  signalCfg?.account?.trim() ||
+                    signalCfg?.httpUrl?.trim() ||
+                    signalCfg?.cliPath?.trim() ||
+                    signalCfg?.httpHost?.trim() ||
+                    typeof signalCfg?.httpPort === "number" ||
+                    typeof signalCfg?.autoStart === "boolean",
+                );
               let signalProbe: SignalProbe | undefined;
               let signalLastProbeAt: number | null = null;
               if (probe && signalConfigured) {
@@ -4362,7 +4509,7 @@ export async function startGatewayServer(
                     lastError: whatsappRuntime.lastError ?? null,
                   },
                   telegram: {
-                    configured: Boolean(telegramToken),
+                    configured: telegramEnabled && Boolean(telegramToken),
                     tokenSource,
                     running: telegramRuntime.running,
                     mode: telegramRuntime.mode ?? null,
@@ -4373,7 +4520,7 @@ export async function startGatewayServer(
                     lastProbeAt,
                   },
                   discord: {
-                    configured: Boolean(discordToken),
+                    configured: discordEnabled && Boolean(discordToken),
                     tokenSource: discordTokenSource,
                     running: discordRuntime.running,
                     lastStartAt: discordRuntime.lastStartAt ?? null,
@@ -6521,7 +6668,7 @@ export async function startGatewayServer(
                 if (explicit) return resolvedTo;
 
                 const cfg = cfgForAgent ?? loadConfig();
-                const rawAllow = cfg.routing?.allowFrom ?? [];
+                const rawAllow = cfg.whatsapp?.allowFrom ?? [];
                 if (rawAllow.includes("*")) return resolvedTo;
                 const allowFrom = rawAllow
                   .map((val) => normalizeE164(val))

@@ -20,7 +20,6 @@ import {
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
@@ -40,6 +39,7 @@ import {
   printWizardHeader,
   probeGatewayReachable,
   randomToken,
+  resolveControlUiLinks,
   summarizeExistingConfig,
 } from "./onboard-helpers.js";
 import { setupProviders } from "./onboard-providers.js";
@@ -280,8 +280,16 @@ export async function runInteractiveOnboarding(
     await select({
       message: "Gateway auth",
       options: [
-        { value: "off", label: "Off (loopback only)" },
-        { value: "token", label: "Token" },
+        {
+          value: "off",
+          label: "Off (loopback only)",
+          hint: "Recommended for single-machine setups",
+        },
+        {
+          value: "token",
+          label: "Token",
+          hint: "Use for multi-machine access or non-loopback binds",
+        },
         { value: "password", label: "Password" },
       ],
     }),
@@ -344,6 +352,7 @@ export async function runInteractiveOnboarding(
     const tokenInput = guardCancel(
       await text({
         message: "Gateway token (blank to generate)",
+        placeholder: "Needed for multi-machine or non-loopback access",
         initialValue: randomToken(),
       }),
       runtime,
@@ -375,7 +384,11 @@ export async function runInteractiveOnboarding(
       ...nextConfig,
       gateway: {
         ...nextConfig.gateway,
-        auth: { ...nextConfig.gateway?.auth, mode: "token" },
+        auth: {
+          ...nextConfig.gateway?.auth,
+          mode: "token",
+          token: gatewayToken,
+        },
       },
     };
   }
@@ -481,18 +494,38 @@ export async function runInteractiveOnboarding(
 
   note(
     (() => {
-      const tailnetIPv4 = pickPrimaryTailnetIPv4();
-      const host =
-        bind === "tailnet" || (bind === "auto" && tailnetIPv4)
-          ? (tailnetIPv4 ?? "127.0.0.1")
-          : "127.0.0.1";
+      const links = resolveControlUiLinks({ bind, port });
+      const tokenParam =
+        authMode === "token" && gatewayToken
+          ? `?token=${encodeURIComponent(gatewayToken)}`
+          : "";
+      const authedUrl = `${links.httpUrl}${tokenParam}`;
       return [
-        `Control UI: http://${host}:${port}/`,
-        `Gateway WS: ws://${host}:${port}`,
-      ].join("\n");
+        `Web UI: ${links.httpUrl}`,
+        tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
+        `Gateway WS: ${links.wsUrl}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
     })(),
-    "Open the Control UI",
+    "Control UI",
   );
+
+  const wantsOpen = guardCancel(
+    await confirm({
+      message: "Open Control UI now?",
+      initialValue: true,
+    }),
+    runtime,
+  );
+  if (wantsOpen) {
+    const links = resolveControlUiLinks({ bind, port });
+    const tokenParam =
+      authMode === "token" && gatewayToken
+        ? `?token=${encodeURIComponent(gatewayToken)}`
+        : "";
+    await openUrl(`${links.httpUrl}${tokenParam}`);
+  }
 
   outro("Onboarding complete.");
 }

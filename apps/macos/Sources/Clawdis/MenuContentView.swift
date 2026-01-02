@@ -374,6 +374,10 @@ struct MenuContent: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.leading)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+                .layoutPriority(1)
         }
         .padding(.top, 2)
     }

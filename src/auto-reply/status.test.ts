@@ -63,8 +63,9 @@ describe("buildStatusMessage", () => {
         sessionId: "g1",
         updatedAt: 0,
         groupActivation: "always",
+        chatType: "group",
       },
-      sessionKey: "group:[redacted-email]",
+      sessionKey: "whatsapp:group:[redacted-email]",
       sessionScope: "per-sender",
       webLinked: true,
     });

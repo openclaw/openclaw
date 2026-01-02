@@ -235,7 +235,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     return { channel, to };
   }
 
-  const rawAllow = cfg.routing?.allowFrom ?? [];
+  const rawAllow = cfg.whatsapp?.allowFrom ?? [];
   if (rawAllow.includes("*")) return { channel, to };
   const allowFrom = rawAllow
     .map((val) => normalizeE164(val))
@@ -401,7 +401,7 @@ export async function runHeartbeatOnce(opts: {
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg);
   const previousUpdatedAt = entry?.updatedAt;
-  const allowFrom = cfg.routing?.allowFrom ?? [];
+  const allowFrom = cfg.whatsapp?.allowFrom ?? [];
   const sender = resolveHeartbeatSender({
     allowFrom,
     lastTo: entry?.lastTo,

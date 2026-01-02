@@ -31,6 +31,8 @@ enum PermissionManager {
             await self.ensureMicrophone(interactive: interactive)
         case .speechRecognition:
             await self.ensureSpeechRecognition(interactive: interactive)
+        case .camera:
+            await self.ensureCamera(interactive: interactive)
         }
     }
 
@@ -114,6 +116,24 @@ enum PermissionManager {
         return SFSpeechRecognizer.authorizationStatus() == .authorized
     }
 
+    private static func ensureCamera(interactive: Bool) async -> Bool {
+        let status = AVCaptureDevice.authorizationStatus(for: .video)
+        switch status {
+        case .authorized:
+            return true
+        case .notDetermined:
+            guard interactive else { return false }
+            return await AVCaptureDevice.requestAccess(for: .video)
+        case .denied, .restricted:
+            if interactive {
+                CameraPermissionHelper.openSettings()
+            }
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     static func voiceWakePermissionsGranted() -> Bool {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -153,6 +173,9 @@ enum PermissionManager {
 
             case .speechRecognition:
                 results[cap] = SFSpeechRecognizer.authorizationStatus() == .authorized
+
+            case .camera:
+                results[cap] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
             }
         }
         return results
@@ -178,6 +201,21 @@ enum MicrophonePermissionHelper {
     static func openSettings() {
         let candidates = [
             "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ]
+
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+}
+
+enum CameraPermissionHelper {
+    static func openSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera",
             "x-apple.systempreferences:com.apple.preference.security",
         ]
 

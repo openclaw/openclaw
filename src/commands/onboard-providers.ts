@@ -64,6 +64,93 @@ function noteDiscordTokenHelp(): void {
   );
 }
 
+function setWhatsAppAllowFrom(cfg: ClawdisConfig, allowFrom?: string[]) {
+  return {
+    ...cfg,
+    whatsapp: {
+      ...cfg.whatsapp,
+      allowFrom,
+    },
+  };
+}
+
+async function promptWhatsAppAllowFrom(
+  cfg: ClawdisConfig,
+  runtime: RuntimeEnv,
+): Promise<ClawdisConfig> {
+  const existingAllowFrom = cfg.whatsapp?.allowFrom ?? [];
+  const existingLabel =
+    existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
+
+  note(
+    [
+      "WhatsApp direct chats are gated by `whatsapp.allowFrom`.",
+      'Default (unset) = self-chat only; use "*" to allow anyone.',
+      `Current: ${existingLabel}`,
+    ].join("\n"),
+    "WhatsApp allowlist",
+  );
+
+  const options =
+    existingAllowFrom.length > 0
+      ? ([
+          { value: "keep", label: "Keep current" },
+          { value: "self", label: "Self-chat only (unset)" },
+          { value: "list", label: "Specific numbers (recommended)" },
+          { value: "any", label: "Anyone (*)" },
+        ] as const)
+      : ([
+          { value: "self", label: "Self-chat only (default)" },
+          { value: "list", label: "Specific numbers (recommended)" },
+          { value: "any", label: "Anyone (*)" },
+        ] as const);
+
+  const mode = guardCancel(
+    await select({
+      message: "Who can trigger the bot via WhatsApp?",
+      options: options.map((opt) => ({ value: opt.value, label: opt.label })),
+    }),
+    runtime,
+  ) as (typeof options)[number]["value"];
+
+  if (mode === "keep") return cfg;
+  if (mode === "self") return setWhatsAppAllowFrom(cfg, undefined);
+  if (mode === "any") return setWhatsAppAllowFrom(cfg, ["*"]);
+
+  const allowRaw = guardCancel(
+    await text({
+      message: "Allowed sender numbers (comma-separated, E.164)",
+      placeholder: "+15555550123, +447700900123",
+      validate: (value) => {
+        const raw = String(value ?? "").trim();
+        if (!raw) return "Required";
+        const parts = raw
+          .split(/[\n,;]+/g)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length === 0) return "Required";
+        for (const part of parts) {
+          if (part === "*") continue;
+          const normalized = normalizeE164(part);
+          if (!normalized) return `Invalid number: ${part}`;
+        }
+        return undefined;
+      },
+    }),
+    runtime,
+  );
+
+  const parts = String(allowRaw)
+    .split(/[\n,;]+/g)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const normalized = parts.map((part) =>
+    part === "*" ? "*" : normalizeE164(part),
+  );
+  const unique = [...new Set(normalized.filter(Boolean))];
+  return setWhatsAppAllowFrom(cfg, unique);
+}
+
 export async function setupProviders(
   cfg: ClawdisConfig,
   runtime: RuntimeEnv,
@@ -198,70 +285,7 @@ export async function setupProviders(
       note("Run `clawdis login` later to link WhatsApp.", "WhatsApp");
     }
 
-    const existingAllowFrom = cfg.routing?.allowFrom ?? [];
-    if (existingAllowFrom.length === 0) {
-      note(
-        [
-          "WhatsApp direct chats are gated by `routing.allowFrom`.",
-          'Default (unset) = self-chat only; use "*" to allow anyone.',
-        ].join("\n"),
-        "Allowlist (recommended)",
-      );
-      const mode = guardCancel(
-        await select({
-          message: "Who can trigger the bot via WhatsApp?",
-          options: [
-            { value: "self", label: "Self-chat only (default)" },
-            { value: "list", label: "Specific numbers (recommended)" },
-            { value: "any", label: "Anyone (*)" },
-          ],
-        }),
-        runtime,
-      ) as "self" | "list" | "any";
-
-      if (mode === "any") {
-        next = {
-          ...next,
-          routing: { ...next.routing, allowFrom: ["*"] },
-        };
-      } else if (mode === "list") {
-        const allowRaw = guardCancel(
-          await text({
-            message: "Allowed sender numbers (comma-separated, E.164)",
-            placeholder: "+15555550123, +447700900123",
-            validate: (value) => {
-              const raw = String(value ?? "").trim();
-              if (!raw) return "Required";
-              const parts = raw
-                .split(/[\n,;]+/g)
-                .map((p) => p.trim())
-                .filter(Boolean);
-              if (parts.length === 0) return "Required";
-              for (const part of parts) {
-                if (part === "*") continue;
-                const normalized = normalizeE164(part);
-                if (!normalized) return `Invalid number: ${part}`;
-              }
-              return undefined;
-            },
-          }),
-          runtime,
-        );
-
-        const parts = String(allowRaw)
-          .split(/[\n,;]+/g)
-          .map((p) => p.trim())
-          .filter(Boolean);
-        const normalized = parts.map((part) =>
-          part === "*" ? "*" : normalizeE164(part),
-        );
-        const unique = [...new Set(normalized.filter(Boolean))];
-        next = {
-          ...next,
-          routing: { ...next.routing, allowFrom: unique },
-        };
-      }
-    }
+    next = await promptWhatsAppAllowFrom(next, runtime);
   }
 
   if (selection.includes("telegram")) {
@@ -277,7 +301,15 @@ export async function setupProviders(
         }),
         runtime,
       );
-      if (!keepEnv) {
+      if (keepEnv) {
+        next = {
+          ...next,
+          telegram: {
+            ...next.telegram,
+            enabled: true,
+          },
+        };
+      } else {
         token = String(
           guardCancel(
             await text({
@@ -344,7 +376,15 @@ export async function setupProviders(
         }),
         runtime,
       );
-      if (!keepEnv) {
+      if (keepEnv) {
+        next = {
+          ...next,
+          discord: {
+            ...next.discord,
+            enabled: true,
+          },
+        };
+      } else {
         token = String(
           guardCancel(
             await text({

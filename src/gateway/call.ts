@@ -25,8 +25,8 @@ export async function callGateway<T = unknown>(
 ): Promise<T> {
   const timeoutMs = opts.timeoutMs ?? 10_000;
   const config = loadConfig();
-  const remote =
-    config.gateway?.mode === "remote" ? config.gateway.remote : undefined;
+  const isRemoteMode = config.gateway?.mode === "remote";
+  const remote = isRemoteMode ? config.gateway.remote : undefined;
   const url =
     (typeof opts.url === "string" && opts.url.trim().length > 0
       ? opts.url.trim()
@@ -39,9 +39,15 @@ export async function callGateway<T = unknown>(
     (typeof opts.token === "string" && opts.token.trim().length > 0
       ? opts.token.trim()
       : undefined) ||
-    (typeof remote?.token === "string" && remote.token.trim().length > 0
-      ? remote.token.trim()
-      : undefined);
+    (isRemoteMode
+      ? typeof remote?.token === "string" && remote.token.trim().length > 0
+        ? remote.token.trim()
+        : undefined
+      : process.env.CLAWDIS_GATEWAY_TOKEN?.trim() ||
+        (typeof config.gateway?.auth?.token === "string" &&
+        config.gateway.auth.token.trim().length > 0
+          ? config.gateway.auth.token.trim()
+          : undefined));
   const password =
     (typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()

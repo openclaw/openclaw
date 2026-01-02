@@ -1,5 +1,8 @@
 import {
+  ApplicationCommandOptionType,
+  ChannelType,
   Client,
+  type CommandInteractionOption,
   Events,
   GatewayIntentBits,
   type Message,
@@ -9,10 +12,12 @@ import {
 import { chunkText } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import type { DiscordSlashCommandConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose } from "../globals.js";
+import { danger, isVerbose, logVerbose, warn } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -24,12 +29,7 @@ export type MonitorDiscordOpts = {
   token?: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  allowFrom?: Array<string | number>;
-  guildAllowFrom?: {
-    guilds?: Array<string | number>;
-    users?: Array<string | number>;
-  };
-  requireMention?: boolean;
+  slashCommand?: DiscordSlashCommandConfig;
   mediaMaxMb?: number;
   historyLimit?: number;
 };
@@ -45,6 +45,25 @@ type DiscordHistoryEntry = {
   body: string;
   timestamp?: number;
   messageId?: string;
+};
+
+export type DiscordAllowList = {
+  allowAll: boolean;
+  ids: Set<string>;
+  names: Set<string>;
+};
+
+export type DiscordGuildEntryResolved = {
+  id?: string;
+  slug?: string;
+  requireMention?: boolean;
+  users?: Array<string | number>;
+  channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+};
+
+export type DiscordChannelConfigResolved = {
+  allowed: boolean;
+  requireMention?: boolean;
 };
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -69,16 +88,21 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     },
   };
 
-  const allowFrom = opts.allowFrom ?? cfg.discord?.allowFrom;
-  const guildAllowFrom = opts.guildAllowFrom ?? cfg.discord?.guildAllowFrom;
-  const requireMention =
-    opts.requireMention ?? cfg.discord?.requireMention ?? true;
+  const dmConfig = cfg.discord?.dm;
+  const guildEntries = cfg.discord?.guilds;
+  const allowFrom = dmConfig?.allowFrom;
+  const slashCommand = resolveSlashCommandConfig(
+    opts.slashCommand ?? cfg.discord?.slashCommand,
+  );
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const historyLimit = Math.max(
     0,
     opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
   );
+  const dmEnabled = dmConfig?.enabled ?? true;
+  const groupDmEnabled = dmConfig?.groupEnabled ?? false;
+  const groupDmChannels = dmConfig?.groupChannels;
 
   const client = new Client({
     intents: [
@@ -95,6 +119,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   client.once(Events.ClientReady, () => {
     runtime.log?.(`logged in as ${client.user?.tag ?? "unknown"}`);
+    if (slashCommand.enabled) {
+      void ensureSlashCommand(client, slashCommand, runtime);
+    }
   });
 
   client.on(Events.Error, (err) => {
@@ -106,7 +133,13 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (message.author?.bot) return;
       if (!message.author) return;
 
-      const isDirectMessage = !message.guild;
+      // Discord.js typing excludes GroupDM for message.channel.type; widen for runtime check.
+      const channelType = message.channel.type as ChannelType;
+      const isGroupDm = channelType === ChannelType.GroupDM;
+      const isDirectMessage = channelType === ChannelType.DM;
+      const isGuildMessage = Boolean(message.guild);
+      if (isGroupDm && !groupDmEnabled) return;
+      if (isDirectMessage && !dmEnabled) return;
       const botId = client.user?.id;
       const wasMentioned =
         !isDirectMessage && Boolean(botId && message.mentions.has(botId));
@@ -117,7 +150,59 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         message.embeds[0]?.description ||
         "";
 
-      if (!isDirectMessage && historyLimit > 0 && baseText) {
+      const guildInfo = isGuildMessage
+        ? resolveDiscordGuildEntry({
+            guild: message.guild,
+            guildEntries,
+          })
+        : null;
+      if (
+        isGuildMessage &&
+        guildEntries &&
+        Object.keys(guildEntries).length > 0 &&
+        !guildInfo
+      ) {
+        logVerbose(
+          `Blocked discord guild ${message.guild?.id ?? "unknown"} (not in discord.guilds)`,
+        );
+        return;
+      }
+
+      const channelName =
+        (isGuildMessage || isGroupDm) && "name" in message.channel
+          ? message.channel.name
+          : undefined;
+      const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+      const guildSlug =
+        guildInfo?.slug ||
+        (message.guild?.name ? normalizeDiscordSlug(message.guild.name) : "");
+      const channelConfig = isGuildMessage
+        ? resolveDiscordChannelConfig({
+            guildInfo,
+            channelId: message.channelId,
+            channelName,
+            channelSlug,
+          })
+        : null;
+
+      const groupDmAllowed =
+        isGroupDm &&
+        resolveGroupDmAllow({
+          channels: groupDmChannels,
+          channelId: message.channelId,
+          channelName,
+          channelSlug,
+        });
+      if (isGroupDm && !groupDmAllowed) return;
+
+      if (isGuildMessage && channelConfig?.allowed === false) {
+        logVerbose(
+          `Blocked discord channel ${message.channelId} not in guild channel allowlist`,
+        );
+        return;
+      }
+
+      if (isGuildMessage && historyLimit > 0 && baseText) {
         const history = guildHistories.get(message.channelId) ?? [];
         history.push({
           sender: message.member?.displayName ?? message.author.tag,
@@ -129,7 +214,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         guildHistories.set(message.channelId, history);
       }
 
-      if (!isDirectMessage && requireMention) {
+      const resolvedRequireMention =
+        channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
+      if (isGuildMessage && resolvedRequireMention) {
         if (botId && !wasMentioned) {
           logger.info(
             {
@@ -142,23 +229,23 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       }
 
-      if (!isDirectMessage && guildAllowFrom) {
-        const guilds = normalizeDiscordAllowList(guildAllowFrom.guilds, [
-          "guild:",
-        ]);
-        const users = normalizeDiscordAllowList(guildAllowFrom.users, [
-          "discord:",
-          "user:",
-        ]);
-        if (guilds || users) {
-          const guildId = message.guild?.id ?? "";
-          const userId = message.author.id;
-          const guildOk =
-            !guilds || guilds.allowAll || (guildId && guilds.ids.has(guildId));
-          const userOk = !users || users.allowAll || users.ids.has(userId);
-          if (!guildOk || !userOk) {
+      if (isGuildMessage) {
+        const userAllow = guildInfo?.users;
+        if (Array.isArray(userAllow) && userAllow.length > 0) {
+          const users = normalizeDiscordAllowList(userAllow, [
+            "discord:",
+            "user:",
+          ]);
+          const userOk =
+            !users ||
+            allowListMatches(users, {
+              id: message.author.id,
+              name: message.author.username,
+              tag: message.author.tag,
+            });
+          if (!userOk) {
             logVerbose(
-              `Blocked discord guild sender ${userId} (guild ${guildId || "unknown"}) not in guildAllowFrom`,
+              `Blocked discord guild sender ${message.author.id} (not in guild users allowlist)`,
             );
             return;
           }
@@ -166,22 +253,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
 
       if (isDirectMessage && Array.isArray(allowFrom) && allowFrom.length > 0) {
-        const allowed = allowFrom
-          .map((entry) => String(entry).trim())
-          .filter(Boolean);
-        const candidate = message.author.id;
-        const normalized = new Set(
-          allowed
-            .filter((entry) => entry !== "*")
-            .map((entry) => entry.replace(/^discord:/i, "")),
-        );
+        const allowList = normalizeDiscordAllowList(allowFrom, [
+          "discord:",
+          "user:",
+        ]);
         const permitted =
-          allowed.includes("*") ||
-          normalized.has(candidate) ||
-          allowed.includes(candidate);
+          allowList &&
+          allowListMatches(allowList, {
+            id: message.author.id,
+            name: message.author.username,
+            tag: message.author.tag,
+          });
         if (!permitted) {
           logVerbose(
-            `Blocked unauthorized discord sender ${candidate} (not in allowFrom)`,
+            `Blocked unauthorized discord sender ${message.author.id} (not in allowFrom)`,
           );
           return;
         }
@@ -198,6 +283,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const fromLabel = isDirectMessage
         ? buildDirectLabel(message)
         : buildGuildLabel(message);
+      const groupRoom =
+        isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
+      const groupSubject = isDirectMessage ? undefined : groupRoom;
       const textWithId = `${text}\n[discord message id: ${message.id} channel: ${message.channelId}]`;
       let combinedBody = formatAgentEnvelope({
         surface: "Discord",
@@ -224,7 +312,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             .join("\n");
           combinedBody = `[Chat messages since your last reply - for context]\n${historyText}\n\n[Current message - respond to this]\n${combinedBody}`;
         }
-        combinedBody = `${combinedBody}\n[from: ${message.member?.displayName ?? message.author.tag}]`;
+        const name = message.author.tag;
+        const id = message.author.id;
+        combinedBody = `${combinedBody}\n[from: ${name} id:${id}]`;
         shouldClearHistory = true;
       }
 
@@ -238,10 +328,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           : `channel:${message.channelId}`,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
-        GroupSubject:
-          !isDirectMessage && "name" in message.channel
-            ? message.channel.name
-            : undefined,
+        GroupSubject: groupSubject,
+        GroupRoom: groupRoom,
+        GroupSpace: isGuildMessage ? guildSlug || undefined : undefined,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
@@ -290,11 +379,168 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         token,
         runtime,
       });
-      if (!isDirectMessage && shouldClearHistory && historyLimit > 0) {
+      if (isGuildMessage && shouldClearHistory && historyLimit > 0) {
         guildHistories.set(message.channelId, []);
       }
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));
+    }
+  });
+
+  client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      if (!slashCommand.enabled) return;
+      if (!interaction.isChatInputCommand()) return;
+      if (interaction.commandName !== slashCommand.name) return;
+      if (interaction.user?.bot) return;
+
+      const channelType = interaction.channel?.type as ChannelType | undefined;
+      const isGroupDm = channelType === ChannelType.GroupDM;
+      const isDirectMessage =
+        !interaction.inGuild() && channelType === ChannelType.DM;
+      const isGuildMessage = interaction.inGuild();
+
+      if (isGroupDm && !groupDmEnabled) return;
+      if (isDirectMessage && !dmEnabled) return;
+
+      if (isGuildMessage) {
+        const guildInfo = resolveDiscordGuildEntry({
+          guild: interaction.guild ?? null,
+          guildEntries,
+        });
+        if (
+          guildEntries &&
+          Object.keys(guildEntries).length > 0 &&
+          !guildInfo
+        ) {
+          logVerbose(
+            `Blocked discord guild ${interaction.guildId ?? "unknown"} (not in discord.guilds)`,
+          );
+          return;
+        }
+        const channelName =
+          interaction.channel && "name" in interaction.channel
+            ? interaction.channel.name
+            : undefined;
+        const channelSlug = channelName
+          ? normalizeDiscordSlug(channelName)
+          : "";
+        const channelConfig = resolveDiscordChannelConfig({
+          guildInfo,
+          channelId: interaction.channelId,
+          channelName,
+          channelSlug,
+        });
+        if (channelConfig?.allowed === false) {
+          logVerbose(
+            `Blocked discord channel ${interaction.channelId} not in guild channel allowlist`,
+          );
+          return;
+        }
+        const userAllow = guildInfo?.users;
+        if (Array.isArray(userAllow) && userAllow.length > 0) {
+          const users = normalizeDiscordAllowList(userAllow, [
+            "discord:",
+            "user:",
+          ]);
+          const userOk =
+            !users ||
+            allowListMatches(users, {
+              id: interaction.user.id,
+              name: interaction.user.username,
+              tag: interaction.user.tag,
+            });
+          if (!userOk) {
+            logVerbose(
+              `Blocked discord guild sender ${interaction.user.id} (not in guild users allowlist)`,
+            );
+            return;
+          }
+        }
+      } else if (isGroupDm) {
+        const channelName =
+          interaction.channel && "name" in interaction.channel
+            ? interaction.channel.name
+            : undefined;
+        const channelSlug = channelName
+          ? normalizeDiscordSlug(channelName)
+          : "";
+        const groupDmAllowed = resolveGroupDmAllow({
+          channels: groupDmChannels,
+          channelId: interaction.channelId,
+          channelName,
+          channelSlug,
+        });
+        if (!groupDmAllowed) return;
+      } else if (isDirectMessage) {
+        if (Array.isArray(allowFrom) && allowFrom.length > 0) {
+          const allowList = normalizeDiscordAllowList(allowFrom, [
+            "discord:",
+            "user:",
+          ]);
+          const permitted =
+            allowList &&
+            allowListMatches(allowList, {
+              id: interaction.user.id,
+              name: interaction.user.username,
+              tag: interaction.user.tag,
+            });
+          if (!permitted) {
+            logVerbose(
+              `Blocked unauthorized discord sender ${interaction.user.id} (not in allowFrom)`,
+            );
+            return;
+          }
+        }
+      }
+
+      const prompt = resolveSlashPrompt(interaction.options.data);
+      if (!prompt) {
+        await interaction.reply({
+          content: "Message required.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: slashCommand.ephemeral });
+
+      const userId = interaction.user.id;
+      const ctxPayload = {
+        Body: prompt,
+        From: `discord:${userId}`,
+        To: `slash:${userId}`,
+        ChatType: "direct",
+        SenderName: interaction.user.username,
+        Surface: "discord" as const,
+        WasMentioned: true,
+        MessageSid: interaction.id,
+        Timestamp: interaction.createdTimestamp,
+        SessionKey: `${slashCommand.sessionPrefix}:${userId}`,
+      };
+
+      const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);
+      const replies = replyResult
+        ? Array.isArray(replyResult)
+          ? replyResult
+          : [replyResult]
+        : [];
+
+      await deliverSlashReplies({
+        replies,
+        interaction,
+        ephemeral: slashCommand.ephemeral,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`slash handler failed: ${String(err)}`));
+      if (interaction.isRepliable()) {
+        const content = "Sorry, something went wrong handling that command.";
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content, ephemeral: true });
+        } else {
+          await interaction.reply({ content, ephemeral: true });
+        }
+      }
     }
   });
 
@@ -364,25 +610,256 @@ function buildGuildLabel(message: import("discord.js").Message) {
   return `${message.guild?.name ?? "Guild"} #${channelName} id:${message.channelId}`;
 }
 
-function normalizeDiscordAllowList(
+export function normalizeDiscordAllowList(
   raw: Array<string | number> | undefined,
   prefixes: string[],
-): { allowAll: boolean; ids: Set<string> } | null {
+): DiscordAllowList | null {
   if (!raw || raw.length === 0) return null;
-  const cleaned = raw
-    .map((entry) => String(entry).trim())
-    .filter(Boolean)
-    .map((entry) => {
-      for (const prefix of prefixes) {
-        if (entry.toLowerCase().startsWith(prefix)) {
-          return entry.slice(prefix.length);
-        }
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  let allowAll = false;
+
+  for (const rawEntry of raw) {
+    let entry = String(rawEntry).trim();
+    if (!entry) continue;
+    if (entry === "*") {
+      allowAll = true;
+      continue;
+    }
+    for (const prefix of prefixes) {
+      if (entry.toLowerCase().startsWith(prefix)) {
+        entry = entry.slice(prefix.length);
+        break;
       }
-      return entry;
+    }
+    const mentionMatch = entry.match(/^<[@#][!]?(\d+)>$/);
+    if (mentionMatch?.[1]) {
+      ids.add(mentionMatch[1]);
+      continue;
+    }
+    entry = entry.trim();
+    if (entry.startsWith("@") || entry.startsWith("#")) {
+      entry = entry.slice(1);
+    }
+    if (/^\d+$/.test(entry)) {
+      ids.add(entry);
+      continue;
+    }
+    const normalized = normalizeDiscordName(entry);
+    if (normalized) names.add(normalized);
+    const slugged = normalizeDiscordSlug(entry);
+    if (slugged) names.add(slugged);
+  }
+
+  if (!allowAll && ids.size === 0 && names.size === 0) return null;
+  return { allowAll, ids, names };
+}
+
+function normalizeDiscordName(value?: string | null) {
+  if (!value) return "";
+  return value.trim().toLowerCase();
+}
+
+export function normalizeDiscordSlug(value?: string | null) {
+  if (!value) return "";
+  let text = value.trim().toLowerCase();
+  if (!text) return "";
+  text = text.replace(/^[@#]+/, "");
+  text = text.replace(/[\s_]+/g, "-");
+  text = text.replace(/[^a-z0-9-]+/g, "-");
+  text = text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  return text;
+}
+
+export function allowListMatches(
+  allowList: DiscordAllowList,
+  candidates: {
+    id?: string;
+    name?: string | null;
+    tag?: string | null;
+  },
+) {
+  if (allowList.allowAll) return true;
+  const { id, name, tag } = candidates;
+  if (id && allowList.ids.has(id)) return true;
+  const normalizedName = normalizeDiscordName(name);
+  if (normalizedName && allowList.names.has(normalizedName)) return true;
+  const normalizedTag = normalizeDiscordName(tag);
+  if (normalizedTag && allowList.names.has(normalizedTag)) return true;
+  const slugName = normalizeDiscordSlug(name);
+  if (slugName && allowList.names.has(slugName)) return true;
+  const slugTag = normalizeDiscordSlug(tag);
+  if (slugTag && allowList.names.has(slugTag)) return true;
+  return false;
+}
+
+export function resolveDiscordGuildEntry(params: {
+  guild: import("discord.js").Guild | null;
+  guildEntries: Record<string, DiscordGuildEntryResolved> | undefined;
+}): DiscordGuildEntryResolved | null {
+  const { guild, guildEntries } = params;
+  if (!guild || !guildEntries || Object.keys(guildEntries).length === 0) {
+    return null;
+  }
+  const guildId = guild.id;
+  const guildSlug = normalizeDiscordSlug(guild.name);
+  const direct = guildEntries[guildId];
+  if (direct) {
+    return {
+      id: guildId,
+      slug: direct.slug ?? guildSlug,
+      requireMention: direct.requireMention,
+      users: direct.users,
+      channels: direct.channels,
+    };
+  }
+  if (guildSlug && guildEntries[guildSlug]) {
+    const entry = guildEntries[guildSlug];
+    return {
+      id: guildId,
+      slug: entry.slug ?? guildSlug,
+      requireMention: entry.requireMention,
+      users: entry.users,
+      channels: entry.channels,
+    };
+  }
+  const matchBySlug = Object.entries(guildEntries).find(([, entry]) => {
+    const entrySlug = normalizeDiscordSlug(entry.slug);
+    return entrySlug && entrySlug === guildSlug;
+  });
+  if (matchBySlug) {
+    const entry = matchBySlug[1];
+    return {
+      id: guildId,
+      slug: entry.slug ?? guildSlug,
+      requireMention: entry.requireMention,
+      users: entry.users,
+      channels: entry.channels,
+    };
+  }
+  return null;
+}
+
+export function resolveDiscordChannelConfig(params: {
+  guildInfo: DiscordGuildEntryResolved | null;
+  channelId: string;
+  channelName?: string;
+  channelSlug?: string;
+}): DiscordChannelConfigResolved | null {
+  const { guildInfo, channelId, channelName, channelSlug } = params;
+  const channelEntries = guildInfo?.channels;
+  if (channelEntries && Object.keys(channelEntries).length > 0) {
+    const entry =
+      channelEntries[channelId] ??
+      (channelSlug
+        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
+        : undefined) ??
+      (channelName
+        ? channelEntries[normalizeDiscordSlug(channelName)]
+        : undefined);
+    if (!entry) return { allowed: false };
+    return {
+      allowed: entry.allow !== false,
+      requireMention: entry.requireMention,
+    };
+  }
+  return { allowed: true };
+}
+
+export function resolveGroupDmAllow(params: {
+  channels: Array<string | number> | undefined;
+  channelId: string;
+  channelName?: string;
+  channelSlug?: string;
+}) {
+  const { channels, channelId, channelName, channelSlug } = params;
+  if (!channels || channels.length === 0) return true;
+  const allowList = normalizeDiscordAllowList(channels, ["channel:"]);
+  if (!allowList) return true;
+  return allowListMatches(allowList, {
+    id: channelId,
+    name: channelSlug || channelName,
+  });
+}
+
+async function ensureSlashCommand(
+  client: Client,
+  slashCommand: Required<DiscordSlashCommandConfig>,
+  runtime: RuntimeEnv,
+) {
+  try {
+    const appCommands = client.application?.commands;
+    if (!appCommands) {
+      runtime.error?.(danger("discord slash commands unavailable"));
+      return;
+    }
+    const existing = await appCommands.fetch();
+    const hasCommand = Array.from(existing.values()).some(
+      (entry) => entry.name === slashCommand.name,
+    );
+    if (hasCommand) return;
+    await appCommands.create({
+      name: slashCommand.name,
+      description: "Ask Clawdis a question",
+      options: [
+        {
+          name: "prompt",
+          description: "What should Clawdis help with?",
+          type: ApplicationCommandOptionType.String,
+          required: true,
+        },
+      ],
     });
-  const allowAll = cleaned.includes("*");
-  const ids = new Set(cleaned.filter((entry) => entry !== "*"));
-  return { allowAll, ids };
+    runtime.log?.(`registered discord slash command /${slashCommand.name}`);
+  } catch (err) {
+    const status = (err as { status?: number | string })?.status;
+    const code = (err as { code?: number | string })?.code;
+    const message = String(err);
+    const isRateLimit =
+      status === 429 || code === 429 || /rate ?limit/i.test(message);
+    const text = `discord slash command setup failed: ${message}`;
+    if (isRateLimit) {
+      logVerbose(text);
+      runtime.error?.(warn(text));
+    } else {
+      runtime.error?.(danger(text));
+    }
+  }
+}
+
+function resolveSlashCommandConfig(
+  raw: DiscordSlashCommandConfig | undefined,
+): Required<DiscordSlashCommandConfig> {
+  return {
+    enabled: raw ? raw.enabled !== false : false,
+    name: raw?.name?.trim() || "clawd",
+    sessionPrefix: raw?.sessionPrefix?.trim() || "discord:slash",
+    ephemeral: raw?.ephemeral !== false,
+  };
+}
+
+function resolveSlashPrompt(
+  options: readonly CommandInteractionOption[],
+): string | undefined {
+  const direct = findFirstStringOption(options);
+  if (direct) return direct;
+  return undefined;
+}
+
+function findFirstStringOption(
+  options: readonly CommandInteractionOption[],
+): string | undefined {
+  for (const option of options) {
+    if (typeof option.value === "string") {
+      const trimmed = option.value.trim();
+      if (trimmed) return trimmed;
+    }
+    if (option.options && option.options.length > 0) {
+      const nested = findFirstStringOption(option.options);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
 }
 
 async function sendTyping(message: Message) {
@@ -428,5 +905,47 @@ async function deliverReplies({
       }
     }
     runtime.log?.(`delivered reply to ${target}`);
+  }
+}
+
+async function deliverSlashReplies({
+  replies,
+  interaction,
+  ephemeral,
+}: {
+  replies: ReplyPayload[];
+  interaction: import("discord.js").ChatInputCommandInteraction;
+  ephemeral: boolean;
+}) {
+  const messages: string[] = [];
+  for (const payload of replies) {
+    const textRaw = payload.text?.trim() ?? "";
+    const text =
+      textRaw && textRaw !== SILENT_REPLY_TOKEN ? textRaw : undefined;
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const combined = [
+      text ?? "",
+      ...mediaList.map((url) => url.trim()).filter(Boolean),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (!combined) continue;
+    for (const chunk of chunkText(combined, 2000)) {
+      messages.push(chunk);
+    }
+  }
+
+  if (messages.length === 0) {
+    await interaction.editReply({
+      content: "No response was generated for that command.",
+    });
+    return;
+  }
+
+  const [first, ...rest] = messages;
+  await interaction.editReply({ content: first });
+  for (const message of rest) {
+    await interaction.followUp({ content: message, ephemeral });
   }
 }

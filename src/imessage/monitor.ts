@@ -61,8 +61,7 @@ function resolveRuntime(opts: MonitorIMessageOpts): RuntimeEnv {
 
 function resolveAllowFrom(opts: MonitorIMessageOpts): string[] {
   const cfg = loadConfig();
-  const raw =
-    opts.allowFrom ?? cfg.imessage?.allowFrom ?? cfg.routing?.allowFrom ?? [];
+  const raw = opts.allowFrom ?? cfg.imessage?.allowFrom ?? [];
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 

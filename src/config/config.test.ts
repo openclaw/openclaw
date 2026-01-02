@@ -206,6 +206,64 @@ describe("config identity defaults", () => {
   });
 });
 
+describe("config discord", () => {
+  let previousHome: string | undefined;
+
+  beforeEach(() => {
+    previousHome = process.env.HOME;
+  });
+
+  afterEach(() => {
+    process.env.HOME = previousHome;
+  });
+
+  it("loads discord guild map + dm group settings", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdis");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdis.json"),
+        JSON.stringify(
+          {
+            discord: {
+              enabled: true,
+              dm: {
+                enabled: true,
+                allowFrom: ["steipete"],
+                groupEnabled: true,
+                groupChannels: ["clawd-dm"],
+              },
+              guilds: {
+                "123": {
+                  slug: "friends-of-clawd",
+                  requireMention: false,
+                  users: ["steipete"],
+                  channels: {
+                    general: { allow: true },
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.discord?.enabled).toBe(true);
+      expect(cfg.discord?.dm?.groupEnabled).toBe(true);
+      expect(cfg.discord?.dm?.groupChannels).toEqual(["clawd-dm"]);
+      expect(cfg.discord?.guilds?.["123"]?.slug).toBe("friends-of-clawd");
+      expect(cfg.discord?.guilds?.["123"]?.channels?.general?.allow).toBe(true);
+    });
+  });
+});
+
 describe("Nix integration (U3, U5, U9)", () => {
   describe("U3: isNixMode env var detection", () => {
     it("isNixMode is false when CLAWDIS_NIX_MODE is not set", async () => {
@@ -428,5 +486,50 @@ describe("talk.voiceAliases", () => {
       },
     });
     expect(res.ok).toBe(false);
+  });
+});
+
+describe("legacy config detection", () => {
+  it("rejects routing.allowFrom", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      routing: { allowFrom: ["+15555550123"] },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("routing.allowFrom");
+    }
+  });
+
+  it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      routing: { allowFrom: ["+15555550123"] },
+    });
+    expect(res.changes).toContain("Moved routing.allowFrom → whatsapp.allowFrom.");
+    expect(res.config?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(res.config?.routing?.allowFrom).toBeUndefined();
+  });
+
+  it("surfaces legacy issues in snapshot", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdis", "clawdis.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ routing: { allowFrom: ["+15555550123"] } }),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.length).toBe(1);
+      expect(snap.legacyIssues[0]?.path).toBe("routing.allowFrom");
+    });
   });
 });

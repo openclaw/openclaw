@@ -119,10 +119,17 @@ const formatAge = (ms: number | null | undefined) => {
   return `${days}d ago`;
 };
 
-function classifyKey(key: string): SessionRow["kind"] {
+function classifyKey(key: string, entry?: SessionEntry): SessionRow["kind"] {
   if (key === "global") return "global";
-  if (key.startsWith("group:")) return "group";
   if (key === "unknown") return "unknown";
+  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
+  if (
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:")
+  ) {
+    return "group";
+  }
   return "direct";
 }
 
@@ -132,7 +139,7 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
       const updatedAt = entry?.updatedAt ?? null;
       return {
         key,
-        kind: classifyKey(key),
+        kind: classifyKey(key, entry),
         updatedAt,
         ageMs: updatedAt ? Date.now() - updatedAt : null,
         sessionId: entry?.sessionId,

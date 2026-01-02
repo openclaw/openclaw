@@ -10,7 +10,7 @@ vi.mock("../media/store.js", () => ({
 }));
 
 const mockLoadConfig = vi.fn().mockReturnValue({
-  routing: {
+  whatsapp: {
     allowFrom: ["*"], // Allow all in tests by default
   },
   messages: {
@@ -450,7 +450,7 @@ describe("web monitor inbox", () => {
 
   it("still forwards group messages (with sender info) even when allowFrom is restrictive", async () => {
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["+111"], // does not include +777
       },
       messages: {
@@ -506,7 +506,7 @@ describe("web monitor inbox", () => {
     // Test for auto-recovery fix: early allowFrom filtering prevents Bad MAC errors
     // from unauthorized senders corrupting sessions
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["+111"], // Only allow +111
       },
       messages: {
@@ -546,7 +546,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -561,7 +561,7 @@ describe("web monitor inbox", () => {
 
   it("skips read receipts in self-chat mode", async () => {
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         // Self-chat heuristic: allowFrom includes selfE164 (+123).
         allowFrom: ["+123"],
       },
@@ -598,7 +598,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -613,7 +613,7 @@ describe("web monitor inbox", () => {
 
   it("lets group messages through even when sender not in allowFrom", async () => {
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["+1234"],
       },
       messages: {
@@ -655,7 +655,7 @@ describe("web monitor inbox", () => {
 
   it("allows messages from senders in allowFrom list", async () => {
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["+111", "+999"], // Allow +999
       },
       messages: {
@@ -690,7 +690,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -707,7 +707,7 @@ describe("web monitor inbox", () => {
     // Same-phone mode: when from === selfJid, should always be allowed
     // This allows users to message themselves even with restrictive allowFrom
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["+111"], // Only allow +111, but self is +123
       },
       messages: {
@@ -810,7 +810,7 @@ it("defaults to self-only when no config is present", async () => {
 
   // Reset mock for other tests
   mockLoadConfig.mockReturnValue({
-    routing: {
+    whatsapp: {
       allowFrom: ["*"],
     },
     messages: {

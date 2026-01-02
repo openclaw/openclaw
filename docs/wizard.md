@@ -58,6 +58,7 @@ It does **not** install or change anything on the remote host.
 
 4) **Gateway**
    - Port, bind, auth mode, tailscale exposure.
+   - Auth recommendation: keep **Off** for single-machine loopback setups. Use **Token** for multi-machine access or non-loopback binds.
    - Non‑loopback binds require auth.
 
 5) **Providers**

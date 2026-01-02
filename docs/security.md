@@ -42,7 +42,7 @@ This is social engineering 101. Create distrust, encourage snooping.
 
 ```json
 {
-  "routing": {
+  "whatsapp": {
     "allowFrom": ["+15555550123"]
   }
 }

@@ -116,7 +116,7 @@ function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
         }
       })
       .filter((r): r is RegExp => Boolean(r)) ?? [];
-  return { mentionRegexes, allowFrom: cfg.routing?.allowFrom };
+  return { mentionRegexes, allowFrom: cfg.whatsapp?.allowFrom };
 }
 
 function isBotMentioned(
@@ -412,7 +412,10 @@ function getSessionRecipients(cfg: ReturnType<typeof loadConfig>) {
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
-    key.startsWith("group:") || key.includes("@g.us");
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:") ||
+    key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");
 
   const recipients = Object.entries(store)
@@ -445,8 +448,8 @@ export function resolveHeartbeatRecipients(
 
   const sessionRecipients = getSessionRecipients(cfg);
   const allowFrom =
-    Array.isArray(cfg.routing?.allowFrom) && cfg.routing.allowFrom.length > 0
-      ? cfg.routing.allowFrom.filter((v) => v !== "*").map(normalizeE164)
+    Array.isArray(cfg.whatsapp?.allowFrom) && cfg.whatsapp.allowFrom.length > 0
+      ? cfg.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
       : [];
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
@@ -812,7 +815,7 @@ export async function monitorWebProvider(
   const resolveGroupActivationFor = (conversationId: string) => {
     const key = conversationId.startsWith("group:")
       ? conversationId
-      : `group:${conversationId}`;
+      : `whatsapp:group:${conversationId}`;
     const store = loadSessionStore(sessionStorePath);
     const entry = store[key];
     const requireMention = cfg.routing?.groupChat?.requireMention;
@@ -915,7 +918,7 @@ export async function monitorWebProvider(
       // Build message prefix: explicit config > default based on allowFrom
       let messagePrefix = cfg.messages?.messagePrefix;
       if (messagePrefix === undefined) {
-        const hasAllowFrom = (cfg.routing?.allowFrom?.length ?? 0) > 0;
+        const hasAllowFrom = (cfg.whatsapp?.allowFrom?.length ?? 0) > 0;
         messagePrefix = hasAllowFrom ? "" : "[clawdis]";
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";

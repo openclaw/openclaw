@@ -1,34 +1,38 @@
 .card {
   border: 1px solid var(--border);
-  background: var(--panel);
-  border-radius: 18px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), transparent 65%),
+    var(--panel);
+  border-radius: 16px;
   padding: 16px;
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
-  animation: rise 0.35s ease;
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.28);
+  animation: rise 0.4s ease;
 }
 
 .card-title {
   font-family: var(--font-display);
-  font-size: 18px;
+  font-size: 16px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
 }
 
 .card-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .stat {
-  background: var(--panel-strong);
+  background: linear-gradient(140deg, rgba(255, 255, 255, 0.04), transparent 70%),
+    var(--panel-strong);
   border-radius: 14px;
   padding: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-strong);
 }
 
 .stat-label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 1px;
 }
 
 .stat-value {
@@ -51,6 +55,7 @@
 
 .note-title {
   font-weight: 600;
+  letter-spacing: 0.2px;
 }
 
 .status-list {
@@ -72,19 +77,20 @@
 
 .label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.9px;
 }
 
 .pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid var(--border);
-  padding: 6px 10px;
+  border: 1px solid var(--border-strong);
+  padding: 6px 12px;
   border-radius: 999px;
-  background: var(--panel);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), transparent),
+    var(--panel);
 }
 
 .theme-toggle {
@@ -101,8 +107,8 @@
   gap: var(--theme-gap);
   padding: var(--theme-pad);
   border-radius: 999px;
-  border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border-strong);
+  background: rgba(255, 255, 255, 0.04);
 }
 
 .theme-toggle__indicator {
@@ -114,10 +120,12 @@
   border-radius: 999px;
   transform: translateY(-50%)
     translateX(calc(var(--theme-index, 0) * (var(--theme-item) + var(--theme-gap))));
-  background: var(--panel-strong);
-  border: 1px solid var(--border);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.25);
-  transition: transform 180ms ease-out, background 180ms ease-out;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.12), transparent),
+    var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  box-shadow: 0 8px 16px rgba(0, 0, 0, 0.25);
+  transition: transform 180ms ease-out, background 180ms ease-out,
+    box-shadow 180ms ease-out;
   z-index: 0;
 }
 
@@ -170,28 +178,31 @@
 
 .statusDot.ok {
   background: var(--ok);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.25), 0 0 10px rgba(43, 217, 127, 0.4);
 }
 
 .btn {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   background: rgba(255, 255, 255, 0.04);
-  padding: 8px 12px;
-  border-radius: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
   cursor: pointer;
+  transition: transform 150ms ease, border-color 150ms ease, background 150ms ease;
 }
 
 .btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateY(-1px);
 }
 
 .btn.primary {
-  border-color: rgba(255, 122, 61, 0.35);
-  background: rgba(255, 122, 61, 0.18);
+  border-color: rgba(245, 159, 74, 0.45);
+  background: rgba(245, 159, 74, 0.2);
 }
 
 .btn.danger {
-  border-color: rgba(255, 92, 92, 0.4);
-  background: rgba(255, 92, 92, 0.16);
+  border-color: rgba(255, 107, 107, 0.45);
+  background: rgba(255, 107, 107, 0.18);
 }
 
 .field {
@@ -201,17 +212,45 @@
 
 .field span {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  letter-spacing: 0.4px;
 }
 
 .field input,
 .field textarea,
 .field select {
-  border: 1px solid var(--border);
-  background: rgba(0, 0, 0, 0.3);
-  border-radius: 10px;
-  padding: 8px 10px;
+  border: 1px solid var(--border-strong);
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 12px;
+  padding: 9px 11px;
   outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease,
+    background 150ms ease;
+}
+
+.field input:focus,
+.field textarea:focus,
+.field select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--focus);
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.field select {
+  appearance: none;
+  padding-right: 38px;
+  background-color: var(--panel-strong);
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%),
+    linear-gradient(to right, transparent, transparent);
+  background-position:
+    calc(100% - 18px) 50%,
+    calc(100% - 12px) 50%,
+    calc(100% - 38px) 50%;
+  background-size: 6px 6px, 6px 6px, 1px 60%;
+  background-repeat: no-repeat;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
 .field textarea {
@@ -219,6 +258,10 @@
   min-height: 180px;
   resize: vertical;
   white-space: pre;
+}
+
+.field textarea:focus {
+  background: rgba(0, 0, 0, 0.32);
 }
 
 .field.checkbox {
@@ -232,6 +275,19 @@
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
 }
 
+:root[data-theme="light"] .field input,
+:root[data-theme="light"] .field textarea,
+:root[data-theme="light"] .field select {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: var(--border-strong);
+}
+
+:root[data-theme="light"] .field input:focus,
+:root[data-theme="light"] .field textarea:focus,
+:root[data-theme="light"] .field select:focus {
+  background: #ffffff;
+}
+
 .muted {
   color: var(--muted);
 }
@@ -242,9 +298,10 @@
 
 .callout {
   padding: 10px 12px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), transparent),
+    rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border);
 }
 
 .callout.danger {
@@ -257,10 +314,17 @@
   font-size: 12px;
   background: rgba(0, 0, 0, 0.35);
   padding: 10px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  border: 1px solid var(--border);
   max-height: 360px;
   overflow: auto;
+}
+
+:root[data-theme="light"] .code-block,
+:root[data-theme="light"] .list-item,
+:root[data-theme="light"] .table-row,
+:root[data-theme="light"] .chip {
+  background: rgba(255, 255, 255, 0.85);
 }
 
 .list {
@@ -291,13 +355,13 @@
 
 .list-sub {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .list-meta {
   text-align: right;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   display: grid;
   gap: 4px;
   min-width: 220px;
@@ -316,7 +380,7 @@
 }
 
 .chip {
-  font-size: 12px;
+  font-size: 11px;
   border: 1px solid var(--border);
   border-radius: 999px;
   padding: 4px 8px;
@@ -348,7 +412,7 @@
 }
 
 .table-head {
-  font-size: 12px;
+  font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.8px;
   color: var(--muted);
@@ -397,11 +461,11 @@
   padding: 14px 12px;
   min-width: 0;
   border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
   background: linear-gradient(
     180deg,
-    rgba(0, 0, 0, 0.18) 0%,
-    rgba(0, 0, 0, 0.26) 100%
+    rgba(0, 0, 0, 0.2) 0%,
+    rgba(0, 0, 0, 0.3) 100%
   );
 }
 
@@ -440,10 +504,10 @@
 .chat-bubble {
   border: 1px solid var(--border);
   background: rgba(0, 0, 0, 0.24);
-  border-radius: 18px;
+  border-radius: 16px;
   padding: 10px 12px;
   min-width: 0;
-  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22);
+  box-shadow: 0 12px 22px rgba(0, 0, 0, 0.24);
 }
 
 :root[data-theme="light"] .chat-bubble {
@@ -452,20 +516,20 @@
 }
 
 .chat-line.user .chat-bubble {
-  border-color: rgba(255, 122, 61, 0.35);
+  border-color: rgba(245, 159, 74, 0.45);
   background: linear-gradient(
     135deg,
-    rgba(255, 122, 61, 0.24) 0%,
-    rgba(255, 122, 61, 0.12) 100%
+    rgba(245, 159, 74, 0.26) 0%,
+    rgba(245, 159, 74, 0.12) 100%
   );
 }
 
 .chat-line.assistant .chat-bubble {
-  border-color: rgba(54, 207, 201, 0.16);
+  border-color: rgba(52, 199, 183, 0.2);
   background: linear-gradient(
     135deg,
-    rgba(54, 207, 201, 0.08) 0%,
-    rgba(0, 0, 0, 0.22) 100%
+    rgba(52, 199, 183, 0.12) 0%,
+    rgba(0, 0, 0, 0.24) 100%
   );
 }
 
@@ -479,18 +543,18 @@
 
 @keyframes chatStreamPulse {
   0% {
-    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22), 0 0 0 0 rgba(54, 207, 201, 0);
+    box-shadow: 0 12px 22px rgba(0, 0, 0, 0.24), 0 0 0 0 rgba(52, 199, 183, 0);
   }
   60% {
-    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22), 0 0 0 6px rgba(54, 207, 201, 0.06);
+    box-shadow: 0 12px 22px rgba(0, 0, 0, 0.24), 0 0 0 6px rgba(52, 199, 183, 0.08);
   }
   100% {
-    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.22), 0 0 0 0 rgba(54, 207, 201, 0);
+    box-shadow: 0 12px 22px rgba(0, 0, 0, 0.24), 0 0 0 0 rgba(52, 199, 183, 0);
   }
 }
 
 .chat-bubble.streaming {
-  border-color: rgba(54, 207, 201, 0.32);
+  border-color: rgba(52, 199, 183, 0.4);
   animation: chatStreamPulse 1.6s ease-in-out infinite;
 }
 
@@ -531,7 +595,7 @@
 .chat-compose__field textarea {
   min-height: 72px;
   padding: 10px 12px;
-  border-radius: 14px;
+  border-radius: 16px;
   resize: vertical;
   white-space: pre-wrap;
   font-family: var(--font-body);
@@ -562,7 +626,7 @@
   margin-top: 12px;
   border-radius: 14px;
   background: rgba(0, 0, 0, 0.2);
-  border: 1px dashed rgba(255, 255, 255, 0.12);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
   padding: 12px;
   display: inline-flex;
 }

@@ -30,6 +30,11 @@ You can still run Clawdis on your own Signal account if your goal is “respond 
 
 ## Quickstart (bot number)
 1) Install `signal-cli` (keep Java installed).
+   - If you use the CLI wizard, it can auto-install to `~/.clawdis/tools/signal-cli/...`.
+   - If you want a pinned version (example: `v0.13.22`), install manually:
+     - Download the release asset for your platform from GitHub (tag `v0.13.22`).
+     - Extract it somewhere stable (example: `~/.clawdis/tools/signal-cli/0.13.22/`).
+     - Set `signal.cliPath` to the extracted `signal-cli` binary path.
 2) Link the bot account as a device:
    - Run: `signal-cli link -n "Clawdis"`
    - Scan QR in Signal: Settings → Linked Devices → Link New Device
@@ -55,6 +60,15 @@ You can still run Clawdis on your own Signal account if your goal is “respond 
    - Expect `signal.probe.ok=true` and `signal.probe.version`.
 5) DM the bot number from your phone; Clawdis replies.
 
+## “Do I need a separate number?”
+- If you want “I text her and she texts me back”, yes: **use a separate Signal account/number for the bot**.
+- Your personal account can run `signal-cli`, but you can’t self-chat (Signal loop protection; Clawdis ignores sender==account).
+
+If you have a second phone:
+- Create/activate the bot number on that phone.
+- Run `signal-cli link -n "Clawdis"` on your Mac, scan the QR on the bot phone.
+- Put your personal number in `signal.allowFrom`, then DM the bot number from your personal phone.
+
 ## Endpoints (daemon --http)
 - `POST /api/v1/rpc` JSON-RPC request (single or batch).
 - `GET /api/v1/events` SSE stream of `receive` notifications.
@@ -65,6 +79,10 @@ You can still run Clawdis on your own Signal account if your goal is “respond 
 - Include `params.account` (E164) on JSON-RPC calls.
 - SSE `?account=+E164` filters events; no param = all accounts.
 
+## Troubleshooting
+- Gateway log coloring: `signal-cli: ...` lines are classified by severity; red means “treat this as an error”.
+- `Failed to initialize HTTP Server` typically means the daemon can’t bind the HTTP port (already in use). Stop the other daemon or change `signal.httpPort`.
+
 ## Minimal RPC surface
 - `send` (recipient/groupId/username, message, attachments).
 - `listGroups` (map group IDs).
@@ -73,7 +91,7 @@ You can still run Clawdis on your own Signal account if your goal is “respond 
 
 ## Addressing (send targets)
 - Direct: `signal:+15551234567` (or plain `+15551234567`)
-- Groups: `group:<groupId>`
+- Groups: `signal:group:<groupId>`
 - Usernames: `username:<name>` / `u:<name>`
 
 ## Process plan (Clawdis adapter)

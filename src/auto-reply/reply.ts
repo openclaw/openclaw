@@ -27,9 +27,11 @@ import {
 } from "../agents/workspace.js";
 import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
+  buildGroupDisplayName,
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGERS,
   loadSessionStore,
+  resolveGroupSessionKey,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
@@ -364,9 +366,9 @@ export async function getReplyFromConfig(
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
+  const groupResolution = resolveGroupSessionKey(ctx);
   const isGroup =
-    typeof ctx.From === "string" &&
-    (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
+    ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
   const triggerBodyNormalized = stripStructuralPrefixes(ctx.Body ?? "")
     .trim()
     .toLowerCase();
@@ -399,6 +401,13 @@ export async function getReplyFromConfig(
 
   sessionKey = resolveSessionKey(sessionScope, ctx, mainKey);
   sessionStore = loadSessionStore(storePath);
+  if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
+    const legacyEntry = sessionStore[groupResolution.legacyKey];
+    if (legacyEntry && !sessionStore[sessionKey]) {
+      sessionStore[sessionKey] = legacyEntry;
+      delete sessionStore[groupResolution.legacyKey];
+    }
+  }
   const entry = sessionStore[sessionKey];
   const idleMs = idleMinutes * 60_000;
   const freshEntry = entry && Date.now() - entry.updatedAt <= idleMs;
@@ -431,7 +440,41 @@ export async function getReplyFromConfig(
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     queueMode: baseEntry?.queueMode,
+    displayName: baseEntry?.displayName,
+    chatType: baseEntry?.chatType,
+    surface: baseEntry?.surface,
+    subject: baseEntry?.subject,
+    room: baseEntry?.room,
+    space: baseEntry?.space,
   };
+  if (groupResolution?.surface) {
+    const surface = groupResolution.surface;
+    const subject = ctx.GroupSubject?.trim();
+    const space = ctx.GroupSpace?.trim();
+    const explicitRoom = ctx.GroupRoom?.trim();
+    const isRoomSurface = surface === "discord" || surface === "slack";
+    const nextRoom =
+      explicitRoom ??
+      (isRoomSurface && subject && subject.startsWith("#")
+        ? subject
+        : undefined);
+    const nextSubject = nextRoom ? undefined : subject;
+    sessionEntry.chatType = groupResolution.chatType ?? "group";
+    sessionEntry.surface = surface;
+    if (nextSubject) sessionEntry.subject = nextSubject;
+    if (nextRoom) sessionEntry.room = nextRoom;
+    if (space) sessionEntry.space = space;
+    sessionEntry.displayName = buildGroupDisplayName({
+      surface: sessionEntry.surface,
+      subject: sessionEntry.subject,
+      room: sessionEntry.room,
+      space: sessionEntry.space,
+      id: groupResolution.id,
+      key: sessionKey,
+    });
+  } else if (!sessionEntry.chatType) {
+    sessionEntry.chatType = "direct";
+  }
   sessionStore[sessionKey] = sessionEntry;
   await saveSessionStore(storePath, sessionStore);
 
@@ -798,14 +841,20 @@ export async function getReplyFromConfig(
   const perMessageQueueMode =
     hasQueueDirective && !inlineQueueReset ? inlineQueueMode : undefined;
 
-  // Optional allowlist by origin number (E.164 without whatsapp: prefix)
-  const configuredAllowFrom = cfg.routing?.allowFrom;
+  const surface = (ctx.Surface ?? "").trim().toLowerCase();
+  const isWhatsAppSurface =
+    surface === "whatsapp" ||
+    (ctx.From ?? "").startsWith("whatsapp:") ||
+    (ctx.To ?? "").startsWith("whatsapp:");
+
+  // WhatsApp owner allowlist (E.164 without whatsapp: prefix); used for group activation only.
+  const configuredAllowFrom = isWhatsAppSurface
+    ? cfg.whatsapp?.allowFrom
+    : undefined;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
-  const isSamePhone = from && to && from === to;
-  // If no config is present, default to self-only DM access.
   const defaultAllowFrom =
-    (!configuredAllowFrom || configuredAllowFrom.length === 0) && to
+    isWhatsAppSurface && (!configuredAllowFrom || configuredAllowFrom.length === 0) && to
       ? [to]
       : undefined;
   const allowFrom =
@@ -819,10 +868,12 @@ export async function getReplyFromConfig(
     : rawBodyNormalized;
   const activationCommand = parseActivationCommand(commandBodyNormalized);
   const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
-  const ownerCandidates = (allowFrom ?? []).filter(
-    (entry) => entry && entry !== "*",
-  );
-  if (ownerCandidates.length === 0 && to) ownerCandidates.push(to);
+  const ownerCandidates = isWhatsAppSurface
+    ? (allowFrom ?? []).filter((entry) => entry && entry !== "*")
+    : [];
+  if (isWhatsAppSurface && ownerCandidates.length === 0 && to) {
+    ownerCandidates.push(to);
+  }
   const ownerList = ownerCandidates
     .map((entry) => normalizeE164(entry))
     .filter((entry): entry is string => Boolean(entry));
@@ -831,20 +882,6 @@ export async function getReplyFromConfig(
 
   if (!sessionEntry && abortKey) {
     abortedLastRun = ABORT_MEMORY.get(abortKey) ?? false;
-  }
-
-  // Same-phone mode (self-messaging) is always allowed
-  if (isSamePhone) {
-    logVerbose(`Allowing same-phone mode: from === to (${from})`);
-  } else if (!isGroup && Array.isArray(allowFrom) && allowFrom.length > 0) {
-    // Support "*" as wildcard to allow all senders
-    if (!allowFrom.includes("*") && !allowFrom.includes(from)) {
-      logVerbose(
-        `Skipping auto-reply: sender ${from || "<unknown>"} not in allowFrom list`,
-      );
-      cleanupTyping();
-      return undefined;
-    }
   }
 
   if (activationCommand.hasCommand) {
@@ -1038,8 +1075,7 @@ export async function getReplyFromConfig(
   // Prepend queued system events (transitions only) and (for new main sessions) a provider snapshot.
   // Token efficiency: we filter out periodic/heartbeat noise and keep the lines compact.
   const isGroupSession =
-    typeof ctx.From === "string" &&
-    (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
+    sessionEntry?.chatType === "group" || sessionEntry?.chatType === "room";
   const isMainSession =
     !isGroupSession && sessionKey === (sessionCfg?.mainKey ?? "main");
   if (isMainSession) {

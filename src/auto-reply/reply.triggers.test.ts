@@ -42,7 +42,7 @@ function makeCfg(home: string) {
       model: "anthropic/claude-opus-4-5",
       workspace: join(home, "clawd"),
     },
-    routing: {
+    whatsapp: {
       allowFrom: ["*"],
     },
     session: { store: join(home, "sessions.json") },
@@ -220,6 +220,7 @@ describe("trigger handling", () => {
           From: "[redacted-email]",
           To: "+2000",
           ChatType: "group",
+          Surface: "whatsapp",
           SenderE164: "+2000",
         },
         {},
@@ -230,7 +231,7 @@ describe("trigger handling", () => {
       const store = JSON.parse(
         await fs.readFile(cfg.session.store, "utf-8"),
       ) as Record<string, { groupActivation?: string }>;
-      expect(store["group:[redacted-email]"]?.groupActivation).toBe("always");
+      expect(store["whatsapp:group:[redacted-email]"]?.groupActivation).toBe("always");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -244,6 +245,7 @@ describe("trigger handling", () => {
           From: "[redacted-email]",
           To: "+2000",
           ChatType: "group",
+          Surface: "whatsapp",
           SenderE164: "+999",
         },
         {},
@@ -270,6 +272,7 @@ describe("trigger handling", () => {
           From: "[redacted-email]",
           To: "+2000",
           ChatType: "group",
+          Surface: "whatsapp",
           SenderE164: "+2000",
           GroupSubject: "Test Group",
           GroupMembers: "Alice (+1), Bob (+2)",
@@ -280,8 +283,10 @@ describe("trigger handling", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
+          },
+          routing: {
             groupChat: { requireMention: false },
           },
           session: { store: join(home, "sessions.json") },
@@ -321,7 +326,7 @@ describe("trigger handling", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: {
@@ -360,7 +365,7 @@ describe("trigger handling", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: {

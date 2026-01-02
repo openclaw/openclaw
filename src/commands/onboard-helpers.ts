@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { inspect } from "node:util";
 
 import { cancel, isCancel } from "@clack/prompts";
 
@@ -12,6 +13,7 @@ import type { ClawdisConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDIS } from "../config/config.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -195,7 +197,14 @@ export async function probeGatewayReachable(params: {
 }
 
 function summarizeError(err: unknown): string {
-  const raw = String(err ?? "unknown error");
+  let raw = "unknown error";
+  if (err instanceof Error) {
+    raw = err.message || raw;
+  } else if (typeof err === "string") {
+    raw = err || raw;
+  } else if (err !== undefined) {
+    raw = inspect(err, { depth: 2 });
+  }
   const line =
     raw
       .split("\n")
@@ -205,3 +214,20 @@ function summarizeError(err: unknown): string {
 }
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
+
+export function resolveControlUiLinks(params: {
+  port: number;
+  bind?: "auto" | "lan" | "tailnet" | "loopback";
+}): { httpUrl: string; wsUrl: string } {
+  const port = params.port;
+  const bind = params.bind ?? "loopback";
+  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const host =
+    bind === "tailnet" || (bind === "auto" && tailnetIPv4)
+      ? (tailnetIPv4 ?? "127.0.0.1")
+      : "127.0.0.1";
+  return {
+    httpUrl: `http://${host}:${port}/`,
+    wsUrl: `ws://${host}:${port}`,
+  };
+}

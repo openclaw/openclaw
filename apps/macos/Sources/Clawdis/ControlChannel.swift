@@ -63,9 +63,11 @@ final class ControlChannel {
                 self.logger.info("control channel state -> connecting")
             case .disconnected:
                 self.logger.info("control channel state -> disconnected")
+                self.scheduleRecovery(reason: "disconnected")
             case let .degraded(message):
                 let detail = message.isEmpty ? "degraded" : "degraded: \(message)"
                 self.logger.info("control channel state -> \(detail, privacy: .public)")
+                self.scheduleRecovery(reason: message)
             }
         }
     }
@@ -74,6 +76,8 @@ final class ControlChannel {
     private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
 
     private var eventTask: Task<Void, Never>?
+    private var recoveryTask: Task<Void, Never>?
+    private var lastRecoveryAt: Date?
 
     private init() {
         self.startEventStream()
@@ -231,7 +235,43 @@ final class ControlChannel {
         }
 
         let detail = nsError.localizedDescription.isEmpty ? "unknown gateway error" : nsError.localizedDescription
-        return "Gateway error: \(detail)"
+        let trimmed = detail.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.lowercased().hasPrefix("gateway error:") { return trimmed }
+        return "Gateway error: \(trimmed)"
+    }
+
+    private func scheduleRecovery(reason: String) {
+        let now = Date()
+        if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
+        guard self.recoveryTask == nil else { return }
+        self.lastRecoveryAt = now
+
+        self.recoveryTask = Task { [weak self] in
+            guard let self else { return }
+            let mode = await MainActor.run { AppStateStore.shared.connectionMode }
+            guard mode != .unconfigured else {
+                self.recoveryTask = nil
+                return
+            }
+
+            let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+            let reasonText = trimmedReason.isEmpty ? "unknown" : trimmedReason
+            self.logger.info(
+                "control channel recovery starting mode=\(String(describing: mode), privacy: .public) reason=\(reasonText, privacy: .public)")
+            if mode == .local {
+                GatewayProcessManager.shared.setActive(true)
+            }
+
+            do {
+                try await GatewayConnection.shared.refresh()
+                self.logger.info("control channel recovery finished")
+            } catch {
+                self.logger.error(
+                    "control channel recovery failed \(error.localizedDescription, privacy: .public)")
+            }
+
+            self.recoveryTask = nil
+        }
     }
 
     func sendSystemEvent(_ text: String, params: [String: AnyHashable] = [:]) async throws {
