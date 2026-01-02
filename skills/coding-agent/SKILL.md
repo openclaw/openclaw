@@ -40,27 +40,15 @@ Interactive (preferred in tmux):
 
 ## Codex CLI
 
-⚠️ **Model-specific settings required!**
-
-| Model | Config Needed |
-|-------|---------------|
-| `gpt-4o` | Works with defaults |
-| `gpt-5.2-codex` | Requires `-c reasoning_effort="medium"` (NOT low/high!) |
-| `o3` | ❌ Not available with ChatGPT accounts |
+⚠️ **Use gpt-5.2-codex with medium reasoning!**
 
 **One-shot with tmux (recommended):**
 ```bash
 # IMPORTANT: Use bash workdir param to start in the target folder!
 # This way Codex "wakes up in a little box" - only sees relevant files
 
-# Default model (gpt-4o)
-bash workdir:~/project/folder command:"tmux new -d -s codex-task 'codex exec \"Your task\"'"
-
-# gpt-5.2-codex (MUST use medium reasoning)
-bash workdir:~/project/folder command:"tmux new -d -s codex-task 'codex exec --model gpt-5.2-codex -c reasoning_effort=\"medium\" \"Your task\"'"
-
-# Full auto mode (sandboxed, auto-approve)
-bash workdir:~/project/folder command:"tmux new -d -s codex-task 'codex exec --full-auto \"Your task\"'"
+# Start Codex in target directory
+bash workdir:~/project/folder command:"tmux new -d -s codex-task 'codex exec --model gpt-5.2-codex -c reasoning_effort=\"medium\" -s workspace-write \"Your task\"'"
 
 # Monitor progress
 tmux capture-pane -t codex-task -p | tail -20
@@ -84,20 +72,13 @@ tmux capture-pane -t codex-task -p | tail -20
 ## OpenCode
 
 One-shot:
-- `opencode run "Write a Python function that ..."`
+- `opencode run "Your task"`
 - `opencode run -m anthropic/claude-sonnet-4-5 "Complex task"`
-- `opencode run -m openai/gpt-5.2 "Coding task"`
-- `opencode run -m google/gemini-2.5-pro "Research task"`
 
 Interactive:
 - `opencode`
 - `opencode -c`
 - `opencode -s <session-id>`
-
-Session management:
-- `opencode session list`
-- `opencode export [sessionID]`
-- `opencode import <file>`
 
 ## Notes
 
