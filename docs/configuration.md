@@ -114,6 +114,7 @@ Controls how inbound messages behave when an agent run is already active.
         whatsapp: "interrupt",
         telegram: "interrupt",
         discord: "queue",
+        imessage: "interrupt",
         webchat: "queue"
       }
     }
@@ -180,12 +181,36 @@ Configure the Discord bot by setting the bot token and optional gating:
     requireMention: true,                   // require @bot mentions in guilds
     mediaMaxMb: 8,                          // clamp inbound media size
     historyLimit: 20,                       // include last N guild messages as context
-    enableReactions: false                  // allow agent-triggered reactions
+    enableReactions: true                   // allow agent-triggered reactions
   }
 }
 ```
 
 Clawdis reads `DISCORD_BOT_TOKEN` or `discord.token` to start the provider (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
+
+### `imessage` (imsg CLI)
+
+Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+
+```json5
+{
+  imessage: {
+    enabled: true,
+    cliPath: "imsg",
+    dbPath: "~/Library/Messages/chat.db",
+    allowFrom: ["+15555550123", "[redacted-email]", "chat_id:123"],
+    includeAttachments: false,
+    mediaMaxMb: 16,
+    service: "auto",
+    region: "US"
+  }
+}
+```
+
+Notes:
+- Requires Full Disk Access to the Messages DB.
+- The first send will prompt for Messages automation permission.
+- Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
 
 ### `agent.workspace`
 
@@ -284,7 +309,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set
   `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
-- `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `none`). Default: `last`.
+- `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
 
@@ -718,7 +743,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 | `{{GroupMembers}}` | Group members preview (best effort) |
 | `{{SenderName}}` | Sender display name (best effort) |
 | `{{SenderE164}}` | Sender phone number (best effort) |
-| `{{Surface}}` | Surface hint (whatsapp|telegram|discord|webchat|…) |
+| `{{Surface}}` | Surface hint (whatsapp|telegram|discord|imessage|webchat|…) |
 
 ## Cron (Gateway scheduler)
 

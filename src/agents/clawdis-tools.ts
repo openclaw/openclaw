@@ -1437,7 +1437,7 @@ function createDiscordTool(): AnyAgentTool {
     label: "Clawdis Discord",
     name: "clawdis_discord",
     description:
-      "React to Discord messages. Requires discord.enableReactions=true in config.",
+      "React to Discord messages. Controlled by discord.enableReactions (default: true).",
     parameters: DiscordToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -1445,7 +1445,7 @@ function createDiscordTool(): AnyAgentTool {
       if (action !== "react") throw new Error(`Unknown action: ${action}`);
 
       const cfg = loadConfig();
-      if (!cfg.discord?.enableReactions) {
+      if (cfg.discord?.enableReactions === false) {
         throw new Error(
           "Discord reactions are disabled (set discord.enableReactions=true).",
         );

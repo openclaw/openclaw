@@ -102,7 +102,7 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?: "last" | "whatsapp" | "telegram" | "discord";
+  channel?: "last" | "whatsapp" | "telegram" | "discord" | "signal" | "imessage";
   to?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -171,7 +171,7 @@ export type DiscordConfig = {
   mediaMaxMb?: number;
   /** Number of recent guild messages to include for context (default: 20). */
   historyLimit?: number;
-  /** Allow agent-triggered Discord reactions (default: false). */
+  /** Allow agent-triggered Discord reactions (default: true). */
   enableReactions?: boolean;
 };
 
@@ -198,6 +198,25 @@ export type SignalConfig = {
   mediaMaxMb?: number;
 };
 
+export type IMessageConfig = {
+  /** If false, do not start the iMessage provider. Default: true. */
+  enabled?: boolean;
+  /** imsg CLI binary path (default: imsg). */
+  cliPath?: string;
+  /** Optional Messages db path override. */
+  dbPath?: string;
+  /** Optional default send service (imessage|sms|auto). */
+  service?: "imessage" | "sms" | "auto";
+  /** Optional default region (used when sending SMS). */
+  region?: string;
+  /** Optional allowlist for inbound handles or chat_id targets. */
+  allowFrom?: Array<string | number>;
+  /** Include attachments + reactions in watch payloads. */
+  includeAttachments?: boolean;
+  /** Max outbound media size in MB. */
+  mediaMaxMb?: number;
+};
+
 export type QueueMode = "queue" | "interrupt";
 
 export type QueueModeBySurface = {
@@ -205,6 +224,7 @@ export type QueueModeBySurface = {
   telegram?: QueueMode;
   discord?: QueueMode;
   signal?: QueueMode;
+  imessage?: QueueMode;
   webchat?: QueueMode;
 };
 
@@ -450,8 +470,15 @@ export type ClawdisConfig = {
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
-      /** Delivery target (last|whatsapp|telegram|discord|signal|none). */
-      target?: "last" | "whatsapp" | "telegram" | "discord" | "signal" | "none";
+      /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|none). */
+      target?:
+        | "last"
+        | "whatsapp"
+        | "telegram"
+        | "discord"
+        | "signal"
+        | "imessage"
+        | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
       /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
@@ -476,6 +503,7 @@ export type ClawdisConfig = {
   telegram?: TelegramConfig;
   discord?: DiscordConfig;
   signal?: SignalConfig;
+  imessage?: IMessageConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
   bridge?: BridgeConfig;
@@ -570,6 +598,7 @@ const QueueModeBySurfaceSchema = z
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
+    imessage: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
   })
   .optional();
@@ -616,6 +645,7 @@ const HeartbeatSchema = z
         z.literal("telegram"),
         z.literal("discord"),
         z.literal("signal"),
+        z.literal("imessage"),
         z.literal("none"),
       ])
       .optional(),
@@ -675,6 +705,7 @@ const HookMappingSchema = z
         z.literal("telegram"),
         z.literal("discord"),
         z.literal("signal"),
+        z.literal("imessage"),
       ])
       .optional(),
     to: z.string().optional(),
@@ -900,6 +931,24 @@ const ClawdisSchema = z.object({
       ignoreStories: z.boolean().optional(),
       sendReadReceipts: z.boolean().optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      mediaMaxMb: z.number().positive().optional(),
+    })
+    .optional(),
+  imessage: z
+    .object({
+      enabled: z.boolean().optional(),
+      cliPath: z.string().optional(),
+      dbPath: z.string().optional(),
+      service: z
+        .union([
+          z.literal("imessage"),
+          z.literal("sms"),
+          z.literal("auto"),
+        ])
+        .optional(),
+      region: z.string().optional(),
+      allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      includeAttachments: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
     })
     .optional(),
