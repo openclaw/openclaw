@@ -1,6 +1,6 @@
 import type { GatewayBrowserClient } from "../gateway";
 import type { ConfigSnapshot } from "../types";
-import type { TelegramForm } from "../ui-types";
+import type { DiscordForm, IMessageForm, SignalForm, TelegramForm } from "../ui-types";
 
 export type ConfigState = {
   client: GatewayBrowserClient | null;
@@ -13,7 +13,13 @@ export type ConfigState = {
   configSnapshot: ConfigSnapshot | null;
   lastError: string | null;
   telegramForm: TelegramForm;
+  discordForm: DiscordForm;
+  signalForm: SignalForm;
+  imessageForm: IMessageForm;
   telegramConfigStatus: string | null;
+  discordConfigStatus: string | null;
+  signalConfigStatus: string | null;
+  imessageConfigStatus: string | null;
 };
 
 export async function loadConfig(state: ConfigState) {
@@ -42,11 +48,18 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
 
   const config = snapshot.config ?? {};
   const telegram = (config.telegram ?? {}) as Record<string, unknown>;
+  const discord = (config.discord ?? {}) as Record<string, unknown>;
+  const signal = (config.signal ?? {}) as Record<string, unknown>;
+  const imessage = (config.imessage ?? {}) as Record<string, unknown>;
+  const toList = (value: unknown) =>
+    Array.isArray(value)
+      ? value
+          .map((v) => String(v ?? "").trim())
+          .filter((v) => v.length > 0)
+          .join(", ")
+      : "";
   const allowFrom = Array.isArray(telegram.allowFrom)
-    ? (telegram.allowFrom as unknown[])
-        .map((v) => String(v ?? "").trim())
-        .filter((v) => v.length > 0)
-        .join(", ")
+    ? toList(telegram.allowFrom)
     : typeof telegram.allowFrom === "string"
       ? telegram.allowFrom
       : "";
@@ -63,7 +76,77 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
     webhookPath: typeof telegram.webhookPath === "string" ? telegram.webhookPath : "",
   };
 
-  state.telegramConfigStatus = snapshot.valid === false ? "Config invalid." : null;
+  const discordDm = (discord.dm ?? {}) as Record<string, unknown>;
+  const slash = (discord.slashCommand ?? {}) as Record<string, unknown>;
+  state.discordForm = {
+    enabled: typeof discord.enabled === "boolean" ? discord.enabled : true,
+    token: typeof discord.token === "string" ? discord.token : "",
+    allowFrom: toList(discordDm.allowFrom),
+    groupEnabled:
+      typeof discordDm.groupEnabled === "boolean" ? discordDm.groupEnabled : false,
+    groupChannels: toList(discordDm.groupChannels),
+    mediaMaxMb:
+      typeof discord.mediaMaxMb === "number" ? String(discord.mediaMaxMb) : "",
+    historyLimit:
+      typeof discord.historyLimit === "number" ? String(discord.historyLimit) : "",
+    enableReactions:
+      typeof discord.enableReactions === "boolean" ? discord.enableReactions : true,
+    slashEnabled: typeof slash.enabled === "boolean" ? slash.enabled : false,
+    slashName: typeof slash.name === "string" ? slash.name : "",
+    slashSessionPrefix:
+      typeof slash.sessionPrefix === "string" ? slash.sessionPrefix : "",
+    slashEphemeral:
+      typeof slash.ephemeral === "boolean" ? slash.ephemeral : true,
+  };
+
+  state.signalForm = {
+    enabled: typeof signal.enabled === "boolean" ? signal.enabled : true,
+    account: typeof signal.account === "string" ? signal.account : "",
+    httpUrl: typeof signal.httpUrl === "string" ? signal.httpUrl : "",
+    httpHost: typeof signal.httpHost === "string" ? signal.httpHost : "",
+    httpPort: typeof signal.httpPort === "number" ? String(signal.httpPort) : "",
+    cliPath: typeof signal.cliPath === "string" ? signal.cliPath : "",
+    autoStart: typeof signal.autoStart === "boolean" ? signal.autoStart : true,
+    receiveMode:
+      signal.receiveMode === "on-start" || signal.receiveMode === "manual"
+        ? signal.receiveMode
+        : "",
+    ignoreAttachments:
+      typeof signal.ignoreAttachments === "boolean" ? signal.ignoreAttachments : false,
+    ignoreStories:
+      typeof signal.ignoreStories === "boolean" ? signal.ignoreStories : false,
+    sendReadReceipts:
+      typeof signal.sendReadReceipts === "boolean" ? signal.sendReadReceipts : false,
+    allowFrom: toList(signal.allowFrom),
+    mediaMaxMb:
+      typeof signal.mediaMaxMb === "number" ? String(signal.mediaMaxMb) : "",
+  };
+
+  state.imessageForm = {
+    enabled: typeof imessage.enabled === "boolean" ? imessage.enabled : true,
+    cliPath: typeof imessage.cliPath === "string" ? imessage.cliPath : "",
+    dbPath: typeof imessage.dbPath === "string" ? imessage.dbPath : "",
+    service:
+      imessage.service === "imessage" ||
+      imessage.service === "sms" ||
+      imessage.service === "auto"
+        ? imessage.service
+        : "auto",
+    region: typeof imessage.region === "string" ? imessage.region : "",
+    allowFrom: toList(imessage.allowFrom),
+    includeAttachments:
+      typeof imessage.includeAttachments === "boolean"
+        ? imessage.includeAttachments
+        : false,
+    mediaMaxMb:
+      typeof imessage.mediaMaxMb === "number" ? String(imessage.mediaMaxMb) : "",
+  };
+
+  const configInvalid = snapshot.valid === false ? "Config invalid." : null;
+  state.telegramConfigStatus = configInvalid;
+  state.discordConfigStatus = configInvalid;
+  state.signalConfigStatus = configInvalid;
+  state.imessageConfigStatus = configInvalid;
 }
 
 export async function saveConfig(state: ConfigState) {
@@ -79,4 +162,3 @@ export async function saveConfig(state: ConfigState) {
     state.configSaving = false;
   }
 }
-

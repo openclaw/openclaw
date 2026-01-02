@@ -8,6 +8,48 @@ export type TelegramForm = {
   webhookPath: string;
 };
 
+export type DiscordForm = {
+  enabled: boolean;
+  token: string;
+  allowFrom: string;
+  groupEnabled: boolean;
+  groupChannels: string;
+  mediaMaxMb: string;
+  historyLimit: string;
+  enableReactions: boolean;
+  slashEnabled: boolean;
+  slashName: string;
+  slashSessionPrefix: string;
+  slashEphemeral: boolean;
+};
+
+export type SignalForm = {
+  enabled: boolean;
+  account: string;
+  httpUrl: string;
+  httpHost: string;
+  httpPort: string;
+  cliPath: string;
+  autoStart: boolean;
+  receiveMode: "on-start" | "manual" | "";
+  ignoreAttachments: boolean;
+  ignoreStories: boolean;
+  sendReadReceipts: boolean;
+  allowFrom: string;
+  mediaMaxMb: string;
+};
+
+export type IMessageForm = {
+  enabled: boolean;
+  cliPath: string;
+  dbPath: string;
+  service: "auto" | "imessage" | "sms";
+  region: string;
+  allowFrom: string;
+  includeAttachments: boolean;
+  mediaMaxMb: string;
+};
+
 export type CronFormState = {
   name: string;
   description: string;
@@ -28,4 +70,3 @@ export type CronFormState = {
   timeoutSeconds: string;
   postToMainPrefix: string;
 };
-

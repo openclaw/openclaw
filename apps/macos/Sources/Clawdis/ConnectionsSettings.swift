@@ -2,6 +2,26 @@ import AppKit
 import SwiftUI
 
 struct ConnectionsSettings: View {
+    private enum ConnectionProvider: String, CaseIterable, Identifiable {
+        case whatsapp
+        case telegram
+        case discord
+        case signal
+        case imessage
+
+        var id: String { self.rawValue }
+
+        var sortOrder: Int {
+            switch self {
+            case .whatsapp: 0
+            case .telegram: 1
+            case .discord: 2
+            case .signal: 3
+            case .imessage: 4
+            }
+        }
+    }
+
     @Bindable var store: ConnectionsStore
     @State private var showTelegramToken = false
     @State private var showDiscordToken = false
@@ -14,9 +34,9 @@ struct ConnectionsSettings: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 14) {
                 self.header
-                self.whatsAppSection
-                self.telegramSection
-                self.discordSection
+                ForEach(self.orderedProviders) { provider in
+                    self.providerSection(provider)
+                }
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -31,7 +51,7 @@ struct ConnectionsSettings: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Connections")
                 .font(.title3.weight(.semibold))
-            Text("Link and monitor WhatsApp, Telegram, and Discord providers.")
+            Text("Link and monitor messaging providers.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -319,6 +339,236 @@ struct ConnectionsSettings: View {
         }
     }
 
+    private var signalSection: some View {
+        GroupBox("Signal") {
+            VStack(alignment: .leading, spacing: 10) {
+                self.providerHeader(
+                    title: "Signal REST",
+                    color: self.signalTint,
+                    subtitle: self.signalSummary)
+
+                if let details = self.signalDetails {
+                    Text(details)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let status = self.store.configStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider().padding(.vertical, 2)
+
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        self.gridLabel("Enabled")
+                        Toggle("", isOn: self.$store.signalEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Account")
+                        TextField("+15551234567", text: self.$store.signalAccount)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("HTTP URL")
+                        TextField("http://127.0.0.1:8080", text: self.$store.signalHttpUrl)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("HTTP host")
+                        TextField("127.0.0.1", text: self.$store.signalHttpHost)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("HTTP port")
+                        TextField("8080", text: self.$store.signalHttpPort)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("CLI path")
+                        TextField("signal-cli", text: self.$store.signalCliPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Auto start")
+                        Toggle("", isOn: self.$store.signalAutoStart)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Receive mode")
+                        Picker("", selection: self.$store.signalReceiveMode) {
+                            Text("Default").tag("")
+                            Text("on-start").tag("on-start")
+                            Text("manual").tag("manual")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Ignore attachments")
+                        Toggle("", isOn: self.$store.signalIgnoreAttachments)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Ignore stories")
+                        Toggle("", isOn: self.$store.signalIgnoreStories)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Read receipts")
+                        Toggle("", isOn: self.$store.signalSendReadReceipts)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Allow from")
+                        TextField("12345, +1555", text: self.$store.signalAllowFrom)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Media max MB")
+                        TextField("8", text: self.$store.signalMediaMaxMb)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await self.store.saveSignalConfig() }
+                    } label: {
+                        if self.store.isSavingConfig {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.store.isSavingConfig)
+
+                    Spacer()
+
+                    Button("Refresh") {
+                        Task { await self.store.refresh(probe: true) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.store.isRefreshing)
+                }
+                .font(.caption)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var imessageSection: some View {
+        GroupBox("iMessage") {
+            VStack(alignment: .leading, spacing: 10) {
+                self.providerHeader(
+                    title: "iMessage (imsg)",
+                    color: self.imessageTint,
+                    subtitle: self.imessageSummary)
+
+                if let details = self.imessageDetails {
+                    Text(details)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if let status = self.store.configStatus {
+                    Text(status)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Divider().padding(.vertical, 2)
+
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                    GridRow {
+                        self.gridLabel("Enabled")
+                        Toggle("", isOn: self.$store.imessageEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("CLI path")
+                        TextField("imsg", text: self.$store.imessageCliPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("DB path")
+                        TextField("~/Library/Messages/chat.db", text: self.$store.imessageDbPath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Service")
+                        Picker("", selection: self.$store.imessageService) {
+                            Text("auto").tag("auto")
+                            Text("imessage").tag("imessage")
+                            Text("sms").tag("sms")
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.menu)
+                    }
+                    GridRow {
+                        self.gridLabel("Region")
+                        TextField("US", text: self.$store.imessageRegion)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Allow from")
+                        TextField("chat_id:101, +1555", text: self.$store.imessageAllowFrom)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Attachments")
+                        Toggle("", isOn: self.$store.imessageIncludeAttachments)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
+                        self.gridLabel("Media max MB")
+                        TextField("16", text: self.$store.imessageMediaMaxMb)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await self.store.saveIMessageConfig() }
+                    } label: {
+                        if self.store.isSavingConfig {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Save")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(self.store.isSavingConfig)
+
+                    Spacer()
+
+                    Button("Refresh") {
+                        Task { await self.store.refresh(probe: true) }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(self.store.isRefreshing)
+                }
+                .font(.caption)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
     private var whatsAppTint: Color {
         guard let status = self.store.snapshot?.whatsapp else { return .secondary }
         if !status.configured { return .secondary }
@@ -347,6 +597,24 @@ struct ConnectionsSettings: View {
         return .orange
     }
 
+    private var signalTint: Color {
+        guard let status = self.store.snapshot?.signal else { return .secondary }
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
+    }
+
+    private var imessageTint: Color {
+        guard let status = self.store.snapshot?.imessage else { return .secondary }
+        if !status.configured { return .secondary }
+        if status.lastError != nil { return .orange }
+        if status.probe?.ok == false { return .orange }
+        if status.running { return .green }
+        return .orange
+    }
+
     private var whatsAppSummary: String {
         guard let status = self.store.snapshot?.whatsapp else { return "Checking…" }
         if !status.linked { return "Not linked" }
@@ -364,6 +632,20 @@ struct ConnectionsSettings: View {
 
     private var discordSummary: String {
         guard let status = self.store.snapshot?.discord else { return "Checking…" }
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
+    }
+
+    private var signalSummary: String {
+        guard let status = self.store.snapshot?.signal else { return "Checking…" }
+        if !status.configured { return "Not configured" }
+        if status.running { return "Running" }
+        return "Configured"
+    }
+
+    private var imessageSummary: String {
+        guard let status = self.store.snapshot?.imessage else { return "Checking…" }
         if !status.configured { return "Not configured" }
         if status.running { return "Running" }
         return "Configured"
@@ -458,12 +740,105 @@ struct ConnectionsSettings: View {
         return lines.isEmpty ? nil : lines.joined(separator: " · ")
     }
 
+    private var signalDetails: String? {
+        guard let status = self.store.snapshot?.signal else { return nil }
+        var lines: [String] = []
+        lines.append("Base URL: \(status.baseUrl)")
+        if let probe = status.probe {
+            if probe.ok {
+                if let version = probe.version, !version.isEmpty {
+                    lines.append("Version \(version)")
+                }
+                if let elapsed = probe.elapsedMs {
+                    lines.append("Probe \(Int(elapsed))ms")
+                }
+            } else {
+                let code = probe.status.map { String($0) } ?? "unknown"
+                lines.append("Probe failed (\(code))")
+            }
+        }
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
+    }
+
+    private var imessageDetails: String? {
+        guard let status = self.store.snapshot?.imessage else { return nil }
+        var lines: [String] = []
+        if let cliPath = status.cliPath, !cliPath.isEmpty {
+            lines.append("CLI: \(cliPath)")
+        }
+        if let dbPath = status.dbPath, !dbPath.isEmpty {
+            lines.append("DB: \(dbPath)")
+        }
+        if let probe = status.probe, !probe.ok {
+            let err = probe.error ?? "probe failed"
+            lines.append("Probe error: \(err)")
+        }
+        if let last = self.date(fromMs: status.lastProbeAt) {
+            lines.append("Last probe \(relativeAge(from: last))")
+        }
+        if let err = status.lastError, !err.isEmpty {
+            lines.append("Error: \(err)")
+        }
+        return lines.isEmpty ? nil : lines.joined(separator: " · ")
+    }
+
     private var isTelegramTokenLocked: Bool {
         self.store.snapshot?.telegram.tokenSource == "env"
     }
 
     private var isDiscordTokenLocked: Bool {
         self.store.snapshot?.discord?.tokenSource == "env"
+    }
+
+    private var orderedProviders: [ConnectionProvider] {
+        ConnectionProvider.allCases.sorted { lhs, rhs in
+            let lhsEnabled = self.providerEnabled(lhs)
+            let rhsEnabled = self.providerEnabled(rhs)
+            if lhsEnabled != rhsEnabled { return lhsEnabled && !rhsEnabled }
+            return lhs.sortOrder < rhs.sortOrder
+        }
+    }
+
+    private func providerEnabled(_ provider: ConnectionProvider) -> Bool {
+        switch provider {
+        case .whatsapp:
+            guard let status = self.store.snapshot?.whatsapp else { return false }
+            return status.configured || status.linked || status.running
+        case .telegram:
+            guard let status = self.store.snapshot?.telegram else { return false }
+            return status.configured || status.running
+        case .discord:
+            guard let status = self.store.snapshot?.discord else { return false }
+            return status.configured || status.running
+        case .signal:
+            guard let status = self.store.snapshot?.signal else { return false }
+            return status.configured || status.running
+        case .imessage:
+            guard let status = self.store.snapshot?.imessage else { return false }
+            return status.configured || status.running
+        }
+    }
+
+    @ViewBuilder
+    private func providerSection(_ provider: ConnectionProvider) -> some View {
+        switch provider {
+        case .whatsapp:
+            self.whatsAppSection
+        case .telegram:
+            self.telegramSection
+        case .discord:
+            self.discordSection
+        case .signal:
+            self.signalSection
+        case .imessage:
+            self.imessageSection
+        }
     }
 
     private func providerHeader(title: String, color: Color, subtitle: String) -> some View {

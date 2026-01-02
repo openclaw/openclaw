@@ -26,13 +26,22 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type { CronFormState, TelegramForm } from "./ui-types";
+import type {
+  CronFormState,
+  DiscordForm,
+  IMessageForm,
+  SignalForm,
+  TelegramForm,
+} from "./ui-types";
 import { loadChatHistory, sendChat, handleChatEvent } from "./controllers/chat";
 import { loadNodes } from "./controllers/nodes";
 import { loadConfig } from "./controllers/config";
 import {
   loadProviders,
   logoutWhatsApp,
+  saveDiscordConfig,
+  saveIMessageConfig,
+  saveSignalConfig,
   saveTelegramConfig,
   startWhatsAppLogin,
   waitWhatsAppLogin,
@@ -126,6 +135,52 @@ export class ClawdisApp extends LitElement {
   @state() telegramSaving = false;
   @state() telegramTokenLocked = false;
   @state() telegramConfigStatus: string | null = null;
+  @state() discordForm: DiscordForm = {
+    enabled: true,
+    token: "",
+    allowFrom: "",
+    groupEnabled: false,
+    groupChannels: "",
+    mediaMaxMb: "",
+    historyLimit: "",
+    enableReactions: true,
+    slashEnabled: false,
+    slashName: "",
+    slashSessionPrefix: "",
+    slashEphemeral: true,
+  };
+  @state() discordSaving = false;
+  @state() discordTokenLocked = false;
+  @state() discordConfigStatus: string | null = null;
+  @state() signalForm: SignalForm = {
+    enabled: true,
+    account: "",
+    httpUrl: "",
+    httpHost: "",
+    httpPort: "",
+    cliPath: "",
+    autoStart: true,
+    receiveMode: "",
+    ignoreAttachments: false,
+    ignoreStories: false,
+    sendReadReceipts: false,
+    allowFrom: "",
+    mediaMaxMb: "",
+  };
+  @state() signalSaving = false;
+  @state() signalConfigStatus: string | null = null;
+  @state() imessageForm: IMessageForm = {
+    enabled: true,
+    cliPath: "",
+    dbPath: "",
+    service: "auto",
+    region: "",
+    allowFrom: "",
+    includeAttachments: false,
+    mediaMaxMb: "",
+  };
+  @state() imessageSaving = false;
+  @state() imessageConfigStatus: string | null = null;
 
   @state() presenceLoading = false;
   @state() presenceEntries: PresenceEntry[] = [];
@@ -505,6 +560,24 @@ export class ClawdisApp extends LitElement {
 
   async handleTelegramSave() {
     await saveTelegramConfig(this);
+    await loadConfig(this);
+    await loadProviders(this, true);
+  }
+
+  async handleDiscordSave() {
+    await saveDiscordConfig(this);
+    await loadConfig(this);
+    await loadProviders(this, true);
+  }
+
+  async handleSignalSave() {
+    await saveSignalConfig(this);
+    await loadConfig(this);
+    await loadProviders(this, true);
+  }
+
+  async handleIMessageSave() {
+    await saveIMessageConfig(this);
     await loadConfig(this);
     await loadProviders(this, true);
   }

@@ -2,6 +2,9 @@ export type ProvidersStatusSnapshot = {
   ts: number;
   whatsapp: WhatsAppStatus;
   telegram: TelegramStatus;
+  discord?: DiscordStatus | null;
+  signal?: SignalStatus | null;
+  imessage?: IMessageStatus | null;
 };
 
 export type WhatsAppSelf = {
@@ -59,6 +62,66 @@ export type TelegramStatus = {
   lastStopAt?: number | null;
   lastError?: string | null;
   probe?: TelegramProbe | null;
+  lastProbeAt?: number | null;
+};
+
+export type DiscordBot = {
+  id?: string | null;
+  username?: string | null;
+};
+
+export type DiscordProbe = {
+  ok: boolean;
+  status?: number | null;
+  error?: string | null;
+  elapsedMs?: number | null;
+  bot?: DiscordBot | null;
+};
+
+export type DiscordStatus = {
+  configured: boolean;
+  tokenSource?: string | null;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: DiscordProbe | null;
+  lastProbeAt?: number | null;
+};
+
+export type SignalProbe = {
+  ok: boolean;
+  status?: number | null;
+  error?: string | null;
+  elapsedMs?: number | null;
+  version?: string | null;
+};
+
+export type SignalStatus = {
+  configured: boolean;
+  baseUrl: string;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  probe?: SignalProbe | null;
+  lastProbeAt?: number | null;
+};
+
+export type IMessageProbe = {
+  ok: boolean;
+  error?: string | null;
+};
+
+export type IMessageStatus = {
+  configured: boolean;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  cliPath?: string | null;
+  dbPath?: string | null;
+  probe?: IMessageProbe | null;
   lastProbeAt?: number | null;
 };
 
