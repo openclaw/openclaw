@@ -189,6 +189,12 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         menu.insertItem(topSeparator, at: cursor)
         cursor += 1
 
+        if let gatewayEntry = self.gatewayEntry() {
+            let gatewayItem = self.makeNodeItem(entry: gatewayEntry, width: width)
+            menu.insertItem(gatewayItem, at: cursor)
+            cursor += 1
+        }
+
         guard self.isControlChannelConnected else { return }
 
         if let error = self.nodesStore.lastError?.nonEmpty {
@@ -214,15 +220,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             cursor += 1
         } else {
             for entry in entries.prefix(8) {
-                let item = NSMenuItem()
-                item.tag = self.nodesTag
-                item.target = self
-                item.action = #selector(self.copyNodeSummary(_:))
-                item.representedObject = NodeMenuEntryFormatter.summaryText(entry)
-                item.view = HighlightedMenuItemHostView(
-                    rootView: AnyView(NodeMenuRowView(entry: entry, width: width)),
-                    width: width)
-                item.submenu = self.buildNodeSubmenu(entry: entry, width: width)
+                let item = self.makeNodeItem(entry: entry, width: width)
                 menu.insertItem(item, at: cursor)
                 cursor += 1
             }
@@ -248,6 +246,58 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         #endif
         if case .connected = ControlChannel.shared.state { return true }
         return false
+    }
+
+    private func gatewayEntry() -> NodeInfo? {
+        let mode = AppStateStore.shared.connectionMode
+        let isConnected = self.isControlChannelConnected
+        let port = GatewayEnvironment.gatewayPort()
+        var host: String?
+        var platform: String?
+
+        switch mode {
+        case .remote:
+            platform = "remote"
+            let target = AppStateStore.shared.remoteTarget
+            if let parsed = CommandResolver.parseSSHTarget(target) {
+                host = parsed.port == 22 ? parsed.host : "\(parsed.host):\(parsed.port)"
+            } else {
+                host = target.nonEmpty
+            }
+        case .local:
+            platform = "local"
+            host = "127.0.0.1:\(port)"
+        case .unconfigured:
+            platform = nil
+            host = nil
+        }
+
+        return NodeInfo(
+            nodeId: "gateway",
+            displayName: "Gateway",
+            platform: platform,
+            version: nil,
+            deviceFamily: nil,
+            modelIdentifier: nil,
+            remoteIp: host,
+            caps: nil,
+            commands: nil,
+            permissions: nil,
+            paired: nil,
+            connected: isConnected)
+    }
+
+    private func makeNodeItem(entry: NodeInfo, width: CGFloat) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.tag = self.nodesTag
+        item.target = self
+        item.action = #selector(self.copyNodeSummary(_:))
+        item.representedObject = NodeMenuEntryFormatter.summaryText(entry)
+        item.view = HighlightedMenuItemHostView(
+            rootView: AnyView(NodeMenuRowView(entry: entry, width: width)),
+            width: width)
+        item.submenu = self.buildNodeSubmenu(entry: entry, width: width)
+        return item
     }
 
     private func makeMessageItem(text: String, symbolName: String, width: CGFloat) -> NSMenuItem {
