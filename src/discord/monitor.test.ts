@@ -1,15 +1,16 @@
+import { describe, expect, it } from "vitest";
 import {
   allowListMatches,
+  type DiscordGuildEntryResolved,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfig,
   resolveDiscordGuildEntry,
   resolveGroupDmAllow,
-  type DiscordGuildEntryResolved,
 } from "./monitor.js";
 
 const fakeGuild = (id: string, name: string) =>
-  ({ id, name } as unknown as import("discord.js").Guild);
+  ({ id, name }) as unknown as import("discord.js").Guild;
 
 const makeEntries = (
   entries: Record<string, Partial<DiscordGuildEntryResolved>>,
@@ -28,12 +29,9 @@ const makeEntries = (
 
 describe("discord allowlist helpers", () => {
   it("normalizes slugs", () => {
-    expect(normalizeDiscordSlug("Friends of Clawd"))
-      .toBe("friends-of-clawd");
-    expect(normalizeDiscordSlug("#General"))
-      .toBe("general");
-    expect(normalizeDiscordSlug("Dev__Chat"))
-      .toBe("dev-chat");
+    expect(normalizeDiscordSlug("Friends of Clawd")).toBe("friends-of-clawd");
+    expect(normalizeDiscordSlug("#General")).toBe("general");
+    expect(normalizeDiscordSlug("Dev__Chat")).toBe("dev-chat");
   });
 
   it("matches ids or names", () => {
@@ -42,10 +40,13 @@ describe("discord allowlist helpers", () => {
       ["discord:", "user:", "guild:", "channel:"],
     );
     expect(allow).not.toBeNull();
-    expect(allowListMatches(allow!, { id: "123" })).toBe(true);
-    expect(allowListMatches(allow!, { name: "steipete" })).toBe(true);
-    expect(allowListMatches(allow!, { name: "friends-of-clawd" })).toBe(true);
-    expect(allowListMatches(allow!, { name: "other" })).toBe(false);
+    if (!allow) {
+      throw new Error("Expected allow list to be normalized");
+    }
+    expect(allowListMatches(allow, { id: "123" })).toBe(true);
+    expect(allowListMatches(allow, { name: "steipete" })).toBe(true);
+    expect(allowListMatches(allow, { name: "friends-of-clawd" })).toBe(true);
+    expect(allowListMatches(allow, { name: "other" })).toBe(false);
   });
 });
 

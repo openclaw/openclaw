@@ -206,7 +206,6 @@ describe("config identity defaults", () => {
   });
 });
 
-import fs from "node:fs/promises";
 describe("config discord", () => {
   let previousHome: string | undefined;
 
