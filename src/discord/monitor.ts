@@ -679,7 +679,7 @@ async function resolveReplyContext(message: Message): Promise<string | null> {
     const isDirectMessage = channelType === ChannelType.DM;
     const fromLabel = isDirectMessage
       ? buildDirectLabel(referenced)
-      : referenced.member?.displayName ?? referenced.author.tag;
+      : (referenced.member?.displayName ?? referenced.author.tag);
     const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${referenced.author.tag} id:${referenced.author.id}]`;
     return formatAgentEnvelope({
       surface: "Discord",
