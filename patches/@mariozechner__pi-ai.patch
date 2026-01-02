@@ -1,5 +1,90 @@
+diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+index ff9cbcfebfac6b4370d85dc838f5cacf2a60ed64..42096c82aec925b412258348a36ba4a7025b283b 100644
+--- a/dist/providers/google-shared.js
++++ b/dist/providers/google-shared.js
+@@ -140,6 +140,71 @@ export function convertMessages(model, context) {
+     }
+     return contents;
+ }
++/**
++ * Sanitize JSON Schema for Google Cloud Code Assist API.
++ * Removes unsupported keywords like patternProperties, const, anyOf, etc.
++ * and converts to a format compatible with Google's function declarations.
++ */
++function sanitizeSchemaForGoogle(schema) {
++    if (!schema || typeof schema !== 'object') {
++        return schema;
++    }
++    // If it's an array, sanitize each element
++    if (Array.isArray(schema)) {
++        return schema.map(item => sanitizeSchemaForGoogle(item));
++    }
++    const sanitized = {};
++    // List of unsupported JSON Schema keywords that Google's API doesn't understand
++    const unsupportedKeywords = [
++        'patternProperties',
++        'const',
++        'anyOf',
++        'oneOf',
++        'allOf',
++        'not',
++        '$schema',
++        '$id',
++        '$ref',
++        '$defs',
++        'definitions',
++        'if',
++        'then',
++        'else',
++        'dependentSchemas',
++        'dependentRequired',
++        'unevaluatedProperties',
++        'unevaluatedItems',
++        'contentEncoding',
++        'contentMediaType',
++        'contentSchema',
++        'deprecated',
++        'readOnly',
++        'writeOnly',
++        'examples',
++        '$comment',
++        'additionalProperties',
++    ];
++    for (const [key, value] of Object.entries(schema)) {
++        // Skip unsupported keywords
++        if (unsupportedKeywords.includes(key)) {
++            continue;
++        }
++        // Recursively sanitize nested objects
++        if (key === 'properties' && typeof value === 'object' && value !== null) {
++            sanitized[key] = {};
++            for (const [propKey, propValue] of Object.entries(value)) {
++                sanitized[key][propKey] = sanitizeSchemaForGoogle(propValue);
++            }
++        } else if (key === 'items' && typeof value === 'object') {
++            sanitized[key] = sanitizeSchemaForGoogle(value);
++        } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
++            sanitized[key] = sanitizeSchemaForGoogle(value);
++        } else {
++            sanitized[key] = value;
++        }
++    }
++    return sanitized;
++}
+ /**
+  * Convert tools to Gemini function declarations format.
+  */
+@@ -151,7 +216,7 @@ export function convertTools(tools) {
+             functionDeclarations: tools.map((tool) => ({
+                 name: tool.name,
+                 description: tool.description,
+-                parameters: tool.parameters,
++                parameters: sanitizeSchemaForGoogle(tool.parameters),
+             })),
+         },
+     ];
 diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
-index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..c2bc63f483f3285b00755901ba97db810221cea6 100644
+index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6ed334863e 100644
 --- a/dist/providers/openai-responses.js
 +++ b/dist/providers/openai-responses.js
 @@ -486,7 +486,6 @@ function convertTools(tools) {

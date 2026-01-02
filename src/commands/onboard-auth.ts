@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
+import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 
 import { resolveClawdisAgentDir } from "../agents/agent-paths.js";
@@ -9,7 +9,7 @@ import type { ClawdisConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 
 export async function writeOAuthCredentials(
-  provider: "anthropic",
+  provider: OAuthProvider,
   creds: OAuthCredentials,
 ): Promise<void> {
   const dir = path.join(CONFIG_DIR, "credentials");

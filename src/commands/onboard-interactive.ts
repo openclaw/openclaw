@@ -9,7 +9,11 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
+import {
+  loginAnthropic,
+  loginAntigravity,
+  type OAuthCredentials,
+} from "@mariozechner/pi-ai";
 
 import type { ClawdisConfig } from "../config/config.js";
 import {
@@ -198,6 +202,10 @@ export async function runInteractiveOnboarding(
       message: "Model/auth choice",
       options: [
         { value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" },
+        {
+          value: "antigravity",
+          label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
+        },
         { value: "apiKey", label: "Anthropic API key" },
         { value: "minimax", label: "Minimax M2.1 (LM Studio)" },
         { value: "skip", label: "Skip for now" },
@@ -237,6 +245,47 @@ export async function runInteractiveOnboarding(
       }
     } catch (err) {
       spin.stop("OAuth failed");
+      runtime.error(String(err));
+    }
+  } else if (authChoice === "antigravity") {
+    note(
+      [
+        "Browser will open for Google authentication.",
+        "Sign in with your Google account that has Antigravity access.",
+        "The callback will be captured automatically on localhost:51121.",
+      ].join("\n"),
+      "Google Antigravity OAuth",
+    );
+    const spin = spinner();
+    spin.start("Starting OAuth flow…");
+    let oauthCreds: OAuthCredentials | null = null;
+    try {
+      oauthCreds = await loginAntigravity(
+        async ({ url, instructions }) => {
+          spin.message(instructions ?? "Complete sign-in in browser…");
+          await openUrl(url);
+          runtime.log(`Open: ${url}`);
+        },
+        (msg) => spin.message(msg),
+      );
+      spin.stop("Antigravity OAuth complete");
+      if (oauthCreds) {
+        await writeOAuthCredentials("google-antigravity", oauthCreds);
+        // Set default model to Claude Opus 4.5 via Antigravity
+        nextConfig = {
+          ...nextConfig,
+          agent: {
+            ...nextConfig.agent,
+            model: "google-antigravity/claude-opus-4-5",
+          },
+        };
+        note(
+          "Default model set to google-antigravity/claude-opus-4-5",
+          "Model configured",
+        );
+      }
+    } catch (err) {
+      spin.stop("Antigravity OAuth failed");
       runtime.error(String(err));
     }
   } else if (authChoice === "apiKey") {
