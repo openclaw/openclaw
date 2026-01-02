@@ -92,8 +92,7 @@ function resolveAccount(opts: MonitorSignalOpts): string | undefined {
 
 function resolveAllowFrom(opts: MonitorSignalOpts): string[] {
   const cfg = loadConfig();
-  const raw =
-    opts.allowFrom ?? cfg.signal?.allowFrom ?? cfg.routing?.allowFrom ?? [];
+  const raw = opts.allowFrom ?? cfg.signal?.allowFrom ?? [];
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 

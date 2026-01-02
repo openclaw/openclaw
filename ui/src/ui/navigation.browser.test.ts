@@ -90,4 +90,13 @@ describe("control UI routing", () => {
     expect(maxScroll).toBeGreaterThan(0);
     expect(container.scrollTop).toBe(maxScroll);
   });
+
+  it("hydrates token from URL params and strips it", async () => {
+    const app = mountApp("/ui/overview?token=abc123");
+    await app.updateComplete;
+
+    expect(app.settings.token).toBe("abc123");
+    expect(window.location.pathname).toBe("/ui/overview");
+    expect(window.location.search).toBe("");
+  });
 });

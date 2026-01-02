@@ -4,6 +4,7 @@ import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdisConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDIS,
+  migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../config/config.js";
@@ -29,8 +30,40 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
 
   const snapshot = await readConfigFileSnapshot();
   let cfg: ClawdisConfig = snapshot.valid ? snapshot.config : {};
-  if (snapshot.exists && !snapshot.valid) {
+  if (
+    snapshot.exists &&
+    !snapshot.valid &&
+    snapshot.legacyIssues.length === 0
+  ) {
     note("Config invalid; doctor will run with defaults.", "Config");
+  }
+
+  if (snapshot.legacyIssues.length > 0) {
+    note(
+      snapshot.legacyIssues
+        .map((issue) => `- ${issue.path}: ${issue.message}`)
+        .join("\n"),
+      "Legacy config keys detected",
+    );
+    const migrate = guardCancel(
+      await confirm({
+        message: "Migrate legacy config entries now?",
+        initialValue: true,
+      }),
+      runtime,
+    );
+    if (migrate) {
+      // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
+      const { config: migrated, changes } = migrateLegacyConfig(
+        snapshot.parsed,
+      );
+      if (changes.length > 0) {
+        note(changes.join("\n"), "Doctor changes");
+      }
+      if (migrated) {
+        cfg = migrated;
+      }
+    }
   }
 
   const workspaceDir = resolveUserPath(
@@ -57,7 +90,12 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
     healthOk = true;
   } catch (err) {
-    runtime.error(`Health check failed: ${String(err)}`);
+    const message = String(err);
+    if (message.includes("gateway closed")) {
+      note("Gateway not running.", "Gateway");
+    } else {
+      runtime.error(`Health check failed: ${message}`);
+    }
   }
 
   if (!healthOk) {
@@ -79,7 +117,12 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
         try {
           await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
         } catch (err) {
-          runtime.error(`Health check failed: ${String(err)}`);
+          const message = String(err);
+          if (message.includes("gateway closed")) {
+            note("Gateway not running.", "Gateway");
+          } else {
+            runtime.error(`Health check failed: ${message}`);
+          }
         }
       }
     }

@@ -75,10 +75,26 @@ final class NodesStore {
             self.lastError = nil
             self.statusMessage = nil
         } catch {
+            if Self.isCancelled(error) {
+                self.logger.debug("node.list cancelled; keeping last nodes")
+                if self.nodes.isEmpty {
+                    self.statusMessage = "Refreshing devices…"
+                }
+                self.lastError = nil
+                return
+            }
             self.logger.error("node.list failed \(error.localizedDescription, privacy: .public)")
             self.nodes = []
             self.lastError = error.localizedDescription
             self.statusMessage = nil
         }
+    }
+
+    private static func isCancelled(_ error: Error) -> Bool {
+        if error is CancellationError { return true }
+        if let urlError = error as? URLError, urlError.code == .cancelled { return true }
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled { return true }
+        return false
     }
 }

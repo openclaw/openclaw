@@ -31,8 +31,8 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 - Inbox listeners are detached on shutdown to avoid accumulating event handlers in tests/restarts.
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
-- **Allowlist**: `routing.allowFrom` enforced for direct chats only.
-  - If `routing.allowFrom` is empty, default allowlist = self number (self-chat mode).
+- **Allowlist**: `whatsapp.allowFrom` enforced for direct chats only.
+  - If `whatsapp.allowFrom` is empty, default allowlist = self number (self-chat mode).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
@@ -57,7 +57,7 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
 - `/activation mention|always` is owner-only.
-- Owner = `routing.allowFrom` (or self E.164 if unset).
+- Owner = `whatsapp.allowFrom` (or self E.164 if unset).
 - **History injection**:
   - Recent messages (default 50) inserted under:
     `[Chat messages since your last reply - for context]`
@@ -98,7 +98,7 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
 - Logged-out => stop and require re-link.
 
 ## Config quick map
-- `routing.allowFrom` (DM allowlist).
+- `whatsapp.allowFrom` (DM allowlist).
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)

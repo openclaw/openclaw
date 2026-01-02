@@ -111,7 +111,7 @@ describe("partial reply gating", () => {
     const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
 
     const mockConfig: ClawdisConfig = {
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
     };
@@ -158,7 +158,7 @@ describe("partial reply gating", () => {
     const replyResolver = vi.fn().mockResolvedValue(undefined);
 
     const mockConfig: ClawdisConfig = {
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       session: { store: store.storePath, mainKey: "main" },
@@ -1097,9 +1097,11 @@ describe("web auto-reply", () => {
     const resolver = vi.fn().mockResolvedValue({ text: "ok" });
 
     setLoadConfigMock(() => ({
-      routing: {
+      whatsapp: {
         // Self-chat heuristic: allowFrom includes selfE164.
         allowFrom: ["+999"],
+      },
+      routing: {
         groupChat: {
           requireMention: true,
           mentionPatterns: ["\\bclawd\\b"],
@@ -1247,7 +1249,7 @@ describe("web auto-reply", () => {
   it("prefixes body with same-phone marker when from === to", async () => {
     // Enable messagePrefix for same-phone mode testing
     setLoadConfigMock(() => ({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -1372,7 +1374,7 @@ describe("web auto-reply", () => {
 
   it("applies responsePrefix to regular replies", async () => {
     setLoadConfigMock(() => ({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -1417,7 +1419,7 @@ describe("web auto-reply", () => {
 
   it("does not deliver HEARTBEAT_OK responses", async () => {
     setLoadConfigMock(() => ({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -1462,7 +1464,7 @@ describe("web auto-reply", () => {
 
   it("does not double-prefix if responsePrefix already present", async () => {
     setLoadConfigMock(() => ({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -1508,7 +1510,7 @@ describe("web auto-reply", () => {
 
   it("sends tool summaries immediately with responsePrefix", async () => {
     setLoadConfigMock(() => ({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {

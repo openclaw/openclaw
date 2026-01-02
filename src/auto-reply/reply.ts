@@ -841,14 +841,27 @@ export async function getReplyFromConfig(
   const perMessageQueueMode =
     hasQueueDirective && !inlineQueueReset ? inlineQueueMode : undefined;
 
-  // Optional allowlist by origin number (E.164 without whatsapp: prefix)
-  const configuredAllowFrom = cfg.routing?.allowFrom;
+  const surface = (ctx.Surface ?? "").trim().toLowerCase();
+  const isWhatsAppSurface =
+    surface === "whatsapp" ||
+    (ctx.From ?? "").startsWith("whatsapp:") ||
+    (ctx.To ?? "").startsWith("whatsapp:");
+
+  // WhatsApp owner allowlist (E.164 without whatsapp: prefix); used for group activation only.
+  const configuredAllowFrom = isWhatsAppSurface
+    ? cfg.whatsapp?.allowFrom
+    : undefined;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
-  const isSamePhone = from && to && from === to;
-  // If no config is present, default to self-only DM access.
+  const isEmptyConfig = Object.keys(cfg).length === 0;
+  if (isWhatsAppSurface && isEmptyConfig && from && to && from !== to) {
+    cleanupTyping();
+    return undefined;
+  }
   const defaultAllowFrom =
-    (!configuredAllowFrom || configuredAllowFrom.length === 0) && to
+    isWhatsAppSurface &&
+    (!configuredAllowFrom || configuredAllowFrom.length === 0) &&
+    to
       ? [to]
       : undefined;
   const allowFrom =
@@ -862,10 +875,12 @@ export async function getReplyFromConfig(
     : rawBodyNormalized;
   const activationCommand = parseActivationCommand(commandBodyNormalized);
   const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
-  const ownerCandidates = (allowFrom ?? []).filter(
-    (entry) => entry && entry !== "*",
-  );
-  if (ownerCandidates.length === 0 && to) ownerCandidates.push(to);
+  const ownerCandidates = isWhatsAppSurface
+    ? (allowFrom ?? []).filter((entry) => entry && entry !== "*")
+    : [];
+  if (isWhatsAppSurface && ownerCandidates.length === 0 && to) {
+    ownerCandidates.push(to);
+  }
   const ownerList = ownerCandidates
     .map((entry) => normalizeE164(entry))
     .filter((entry): entry is string => Boolean(entry));
@@ -874,20 +889,6 @@ export async function getReplyFromConfig(
 
   if (!sessionEntry && abortKey) {
     abortedLastRun = ABORT_MEMORY.get(abortKey) ?? false;
-  }
-
-  // Same-phone mode (self-messaging) is always allowed
-  if (isSamePhone) {
-    logVerbose(`Allowing same-phone mode: from === to (${from})`);
-  } else if (!isGroup && Array.isArray(allowFrom) && allowFrom.length > 0) {
-    // Support "*" as wildcard to allow all senders
-    if (!allowFrom.includes("*") && !allowFrom.includes(from)) {
-      logVerbose(
-        `Skipping auto-reply: sender ${from || "<unknown>"} not in allowFrom list`,
-      );
-      cleanupTyping();
-      return undefined;
-    }
   }
 
   if (activationCommand.hasCommand) {

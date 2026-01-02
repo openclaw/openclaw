@@ -22,9 +22,9 @@ The agent was interrupted mid-response.
 
 ### Messages Not Triggering
 
-**Check 1:** Is the sender in `routing.allowFrom`?
+**Check 1:** Is the sender in `whatsapp.allowFrom`?
 ```bash
-cat ~/.clawdis/clawdis.json | jq '.routing.allowFrom'
+cat ~/.clawdis/clawdis.json | jq '.whatsapp.allowFrom'
 ```
 
 **Check 2:** For group chats, is mention required?

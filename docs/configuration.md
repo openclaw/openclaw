@@ -9,7 +9,7 @@ read_when:
 CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comments + trailing commas allowed).
 
 If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
-- restrict who can trigger the bot (`routing.allowFrom`)
+- restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
 - tune group mention behavior (`routing.groupChat`)
 - customize message prefixes (`messages`)
 - set the agent’s workspace (`agent.workspace`)
@@ -21,7 +21,7 @@ If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-
 ```json5
 {
   agent: { workspace: "~/clawd" },
-  routing: { allowFrom: ["+15555550123"] }
+  whatsapp: { allowFrom: ["+15555550123"] }
 }
 ```
 
@@ -76,13 +76,13 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 }
 ```
 
-### `routing.allowFrom`
+### `whatsapp.allowFrom`
 
-Allowlist of E.164 phone numbers that may trigger auto-replies.
+Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies.
 
 ```json5
 {
-  routing: { allowFrom: ["+15555550123", "+447700900123"] }
+  whatsapp: { allowFrom: ["+15555550123", "+447700900123"] }
 }
 ```
 
@@ -175,6 +175,12 @@ Configure the Discord bot by setting the bot token and optional gating:
     token: "your-bot-token",
     mediaMaxMb: 8,                          // clamp inbound media size
     enableReactions: true,                  // allow agent-triggered reactions
+    slashCommand: {                         // user-installed app slash commands
+      enabled: true,
+      name: "clawd",
+      sessionPrefix: "discord:slash",
+      ephemeral: true
+    },
     dm: {
       enabled: true,                        // disable all DMs when false
       allowFrom: ["1234567890", "steipete"], // optional DM allowlist (ids or names)
@@ -549,7 +555,7 @@ Defaults:
     mode: "local", // or "remote"
     bind: "loopback",
     // controlUi: { enabled: true }
-    // auth: { mode: "token" | "password" }
+    // auth: { mode: "token", token: "your-token" } // token is for multi-machine CLI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
   }
 }
@@ -560,6 +566,7 @@ Notes:
 
 Auth and Tailscale:
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
+- `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
 - `gateway.auth.password` can be set here, or via `CLAWDIS_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` controls whether Tailscale identity headers can satisfy auth.

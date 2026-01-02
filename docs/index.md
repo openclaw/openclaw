@@ -100,16 +100,14 @@ clawdis send --to +15555550123 --message "Hello from CLAWDIS"
 Config lives at `~/.clawdis/clawdis.json`.
 
 - If you **do nothing**, CLAWDIS uses the bundled Pi binary in RPC mode with per-sender sessions.
-- If you want to lock it down, start with `routing.allowFrom` and (for groups) mention rules.
+- If you want to lock it down, start with `whatsapp.allowFrom` and (for groups) mention rules.
 
 Example:
 
 ```json5
 {
-  routing: {
-    allowFrom: ["+15555550123"],
-    groupChat: { requireMention: true, mentionPatterns: ["@clawd"] }
-  }
+  whatsapp: { allowFrom: ["+15555550123"] },
+  routing: { groupChat: { requireMention: true, mentionPatterns: ["@clawd"] } }
 }
 ```
 

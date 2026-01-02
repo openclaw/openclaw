@@ -2,15 +2,30 @@ import AppKit
 import SwiftUI
 
 struct NodeMenuEntryFormatter {
+    static func isGateway(_ entry: NodeInfo) -> Bool {
+        entry.nodeId == "gateway"
+    }
+
     static func isConnected(_ entry: NodeInfo) -> Bool {
         entry.isConnected
     }
 
     static func primaryName(_ entry: NodeInfo) -> String {
-        entry.displayName?.nonEmpty ?? entry.nodeId
+        if self.isGateway(entry) {
+            return entry.displayName?.nonEmpty ?? "Gateway"
+        }
+        return entry.displayName?.nonEmpty ?? entry.nodeId
     }
 
     static func summaryText(_ entry: NodeInfo) -> String {
+        if self.isGateway(entry) {
+            let role = self.roleText(entry)
+            let name = self.primaryName(entry)
+            var parts = ["\(name) · \(role)"]
+            if let ip = entry.remoteIp?.nonEmpty { parts.append("host \(ip)") }
+            if let platform = self.platformText(entry) { parts.append(platform) }
+            return parts.joined(separator: " · ")
+        }
         let name = self.primaryName(entry)
         var prefix = "Node: \(name)"
         if let ip = entry.remoteIp?.nonEmpty {
@@ -112,6 +127,11 @@ struct NodeMenuEntryFormatter {
     }
 
     static func leadingSymbol(_ entry: NodeInfo) -> String {
+        if self.isGateway(entry) {
+            return self.safeSystemSymbol(
+                "antenna.radiowaves.left.and.right",
+                fallback: "dot.radiowaves.left.and.right")
+        }
         if let family = entry.deviceFamily?.lowercased() {
             if family.contains("mac") {
                 return self.safeSystemSymbol("laptopcomputer", fallback: "laptopcomputer")

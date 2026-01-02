@@ -48,6 +48,7 @@ import {
   CONFIG_PATH_CLAWDIS,
   isNixMode,
   loadConfig,
+  migrateLegacyConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   STATE_DIR_CLAWDIS,
@@ -658,8 +659,6 @@ type DedupeEntry = {
   payload?: unknown;
   error?: ErrorShape;
 };
-
-const getGatewayToken = () => process.env.CLAWDIS_GATEWAY_TOKEN;
 
 function formatForLog(value: unknown): string {
   try {
@@ -1322,6 +1321,31 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  const configSnapshot = await readConfigFileSnapshot();
+  if (configSnapshot.legacyIssues.length > 0) {
+    if (isNixMode) {
+      throw new Error(
+        "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and restart.",
+      );
+    }
+    const { config: migrated, changes } = migrateLegacyConfig(
+      configSnapshot.parsed,
+    );
+    if (!migrated) {
+      throw new Error(
+        'Legacy config entries detected but auto-migration failed. Run "clawdis doctor" to migrate.',
+      );
+    }
+    await writeConfigFile(migrated);
+    if (changes.length > 0) {
+      log.info(
+        `gateway: migrated legacy config entries:\n${changes
+          .map((entry) => `- ${entry}`)
+          .join("\n")}`,
+      );
+    }
+  }
+
   const cfgAtStart = loadConfig();
   const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
   const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
@@ -1345,7 +1369,8 @@ export async function startGatewayServer(
     ...tailscaleOverrides,
   };
   const tailscaleMode = tailscaleConfig.mode ?? "off";
-  const token = getGatewayToken();
+  const token =
+    authConfig.token ?? process.env.CLAWDIS_GATEWAY_TOKEN ?? undefined;
   const password =
     authConfig.password ?? process.env.CLAWDIS_GATEWAY_PASSWORD ?? undefined;
   const authMode: ResolvedGatewayAuth["mode"] =
@@ -2228,6 +2253,7 @@ export async function startGatewayServer(
       token: discordToken.trim(),
       runtime: discordRuntimeEnv,
       abortSignal: discordAbort.signal,
+      slashCommand: cfg.discord?.slashCommand,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
       historyLimit: cfg.discord?.historyLimit,
     })
@@ -6641,7 +6667,7 @@ export async function startGatewayServer(
                 if (explicit) return resolvedTo;
 
                 const cfg = cfgForAgent ?? loadConfig();
-                const rawAllow = cfg.routing?.allowFrom ?? [];
+                const rawAllow = cfg.whatsapp?.allowFrom ?? [];
                 if (rawAllow.includes("*")) return resolvedTo;
                 const allowFrom = rawAllow
                   .map((val) => normalizeE164(val))

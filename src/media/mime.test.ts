@@ -1,7 +1,7 @@
 import JSZip from "jszip";
 import { describe, expect, it } from "vitest";
 
-import { detectMime } from "./mime.js";
+import { detectMime, imageMimeFromFormat } from "./mime.js";
 
 async function makeOoxmlZip(opts: {
   mainMime: string;
@@ -17,6 +17,15 @@ async function makeOoxmlZip(opts: {
 }
 
 describe("mime detection", () => {
+  it("maps common image formats to mime types", () => {
+    expect(imageMimeFromFormat("jpg")).toBe("image/jpeg");
+    expect(imageMimeFromFormat("jpeg")).toBe("image/jpeg");
+    expect(imageMimeFromFormat("png")).toBe("image/png");
+    expect(imageMimeFromFormat("webp")).toBe("image/webp");
+    expect(imageMimeFromFormat("gif")).toBe("image/gif");
+    expect(imageMimeFromFormat("unknown")).toBeUndefined();
+  });
+
   it("detects docx from buffer", async () => {
     const buf = await makeOoxmlZip({
       mainMime:

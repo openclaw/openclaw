@@ -94,7 +94,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   it("applies allowFrom fallback for WhatsApp targets", () => {
     const cfg: ClawdisConfig = {
       agent: { heartbeat: { target: "whatsapp", to: "+1999" } },
-      routing: { allowFrom: ["+1555", "+1666"] },
+      whatsapp: { allowFrom: ["+1555", "+1666"] },
     };
     const entry = {
       ...baseEntry,
@@ -145,7 +145,7 @@ describe("runHeartbeatOnce", () => {
         agent: {
           heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
         },
-        routing: { allowFrom: ["*"] },
+        whatsapp: { allowFrom: ["*"] },
         session: { store: storePath },
       };
 
@@ -206,7 +206,7 @@ describe("runHeartbeatOnce", () => {
         agent: {
           heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
         },
-        routing: { allowFrom: ["*"] },
+        whatsapp: { allowFrom: ["*"] },
         session: { store: storePath },
       };
 

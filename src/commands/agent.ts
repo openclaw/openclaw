@@ -158,7 +158,7 @@ export async function agentCommand(
   });
   const workspaceDir = workspace.dir;
 
-  const allowFrom = (cfg.routing?.allowFrom ?? [])
+  const allowFrom = (cfg.whatsapp?.allowFrom ?? [])
     .map((val) => normalizeE164(val))
     .filter((val) => val.length > 1);
 
@@ -451,7 +451,7 @@ export async function agentCommand(
   if (deliver) {
     if (deliveryProvider === "whatsapp" && !whatsappTarget) {
       const err = new Error(
-        "Delivering to WhatsApp requires --to <E.164> or routing.allowFrom[0]",
+        "Delivering to WhatsApp requires --to <E.164> or whatsapp.allowFrom[0]",
       );
       if (!bestEffortDeliver) throw err;
       logDeliveryError(err);

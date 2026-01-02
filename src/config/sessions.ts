@@ -349,6 +349,8 @@ export function resolveSessionKey(
   ctx: MsgContext,
   mainKey?: string,
 ) {
+  const explicit = ctx.SessionKey?.trim();
+  if (explicit) return explicit;
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") return raw;
   // Default to a single shared direct-chat session called "main"; groups stay isolated.

@@ -118,7 +118,7 @@ describe("directive parsing", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: { store: path.join(home, "sessions.json") },
@@ -168,7 +168,7 @@ describe("directive parsing", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          routing: { allowFrom: ["*"] },
+          whatsapp: { allowFrom: ["*"] },
           session: { store: storePath },
         },
       );
@@ -195,7 +195,7 @@ describe("directive parsing", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          routing: { allowFrom: ["*"] },
+          whatsapp: { allowFrom: ["*"] },
           session: { store: storePath },
         },
       );
@@ -208,7 +208,7 @@ describe("directive parsing", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          routing: { allowFrom: ["*"] },
+          whatsapp: { allowFrom: ["*"] },
           session: { store: storePath },
         },
       );
@@ -264,7 +264,7 @@ describe("directive parsing", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: { store: storePath },
@@ -325,7 +325,7 @@ describe("directive parsing", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: path.join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: { store: storePath },
@@ -506,7 +506,7 @@ describe("directive parsing", () => {
             workspace: path.join(home, "clawd"),
             allowedModels: ["openai/gpt-4.1-mini"],
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: { store: storePath },

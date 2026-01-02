@@ -116,7 +116,7 @@ function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
         }
       })
       .filter((r): r is RegExp => Boolean(r)) ?? [];
-  return { mentionRegexes, allowFrom: cfg.routing?.allowFrom };
+  return { mentionRegexes, allowFrom: cfg.whatsapp?.allowFrom };
 }
 
 function isBotMentioned(
@@ -448,8 +448,8 @@ export function resolveHeartbeatRecipients(
 
   const sessionRecipients = getSessionRecipients(cfg);
   const allowFrom =
-    Array.isArray(cfg.routing?.allowFrom) && cfg.routing.allowFrom.length > 0
-      ? cfg.routing.allowFrom.filter((v) => v !== "*").map(normalizeE164)
+    Array.isArray(cfg.whatsapp?.allowFrom) && cfg.whatsapp.allowFrom.length > 0
+      ? cfg.whatsapp.allowFrom.filter((v) => v !== "*").map(normalizeE164)
       : [];
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
@@ -918,7 +918,7 @@ export async function monitorWebProvider(
       // Build message prefix: explicit config > default based on allowFrom
       let messagePrefix = cfg.messages?.messagePrefix;
       if (messagePrefix === undefined) {
-        const hasAllowFrom = (cfg.routing?.allowFrom?.length ?? 0) > 0;
+        const hasAllowFrom = (cfg.whatsapp?.allowFrom?.length ?? 0) > 0;
         messagePrefix = hasAllowFrom ? "" : "[clawdis]";
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";

@@ -42,7 +42,7 @@ function makeCfg(home: string) {
       model: "anthropic/claude-opus-4-5",
       workspace: join(home, "clawd"),
     },
-    routing: {
+    whatsapp: {
       allowFrom: ["*"],
     },
     session: { store: join(home, "sessions.json") },
@@ -283,8 +283,10 @@ describe("trigger handling", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
+          },
+          routing: {
             groupChat: { requireMention: false },
           },
           session: { store: join(home, "sessions.json") },
@@ -324,7 +326,7 @@ describe("trigger handling", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: {
@@ -363,7 +365,7 @@ describe("trigger handling", () => {
             model: "anthropic/claude-opus-4-5",
             workspace: join(home, "clawd"),
           },
-          routing: {
+          whatsapp: {
             allowFrom: ["*"],
           },
           session: {

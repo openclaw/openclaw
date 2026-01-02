@@ -103,7 +103,7 @@ function resolveDeliveryTarget(
 
   const sanitizedWhatsappTo = (() => {
     if (channel !== "whatsapp") return to;
-    const rawAllow = cfg.routing?.allowFrom ?? [];
+    const rawAllow = cfg.whatsapp?.allowFrom ?? [];
     if (rawAllow.includes("*")) return to;
     const allowFrom = rawAllow
       .map((val) => normalizeE164(val))

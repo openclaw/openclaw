@@ -64,11 +64,11 @@ function noteDiscordTokenHelp(): void {
   );
 }
 
-function setRoutingAllowFrom(cfg: ClawdisConfig, allowFrom?: string[]) {
+function setWhatsAppAllowFrom(cfg: ClawdisConfig, allowFrom?: string[]) {
   return {
     ...cfg,
-    routing: {
-      ...cfg.routing,
+    whatsapp: {
+      ...cfg.whatsapp,
       allowFrom,
     },
   };
@@ -78,13 +78,13 @@ async function promptWhatsAppAllowFrom(
   cfg: ClawdisConfig,
   runtime: RuntimeEnv,
 ): Promise<ClawdisConfig> {
-  const existingAllowFrom = cfg.routing?.allowFrom ?? [];
+  const existingAllowFrom = cfg.whatsapp?.allowFrom ?? [];
   const existingLabel =
     existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
 
   note(
     [
-      "WhatsApp direct chats are gated by `routing.allowFrom`.",
+      "WhatsApp direct chats are gated by `whatsapp.allowFrom`.",
       'Default (unset) = self-chat only; use "*" to allow anyone.',
       `Current: ${existingLabel}`,
     ].join("\n"),
@@ -114,8 +114,8 @@ async function promptWhatsAppAllowFrom(
   ) as (typeof options)[number]["value"];
 
   if (mode === "keep") return cfg;
-  if (mode === "self") return setRoutingAllowFrom(cfg, undefined);
-  if (mode === "any") return setRoutingAllowFrom(cfg, ["*"]);
+  if (mode === "self") return setWhatsAppAllowFrom(cfg, undefined);
+  if (mode === "any") return setWhatsAppAllowFrom(cfg, ["*"]);
 
   const allowRaw = guardCancel(
     await text({
@@ -148,7 +148,7 @@ async function promptWhatsAppAllowFrom(
     part === "*" ? "*" : normalizeE164(part),
   );
   const unique = [...new Set(normalized.filter(Boolean))];
-  return setRoutingAllowFrom(cfg, unique);
+  return setWhatsAppAllowFrom(cfg, unique);
 }
 
 export async function setupProviders(

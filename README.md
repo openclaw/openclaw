@@ -157,7 +157,7 @@ Minimal `~/.clawdis/clawdis.json`:
 
 ```json5
 {
-  routing: {
+  whatsapp: {
     allowFrom: ["+1234567890"]
   }
 }
@@ -166,7 +166,7 @@ Minimal `~/.clawdis/clawdis.json`:
 ### WhatsApp
 
 - Link the device: `pnpm clawdis login` (stores creds in `~/.clawdis/credentials`).
-- Allowlist who can talk to the assistant via `routing.allowFrom`.
+- Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
 
 ### Telegram
 
@@ -184,7 +184,7 @@ Minimal `~/.clawdis/clawdis.json`:
 ### Discord
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
-- Optional: set `discord.requireMention`, `discord.allowFrom`, or `discord.mediaMaxMb` as needed.
+- Optional: set `discord.slashCommand`, `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
 
 ```json5
 {

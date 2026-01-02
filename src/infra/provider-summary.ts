@@ -80,8 +80,8 @@ export async function buildProviderSummary(
     );
   }
 
-  const allowFrom = effective.routing?.allowFrom?.length
-    ? effective.routing.allowFrom.map(normalizeE164).filter(Boolean)
+  const allowFrom = effective.whatsapp?.allowFrom?.length
+    ? effective.whatsapp.allowFrom.map(normalizeE164).filter(Boolean)
     : [];
   if (allowFrom.length) {
     lines.push(chalk.cyan(`AllowFrom: ${allowFrom.join(", ")}`));

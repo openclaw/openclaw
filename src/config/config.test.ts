@@ -488,3 +488,50 @@ describe("talk.voiceAliases", () => {
     expect(res.ok).toBe(false);
   });
 });
+
+describe("legacy config detection", () => {
+  it("rejects routing.allowFrom", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      routing: { allowFrom: ["+15555550123"] },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("routing.allowFrom");
+    }
+  });
+
+  it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      routing: { allowFrom: ["+15555550123"] },
+    });
+    expect(res.changes).toContain(
+      "Moved routing.allowFrom → whatsapp.allowFrom.",
+    );
+    expect(res.config?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+    expect(res.config?.routing?.allowFrom).toBeUndefined();
+  });
+
+  it("surfaces legacy issues in snapshot", async () => {
+    await withTempHome(async (home) => {
+      const configPath = path.join(home, ".clawdis", "clawdis.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ routing: { allowFrom: ["+15555550123"] } }),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.valid).toBe(false);
+      expect(snap.legacyIssues.length).toBe(1);
+      expect(snap.legacyIssues[0]?.path).toBe("routing.allowFrom");
+    });
+  });
+});

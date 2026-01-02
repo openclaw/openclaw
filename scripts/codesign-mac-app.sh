@@ -98,6 +98,8 @@ cat > "$ENT_TMP_BASE" <<'PLIST'
     <true/>
     <key>com.apple.security.device.audio-input</key>
     <true/>
+    <key>com.apple.security.device.camera</key>
+    <true/>
 </dict>
 </plist>
 PLIST
@@ -110,6 +112,8 @@ cat > "$ENT_TMP_APP_BASE" <<'PLIST'
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
     <true/>
 </dict>
 </plist>
@@ -138,6 +142,8 @@ cat > "$ENT_TMP_APP" <<'PLIST'
     <key>com.apple.security.automation.apple-events</key>
     <true/>
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <key>com.apple.security.device.camera</key>
     <true/>
 </dict>
 </plist>

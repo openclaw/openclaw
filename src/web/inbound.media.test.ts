@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn().mockReturnValue({
-    routing: {
+    whatsapp: {
       allowFrom: ["*"], // Allow all in tests
     },
     messages: {

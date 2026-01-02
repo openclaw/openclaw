@@ -40,7 +40,7 @@ struct GatewayAgentInvocation: Sendable {
 actor GatewayConnection {
     static let shared = GatewayConnection()
 
-    typealias Config = (url: URL, token: String?)
+    typealias Config = (url: URL, token: String?, password: String?)
 
     enum Method: String, Sendable {
         case agent
@@ -83,6 +83,7 @@ actor GatewayConnection {
     private var client: GatewayChannelActor?
     private var configuredURL: URL?
     private var configuredToken: String?
+    private var configuredPassword: String?
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
@@ -103,7 +104,7 @@ actor GatewayConnection {
         timeoutMs: Double? = nil) async throws -> Data
     {
         let cfg = try await self.configProvider()
-        await self.configure(url: cfg.url, token: cfg.token)
+        await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
         guard let client else {
             throw NSError(domain: "Gateway", code: 0, userInfo: [NSLocalizedDescriptionKey: "gateway not configured"])
         }
@@ -149,7 +150,7 @@ actor GatewayConnection {
                     try await Task.sleep(nanoseconds: UInt64(delayMs) * 1_000_000)
                     do {
                         let cfg = try await self.configProvider()
-                        await self.configure(url: cfg.url, token: cfg.token)
+                        await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
                         guard let client = self.client else {
                             throw NSError(
                                 domain: "Gateway",
@@ -209,7 +210,7 @@ actor GatewayConnection {
     /// Ensure the underlying socket is configured (and replaced if config changed).
     func refresh() async throws {
         let cfg = try await self.configProvider()
-        await self.configure(url: cfg.url, token: cfg.token)
+        await self.configure(url: cfg.url, token: cfg.token, password: cfg.password)
     }
 
     func shutdown() async {
@@ -264,8 +265,8 @@ actor GatewayConnection {
         }
     }
 
-    private func configure(url: URL, token: String?) async {
-        if self.client != nil, self.configuredURL == url, self.configuredToken == token {
+    private func configure(url: URL, token: String?, password: String?) async {
+        if self.client != nil, self.configuredURL == url, self.configuredToken == token, self.configuredPassword == password {
             return
         }
         if let client {
@@ -275,12 +276,14 @@ actor GatewayConnection {
         self.client = GatewayChannelActor(
             url: url,
             token: token,
+            password: password,
             session: self.sessionBox,
             pushHandler: { [weak self] push in
                 await self?.handle(push: push)
             })
         self.configuredURL = url
         self.configuredToken = token
+        self.configuredPassword = password
     }
 
     private func handle(push: GatewayPush) {

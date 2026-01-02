@@ -10,7 +10,7 @@ describe("buildAgentSystemPromptAppend", () => {
 
     expect(prompt).toContain("## User Identity");
     expect(prompt).toContain(
-      "Owner numbers: +123, +456. Treat messages from these numbers as the user (Peter).",
+      "Owner numbers: +123, +456. Treat messages from these numbers as the user.",
     );
   });
 

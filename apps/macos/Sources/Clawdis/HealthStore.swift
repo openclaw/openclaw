@@ -114,6 +114,7 @@ final class HealthStore {
         guard !self.isRefreshing else { return }
         self.isRefreshing = true
         defer { self.isRefreshing = false }
+        let previousError = self.lastError
 
         do {
             let data = try await ControlChannel.shared.health(timeout: 15)
@@ -121,13 +122,23 @@ final class HealthStore {
                 self.snapshot = decoded
                 self.lastSuccess = Date()
                 self.lastError = nil
+                if previousError != nil {
+                    Self.logger.info("health refresh recovered")
+                }
             } else {
                 self.lastError = "health output not JSON"
                 if onDemand { self.snapshot = nil }
+                if previousError != self.lastError {
+                    Self.logger.warning("health refresh failed: output not JSON")
+                }
             }
         } catch {
-            self.lastError = error.localizedDescription
+            let desc = error.localizedDescription
+            self.lastError = desc
             if onDemand { self.snapshot = nil }
+            if previousError != desc {
+                Self.logger.error("health refresh failed \(desc, privacy: .public)")
+            }
         }
     }
 

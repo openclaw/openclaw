@@ -22,6 +22,10 @@ First question: where does the **Gateway** run?
 - **Local (this Mac):** onboarding can run the Anthropic OAuth flow and write the Clawdis token store locally.
 - **Remote (over SSH/tailnet):** onboarding must not run OAuth locally, because credentials must exist on the **gateway host**.
 
+Gateway auth tip:
+- If you only use Clawdis on this Mac (loopback gateway), keep auth **Off**.
+- Use **Token** for multi-machine access or non-loopback binds.
+
 Implementation note (2025-12-19): in local mode, the macOS app bundles the Gateway and enables it via a per-user launchd LaunchAgent (no global npm install/Node requirement for the user).
 
 ## 2) Local-only: Connect Claude (Anthropic OAuth)

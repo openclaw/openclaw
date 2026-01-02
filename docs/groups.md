@@ -40,7 +40,7 @@ Group owners can toggle per-group activation:
 - `/activation mention`
 - `/activation always`
 
-Owner is determined by `routing.allowFrom` (or the bot’s default identity when unset).
+Owner is determined by `whatsapp.allowFrom` (or the bot’s self E.164 when unset). Other surfaces currently ignore `/activation`.
 
 ## Context fields
 Group inbound payloads set:
