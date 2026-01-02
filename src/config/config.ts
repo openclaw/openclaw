@@ -221,6 +221,24 @@ export type DiscordSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
+export type DiscordActionConfig = {
+  reactions?: boolean;
+  stickers?: boolean;
+  polls?: boolean;
+  permissions?: boolean;
+  messages?: boolean;
+  threads?: boolean;
+  pins?: boolean;
+  search?: boolean;
+  memberInfo?: boolean;
+  roleInfo?: boolean;
+  roles?: boolean;
+  channelInfo?: boolean;
+  voiceStatus?: boolean;
+  events?: boolean;
+  moderation?: boolean;
+};
+
 export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
@@ -231,6 +249,8 @@ export type DiscordConfig = {
   historyLimit?: number;
   /** Allow agent-triggered Discord reactions (default: true). */
   enableReactions?: boolean;
+  /** Per-action tool gating (default: true for all). */
+  actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
   slashCommand?: DiscordSlashCommandConfig;
@@ -1033,6 +1053,25 @@ const ClawdisSchema = z.object({
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),
+      actions: z
+        .object({
+          reactions: z.boolean().optional(),
+          stickers: z.boolean().optional(),
+          polls: z.boolean().optional(),
+          permissions: z.boolean().optional(),
+          messages: z.boolean().optional(),
+          threads: z.boolean().optional(),
+          pins: z.boolean().optional(),
+          search: z.boolean().optional(),
+          memberInfo: z.boolean().optional(),
+          roleInfo: z.boolean().optional(),
+          roles: z.boolean().optional(),
+          channelInfo: z.boolean().optional(),
+          voiceStatus: z.boolean().optional(),
+          events: z.boolean().optional(),
+          moderation: z.boolean().optional(),
+        })
+        .optional(),
       replyToMode: ReplyToModeSchema.optional(),
       dm: z
         .object({
