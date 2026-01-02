@@ -20,6 +20,14 @@ Everything lives under `~/.clawdis/`:
 
 Your **workspace** (AGENTS.md, memory files, skills) is separate — configured via `agent.workspace` in your config (default: `~/clawd`).
 
+### What platforms does Clawdis run on?
+
+**macOS, Windows, and Linux!** Anywhere Node.js 22+ runs. The onboarding wizard (`clawdis onboard`) works on all three.
+
+Some features are platform-specific:
+- **iMessage** — macOS only (uses `imsg` CLI)
+- **Clawdis.app** — macOS native app (optional, gateway works without it)
+
 ### I'm getting "unauthorized" errors on health check
 
 You need a config file. Run the onboarding wizard:

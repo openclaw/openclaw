@@ -20,7 +20,7 @@ It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, iMe
 
 If you want a private, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Discord: https://discord.gg/qkhbAGHRBT
+Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · FAQ: [`docs/faq.md`](docs/faq.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Discord: https://discord.gg/qkhbAGHRBT
 
 Preferred setup: run the onboarding wizard (`clawdis onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
