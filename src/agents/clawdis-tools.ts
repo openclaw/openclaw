@@ -41,7 +41,36 @@ import {
 } from "../cli/nodes-screen.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { loadConfig } from "../config/config.js";
-import { reactMessageDiscord } from "../discord/send.js";
+import {
+  addRoleDiscord,
+  banMemberDiscord,
+  createScheduledEventDiscord,
+  createThreadDiscord,
+  deleteMessageDiscord,
+  editMessageDiscord,
+  fetchChannelInfoDiscord,
+  fetchChannelPermissionsDiscord,
+  fetchMemberInfoDiscord,
+  fetchReactionsDiscord,
+  fetchRoleInfoDiscord,
+  fetchVoiceStatusDiscord,
+  kickMemberDiscord,
+  listGuildChannelsDiscord,
+  listGuildEmojisDiscord,
+  listPinsDiscord,
+  listScheduledEventsDiscord,
+  listThreadsDiscord,
+  pinMessageDiscord,
+  reactMessageDiscord,
+  readMessagesDiscord,
+  removeRoleDiscord,
+  searchMessagesDiscord,
+  sendMessageDiscord,
+  sendPollDiscord,
+  sendStickerDiscord,
+  timeoutMemberDiscord,
+  unpinMessageDiscord,
+} from "../discord/send.js";
 import { callGateway } from "../gateway/call.js";
 import { detectMime, imageMimeFromFormat } from "../media/mime.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -106,6 +135,46 @@ function readStringParam(
     return undefined;
   }
   return value;
+}
+
+function readStringArrayParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: StringParamOptions & { required: true },
+): string[];
+function readStringArrayParam(
+  params: Record<string, unknown>,
+  key: string,
+  options?: StringParamOptions,
+): string[] | undefined;
+function readStringArrayParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: StringParamOptions = {},
+) {
+  const { required = false, label = key } = options;
+  const raw = params[key];
+  if (Array.isArray(raw)) {
+    const values = raw
+      .filter((entry) => typeof entry === "string")
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    if (values.length === 0) {
+      if (required) throw new Error(`${label} required`);
+      return undefined;
+    }
+    return values;
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim();
+    if (!value) {
+      if (required) throw new Error(`${label} required`);
+      return undefined;
+    }
+    return [value];
+  }
+  if (required) throw new Error(`${label} required`);
+  return undefined;
 }
 
 async function callGatewayTool<T = unknown>(
@@ -1486,37 +1555,714 @@ const DiscordToolSchema = Type.Union([
     messageId: Type.String(),
     emoji: Type.String(),
   }),
+  Type.Object({
+    action: Type.Literal("reactions"),
+    channelId: Type.String(),
+    messageId: Type.String(),
+    limit: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("sticker"),
+    to: Type.String(),
+    stickerIds: Type.Array(Type.String()),
+    content: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("poll"),
+    to: Type.String(),
+    question: Type.String(),
+    answers: Type.Array(Type.String()),
+    allowMultiselect: Type.Optional(Type.Boolean()),
+    durationHours: Type.Optional(Type.Number()),
+    content: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("permissions"),
+    channelId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("readMessages"),
+    channelId: Type.String(),
+    limit: Type.Optional(Type.Number()),
+    before: Type.Optional(Type.String()),
+    after: Type.Optional(Type.String()),
+    around: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("sendMessage"),
+    to: Type.String(),
+    content: Type.String(),
+    mediaUrl: Type.Optional(Type.String()),
+    replyTo: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("editMessage"),
+    channelId: Type.String(),
+    messageId: Type.String(),
+    content: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("deleteMessage"),
+    channelId: Type.String(),
+    messageId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("threadCreate"),
+    channelId: Type.String(),
+    name: Type.String(),
+    messageId: Type.Optional(Type.String()),
+    autoArchiveMinutes: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("threadList"),
+    guildId: Type.String(),
+    channelId: Type.Optional(Type.String()),
+    includeArchived: Type.Optional(Type.Boolean()),
+    before: Type.Optional(Type.String()),
+    limit: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("threadReply"),
+    channelId: Type.String(),
+    content: Type.String(),
+    mediaUrl: Type.Optional(Type.String()),
+    replyTo: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("pinMessage"),
+    channelId: Type.String(),
+    messageId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("unpinMessage"),
+    channelId: Type.String(),
+    messageId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("listPins"),
+    channelId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("searchMessages"),
+    guildId: Type.String(),
+    content: Type.String(),
+    channelId: Type.Optional(Type.String()),
+    channelIds: Type.Optional(Type.Array(Type.String())),
+    authorId: Type.Optional(Type.String()),
+    authorIds: Type.Optional(Type.Array(Type.String())),
+    limit: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("memberInfo"),
+    guildId: Type.String(),
+    userId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("roleInfo"),
+    guildId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("emojiList"),
+    guildId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("roleAdd"),
+    guildId: Type.String(),
+    userId: Type.String(),
+    roleId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("roleRemove"),
+    guildId: Type.String(),
+    userId: Type.String(),
+    roleId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("channelInfo"),
+    channelId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("channelList"),
+    guildId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("voiceStatus"),
+    guildId: Type.String(),
+    userId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("eventList"),
+    guildId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("eventCreate"),
+    guildId: Type.String(),
+    name: Type.String(),
+    startTime: Type.String(),
+    endTime: Type.Optional(Type.String()),
+    description: Type.Optional(Type.String()),
+    channelId: Type.Optional(Type.String()),
+    entityType: Type.Optional(
+      Type.Union([
+        Type.Literal("voice"),
+        Type.Literal("stage"),
+        Type.Literal("external"),
+      ]),
+    ),
+    location: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("timeout"),
+    guildId: Type.String(),
+    userId: Type.String(),
+    durationMinutes: Type.Optional(Type.Number()),
+    until: Type.Optional(Type.String()),
+    reason: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("kick"),
+    guildId: Type.String(),
+    userId: Type.String(),
+    reason: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("ban"),
+    guildId: Type.String(),
+    userId: Type.String(),
+    reason: Type.Optional(Type.String()),
+    deleteMessageDays: Type.Optional(Type.Number()),
+  }),
 ]);
 
 function createDiscordTool(): AnyAgentTool {
   return {
     label: "Clawdis Discord",
-    name: "clawdis_discord",
-    description:
-      "React to Discord messages. Controlled by discord.enableReactions (default: true).",
+    name: "discord",
+    description: "Manage Discord messages, reactions, and moderation.",
     parameters: DiscordToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
-      if (action !== "react") throw new Error(`Unknown action: ${action}`);
-
       const cfg = loadConfig();
-      if (cfg.discord?.enableReactions === false) {
-        throw new Error(
-          "Discord reactions are disabled (set discord.enableReactions=true).",
-        );
+      const isActionEnabled = (
+        key: keyof NonNullable<typeof cfg.discord>["actions"],
+        defaultValue = true,
+      ) => {
+        const value = cfg.discord?.actions?.[key];
+        if (value === undefined) return defaultValue;
+        return value !== false;
+      };
+
+      switch (action) {
+        case "react": {
+          if (!isActionEnabled("reactions")) {
+            throw new Error("Discord reactions are disabled.");
+          }
+          if (cfg.discord?.enableReactions === false) {
+            throw new Error(
+              "Discord reactions are disabled (set discord.enableReactions=true).",
+            );
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messageId = readStringParam(params, "messageId", {
+            required: true,
+          });
+          const emoji = readStringParam(params, "emoji", { required: true });
+          await reactMessageDiscord(channelId, messageId, emoji);
+          return jsonResult({ ok: true });
+        }
+        case "reactions": {
+          if (!isActionEnabled("reactions")) {
+            throw new Error("Discord reactions are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messageId = readStringParam(params, "messageId", {
+            required: true,
+          });
+          const limitRaw = params.limit;
+          const limit =
+            typeof limitRaw === "number" && Number.isFinite(limitRaw)
+              ? limitRaw
+              : undefined;
+          const reactions = await fetchReactionsDiscord(channelId, messageId, {
+            limit,
+          });
+          return jsonResult({ ok: true, reactions });
+        }
+        case "sticker": {
+          if (!isActionEnabled("stickers")) {
+            throw new Error("Discord stickers are disabled.");
+          }
+          const to = readStringParam(params, "to", { required: true });
+          const content = readStringParam(params, "content");
+          const stickerIds = readStringArrayParam(params, "stickerIds", {
+            required: true,
+            label: "stickerIds",
+          });
+          await sendStickerDiscord(to, stickerIds, { content });
+          return jsonResult({ ok: true });
+        }
+        case "poll": {
+          if (!isActionEnabled("polls")) {
+            throw new Error("Discord polls are disabled.");
+          }
+          const to = readStringParam(params, "to", { required: true });
+          const content = readStringParam(params, "content");
+          const question = readStringParam(params, "question", {
+            required: true,
+          });
+          const answers = readStringArrayParam(params, "answers", {
+            required: true,
+            label: "answers",
+          });
+          const allowMultiselectRaw = params.allowMultiselect;
+          const allowMultiselect =
+            typeof allowMultiselectRaw === "boolean"
+              ? allowMultiselectRaw
+              : undefined;
+          const durationRaw = params.durationHours;
+          const durationHours =
+            typeof durationRaw === "number" && Number.isFinite(durationRaw)
+              ? durationRaw
+              : undefined;
+          await sendPollDiscord(
+            to,
+            { question, answers, allowMultiselect, durationHours },
+            { content },
+          );
+          return jsonResult({ ok: true });
+        }
+        case "permissions": {
+          if (!isActionEnabled("permissions")) {
+            throw new Error("Discord permissions are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const permissions = await fetchChannelPermissionsDiscord(channelId);
+          return jsonResult({ ok: true, permissions });
+        }
+        case "readMessages": {
+          if (!isActionEnabled("messages")) {
+            throw new Error("Discord message reads are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messages = await readMessagesDiscord(channelId, {
+            limit:
+              typeof params.limit === "number" && Number.isFinite(params.limit)
+                ? params.limit
+                : undefined,
+            before: readStringParam(params, "before"),
+            after: readStringParam(params, "after"),
+            around: readStringParam(params, "around"),
+          });
+          return jsonResult({ ok: true, messages });
+        }
+        case "sendMessage": {
+          if (!isActionEnabled("messages")) {
+            throw new Error("Discord message sends are disabled.");
+          }
+          const to = readStringParam(params, "to", { required: true });
+          const content = readStringParam(params, "content", {
+            required: true,
+          });
+          const mediaUrl = readStringParam(params, "mediaUrl");
+          const replyTo = readStringParam(params, "replyTo");
+          const result = await sendMessageDiscord(to, content, {
+            mediaUrl,
+            replyTo,
+          });
+          return jsonResult({ ok: true, result });
+        }
+        case "editMessage": {
+          if (!isActionEnabled("messages")) {
+            throw new Error("Discord message edits are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messageId = readStringParam(params, "messageId", {
+            required: true,
+          });
+          const content = readStringParam(params, "content", {
+            required: true,
+          });
+          const message = await editMessageDiscord(channelId, messageId, {
+            content,
+          });
+          return jsonResult({ ok: true, message });
+        }
+        case "deleteMessage": {
+          if (!isActionEnabled("messages")) {
+            throw new Error("Discord message deletes are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messageId = readStringParam(params, "messageId", {
+            required: true,
+          });
+          await deleteMessageDiscord(channelId, messageId);
+          return jsonResult({ ok: true });
+        }
+        case "threadCreate": {
+          if (!isActionEnabled("threads")) {
+            throw new Error("Discord threads are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const name = readStringParam(params, "name", { required: true });
+          const messageId = readStringParam(params, "messageId");
+          const autoArchiveMinutesRaw = params.autoArchiveMinutes;
+          const autoArchiveMinutes =
+            typeof autoArchiveMinutesRaw === "number" &&
+            Number.isFinite(autoArchiveMinutesRaw)
+              ? autoArchiveMinutesRaw
+              : undefined;
+          const thread = await createThreadDiscord(channelId, {
+            name,
+            messageId,
+            autoArchiveMinutes,
+          });
+          return jsonResult({ ok: true, thread });
+        }
+        case "threadList": {
+          if (!isActionEnabled("threads")) {
+            throw new Error("Discord threads are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const channelId = readStringParam(params, "channelId");
+          const includeArchived =
+            typeof params.includeArchived === "boolean"
+              ? params.includeArchived
+              : undefined;
+          const before = readStringParam(params, "before");
+          const limit =
+            typeof params.limit === "number" && Number.isFinite(params.limit)
+              ? params.limit
+              : undefined;
+          const threads = await listThreadsDiscord({
+            guildId,
+            channelId,
+            includeArchived,
+            before,
+            limit,
+          });
+          return jsonResult({ ok: true, threads });
+        }
+        case "threadReply": {
+          if (!isActionEnabled("threads")) {
+            throw new Error("Discord threads are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const content = readStringParam(params, "content", {
+            required: true,
+          });
+          const mediaUrl = readStringParam(params, "mediaUrl");
+          const replyTo = readStringParam(params, "replyTo");
+          const result = await sendMessageDiscord(
+            `channel:${channelId}`,
+            content,
+            {
+              mediaUrl,
+              replyTo,
+            },
+          );
+          return jsonResult({ ok: true, result });
+        }
+        case "pinMessage": {
+          if (!isActionEnabled("pins")) {
+            throw new Error("Discord pins are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messageId = readStringParam(params, "messageId", {
+            required: true,
+          });
+          await pinMessageDiscord(channelId, messageId);
+          return jsonResult({ ok: true });
+        }
+        case "unpinMessage": {
+          if (!isActionEnabled("pins")) {
+            throw new Error("Discord pins are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const messageId = readStringParam(params, "messageId", {
+            required: true,
+          });
+          await unpinMessageDiscord(channelId, messageId);
+          return jsonResult({ ok: true });
+        }
+        case "listPins": {
+          if (!isActionEnabled("pins")) {
+            throw new Error("Discord pins are disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const pins = await listPinsDiscord(channelId);
+          return jsonResult({ ok: true, pins });
+        }
+        case "searchMessages": {
+          if (!isActionEnabled("search")) {
+            throw new Error("Discord search is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const content = readStringParam(params, "content", {
+            required: true,
+          });
+          const channelId = readStringParam(params, "channelId");
+          const channelIds = readStringArrayParam(params, "channelIds");
+          const authorId = readStringParam(params, "authorId");
+          const authorIds = readStringArrayParam(params, "authorIds");
+          const limit =
+            typeof params.limit === "number" && Number.isFinite(params.limit)
+              ? params.limit
+              : undefined;
+          const channelIdList = [
+            ...(channelIds ?? []),
+            ...(channelId ? [channelId] : []),
+          ];
+          const authorIdList = [
+            ...(authorIds ?? []),
+            ...(authorId ? [authorId] : []),
+          ];
+          const results = await searchMessagesDiscord({
+            guildId,
+            content,
+            channelIds: channelIdList.length ? channelIdList : undefined,
+            authorIds: authorIdList.length ? authorIdList : undefined,
+            limit,
+          });
+          return jsonResult({ ok: true, results });
+        }
+        case "memberInfo": {
+          if (!isActionEnabled("memberInfo")) {
+            throw new Error("Discord member info is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const member = await fetchMemberInfoDiscord(guildId, userId);
+          return jsonResult({ ok: true, member });
+        }
+        case "roleInfo": {
+          if (!isActionEnabled("roleInfo")) {
+            throw new Error("Discord role info is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const roles = await fetchRoleInfoDiscord(guildId);
+          return jsonResult({ ok: true, roles });
+        }
+        case "emojiList": {
+          if (!isActionEnabled("reactions")) {
+            throw new Error("Discord reactions are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const emojis = await listGuildEmojisDiscord(guildId);
+          return jsonResult({ ok: true, emojis });
+        }
+        case "roleAdd": {
+          if (!isActionEnabled("roles", false)) {
+            throw new Error("Discord role changes are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const roleId = readStringParam(params, "roleId", {
+            required: true,
+          });
+          await addRoleDiscord({ guildId, userId, roleId });
+          return jsonResult({ ok: true });
+        }
+        case "roleRemove": {
+          if (!isActionEnabled("roles", false)) {
+            throw new Error("Discord role changes are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const roleId = readStringParam(params, "roleId", {
+            required: true,
+          });
+          await removeRoleDiscord({ guildId, userId, roleId });
+          return jsonResult({ ok: true });
+        }
+        case "channelInfo": {
+          if (!isActionEnabled("channelInfo")) {
+            throw new Error("Discord channel info is disabled.");
+          }
+          const channelId = readStringParam(params, "channelId", {
+            required: true,
+          });
+          const channel = await fetchChannelInfoDiscord(channelId);
+          return jsonResult({ ok: true, channel });
+        }
+        case "channelList": {
+          if (!isActionEnabled("channelInfo")) {
+            throw new Error("Discord channel info is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const channels = await listGuildChannelsDiscord(guildId);
+          return jsonResult({ ok: true, channels });
+        }
+        case "voiceStatus": {
+          if (!isActionEnabled("voiceStatus")) {
+            throw new Error("Discord voice status is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const voice = await fetchVoiceStatusDiscord(guildId, userId);
+          return jsonResult({ ok: true, voice });
+        }
+        case "eventList": {
+          if (!isActionEnabled("events")) {
+            throw new Error("Discord events are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const events = await listScheduledEventsDiscord(guildId);
+          return jsonResult({ ok: true, events });
+        }
+        case "eventCreate": {
+          if (!isActionEnabled("events")) {
+            throw new Error("Discord events are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const name = readStringParam(params, "name", { required: true });
+          const startTime = readStringParam(params, "startTime", {
+            required: true,
+          });
+          const endTime = readStringParam(params, "endTime");
+          const description = readStringParam(params, "description");
+          const channelId = readStringParam(params, "channelId");
+          const location = readStringParam(params, "location");
+          const entityTypeRaw = readStringParam(params, "entityType");
+          const entityType =
+            entityTypeRaw === "stage"
+              ? 1
+              : entityTypeRaw === "external"
+                ? 3
+                : 2;
+          const payload = {
+            name,
+            description,
+            scheduled_start_time: startTime,
+            scheduled_end_time: endTime,
+            entity_type: entityType,
+            channel_id: channelId,
+            entity_metadata:
+              entityType === 3 && location ? { location } : undefined,
+            privacy_level: 2,
+          };
+          const event = await createScheduledEventDiscord(guildId, payload);
+          return jsonResult({ ok: true, event });
+        }
+        case "timeout": {
+          if (!isActionEnabled("moderation", false)) {
+            throw new Error("Discord moderation is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const durationMinutes =
+            typeof params.durationMinutes === "number" &&
+            Number.isFinite(params.durationMinutes)
+              ? params.durationMinutes
+              : undefined;
+          const until = readStringParam(params, "until");
+          const reason = readStringParam(params, "reason");
+          const member = await timeoutMemberDiscord({
+            guildId,
+            userId,
+            durationMinutes,
+            until,
+            reason,
+          });
+          return jsonResult({ ok: true, member });
+        }
+        case "kick": {
+          if (!isActionEnabled("moderation", false)) {
+            throw new Error("Discord moderation is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const reason = readStringParam(params, "reason");
+          await kickMemberDiscord({ guildId, userId, reason });
+          return jsonResult({ ok: true });
+        }
+        case "ban": {
+          if (!isActionEnabled("moderation", false)) {
+            throw new Error("Discord moderation is disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const userId = readStringParam(params, "userId", {
+            required: true,
+          });
+          const reason = readStringParam(params, "reason");
+          const deleteMessageDays =
+            typeof params.deleteMessageDays === "number" &&
+            Number.isFinite(params.deleteMessageDays)
+              ? params.deleteMessageDays
+              : undefined;
+          await banMemberDiscord({
+            guildId,
+            userId,
+            reason,
+            deleteMessageDays,
+          });
+          return jsonResult({ ok: true });
+        }
+        default:
+          throw new Error(`Unknown action: ${action}`);
       }
-
-      const channelId = readStringParam(params, "channelId", {
-        required: true,
-      });
-      const messageId = readStringParam(params, "messageId", {
-        required: true,
-      });
-      const emoji = readStringParam(params, "emoji", { required: true });
-
-      await reactMessageDiscord(channelId, messageId, emoji);
-      return jsonResult({ ok: true });
     },
   };
 }

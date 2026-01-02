@@ -105,6 +105,46 @@ Core actions:
 Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
 
+### `discord`
+Send Discord reactions, stickers, or polls.
+
+Core actions:
+- `react` (`channelId`, `messageId`, `emoji`)
+- `reactions` (`channelId`, `messageId`, optional `limit`)
+- `sticker` (`to`, `stickerIds`, optional `content`)
+- `poll` (`to`, `question`, `answers`, optional `allowMultiselect`, `durationHours`, `content`)
+- `permissions` (`channelId`)
+- `readMessages` (`channelId`, optional `limit`/`before`/`after`/`around`)
+- `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyTo`)
+- `editMessage` (`channelId`, `messageId`, `content`)
+- `deleteMessage` (`channelId`, `messageId`)
+- `threadCreate` (`channelId`, `name`, optional `messageId`, `autoArchiveMinutes`)
+- `threadList` (`guildId`, optional `channelId`, `includeArchived`, `before`, `limit`)
+- `threadReply` (`channelId`, `content`, optional `mediaUrl`, `replyTo`)
+- `pinMessage`/`unpinMessage` (`channelId`, `messageId`)
+- `listPins` (`channelId`)
+- `searchMessages` (`guildId`, `content`, optional `channelId`/`channelIds`, `authorId`/`authorIds`, `limit`)
+- `memberInfo` (`guildId`, `userId`)
+- `roleInfo` (`guildId`)
+- `emojiList` (`guildId`)
+- `roleAdd`/`roleRemove` (`guildId`, `userId`, `roleId`)
+- `channelInfo` (`channelId`)
+- `channelList` (`guildId`)
+- `voiceStatus` (`guildId`, `userId`)
+- `eventList` (`guildId`)
+- `eventCreate` (`guildId`, `name`, `startTime`, optional `endTime`, `description`, `channelId`, `entityType`, `location`)
+- `timeout` (`guildId`, `userId`, optional `durationMinutes`, `until`, `reason`)
+- `kick` (`guildId`, `userId`, optional `reason`)
+- `ban` (`guildId`, `userId`, optional `reason`, `deleteMessageDays`)
+
+Notes:
+- `to` accepts `channel:<id>` or `user:<id>`.
+- Polls require 2–10 answers and default to 24 hours.
+- `reactions` returns per-emoji user lists (limited to 100 per reaction).
+- Reactions respect `discord.enableReactions` (default `true`).
+- `discord.actions.roles` + `discord.actions.moderation` default to `false`.
+- `searchMessages` follows the Discord preview spec (limit max 25, channel/author filters accept arrays).
+
 ## Parameters (common)
 
 Gateway-backed tools (`clawdis_canvas`, `clawdis_nodes`, `clawdis_cron`):
