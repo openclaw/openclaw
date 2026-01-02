@@ -300,6 +300,25 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         return item
     }
 
+    private func makeSessionPreviewItem(
+        sessionKey: String,
+        title: String,
+        width: CGFloat,
+        maxLines: Int) -> NSMenuItem
+    {
+        let item = NSMenuItem()
+        item.tag = self.tag
+        item.isEnabled = false
+        let view = AnyView(SessionMenuPreviewView(
+            sessionKey: sessionKey,
+            width: width,
+            maxItems: 10,
+            maxLines: maxLines,
+            title: title))
+        item.view = self.makeHostedView(rootView: view, width: width, highlighted: false)
+        return item
+    }
+
     private func makeMessageItem(text: String, symbolName: String, width: CGFloat) -> NSMenuItem {
         let view = AnyView(
             Label(text, systemImage: symbolName)
@@ -361,6 +380,19 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     private func buildSubmenu(for row: SessionRow, storePath: String) -> NSMenu {
         let menu = NSMenu()
+        let width = self.submenuWidth()
+
+        menu.addItem(self.makeSessionPreviewItem(
+            sessionKey: row.key,
+            title: "Recent messages (last 10)",
+            width: width,
+            maxLines: 3))
+
+        let morePreview = NSMenuItem(title: "More preview…", action: nil, keyEquivalent: "")
+        morePreview.submenu = self.buildPreviewSubmenu(sessionKey: row.key, width: width)
+        menu.addItem(morePreview)
+
+        menu.addItem(NSMenuItem.separator())
 
         let thinking = NSMenuItem(title: "Thinking", action: nil, keyEquivalent: "")
         thinking.submenu = self.buildThinkingMenu(for: row)
@@ -452,6 +484,16 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             item.state = (current == level) ? .on : .off
             menu.addItem(item)
         }
+        return menu
+    }
+
+    private func buildPreviewSubmenu(sessionKey: String, width: CGFloat) -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(self.makeSessionPreviewItem(
+            sessionKey: sessionKey,
+            title: "Recent messages (expanded)",
+            width: width,
+            maxLines: 8))
         return menu
     }
 
@@ -703,6 +745,16 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             return max(300, openWidth)
         }
         return self.currentMenuWidth(for: menu)
+    }
+
+    private func submenuWidth() -> CGFloat {
+        if let openWidth = self.menuOpenWidth {
+            return max(300, openWidth)
+        }
+        if let cached = self.lastKnownMenuWidth {
+            return max(300, cached)
+        }
+        return self.fallbackWidth
     }
 
     private func menuWindowWidth(for menu: NSMenu) -> CGFloat? {

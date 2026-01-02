@@ -1,0 +1,265 @@
+import ClawdisChatUI
+import ClawdisKit
+import SwiftUI
+
+private struct SessionPreviewItem: Identifiable, Sendable {
+    let id: String
+    let role: PreviewRole
+    let text: String
+}
+
+private enum PreviewRole: String, Sendable {
+    case user
+    case assistant
+    case tool
+    case system
+    case other
+
+    var label: String {
+        switch self {
+        case .user: "User"
+        case .assistant: "Agent"
+        case .tool: "Tool"
+        case .system: "System"
+        case .other: "Other"
+        }
+    }
+}
+
+private actor SessionPreviewCache {
+    static let shared = SessionPreviewCache()
+
+    private struct CacheEntry {
+        let items: [SessionPreviewItem]
+        let updatedAt: Date
+    }
+
+    private var entries: [String: CacheEntry] = [:]
+
+    func cachedItems(for sessionKey: String, maxAge: TimeInterval) -> [SessionPreviewItem]? {
+        guard let entry = self.entries[sessionKey] else { return nil }
+        guard Date().timeIntervalSince(entry.updatedAt) < maxAge else { return nil }
+        return entry.items
+    }
+
+    func store(items: [SessionPreviewItem], for sessionKey: String) {
+        self.entries[sessionKey] = CacheEntry(items: items, updatedAt: Date())
+    }
+}
+
+struct SessionMenuPreviewView: View {
+    let sessionKey: String
+    let width: CGFloat
+    let maxItems: Int
+    let maxLines: Int
+    let title: String
+
+    @Environment(\.menuItemHighlighted) private var isHighlighted
+    @State private var items: [SessionPreviewItem] = []
+    @State private var status: LoadStatus = .loading
+
+    private enum LoadStatus: Equatable {
+        case loading
+        case ready
+        case empty
+        case error(String)
+    }
+
+    private var primaryColor: Color {
+        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor) : .primary
+    }
+
+    private var secondaryColor: Color {
+        self.isHighlighted ? Color(nsColor: .selectedMenuItemTextColor).opacity(0.85) : .secondary
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(self.title)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(self.secondaryColor)
+                Spacer(minLength: 8)
+            }
+
+            switch self.status {
+            case .loading:
+                Text("Loading preview…")
+                    .font(.caption)
+                    .foregroundStyle(self.secondaryColor)
+            case .empty:
+                Text("No recent messages")
+                    .font(.caption)
+                    .foregroundStyle(self.secondaryColor)
+            case let .error(message):
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(self.secondaryColor)
+            case .ready:
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(self.items) { item in
+                        self.previewRow(item)
+                    }
+                }
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.leading, 18)
+        .padding(.trailing, 12)
+        .frame(width: max(1, self.width), alignment: .leading)
+        .task(id: self.sessionKey) {
+            await self.loadPreview()
+        }
+    }
+
+    @ViewBuilder
+    private func previewRow(_ item: SessionPreviewItem) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Text(item.role.label)
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(self.roleColor(item.role))
+                .frame(width: 50, alignment: .leading)
+
+            Text(item.text)
+                .font(.caption)
+                .foregroundStyle(self.primaryColor)
+                .multilineTextAlignment(.leading)
+                .lineLimit(self.maxLines)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func roleColor(_ role: PreviewRole) -> Color {
+        if self.isHighlighted { return Color(nsColor: .selectedMenuItemTextColor).opacity(0.9) }
+        switch role {
+        case .user: return .accentColor
+        case .assistant: return .secondary
+        case .tool: return .orange
+        case .system: return .gray
+        case .other: return .secondary
+        }
+    }
+
+    private func loadPreview() async {
+        if let cached = await SessionPreviewCache.shared.cachedItems(for: self.sessionKey, maxAge: 12) {
+            await MainActor.run {
+                self.items = cached
+                self.status = cached.isEmpty ? .empty : .ready
+            }
+            return
+        }
+
+        await MainActor.run {
+            self.status = .loading
+        }
+
+        do {
+            let payload = try await GatewayConnection.shared.chatHistory(sessionKey: self.sessionKey)
+            let built = Self.previewItems(from: payload, maxItems: self.maxItems)
+            await SessionPreviewCache.shared.store(items: built, for: self.sessionKey)
+            await MainActor.run {
+                self.items = built
+                self.status = built.isEmpty ? .empty : .ready
+            }
+        } catch {
+            await MainActor.run {
+                self.status = .error("Preview unavailable")
+            }
+        }
+    }
+
+    private static func previewItems(
+        from payload: ClawdisChatHistoryPayload,
+        maxItems: Int) -> [SessionPreviewItem]
+    {
+        let messages = self.decodeMessages(payload.messages ?? [])
+        let built = messages.compactMap { message -> SessionPreviewItem? in
+            guard let text = self.previewText(for: message) else { return nil }
+            let isTool = self.isToolCall(message)
+            let role = self.previewRole(message.role, isTool: isTool)
+            let id = "\(message.timestamp ?? 0)-\(UUID().uuidString)"
+            return SessionPreviewItem(id: id, role: role, text: text)
+        }
+
+        let trimmed = built.suffix(maxItems)
+        return Array(trimmed.reversed())
+    }
+
+    private static func decodeMessages(_ raw: [AnyCodable]) -> [ClawdisChatMessage] {
+        raw.compactMap { item in
+            (try? ChatPayloadDecoding.decode(item, as: ClawdisChatMessage.self))
+        }
+    }
+
+    private static func previewRole(_ raw: String, isTool: Bool) -> PreviewRole {
+        if isTool { return .tool }
+        switch raw.lowercased() {
+        case "user": return .user
+        case "assistant": return .assistant
+        case "system": return .system
+        case "tool": return .tool
+        default: return .other
+        }
+    }
+
+    private static func previewText(for message: ClawdisChatMessage) -> String? {
+        let text = message.content.compactMap(\.text).joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.isEmpty { return text }
+
+        let toolNames = self.toolNames(for: message)
+        if !toolNames.isEmpty {
+            let shown = toolNames.prefix(2)
+            let overflow = toolNames.count - shown.count
+            var label = "call \(shown.joined(separator: ", "))"
+            if overflow > 0 { label += " +\(overflow)" }
+            return label
+        }
+
+        if let media = self.mediaSummary(for: message) {
+            return media
+        }
+
+        return nil
+    }
+
+    private static func isToolCall(_ message: ClawdisChatMessage) -> Bool {
+        if message.toolName?.nonEmpty != nil { return true }
+        return message.content.contains { $0.name?.nonEmpty != nil || $0.type?.lowercased() == "toolcall" }
+    }
+
+    private static func toolNames(for message: ClawdisChatMessage) -> [String] {
+        var names: [String] = []
+        for content in message.content {
+            if let name = content.name?.nonEmpty {
+                names.append(name)
+            }
+        }
+        if let toolName = message.toolName?.nonEmpty {
+            names.append(toolName)
+        }
+        return Self.dedupePreservingOrder(names)
+    }
+
+    private static func mediaSummary(for message: ClawdisChatMessage) -> String? {
+        let types = message.content.compactMap { content -> String? in
+            let raw = content.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let raw, !raw.isEmpty else { return nil }
+            if raw == "text" || raw == "toolcall" { return nil }
+            return raw
+        }
+        guard let first = types.first else { return nil }
+        return "[\(first)]"
+    }
+
+    private static func dedupePreservingOrder(_ values: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for value in values where !seen.contains(value) {
+            seen.insert(value)
+            result.append(value)
+        }
+        return result
+    }
+}

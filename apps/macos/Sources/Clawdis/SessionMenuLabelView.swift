@@ -45,7 +45,7 @@ struct SessionMenuLabelView: View {
 
                 Spacer(minLength: 8)
 
-                Text(self.row.tokens.contextSummaryShort)
+                Text("\(self.row.tokens.contextSummaryShort) · \(self.row.ageText)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(self.secondaryTextColor)
                     .lineLimit(1)

@@ -73,6 +73,7 @@
 - macOS settings: colorize provider status subtitles to distinguish healthy vs degraded states.
 - macOS: keep config writes on the main actor to satisfy Swift concurrency rules.
 - macOS menu: show multi-line gateway error details, add an always-visible gateway row, avoid duplicate gateway status rows, suppress transient `cancelled` device refresh errors, and auto-recover the control channel on disconnect.
+- macOS menu: show session last-used timestamps in the list and add recent-message previews in session submenus.
 - macOS: log health refresh failures and recovery to make gateway issues easier to diagnose.
 - macOS codesign: skip hardened runtime for ad-hoc signing and avoid empty options args (#70) — thanks @petter-b
 - macOS codesign: include camera entitlement so permission prompts work in the menu bar app.
