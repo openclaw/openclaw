@@ -35,6 +35,7 @@
 - WebChat: stream live updates for sessions even when runs start outside the chat UI.
 - Gateway CLI: read `CLAWDIS_GATEWAY_PASSWORD` from environment in `callGateway()` — allows `doctor`/`health` commands to auth without explicit `--password` flag.
 - Auto-reply: suppress stray `HEARTBEAT_OK` acks so they never get delivered as messages.
+- Logging: trim provider prefix duplication in Discord/Signal/Telegram runtime log lines.
 - Discord: include recent guild context when replying to mentions and add `discord.historyLimit` to tune how many messages are captured.
 - Skills: switch imsg installer to brew tap formula.
 - Skills: gate macOS-only skills by OS and surface block reasons in the Skills UI.
