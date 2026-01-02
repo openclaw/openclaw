@@ -13,7 +13,10 @@ actor RemoteTunnelManager {
            tunnel.process.isRunning,
            let local = tunnel.localPort
         {
-            if await self.isTunnelHealthy(port: local) { return local }
+            if await self.isTunnelHealthy(port: local) {
+                self.logger.info("reusing active SSH tunnel localPort=\(local, privacy: .public)")
+                return local
+            }
             self.logger.error("active SSH tunnel on port \(local, privacy: .public) is unhealthy; restarting")
             tunnel.terminate()
             self.controlTunnel = nil
@@ -24,7 +27,11 @@ actor RemoteTunnelManager {
         if let desc = await PortGuardian.shared.describe(port: Int(desiredPort)),
            self.isSshProcess(desc)
         {
-            if await self.isTunnelHealthy(port: desiredPort) { return desiredPort }
+            if await self.isTunnelHealthy(port: desiredPort) {
+                self.logger.info(
+                    "reusing existing SSH tunnel listener localPort=\(desiredPort, privacy: .public) pid=\(desc.pid, privacy: .public)")
+                return desiredPort
+            }
             await self.cleanupStaleTunnel(desc: desc, port: desiredPort)
         }
         return nil
@@ -41,6 +48,10 @@ actor RemoteTunnelManager {
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
 
+        let identitySet = !settings.identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        self.logger.info(
+            "ensure SSH tunnel target=\(settings.target, privacy: .public) identitySet=\(identitySet, privacy: .public)")
+
         if let local = await self.controlTunnelPortIfRunning() { return local }
 
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
@@ -48,6 +59,8 @@ actor RemoteTunnelManager {
             remotePort: GatewayEnvironment.gatewayPort(),
             preferredLocalPort: desiredPort)
         self.controlTunnel = tunnel
+        let resolvedPort = tunnel.localPort ?? desiredPort
+        self.logger.info("ssh tunnel ready localPort=\(resolvedPort, privacy: .public)")
         return tunnel.localPort ?? desiredPort
     }
 

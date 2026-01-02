@@ -165,6 +165,8 @@ actor GatewayEndpointStore {
             // Auto-recover for remote mode: if the SSH control tunnel died (or hasn't been created yet),
             // recreate it on demand so callers can recover without a manual reconnect.
             do {
+                self.logger.info(
+                    "endpoint unavailable; ensuring remote control tunnel reason=\(reason, privacy: .public)")
                 let forwarded = try await self.deps.ensureRemoteTunnel()
                 let token = self.deps.token()
                 let password = self.deps.password()
@@ -174,6 +176,7 @@ actor GatewayEndpointStore {
             } catch {
                 let msg = "\(reason) (\(error.localizedDescription))"
                 self.setState(.unavailable(mode: .remote, reason: msg))
+                self.logger.error("remote control tunnel ensure failed \(msg, privacy: .public)")
                 throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
             }
         }

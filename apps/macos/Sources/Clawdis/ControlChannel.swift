@@ -84,6 +84,7 @@ final class ControlChannel {
     }
 
     func configure() async {
+        self.logger.info("control channel configure mode=local")
         self.state = .connecting
         do {
             try await GatewayConnection.shared.refresh()
@@ -102,6 +103,9 @@ final class ControlChannel {
         case let .remote(target, identity):
             do {
                 _ = (target, identity)
+                let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                self.logger.info(
+                    "control channel configure mode=remote target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 await self.configure()
             } catch {
@@ -260,6 +264,15 @@ final class ControlChannel {
                 "control channel recovery starting mode=\(String(describing: mode), privacy: .public) reason=\(reasonText, privacy: .public)")
             if mode == .local {
                 GatewayProcessManager.shared.setActive(true)
+            }
+            if mode == .remote {
+                do {
+                    let port = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
+                    self.logger.info("control channel recovery ensured SSH tunnel port=\(port, privacy: .public)")
+                } catch {
+                    self.logger.error(
+                        "control channel recovery tunnel failed \(error.localizedDescription, privacy: .public)")
+                }
             }
 
             do {

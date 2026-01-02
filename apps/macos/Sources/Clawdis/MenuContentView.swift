@@ -204,6 +204,16 @@ struct MenuContent: View {
                 } label: {
                     Label("Send Test Heartbeat", systemImage: "waveform.path.ecg")
                 }
+                if self.state.connectionMode == .remote {
+                    Button {
+                        Task { @MainActor in
+                            let result = await DebugActions.resetGatewayTunnel()
+                            self.presentDebugResult(result, title: "Remote Tunnel")
+                        }
+                    } label: {
+                        Label("Reset Remote Tunnel", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
                 Button {
                     Task { _ = await DebugActions.toggleVerboseLoggingMain() }
                 } label: {
@@ -460,6 +470,21 @@ struct MenuContent: View {
             return "Auto-detect (\(host))"
         }
         return "System default"
+    }
+
+    @MainActor
+    private func presentDebugResult(_ result: Result<String, DebugActionError>, title: String) {
+        let alert = NSAlert()
+        alert.messageText = title
+        switch result {
+        case let .success(message):
+            alert.informativeText = message
+            alert.alertStyle = .informational
+        case let .failure(error):
+            alert.informativeText = error.localizedDescription
+            alert.alertStyle = .warning
+        }
+        alert.runModal()
     }
 
     @MainActor
