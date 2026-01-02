@@ -120,6 +120,25 @@ import Testing
             env: env) == "env")
     }
 
+    @Test func gatewayPasswordIgnoresWhitespaceValues() {
+        let root: [String: Any] = [
+            "gateway": [
+                "auth": ["password": "   "],
+                "remote": ["password": "\n\t"],
+            ],
+        ]
+        let env = ["CLAWDIS_GATEWAY_PASSWORD": "  "]
+
+        #expect(GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: false,
+            root: root,
+            env: env) == nil)
+        #expect(GatewayEndpointStore._testResolveGatewayPassword(
+            isRemote: true,
+            root: root,
+            env: env) == nil)
+    }
+
     @Test func unconfiguredModeRejectsConfig() async {
         let mode = ModeBox(.unconfigured)
         let store = GatewayEndpointStore(deps: .init(
