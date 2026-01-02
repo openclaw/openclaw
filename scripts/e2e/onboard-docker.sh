@@ -85,6 +85,7 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
     send $'"'"'n\r'"'"' 0.5
     send $'"'"'n\r'"'"' 0.5
     send $'"'"'n\r'"'"' 0.5
+    send $'"'"'n\r'"'"' 0.5
   }
 
   send_reset_config_only() {
@@ -97,26 +98,32 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
   }
 
   send_providers_flow() {
-    send $'"'"'\r'"'"' 0.8
     send "" 0.6
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.3
-    send $'"'"'\r'"'"' 0.5
+    send $'"'"'\r'"'"' 0.8
+    send "" 1.2
+    # Select Providers section only.
+    send $'"'"'\e[B'"'"' 0.5
+    send $'"'"'\e[B'"'"' 0.5
+    send $'"'"'\e[B'"'"' 0.5
+    send $'"'"'\e[B'"'"' 0.5
+    send $'"'"' '"'"' 0.4
     send $'"'"'\r'"'"' 0.6
+    # Configure providers now? (default Yes)
+    send $'"'"'\r'"'"' 0.8
+    send "" 0.8
+    # Select Telegram, Discord, Signal.
     send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.3
+    send $'"'"' '"'"' 0.4
     send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.3
+    send $'"'"' '"'"' 0.4
     send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.3
-    send $'"'"'\r'"'"' 0.5
-    send $'"'"'tg_token\r'"'"' 0.5
-    send $'"'"'discord_token\r'"'"' 0.5
-    send $'"'"'n\r'"'"' 0.5
-    send $'"'"'+15551234567\r'"'"' 0.5
+    send $'"'"' '"'"' 0.4
+    send $'"'"'\r'"'"' 0.6
+    send $'"'"'tg_token\r'"'"' 0.6
+    send $'"'"'discord_token\r'"'"' 0.6
+    send $'"'"'n\r'"'"' 0.6
+    send $'"'"'+15551234567\r'"'"' 0.6
+    send $'"'"'n\r'"'"' 0.6
   }
 
   send_skills_flow() {
@@ -130,6 +137,7 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
     send $'"'"'\e[B'"'"' 0.4
     send $'"'"' '"'"' 0.3
     send $'"'"'\r'"'"' 0.4
+    send $'"'"'n\r'"'"' 0.4
     send $'"'"'n\r'"'"' 0.4
   }
 
