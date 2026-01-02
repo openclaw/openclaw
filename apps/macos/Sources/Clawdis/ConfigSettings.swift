@@ -462,7 +462,8 @@ struct ConfigSettings: View {
         }
     }
 
-    private nonisolated static func buildAndSaveConfig(
+    @MainActor
+    private static func buildAndSaveConfig(
         configModel: String,
         customModel: String,
         heartbeatMinutes: Int?,
