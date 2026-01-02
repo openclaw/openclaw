@@ -526,6 +526,12 @@ export type ClawdisConfig = {
     verboseDefault?: "off" | "on";
     /** Default block streaming level when no override is present. */
     blockStreamingDefault?: "off" | "on";
+    /**
+     * Block streaming boundary:
+     * - "text_end": end of each assistant text content block (before tool calls)
+     * - "message_end": end of the whole assistant message (may include tool blocks)
+     */
+    blockStreamingBreak?: "text_end" | "message_end";
     timeoutSeconds?: number;
     /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
     mediaMaxMb?: number;
@@ -905,6 +911,9 @@ const ClawdisSchema = z.object({
       verboseDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
       blockStreamingDefault: z
         .union([z.literal("off"), z.literal("on")])
+        .optional(),
+      blockStreamingBreak: z
+        .union([z.literal("text_end"), z.literal("message_end")])
         .optional(),
       timeoutSeconds: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),

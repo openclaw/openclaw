@@ -114,6 +114,7 @@ describe("subscribeEmbeddedPiSession", () => {
       >[0]["session"],
       runId: "run",
       onBlockReply,
+      blockReplyBreak: "message_end",
     });
 
     const assistantMessage = {
@@ -126,6 +127,59 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply).toHaveBeenCalled();
     const payload = onBlockReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello block");
+  });
+
+  it("emits block replies on text_end and does not duplicate on message_end", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Hello block",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+      },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = onBlockReply.mock.calls[0][0];
+    expect(payload.text).toBe("Hello block");
+    expect(subscription.assistantTexts).toEqual(["Hello block"]);
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello block" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
 
   it("waits for auto-compaction retry and clears buffered text", async () => {
