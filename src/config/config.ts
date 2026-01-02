@@ -411,6 +411,7 @@ export type ClawdisConfig = {
   discovery?: DiscoveryConfig;
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
+  deepResearch?: DeepResearchConfig;
   gateway?: GatewayConfig;
   skills?: Record<string, SkillConfig>;
 };
@@ -635,6 +636,30 @@ const HooksGmailSchema = z
   })
   .optional();
 
+const DEEP_RESEARCH_OUTPUT_LANGUAGES = ["ru", "en", "auto"] as const;
+// Defaults align with docs; override via config or env as needed.
+const DEEP_RESEARCH_DEFAULTS = {
+  enabled: true,
+  dryRun: true,
+  cliPath: "/home/almaz/TOOLS/gemini_deep_research/gdr.sh",
+  outputLanguage: "auto" as const,
+};
+
+// Deep Research configuration schema
+const deepResearchSchema = z
+  .object({
+    enabled: z.boolean().default(DEEP_RESEARCH_DEFAULTS.enabled),
+    dryRun: z.boolean().default(DEEP_RESEARCH_DEFAULTS.dryRun), // true during dev!
+    cliPath: z.string().default(DEEP_RESEARCH_DEFAULTS.cliPath),
+    outputLanguage: z
+      .enum(DEEP_RESEARCH_OUTPUT_LANGUAGES)
+      .default(DEEP_RESEARCH_DEFAULTS.outputLanguage),
+    keywords: z.array(z.string()).optional(),
+  })
+  .optional();
+
+export type DeepResearchConfig = z.infer<typeof deepResearchSchema>;
+
 const ClawdisSchema = z.object({
   identity: z
     .object({
@@ -824,6 +849,7 @@ const ClawdisSchema = z.object({
       interruptOnSpeech: z.boolean().optional(),
     })
     .optional(),
+  deepResearch: deepResearchSchema,
   gateway: z
     .object({
       mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
@@ -945,7 +971,9 @@ export function loadConfig(): ClawdisConfig {
       }
       return {};
     }
-    return applyIdentityDefaults(validated.data as ClawdisConfig);
+    return applyDeepResearchEnvOverrides(
+      applyIdentityDefaults(validated.data as ClawdisConfig),
+    );
   } catch (err) {
     console.error(`Failed to read config at ${configPath}`, err);
     return {};
@@ -1024,11 +1052,51 @@ function applyTalkApiKey(config: ClawdisConfig): ClawdisConfig {
   };
 }
 
+function applyDeepResearchEnvOverrides(config: ClawdisConfig): ClawdisConfig {
+  const hasEnabled = process.env.DEEP_RESEARCH_ENABLED !== undefined;
+  const hasDryRun = process.env.DEEP_RESEARCH_DRY_RUN !== undefined;
+  const cliPath = process.env.DEEP_RESEARCH_CLI_PATH;
+  const outputLanguage = process.env.DEEP_RESEARCH_OUTPUT_LANGUAGE;
+  const hasOutputLanguage = outputLanguage !== undefined;
+
+  if (!hasEnabled && !hasDryRun && !cliPath && !hasOutputLanguage) return config;
+
+  const deepResearch: DeepResearchConfig = {
+    ...DEEP_RESEARCH_DEFAULTS,
+    ...(config.deepResearch ?? {}),
+  };
+  if (hasEnabled) {
+    deepResearch.enabled = process.env.DEEP_RESEARCH_ENABLED === "true";
+  }
+  if (hasDryRun) {
+    deepResearch.dryRun = process.env.DEEP_RESEARCH_DRY_RUN === "true";
+  }
+  if (cliPath) {
+    deepResearch.cliPath = cliPath;
+  }
+  if (outputLanguage) {
+    const normalized = outputLanguage.toLowerCase();
+    if (
+      DEEP_RESEARCH_OUTPUT_LANGUAGES.includes(
+        normalized as (typeof DEEP_RESEARCH_OUTPUT_LANGUAGES)[number],
+      )
+    ) {
+      deepResearch.outputLanguage =
+        normalized as (typeof DEEP_RESEARCH_OUTPUT_LANGUAGES)[number];
+    }
+  }
+
+  return {
+    ...config,
+    deepResearch,
+  };
+}
+
 export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   const configPath = CONFIG_PATH_CLAWDIS;
   const exists = fs.existsSync(configPath);
   if (!exists) {
-    const config = applyTalkApiKey({});
+    const config = applyDeepResearchEnvOverrides(applyTalkApiKey({}));
     return {
       path: configPath,
       exists: false,
@@ -1076,7 +1144,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
       raw,
       parsed: parsedRes.parsed,
       valid: true,
-      config: applyTalkApiKey(validated.config),
+      config: applyDeepResearchEnvOverrides(applyTalkApiKey(validated.config)),
       issues: [],
     };
   } catch (err) {

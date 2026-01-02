@@ -222,6 +222,55 @@ describe("talk api key fallback", () => {
   });
 });
 
+describe("deep research env overrides", () => {
+  let previousEnv: {
+    enabled?: string;
+    dryRun?: string;
+    cliPath?: string;
+    outputLanguage?: string;
+  };
+
+  beforeEach(() => {
+    previousEnv = {
+      enabled: process.env.DEEP_RESEARCH_ENABLED,
+      dryRun: process.env.DEEP_RESEARCH_DRY_RUN,
+      cliPath: process.env.DEEP_RESEARCH_CLI_PATH,
+      outputLanguage: process.env.DEEP_RESEARCH_OUTPUT_LANGUAGE,
+    };
+    delete process.env.DEEP_RESEARCH_ENABLED;
+    delete process.env.DEEP_RESEARCH_DRY_RUN;
+    delete process.env.DEEP_RESEARCH_CLI_PATH;
+    delete process.env.DEEP_RESEARCH_OUTPUT_LANGUAGE;
+  });
+
+  afterEach(() => {
+    process.env.DEEP_RESEARCH_ENABLED = previousEnv.enabled;
+    process.env.DEEP_RESEARCH_DRY_RUN = previousEnv.dryRun;
+    process.env.DEEP_RESEARCH_CLI_PATH = previousEnv.cliPath;
+    process.env.DEEP_RESEARCH_OUTPUT_LANGUAGE = previousEnv.outputLanguage;
+  });
+
+  it("applies env overrides when config is missing", async () => {
+    await withTempHome(async () => {
+      process.env.DEEP_RESEARCH_ENABLED = "false";
+      process.env.DEEP_RESEARCH_DRY_RUN = "false";
+      process.env.DEEP_RESEARCH_CLI_PATH = "/tmp/deep-research-cli.sh";
+      process.env.DEEP_RESEARCH_OUTPUT_LANGUAGE = "ru";
+
+      vi.resetModules();
+      const { readConfigFileSnapshot } = await import("./config.js");
+      const snap = await readConfigFileSnapshot();
+
+      expect(snap.config.deepResearch?.enabled).toBe(false);
+      expect(snap.config.deepResearch?.dryRun).toBe(false);
+      expect(snap.config.deepResearch?.cliPath).toBe(
+        "/tmp/deep-research-cli.sh",
+      );
+      expect(snap.config.deepResearch?.outputLanguage).toBe("ru");
+    });
+  });
+});
+
 describe("talk.voiceAliases", () => {
   it("accepts a string map of voice aliases", async () => {
     vi.resetModules();
