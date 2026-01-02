@@ -425,6 +425,10 @@ describe("cli program", () => {
         "640",
         "--quality",
         "0.8",
+        "--delay-ms",
+        "2000",
+        "--device-id",
+        "cam-123",
       ],
       { from: "user" },
     );
@@ -442,6 +446,8 @@ describe("cli program", () => {
             facing: "front",
             maxWidth: 640,
             quality: 0.8,
+            delayMs: 2000,
+            deviceId: "cam-123",
           }),
         }),
       }),
@@ -494,6 +500,8 @@ describe("cli program", () => {
         "--duration",
         "3000",
         "--no-audio",
+        "--device-id",
+        "cam-123",
       ],
       { from: "user" },
     );
@@ -509,6 +517,7 @@ describe("cli program", () => {
           idempotencyKey: "idem-test",
           params: expect.objectContaining({
             includeAudio: false,
+            deviceId: "cam-123",
           }),
         }),
       }),

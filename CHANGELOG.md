@@ -81,6 +81,7 @@
 - macOS camera: wait for exposure/white balance to settle before capturing a snap to avoid dark images.
 - Camera snap: add `delayMs` parameter (default 2000ms on macOS) to improve exposure reliability.
 - Camera: add `camera.list` and optional `deviceId` selection for snaps/clips.
+- Tests: cover camera device selection params in CLI + agent tools.
 - macOS packaging: move rpath config into swift build for reliability (#69) — thanks @petter-b
 - macOS: prioritize main bundle for device resources to prevent crash (#73) — thanks @petter-b
 - macOS remote: route settings through gateway config and avoid local config reads in remote mode.
