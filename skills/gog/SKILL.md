@@ -17,7 +17,7 @@ Setup (once)
 Common commands
 - Gmail search: `gog gmail search 'newer_than:7d' --max 10`
 - Gmail send: `gog gmail send --to [redacted-email] --subject "Hi" --body "Hello"`
-- Calendar: `gog calendar events <calendarId> --from <iso> --to <iso>`
+- Calendar: `gog calendar events <calendarId> --from <rfc3339> --to <rfc3339>`
 - Drive: `gog drive search "query" --max 10`
 - Contacts: `gog contacts list --max 20`
 
