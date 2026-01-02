@@ -27,7 +27,7 @@ type LegacyMigration = {
 };
 
 const LEGACY_MIGRATIONS: LegacyMigration[] = [
-  // Legacy migration (2026-01-02, commit: TBD) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
+  // Legacy migration (2026-01-02, commit: 3c6b59d8) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
   {
     id: "routing.allowFrom->whatsapp.allowFrom",
     describe: "Move routing.allowFrom to whatsapp.allowFrom",
