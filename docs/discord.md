@@ -29,6 +29,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 
 Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
+Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-ready replies easy.
 
 ## Capabilities & limits
 - DMs and guild text channels (threads are treated as separate channels; voice not supported).
