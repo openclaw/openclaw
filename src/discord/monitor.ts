@@ -122,7 +122,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (message.author?.bot) return;
       if (!message.author) return;
 
-      const channelType = message.channel.type;
+      // Discord.js typing excludes GroupDM for message.channel.type; widen for runtime check.
+      const channelType = message.channel.type as ChannelType;
       const isGroupDm = channelType === ChannelType.GroupDM;
       const isDirectMessage = channelType === ChannelType.DM;
       const isGuildMessage = Boolean(message.guild);
