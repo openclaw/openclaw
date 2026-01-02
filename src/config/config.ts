@@ -992,19 +992,6 @@ const ClawdisSchema = z.object({
             .optional(),
         )
         .optional(),
-      guild: z
-        .object({
-          allowFrom: z
-            .object({
-              guilds: z.array(z.union([z.string(), z.number()])).optional(),
-              users: z.array(z.union([z.string(), z.number()])).optional(),
-            })
-            .optional(),
-          channels: z.array(z.union([z.string(), z.number()])).optional(),
-          requireMention: z.boolean().optional(),
-          historyLimit: z.number().int().min(0).optional(),
-        })
-        .optional(),
     })
     .optional(),
   signal: z

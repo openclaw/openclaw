@@ -28,6 +28,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 9. Optional slash commands: enable `discord.slashCommand` to accept user-installed app commands (ephemeral replies). Slash invocations respect the same DM/guild allowlists.
 10. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
 11. Reactions (default on): set `discord.enableReactions = false` to disable agent-triggered reactions via the `clawdis_discord` tool.
+12. Slash commands use isolated session keys (`${sessionPrefix}:${userId}`) rather than the shared `main` session.
 
 Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
@@ -38,6 +39,7 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
 - Typing indicators sent best-effort; message chunking honors Discord’s 2k character limit.
 - File uploads supported up to the configured `discord.mediaMaxMb` (default 8 MB).
 - Mention-gated guild replies by default to avoid noisy bots.
+- Reply context is injected when a message references another message (quoted content + ids).
 
 ## Config
 
@@ -89,6 +91,12 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
 - `enableReactions`: allow agent-triggered reactions via the `clawdis_discord` tool (default `true`).
 
+Allowlist matching notes:
+- `allowFrom`/`users`/`groupChannels` accept ids, names, tags, or mentions like `<@id>`.
+- Prefixes like `discord:`/`user:` (users) and `channel:` (group DMs) are supported.
+- Use `*` to allow any sender/channel.
+- When `guilds.<id>.channels` is present, channels not listed are denied by default.
+
 Slash command notes:
 - Register a chat input command in Discord with at least one string option (e.g., `prompt`).
 - The first non-empty string option is treated as the prompt.
@@ -101,6 +109,7 @@ When `discord.enableReactions = true`, the agent can call `clawdis_discord` with
 - `channelId`, `messageId`, `emoji`
 
 Discord message ids are surfaced in the injected context (`[discord message id: …]` and history lines) so the agent can target them.
+Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:1234567890>`.
 
 ## Safety & ops
 - Treat the bot token like a password; prefer the `DISCORD_BOT_TOKEN` env var on supervised hosts or lock down the config file permissions.
