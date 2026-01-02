@@ -192,7 +192,6 @@ actor CameraController {
     func listDevices() -> [CameraDeviceInfo] {
         let types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
-            .externalUnknown,
         ]
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: types,
@@ -308,7 +307,8 @@ actor CameraController {
 
     private nonisolated static func sleepDelayMs(_ delayMs: Int) async {
         guard delayMs > 0 else { return }
-        let ns = UInt64(min(delayMs, 10_000)) * 1_000_000
+        let maxDelayMs = 10 * 1000
+        let ns = UInt64(min(delayMs, maxDelayMs)) * UInt64(NSEC_PER_MSEC)
         try? await Task.sleep(nanoseconds: ns)
     }
 }

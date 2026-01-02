@@ -440,7 +440,7 @@ private struct ChatComposerTextView: NSViewRepresentable {
         // Always allow clearing the text (e.g. after send), even while editing.
         // Only skip other updates while editing to avoid cursor jumps.
         let shouldClear = self.text.isEmpty && !textView.string.isEmpty
-        if isEditing && !shouldClear { return }
+        if isEditing, !shouldClear { return }
 
         if textView.string != self.text {
             context.coordinator.isProgrammaticUpdate = true
