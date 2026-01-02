@@ -23,7 +23,13 @@ actor GatewayEndpointStore {
 
         static let live = Deps(
             mode: { await MainActor.run { AppStateStore.shared.connectionMode } },
-            token: { ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"] },
+            token: {
+                // First check env var, fallback to config file
+                if let envToken = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"], !envToken.isEmpty {
+                    return envToken
+                }
+                return ClawdisConfigFile.gatewayPassword()
+            },
             localPort: { GatewayEnvironment.gatewayPort() },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })

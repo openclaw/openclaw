@@ -18,7 +18,7 @@ export type HookMappingResolved = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?: "last" | "whatsapp" | "telegram" | "discord";
+  channel?: "last" | "whatsapp" | "telegram" | "discord" | "signal" | "imessage";
   to?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -50,7 +50,7 @@ export type HookAction =
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       deliver?: boolean;
-      channel?: "last" | "whatsapp" | "telegram" | "discord";
+      channel?: "last" | "whatsapp" | "telegram" | "discord" | "signal" | "imessage";
       to?: string;
       thinking?: string;
       timeoutSeconds?: number;

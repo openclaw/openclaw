@@ -213,7 +213,13 @@ actor GatewayChannelActor {
             "userAgent": ProtoAnyCodable(ProcessInfo.processInfo.operatingSystemVersionString),
         ]
         if let token = self.token {
-            params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(token)])
+            // Send both 'token' and 'password' to support both auth modes.
+            // Gateway checks the field matching its auth.mode configuration.
+            let authDict: [String: ProtoAnyCodable] = [
+                "token": ProtoAnyCodable(token),
+                "password": ProtoAnyCodable(token),
+            ]
+            params["auth"] = ProtoAnyCodable(authDict)
         }
 
         let frame = RequestFrame(
