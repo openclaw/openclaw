@@ -1,8 +1,8 @@
 import {
   ApplicationCommandOptionType,
   ChannelType,
-  type CommandInteractionOption,
   Client,
+  type CommandInteractionOption,
   Events,
   GatewayIntentBits,
   type Message,
@@ -12,8 +12,9 @@ import {
 import { chunkText } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import type { ReplyPayload } from "../auto-reply/types.js";
+import type { DiscordSlashCommandConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, isVerbose, logVerbose, warn } from "../globals.js";
@@ -23,7 +24,6 @@ import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
-import type { DiscordSlashCommandConfig } from "../config/config.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -422,7 +422,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           interaction.channel && "name" in interaction.channel
             ? interaction.channel.name
             : undefined;
-        const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+        const channelSlug = channelName
+          ? normalizeDiscordSlug(channelName)
+          : "";
         const channelConfig = resolveDiscordChannelConfig({
           guildInfo,
           channelId: interaction.channelId,
@@ -460,7 +462,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           interaction.channel && "name" in interaction.channel
             ? interaction.channel.name
             : undefined;
-        const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+        const channelSlug = channelName
+          ? normalizeDiscordSlug(channelName)
+          : "";
         const groupDmAllowed = resolveGroupDmAllow({
           channels: groupDmChannels,
           channelId: interaction.channelId,
@@ -812,9 +816,7 @@ async function ensureSlashCommand(
     const code = (err as { code?: number | string })?.code;
     const message = String(err);
     const isRateLimit =
-      status === 429 ||
-      code === 429 ||
-      /rate ?limit/i.test(message);
+      status === 429 || code === 429 || /rate ?limit/i.test(message);
     const text = `discord slash command setup failed: ${message}`;
     if (isRateLimit) {
       logVerbose(text);
