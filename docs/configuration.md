@@ -10,11 +10,11 @@ CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comme
 
 If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
-- tune group mention behavior (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`)
+- control group mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `routing.groupChat`)
 - customize message prefixes (`messages`)
-- set the agent’s workspace (`agent.workspace`)
+- set the agent's workspace (`agent.workspace`)
 - tune the embedded agent (`agent`) and session behavior (`session`)
-- set the agent’s identity (`identity`)
+- set the agent's identity (`identity`)
 
 ## Minimal config (recommended starting point)
 
@@ -22,6 +22,26 @@ If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-
 {
   agent: { workspace: "~/clawd" },
   whatsapp: { allowFrom: ["+15555550123"] }
+}
+```
+
+## Self-chat mode (recommended for group control)
+
+To prevent the bot from responding to WhatsApp @-mentions in groups (only respond to specific text triggers):
+
+```json5
+{
+  agent: { workspace: "~/clawd" },
+  whatsapp: {
+    // Allowlist is DMs only; including your own number enables self-chat mode.
+    allowFrom: ["+15555550123"],
+    groups: { "*": { requireMention: true } }
+  },
+  routing: {
+    groupChat: {
+      mentionPatterns: ["@clawd", "reisponde"]
+    }
+  }
 }
 ```
 
@@ -78,7 +98,8 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 
 ### `whatsapp.allowFrom`
 
-Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies.
+Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (DMs only).
+If empty, the default allowlist is your own WhatsApp number (self-chat mode).
 
 ```json5
 {
@@ -89,24 +110,13 @@ Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies.
 }
 ```
 
-### `whatsapp.groups`
-
-Per-group mention gating for WhatsApp groups. Default group config lives at `whatsapp.groups."*"`.
-
-```json5
-{
-  whatsapp: {
-    groups: {
-      "*": { requireMention: true },
-      "123@g.us": { requireMention: false } // group JID
-    }
-  }
-}
-```
-
 ### `routing.groupChat`
 
-Group mention patterns + history handling shared across surfaces (WhatsApp/iMessage/Telegram/Discord).
+Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
+
+**Mention types:**
+- **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
+- **Text patterns**: Regex patterns defined in `mentionPatterns`. Always checked regardless of self-chat mode.
 
 ```json5
 {
@@ -118,7 +128,25 @@ Group mention patterns + history handling shared across surfaces (WhatsApp/iMess
   }
 }
 ```
+
 Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`).
+
+To respond **only** to specific text triggers (ignoring native @-mentions):
+```json5
+{
+  whatsapp: {
+    // Include your own number to enable self-chat mode (ignore native @-mentions).
+    allowFrom: ["+15555550123"],
+    groups: { "*": { requireMention: true } }
+  },
+  routing: {
+    groupChat: {
+      // Only these text patterns will trigger responses
+      mentionPatterns: ["reisponde", "@clawd"]
+    }
+  }
+}
+```
 
 ### `routing.queue`
 
@@ -172,12 +200,7 @@ Set `telegram.enabled: false` to disable automatic startup.
   telegram: {
     enabled: true,
     botToken: "your-bot-token",
-    textChunkLimit: 4000,                  // optional outbound chunk size (chars)
-    replyToMode: "off",
-    groups: {
-      "*": { requireMention: true },
-      "123456789": { requireMention: false } // group chat id
-    },
+    requireMention: true,
     allowFrom: ["123456789"],
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
@@ -187,8 +210,6 @@ Set `telegram.enabled: false` to disable automatic startup.
   }
 }
 ```
-Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
-Reply threading is controlled via `telegram.replyToMode` (`off` | `first` | `all`) and reply tags in the model output.
 
 ### `discord` (bot transport)
 
@@ -199,10 +220,8 @@ Configure the Discord bot by setting the bot token and optional gating:
   discord: {
     enabled: true,
     token: "your-bot-token",
-    textChunkLimit: 2000,                   // optional outbound chunk size (chars)
     mediaMaxMb: 8,                          // clamp inbound media size
     enableReactions: true,                  // allow agent-triggered reactions
-    replyToMode: "off",                     // off | first | all
     slashCommand: {                         // user-installed app slash commands
       enabled: true,
       name: "clawd",
@@ -216,7 +235,6 @@ Configure the Discord bot by setting the bot token and optional gating:
       groupChannels: ["clawd-dm"]          // optional group DM allowlist
     },
     guilds: {
-      "*": { requireMention: true },       // default per-guild mention gating
       "123456789012345678": {               // guild id (preferred) or slug
         slug: "friends-of-clawd",
         requireMention: false,              // per-guild default
@@ -233,23 +251,7 @@ Configure the Discord bot by setting the bot token and optional gating:
 ```
 
 Clawdis starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
-Reply threading is controlled via `discord.replyToMode` (`off` | `first` | `all`) and reply tags in the model output.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
-Use `discord.guilds."*"` for default per-guild settings.
-
-### `signal` (signal-cli JSON-RPC)
-
-Clawdis can send/receive Signal via `signal-cli` (daemon or existing HTTP URL).
-
-```json5
-{
-  signal: {
-    enabled: true,
-    textChunkLimit: 4000,                   // optional outbound chunk size (chars)
-    mediaMaxMb: 8
-  }
-}
-```
 
 ### `imessage` (imsg CLI)
 
@@ -261,12 +263,7 @@ Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
     enabled: true,
     cliPath: "imsg",
     dbPath: "~/Library/Messages/chat.db",
-    textChunkLimit: 4000,                   // optional outbound chunk size (chars)
     allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
-    groups: {
-      "*": { requireMention: true },
-      "123": { requireMention: false } // chat_id for the group
-    },
     includeAttachments: false,
     mediaMaxMb: 16,
     service: "auto",
@@ -279,7 +276,6 @@ Notes:
 - Requires Full Disk Access to the Messages DB.
 - The first send will prompt for Messages automation permission.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
-- Group mention gating lives in `imessage.groups` (default at `imessage.groups."*"`).
 
 ### `agent.workspace`
 
@@ -296,7 +292,6 @@ Default: `~/clawd`.
 ### `messages`
 
 Controls inbound/outbound prefixes and timestamps.
-Outbound text chunking is configured per provider via `*.textChunkLimit` (e.g. `whatsapp.textChunkLimit`, `telegram.textChunkLimit`).
 
 ```json5
 {
@@ -351,8 +346,6 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
     },
     thinkingDefault: "low",
     verboseDefault: "off",
-    blockStreamingDefault: "on",
-    blockStreamingBreak: "text_end",
     timeoutSeconds: 600,
     mediaMaxMb: 5,
     heartbeat: {
@@ -376,14 +369,6 @@ If you omit the provider, CLAWDIS currently assumes `anthropic` as a temporary
 deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
-
-`agent.blockStreamingDefault` controls whether completed assistant blocks are
-sent immediately (default: `on`). Set to `off` to only deliver the final
-consolidated reply.
-
-`agent.blockStreamingBreak` controls what “block” means:
-- `text_end` (default): end of each assistant text content block (before tool calls)
-- `message_end`: end of the whole assistant message (may wait across tools)
 
 `agent.heartbeat` configures periodic heartbeat runs:
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set
