@@ -20,6 +20,7 @@ import {
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
@@ -476,6 +477,21 @@ export async function runInteractiveOnboarding(
       "- Android app (camera/canvas)",
     ].join("\n"),
     "Optional apps",
+  );
+
+  note(
+    (() => {
+      const tailnetIPv4 = pickPrimaryTailnetIPv4();
+      const host =
+        bind === "tailnet" || (bind === "auto" && tailnetIPv4)
+          ? (tailnetIPv4 ?? "127.0.0.1")
+          : "127.0.0.1";
+      return [
+        `Control UI: http://${host}:${port}/`,
+        `Gateway WS: ws://${host}:${port}`,
+      ].join("\n");
+    })(),
+    "Open the Control UI",
   );
 
   outro("Onboarding complete.");

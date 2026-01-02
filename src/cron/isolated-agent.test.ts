@@ -97,6 +97,7 @@ describe("runCronIsolatedAgentTurn", () => {
         sendMessageTelegram: vi.fn(),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "first" }, { text: " " }, { text: " last " }],
@@ -128,6 +129,7 @@ describe("runCronIsolatedAgentTurn", () => {
         sendMessageTelegram: vi.fn(),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
       };
       const long = "a".repeat(2001);
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
@@ -160,6 +162,7 @@ describe("runCronIsolatedAgentTurn", () => {
         sendMessageTelegram: vi.fn(),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello" }],
@@ -199,6 +202,7 @@ describe("runCronIsolatedAgentTurn", () => {
         sendMessageTelegram: vi.fn(),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello" }],
@@ -240,6 +244,7 @@ describe("runCronIsolatedAgentTurn", () => {
         }),
         sendMessageDiscord: vi.fn(),
         sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello from cron" }],
@@ -294,6 +299,7 @@ describe("runCronIsolatedAgentTurn", () => {
           channelId: "chan",
         }),
         sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
       };
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "hello from cron" }],

@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { confirm, multiselect, note, text } from "@clack/prompts";
+import { confirm, multiselect, note, select, text } from "@clack/prompts";
 import chalk from "chalk";
 
 import type { ClawdisConfig } from "../config/config.js";
 import { loginWeb } from "../provider-web.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeE164 } from "../utils.js";
 import { resolveWebAuthDir } from "../web/session.js";
 import { detectBinary, guardCancel } from "./onboard-helpers.js";
 import type { ProviderChoice } from "./onboard-types.js";
@@ -33,6 +34,7 @@ function noteProviderPrimer(): void {
       "Telegram: Bot API (token from @BotFather), replies via your bot.",
       "Discord: Bot token from Discord Developer Portal; invite bot to your server.",
       "Signal: signal-cli as a linked device (recommended: separate bot number).",
+      "iMessage: local imsg CLI (JSON-RPC over stdio) reading Messages DB.",
     ].join("\n"),
     "How providers work",
   );
@@ -79,6 +81,11 @@ export async function setupProviders(
   );
   const signalCliPath = cfg.signal?.cliPath ?? "signal-cli";
   const signalCliDetected = await detectBinary(signalCliPath);
+  const imessageConfigured = Boolean(
+    cfg.imessage?.cliPath || cfg.imessage?.dbPath || cfg.imessage?.allowFrom,
+  );
+  const imessageCliPath = cfg.imessage?.cliPath ?? "imsg";
+  const imessageCliDetected = await detectBinary(imessageCliPath);
 
   note(
     [
@@ -100,9 +107,17 @@ export async function setupProviders(
           ? chalk.green("configured")
           : chalk.yellow("needs setup")
       }`,
+      `iMessage: ${
+        imessageConfigured
+          ? chalk.green("configured")
+          : chalk.yellow("needs setup")
+      }`,
       `signal-cli: ${
         signalCliDetected ? chalk.green("found") : chalk.red("missing")
       } (${signalCliPath})`,
+      `imsg: ${
+        imessageCliDetected ? chalk.green("found") : chalk.red("missing")
+      } (${imessageCliPath})`,
     ].join("\n"),
     "Provider status",
   );
@@ -142,6 +157,11 @@ export async function setupProviders(
           label: "Signal (signal-cli)",
           hint: signalCliDetected ? "signal-cli found" : "signal-cli missing",
         },
+        {
+          value: "imessage",
+          label: "iMessage (imsg)",
+          hint: imessageCliDetected ? "imsg found" : "imsg missing",
+        },
       ],
     }),
     runtime,
@@ -176,6 +196,71 @@ export async function setupProviders(
       }
     } else if (!whatsappLinked) {
       note("Run `clawdis login` later to link WhatsApp.", "WhatsApp");
+    }
+
+    const existingAllowFrom = cfg.routing?.allowFrom ?? [];
+    if (existingAllowFrom.length === 0) {
+      note(
+        [
+          "WhatsApp direct chats are gated by `routing.allowFrom`.",
+          'Default (unset) = self-chat only; use "*" to allow anyone.',
+        ].join("\n"),
+        "Allowlist (recommended)",
+      );
+      const mode = guardCancel(
+        await select({
+          message: "Who can trigger the bot via WhatsApp?",
+          options: [
+            { value: "self", label: "Self-chat only (default)" },
+            { value: "list", label: "Specific numbers (recommended)" },
+            { value: "any", label: "Anyone (*)" },
+          ],
+        }),
+        runtime,
+      ) as "self" | "list" | "any";
+
+      if (mode === "any") {
+        next = {
+          ...next,
+          routing: { ...next.routing, allowFrom: ["*"] },
+        };
+      } else if (mode === "list") {
+        const allowRaw = guardCancel(
+          await text({
+            message: "Allowed sender numbers (comma-separated, E.164)",
+            placeholder: "+15555550123, +447700900123",
+            validate: (value) => {
+              const raw = String(value ?? "").trim();
+              if (!raw) return "Required";
+              const parts = raw
+                .split(/[\n,;]+/g)
+                .map((p) => p.trim())
+                .filter(Boolean);
+              if (parts.length === 0) return "Required";
+              for (const part of parts) {
+                if (part === "*") continue;
+                const normalized = normalizeE164(part);
+                if (!normalized) return `Invalid number: ${part}`;
+              }
+              return undefined;
+            },
+          }),
+          runtime,
+        );
+
+        const parts = String(allowRaw)
+          .split(/[\n,;]+/g)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        const normalized = parts.map((part) =>
+          part === "*" ? "*" : normalizeE164(part),
+        );
+        const unique = [...new Set(normalized.filter(Boolean))];
+        next = {
+          ...next,
+          routing: { ...next.routing, allowFrom: unique },
+        };
+      }
     }
   }
 
@@ -395,6 +480,44 @@ export async function setupProviders(
     );
   }
 
+  if (selection.includes("imessage")) {
+    let resolvedCliPath = imessageCliPath;
+    if (!imessageCliDetected) {
+      const entered = guardCancel(
+        await text({
+          message: "imsg CLI path",
+          initialValue: resolvedCliPath,
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+        runtime,
+      );
+      resolvedCliPath = String(entered).trim();
+      if (!resolvedCliPath) {
+        note("imsg CLI path required to enable iMessage.", "iMessage");
+      }
+    }
+
+    if (resolvedCliPath) {
+      next = {
+        ...next,
+        imessage: {
+          ...next.imessage,
+          enabled: true,
+          cliPath: resolvedCliPath,
+        },
+      };
+    }
+
+    note(
+      [
+        "Ensure Clawdis has Full Disk Access to Messages DB.",
+        "Grant Automation permission for Messages when prompted.",
+        "List chats with: imsg chats --limit 20",
+      ].join("\n"),
+      "iMessage next steps",
+    );
+  }
+
   if (options?.allowDisable) {
     if (!selection.includes("telegram") && telegramConfigured) {
       const disable = guardCancel(
@@ -440,6 +563,22 @@ export async function setupProviders(
         next = {
           ...next,
           signal: { ...next.signal, enabled: false },
+        };
+      }
+    }
+
+    if (!selection.includes("imessage") && imessageConfigured) {
+      const disable = guardCancel(
+        await confirm({
+          message: "Disable iMessage provider?",
+          initialValue: false,
+        }),
+        runtime,
+      );
+      if (disable) {
+        next = {
+          ...next,
+          imessage: { ...next.imessage, enabled: false },
         };
       }
     }

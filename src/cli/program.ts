@@ -282,10 +282,12 @@ export function buildProgram() {
 
   program
     .command("send")
-    .description("Send a message (WhatsApp Web, Telegram bot, Discord, Signal)")
+    .description(
+      "Send a message (WhatsApp Web, Telegram bot, Discord, Signal, iMessage)",
+    )
     .requiredOption(
       "-t, --to <number>",
-      "Recipient: E.164 for WhatsApp/Signal, Telegram chat id/@username, or Discord channel/user",
+      "Recipient: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord channel/user, or iMessage handle/chat_id",
     )
     .requiredOption("-m, --message <text>", "Message body")
     .option(
@@ -294,7 +296,7 @@ export function buildProgram() {
     )
     .option(
       "--provider <provider>",
-      "Delivery provider: whatsapp|telegram|discord|signal (default: whatsapp)",
+      "Delivery provider: whatsapp|telegram|discord|signal|imessage (default: whatsapp)",
     )
     .option("--dry-run", "Print payload and skip sending", false)
     .option("--json", "Output result as JSON", false)
@@ -337,7 +339,7 @@ Examples:
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
       "--provider <provider>",
-      "Delivery provider: whatsapp|telegram|discord|signal (default: whatsapp)",
+      "Delivery provider: whatsapp|telegram|discord|signal|imessage (default: whatsapp)",
     )
     .option(
       "--deliver",

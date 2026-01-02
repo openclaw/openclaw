@@ -60,6 +60,18 @@ export async function buildProviderSummary(
     );
   }
 
+  const imessageEnabled = effective.imessage?.enabled !== false;
+  if (!imessageEnabled) {
+    lines.push(chalk.cyan("iMessage: disabled"));
+  } else {
+    const imessageConfigured = Boolean(effective.imessage);
+    lines.push(
+      imessageConfigured
+        ? chalk.green("iMessage: configured")
+        : chalk.cyan("iMessage: not configured"),
+    );
+  }
+
   const allowFrom = effective.routing?.allowFrom?.length
     ? effective.routing.allowFrom.map(normalizeE164).filter(Boolean)
     : [];

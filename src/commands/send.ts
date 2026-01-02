@@ -108,6 +108,31 @@ export async function sendCommand(
     return;
   }
 
+  if (provider === "imessage" || provider === "imsg") {
+    const result = await deps.sendMessageIMessage(opts.to, opts.message, {
+      mediaUrl: opts.media,
+    });
+    runtime.log(
+      success(`✅ Sent via iMessage. Message ID: ${result.messageId}`),
+    );
+    if (opts.json) {
+      runtime.log(
+        JSON.stringify(
+          {
+            provider: "imessage",
+            via: "direct",
+            to: opts.to,
+            messageId: result.messageId,
+            mediaUrl: opts.media ?? null,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    return;
+  }
+
   // Always send via gateway over WS to avoid multi-session corruption.
   const sendViaGateway = async () =>
     callGateway<{

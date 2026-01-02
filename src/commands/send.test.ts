@@ -42,6 +42,7 @@ const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageTelegram: vi.fn(),
   sendMessageDiscord: vi.fn(),
   sendMessageSignal: vi.fn(),
+  sendMessageIMessage: vi.fn(),
   ...overrides,
 });
 
@@ -145,6 +146,23 @@ describe("sendCommand", () => {
     );
     expect(deps.sendMessageSignal).toHaveBeenCalledWith(
       "+15551234567",
+      "hi",
+      expect.objectContaining({ mediaUrl: undefined }),
+    );
+    expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("routes to imessage provider", async () => {
+    const deps = makeDeps({
+      sendMessageIMessage: vi.fn().mockResolvedValue({ messageId: "i1" }),
+    });
+    await sendCommand(
+      { to: "chat_id:42", message: "hi", provider: "imessage" },
+      deps,
+      runtime,
+    );
+    expect(deps.sendMessageIMessage).toHaveBeenCalledWith(
+      "chat_id:42",
       "hi",
       expect.objectContaining({ mediaUrl: undefined }),
     );
