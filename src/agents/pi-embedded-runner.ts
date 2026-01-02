@@ -331,6 +331,7 @@ export async function runEmbeddedPiAgent(params: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
+  blockReplyBreak?: "text_end" | "message_end";
   onToolResult?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -494,6 +495,7 @@ export async function runEmbeddedPiAgent(params: {
           shouldEmitToolResult: params.shouldEmitToolResult,
           onToolResult: params.onToolResult,
           onBlockReply: params.onBlockReply,
+          blockReplyBreak: params.blockReplyBreak,
           onPartialReply: params.onPartialReply,
           onAgentEvent: params.onAgentEvent,
           enforceFinalTag: params.enforceFinalTag,

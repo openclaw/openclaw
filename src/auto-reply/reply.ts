@@ -604,6 +604,10 @@ export async function getReplyFromConfig(
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
   const resolvedBlockStreaming =
     agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
+  const resolvedBlockStreamingBreak =
+    agentCfg?.blockStreamingBreak === "message_end"
+      ? "message_end"
+      : "text_end";
   const blockStreamingEnabled = resolvedBlockStreaming === "on";
   const streamedPayloadKeys = new Set<string>();
   const pendingBlockTasks = new Set<Promise<void>>();
@@ -1368,6 +1372,7 @@ export async function getReplyFromConfig(
         verboseLevel: resolvedVerboseLevel,
         timeoutMs,
         runId,
+        blockReplyBreak: resolvedBlockStreamingBreak,
         onPartialReply: opts?.onPartialReply
           ? async (payload) => {
               let text = payload.text;

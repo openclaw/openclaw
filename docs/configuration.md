@@ -331,6 +331,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
     thinkingDefault: "low",
     verboseDefault: "off",
     blockStreamingDefault: "on",
+    blockStreamingBreak: "text_end",
     timeoutSeconds: 600,
     mediaMaxMb: 5,
     heartbeat: {
@@ -355,9 +356,13 @@ deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
 
-`agent.blockStreamingDefault` controls whether completed assistant blocks
-(`message_end` chunks) are sent immediately (default: `on`). Set to `off` to
-only deliver the final consolidated reply.
+`agent.blockStreamingDefault` controls whether completed assistant blocks are
+sent immediately (default: `on`). Set to `off` to only deliver the final
+consolidated reply.
+
+`agent.blockStreamingBreak` controls what “block” means:
+- `text_end` (default): end of each assistant text content block (before tool calls)
+- `message_end`: end of the whole assistant message (may wait across tools)
 
 `agent.heartbeat` configures periodic heartbeat runs:
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set

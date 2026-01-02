@@ -61,6 +61,7 @@ export function subscribeEmbeddedPiSession(params: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
+  blockReplyBreak?: "text_end" | "message_end";
   onPartialReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -74,8 +75,10 @@ export function subscribeEmbeddedPiSession(params: {
   const assistantTexts: string[] = [];
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
+  const blockReplyBreak = params.blockReplyBreak ?? "text_end";
   let deltaBuffer = "";
   let lastStreamedAssistant: string | undefined;
+  let assistantTextBaseline = 0;
   let compactionInFlight = false;
   let pendingCompactionRetry = 0;
   let compactionRetryResolve: (() => void) | undefined;
@@ -149,6 +152,7 @@ export function subscribeEmbeddedPiSession(params: {
     toolMetaById.clear();
     deltaBuffer = "";
     lastStreamedAssistant = undefined;
+    assistantTextBaseline = 0;
     toolDebouncer.flush();
   };
 
@@ -264,38 +268,55 @@ export function subscribeEmbeddedPiSession(params: {
                   : "";
             if (chunk) {
               deltaBuffer += chunk;
-              const cleaned = params.enforceFinalTag
-                ? stripThinkingSegments(stripUnpairedThinkingTags(deltaBuffer))
-                : stripThinkingSegments(deltaBuffer);
-              const next = params.enforceFinalTag
-                ? (extractFinalText(cleaned)?.trim() ?? cleaned.trim())
-                : cleaned.trim();
-              if (next && next !== lastStreamedAssistant) {
-                lastStreamedAssistant = next;
+            }
+
+            const cleaned = params.enforceFinalTag
+              ? stripThinkingSegments(stripUnpairedThinkingTags(deltaBuffer))
+              : stripThinkingSegments(deltaBuffer);
+            const next = params.enforceFinalTag
+              ? (extractFinalText(cleaned)?.trim() ?? cleaned.trim())
+              : cleaned.trim();
+            if (next && next !== lastStreamedAssistant) {
+              lastStreamedAssistant = next;
+              const { text: cleanedText, mediaUrls } =
+                splitMediaFromOutput(next);
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "assistant",
+                data: {
+                  text: cleanedText,
+                  mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                },
+              });
+              params.onAgentEvent?.({
+                stream: "assistant",
+                data: {
+                  text: cleanedText,
+                  mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                },
+              });
+              if (params.onPartialReply) {
+                void params.onPartialReply({
+                  text: cleanedText,
+                  mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                });
+              }
+            }
+
+            if (evtType === "text_end" && blockReplyBreak === "text_end") {
+              if (next) assistantTexts.push(next);
+              if (next && params.onBlockReply) {
                 const { text: cleanedText, mediaUrls } =
                   splitMediaFromOutput(next);
-                emitAgentEvent({
-                  runId: params.runId,
-                  stream: "assistant",
-                  data: {
-                    text: cleanedText,
-                    mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-                  },
-                });
-                params.onAgentEvent?.({
-                  stream: "assistant",
-                  data: {
-                    text: cleanedText,
-                    mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-                  },
-                });
-                if (params.onPartialReply) {
-                  void params.onPartialReply({
+                if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
+                  void params.onBlockReply({
                     text: cleanedText,
                     mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
                   });
                 }
               }
+              deltaBuffer = "";
+              lastStreamedAssistant = undefined;
             }
           }
         }
@@ -317,8 +338,17 @@ export function subscribeEmbeddedPiSession(params: {
             params.enforceFinalTag && cleaned
               ? (extractFinalText(cleaned)?.trim() ?? cleaned)
               : cleaned;
-          if (text) assistantTexts.push(text);
-          if (text && params.onBlockReply) {
+
+          const addedDuringMessage =
+            assistantTexts.length > assistantTextBaseline;
+          if (!addedDuringMessage && text) assistantTexts.push(text);
+          assistantTextBaseline = assistantTexts.length;
+
+          if (
+            blockReplyBreak === "message_end" &&
+            text &&
+            params.onBlockReply
+          ) {
             const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
             if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
               void params.onBlockReply({
@@ -328,6 +358,7 @@ export function subscribeEmbeddedPiSession(params: {
             }
           }
           deltaBuffer = "";
+          lastStreamedAssistant = undefined;
         }
       }
 
