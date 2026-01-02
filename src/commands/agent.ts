@@ -470,7 +470,7 @@ export async function agentCommand(
     }
     if (deliveryProvider === "signal" && !signalTarget) {
       const err = new Error(
-        "Delivering to Signal requires --to <E.164|group:ID|signal:+E.164>",
+        "Delivering to Signal requires --to <E.164|group:ID|signal:group:ID|signal:+E.164>",
       );
       if (!bestEffortDeliver) throw err;
       logDeliveryError(err);

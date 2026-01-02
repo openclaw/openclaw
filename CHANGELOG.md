@@ -11,6 +11,7 @@
   - `skillsInstall.*` → `skills.install.*`
   - per-skill config map moved to `skills.entries` (e.g. `skills.peekaboo.enabled` → `skills.entries.peekaboo.enabled`)
   - new optional bundled allowlist: `skills.allowBundled` (only affects bundled skills)
+- Sessions: group keys now use `surface:group:<id>` / `surface:channel:<id>`; legacy `group:*` keys migrate on next message; `groupdm` keys are no longer recognized.
 
 ### Features
 - Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.

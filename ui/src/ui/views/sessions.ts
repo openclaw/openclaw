@@ -130,7 +130,7 @@ function renderRow(row: GatewaySessionRow, onPatch: SessionsProps["onPatch"]) {
   const verbose = row.verboseLevel ?? "";
   return html`
     <div class="table-row">
-      <div class="mono">${row.key}</div>
+      <div class="mono">${row.displayName ?? row.key}</div>
       <div>${row.kind}</div>
       <div>${updated}</div>
       <div>${formatSessionTokens(row)}</div>

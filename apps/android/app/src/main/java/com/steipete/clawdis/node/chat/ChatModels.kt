@@ -25,6 +25,7 @@ data class ChatPendingToolCall(
 data class ChatSessionEntry(
   val key: String,
   val updatedAtMs: Long?,
+  val displayName: String? = null,
 )
 
 data class ChatHistory(

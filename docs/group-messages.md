@@ -10,7 +10,7 @@ Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that 
 ## What’s implemented (2025-12-03)
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Activation is controlled per group (command or UI), not via config.
 - Group allowlist bypass: we still enforce `routing.allowFrom` on the participant at inbox ingest, but group JIDs themselves no longer block replies.
-- Per-group sessions: session keys look like `group:<jid>` so commands such as `/verbose on` or `/think:high` are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
+- Per-group sessions: session keys look like `whatsapp:group:<jid>` so commands such as `/verbose on` or `/think:high` are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
 - Context injection: last N (default 50) group messages are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`.
 - Sender surfacing: every group batch now ends with `[from: Sender Name (+E164)]` so Pi knows who is speaking.
 - Ephemeral/view-once: we unwrap those before extracting text/mentions, so pings inside them still trigger.
@@ -63,4 +63,4 @@ Only the owner number (from `routing.allowFrom`, defaulting to the bot’s own E
 ## Known considerations
 - Heartbeats are intentionally skipped for groups to avoid noisy broadcasts.
 - Echo suppression uses the combined batch string; if you send identical text twice without mentions, only the first will get a response.
-- Session store entries will appear as `group:<jid>` in the session store (`~/.clawdis/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.
+- Session store entries will appear as `whatsapp:group:<jid>` in the session store (`~/.clawdis/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.

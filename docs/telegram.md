@@ -11,7 +11,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 
 ## Goals
 - Let you talk to Clawdis via a Telegram bot in DMs and groups.
-- Share the same `main` session used by WhatsApp/WebChat; groups stay isolated as `group:<chatId>`.
+- Share the same `main` session used by WhatsApp/WebChat; groups stay isolated as `telegram:group:<chatId>`.
 - Keep transport routing deterministic: replies always go back to the surface they arrived on.
 
 ## How it will work (Bot API)
@@ -23,7 +23,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
      - The webhook listener currently binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
      - If you need a different public port/host, set `telegram.webhookUrl` to the externally reachable URL and use a reverse proxy to forward to `:8787`.
 4) Direct chats: user sends the first message; all subsequent turns land in the shared `main` session (default, no extra config).
-5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `group:<chatId>` and require mention/command to trigger replies.
+5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>` and require mention/command to trigger replies.
 6) Optional allowlist: reuse `routing.allowFrom` for direct chats by chat id (`123456789` or `telegram:123456789`).
 
 ## Capabilities & limits (Bot API)

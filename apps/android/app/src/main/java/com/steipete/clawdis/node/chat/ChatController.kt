@@ -469,7 +469,8 @@ class ChatController(
       val key = obj["key"].asStringOrNull()?.trim().orEmpty()
       if (key.isEmpty()) return@mapNotNull null
       val updatedAt = obj["updatedAt"].asLongOrNull()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt)
+      val displayName = obj["displayName"].asStringOrNull()?.trim()
+      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
     }
   }
 

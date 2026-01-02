@@ -1,4 +1,5 @@
 import {
+  ChannelType,
   Client,
   Events,
   GatewayIntentBits,
@@ -106,7 +107,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (message.author?.bot) return;
       if (!message.author) return;
 
-      const isDirectMessage = !message.guild;
+      const channelType = message.channel.type;
+      const isGroupDm = channelType === ChannelType.GroupDM;
+      const isDirectMessage = channelType === ChannelType.DM;
+      const isGuildMessage = Boolean(message.guild);
       const botId = client.user?.id;
       const wasMentioned =
         !isDirectMessage && Boolean(botId && message.mentions.has(botId));
@@ -142,7 +146,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       }
 
-      if (!isDirectMessage && guildAllowFrom) {
+      if (!isDirectMessage && isGuildMessage && guildAllowFrom) {
         const guilds = normalizeDiscordAllowList(guildAllowFrom.guilds, [
           "guild:",
         ]);
@@ -197,7 +201,16 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
       const fromLabel = isDirectMessage
         ? buildDirectLabel(message)
-        : buildGuildLabel(message);
+        : isGroupDm
+          ? buildGroupDmLabel(message)
+          : buildGuildLabel(message);
+      const groupSubject = (() => {
+        if (isDirectMessage) return undefined;
+        const channelName =
+          "name" in message.channel ? message.channel.name : message.channelId;
+        if (!channelName) return undefined;
+        return isGuildMessage ? `#${channelName}` : channelName;
+      })();
       const textWithId = `${text}\n[discord message id: ${message.id} channel: ${message.channelId}]`;
       let combinedBody = formatAgentEnvelope({
         surface: "Discord",
@@ -238,10 +251,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           : `channel:${message.channelId}`,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
-        GroupSubject:
-          !isDirectMessage && "name" in message.channel
-            ? message.channel.name
-            : undefined,
+        GroupSubject: groupSubject,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
@@ -356,6 +366,13 @@ function inferPlaceholder(attachment: import("discord.js").Attachment): string {
 function buildDirectLabel(message: import("discord.js").Message) {
   const username = message.author.tag;
   return `${username} id:${message.author.id}`;
+}
+
+function buildGroupDmLabel(message: import("discord.js").Message) {
+  const channelName =
+    "name" in message.channel ? message.channel.name : undefined;
+  const name = channelName ? ` ${channelName}` : "";
+  return `Group DM${name} id:${message.channelId}`;
 }
 
 function buildGuildLabel(message: import("discord.js").Message) {

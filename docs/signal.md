@@ -73,7 +73,7 @@ You can still run Clawdis on your own Signal account if your goal is “respond 
 
 ## Addressing (send targets)
 - Direct: `signal:+15551234567` (or plain `+15551234567`)
-- Groups: `group:<groupId>`
+- Groups: `signal:group:<groupId>`
 - Usernames: `username:<name>` / `u:<name>`
 
 ## Process plan (Clawdis adapter)

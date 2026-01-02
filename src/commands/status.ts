@@ -102,7 +102,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
 
       return {
         key,
-        kind: classifyKey(key),
+        kind: classifyKey(key, entry),
         sessionId: entry?.sessionId,
         updatedAt,
         age,
@@ -169,10 +169,17 @@ const formatContextUsage = (
   return `tokens: ${formatKTokens(used)} used, ${formatKTokens(left)} left of ${formatKTokens(contextTokens)} (${pctLabel})`;
 };
 
-const classifyKey = (key: string): SessionStatus["kind"] => {
+const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] => {
   if (key === "global") return "global";
-  if (key.startsWith("group:")) return "group";
   if (key === "unknown") return "unknown";
+  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
+  if (
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:")
+  ) {
+    return "group";
+  }
   return "direct";
 };
 

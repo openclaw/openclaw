@@ -10,11 +10,24 @@ import { normalizeE164 } from "../utils.js";
 
 export type SessionScope = "per-sender" | "global";
 
+const GROUP_SURFACES = new Set([
+  "whatsapp",
+  "telegram",
+  "discord",
+  "signal",
+  "imessage",
+  "webchat",
+  "slack",
+]);
+
+export type SessionChatType = "direct" | "group" | "room";
+
 export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  chatType?: SessionChatType;
   thinkingLevel?: string;
   verboseLevel?: string;
   providerOverride?: string;
@@ -27,6 +40,11 @@ export type SessionEntry = {
   totalTokens?: number;
   model?: string;
   contextTokens?: number;
+  displayName?: string;
+  surface?: string;
+  subject?: string;
+  room?: string;
+  space?: string;
   lastChannel?:
     | "whatsapp"
     | "telegram"
@@ -36,6 +54,14 @@ export type SessionEntry = {
     | "webchat";
   lastTo?: string;
   skillsSnapshot?: SessionSkillSnapshot;
+};
+
+export type GroupKeyResolution = {
+  key: string;
+  legacyKey?: string;
+  surface?: string;
+  id?: string;
+  chatType?: SessionChatType;
 };
 
 export type SessionSkillSnapshot = {
@@ -64,6 +90,135 @@ export function resolveStorePath(store?: string) {
   if (store.startsWith("~"))
     return path.resolve(store.replace("~", os.homedir()));
   return path.resolve(store);
+}
+
+function normalizeGroupLabel(raw?: string) {
+  const trimmed = raw?.trim().toLowerCase() ?? "";
+  if (!trimmed) return "";
+  const dashed = trimmed.replace(/\s+/g, "-");
+  const cleaned = dashed.replace(/[^a-z0-9#@._+-]+/g, "-");
+  return cleaned.replace(/-{2,}/g, "-").replace(/^[-.]+|[-.]+$/g, "");
+}
+
+function shortenGroupId(value?: string) {
+  const trimmed = value?.trim() ?? "";
+  if (!trimmed) return "";
+  if (trimmed.length <= 14) return trimmed;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-4)}`;
+}
+
+export function buildGroupDisplayName(params: {
+  surface?: string;
+  subject?: string;
+  room?: string;
+  space?: string;
+  id?: string;
+  key: string;
+}) {
+  const surfaceKey = (params.surface?.trim().toLowerCase() || "group").trim();
+  const detail =
+    params.room?.trim() ||
+    params.subject?.trim() ||
+    params.space?.trim() ||
+    "";
+  const fallbackId = params.id?.trim() || params.key.replace(/^group:/, "");
+  const rawLabel = detail || fallbackId;
+  let token = normalizeGroupLabel(rawLabel);
+  if (!token) {
+    token = normalizeGroupLabel(shortenGroupId(rawLabel));
+  }
+  if (!params.room && token.startsWith("#")) {
+    token = token.replace(/^#+/, "");
+  }
+  if (token && !/^[@#]/.test(token) && !token.startsWith("g-")) {
+    token = `g-${token}`;
+  }
+  return token ? `${surfaceKey}:${token}` : surfaceKey;
+}
+
+export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
+  const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
+  if (!from) return null;
+  const chatType = ctx.ChatType?.trim().toLowerCase();
+  const isGroup =
+    chatType === "group" ||
+    from.startsWith("group:") ||
+    from.includes("@g.us") ||
+    from.includes(":group:") ||
+    from.includes(":channel:");
+  if (!isGroup) return null;
+
+  const surfaceHint = ctx.Surface?.trim().toLowerCase();
+  const hasLegacyGroupPrefix = from.startsWith("group:");
+  const raw = (hasLegacyGroupPrefix ? from.slice("group:".length) : from).trim();
+
+  let surface: string | undefined;
+  let kind: "group" | "channel" | undefined;
+  let id = "";
+
+  const parseKind = (value: string) => {
+    if (value === "channel") return "channel";
+    return "group";
+  };
+
+  const parseParts = (parts: string[]) => {
+    if (parts.length >= 2 && GROUP_SURFACES.has(parts[0])) {
+      surface = parts[0];
+      if (parts.length >= 3) {
+        const kindCandidate = parts[1];
+        if (["group", "channel"].includes(kindCandidate)) {
+          kind = parseKind(kindCandidate);
+          id = parts.slice(2).join(":");
+        } else {
+          id = parts.slice(1).join(":");
+        }
+      } else {
+        id = parts[1];
+      }
+      return;
+    }
+    if (parts.length >= 2 && ["group", "channel"].includes(parts[0])) {
+      kind = parseKind(parts[0]);
+      id = parts.slice(1).join(":");
+    }
+  };
+
+  if (hasLegacyGroupPrefix) {
+    const legacyParts = raw.split(":").filter(Boolean);
+    if (legacyParts.length > 1) {
+      parseParts(legacyParts);
+    } else {
+      id = raw;
+    }
+  } else if (from.includes("@g.us") && !from.includes(":")) {
+    id = from;
+  } else {
+    parseParts(from.split(":").filter(Boolean));
+    if (!id) {
+      id = raw || from;
+    }
+  }
+
+  const resolvedSurface = surface ?? surfaceHint;
+  if (!resolvedSurface) {
+    const legacy = hasLegacyGroupPrefix ? `group:${raw}` : `group:${from}`;
+    return { key: legacy, id: raw || from, legacyKey: legacy, chatType: "group" };
+  }
+
+  const resolvedKind = kind === "channel" ? "channel" : "group";
+  const key = `${resolvedSurface}:${resolvedKind}:${id || raw || from}`;
+  let legacyKey: string | undefined;
+  if (hasLegacyGroupPrefix || from.includes("@g.us")) {
+    legacyKey = `group:${id || raw || from}`;
+  }
+
+  return {
+    key,
+    legacyKey,
+    surface: resolvedSurface,
+    id: id || raw || from,
+    chatType: resolvedKind === "channel" ? "room" : "group",
+  };
 }
 
 export function loadSessionStore(
@@ -145,6 +300,12 @@ export async function updateLastRoute(params: {
     totalTokens: existing?.totalTokens,
     model: existing?.model,
     contextTokens: existing?.contextTokens,
+    displayName: existing?.displayName,
+    chatType: existing?.chatType,
+    surface: existing?.surface,
+    subject: existing?.subject,
+    room: existing?.room,
+    space: existing?.space,
     skillsSnapshot: existing?.skillsSnapshot,
     lastChannel: channel,
     lastTo: to?.trim() ? to.trim() : undefined,
@@ -157,14 +318,9 @@ export async function updateLastRoute(params: {
 // Decide which session bucket to use (per-sender vs global).
 export function deriveSessionKey(scope: SessionScope, ctx: MsgContext) {
   if (scope === "global") return "global";
+  const resolvedGroup = resolveGroupSessionKey(ctx);
+  if (resolvedGroup) return resolvedGroup.key;
   const from = ctx.From ? normalizeE164(ctx.From) : "";
-  // Preserve group conversations as distinct buckets
-  if (typeof ctx.From === "string" && ctx.From.includes("@g.us")) {
-    return `group:${ctx.From}`;
-  }
-  if (typeof ctx.From === "string" && ctx.From.startsWith("group:")) {
-    return ctx.From;
-  }
   return from || "unknown";
 }
 
@@ -181,7 +337,10 @@ export function resolveSessionKey(
   if (scope === "global") return raw;
   // Default to a single shared direct-chat session called "main"; groups stay isolated.
   const canonical = (mainKey ?? "main").trim() || "main";
-  const isGroup = raw.startsWith("group:") || raw.includes("@g.us");
+  const isGroup =
+    raw.startsWith("group:") ||
+    raw.includes(":group:") ||
+    raw.includes(":channel:");
   if (!isGroup) return canonical;
   return raw;
 }

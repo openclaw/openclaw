@@ -100,6 +100,11 @@ export type GatewaySessionsDefaults = {
 export type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
+  displayName?: string;
+  surface?: string;
+  subject?: string;
+  room?: string;
+  space?: string;
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;

@@ -83,7 +83,7 @@ git commit -m "Add Clawd workspace"
 ## What Clawdis Does
 - Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run skills via the host Mac.
 - macOS app manages permissions (screen recording, notifications, microphone) and exposes the `clawdis` CLI via its bundled binary.
-- Direct chats collapse into the shared `main` session by default; groups stay isolated as `group:<jid>`; heartbeats keep background tasks alive.
+- Direct chats collapse into the shared `main` session by default; groups stay isolated as `surface:group:<id>` (rooms: `surface:channel:<id>`); heartbeats keep background tasks alive.
 
 ## Core Skills (enable in Settings → Skills)
 - **mcporter** — Tool server runtime/CLI for managing external skill backends.

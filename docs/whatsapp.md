@@ -52,7 +52,7 @@ Status: WhatsApp Web via Baileys only. Gateway owns the single session.
   - `<media:image|video|audio|document|sticker>`
 
 ## Groups
-- Groups map to `group:<jid>` sessions.
+- Groups map to `whatsapp:group:<jid>` sessions.
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.

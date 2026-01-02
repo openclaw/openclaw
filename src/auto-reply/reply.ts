@@ -29,7 +29,9 @@ import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGERS,
+  buildGroupDisplayName,
   loadSessionStore,
+  resolveGroupSessionKey,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
@@ -364,9 +366,9 @@ export async function getReplyFromConfig(
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
+  const groupResolution = resolveGroupSessionKey(ctx);
   const isGroup =
-    typeof ctx.From === "string" &&
-    (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
+    ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
   const triggerBodyNormalized = stripStructuralPrefixes(ctx.Body ?? "")
     .trim()
     .toLowerCase();
@@ -399,6 +401,16 @@ export async function getReplyFromConfig(
 
   sessionKey = resolveSessionKey(sessionScope, ctx, mainKey);
   sessionStore = loadSessionStore(storePath);
+  if (
+    groupResolution?.legacyKey &&
+    groupResolution.legacyKey !== sessionKey
+  ) {
+    const legacyEntry = sessionStore[groupResolution.legacyKey];
+    if (legacyEntry && !sessionStore[sessionKey]) {
+      sessionStore[sessionKey] = legacyEntry;
+      delete sessionStore[groupResolution.legacyKey];
+    }
+  }
   const entry = sessionStore[sessionKey];
   const idleMs = idleMinutes * 60_000;
   const freshEntry = entry && Date.now() - entry.updatedAt <= idleMs;
@@ -431,7 +443,35 @@ export async function getReplyFromConfig(
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     queueMode: baseEntry?.queueMode,
+    displayName: baseEntry?.displayName,
+    chatType: baseEntry?.chatType,
+    surface: baseEntry?.surface,
+    subject: baseEntry?.subject,
+    room: baseEntry?.room,
+    space: baseEntry?.space,
   };
+  if (groupResolution?.surface) {
+    const surface = groupResolution.surface;
+    const subject = ctx.GroupSubject?.trim();
+    const isRoomSurface = surface === "discord" || surface === "slack";
+    const nextRoom =
+      isRoomSurface && subject && subject.startsWith("#") ? subject : undefined;
+    const nextSubject = nextRoom ? undefined : subject;
+    sessionEntry.chatType = groupResolution.chatType ?? "group";
+    sessionEntry.surface = surface;
+    if (nextSubject) sessionEntry.subject = nextSubject;
+    if (nextRoom) sessionEntry.room = nextRoom;
+    sessionEntry.displayName = buildGroupDisplayName({
+      surface: sessionEntry.surface,
+      subject: sessionEntry.subject,
+      room: sessionEntry.room,
+      space: sessionEntry.space,
+      id: groupResolution.id,
+      key: sessionKey,
+    });
+  } else if (!sessionEntry.chatType) {
+    sessionEntry.chatType = "direct";
+  }
   sessionStore[sessionKey] = sessionEntry;
   await saveSessionStore(storePath, sessionStore);
 
@@ -1038,8 +1078,7 @@ export async function getReplyFromConfig(
   // Prepend queued system events (transitions only) and (for new main sessions) a provider snapshot.
   // Token efficiency: we filter out periodic/heartbeat noise and keep the lines compact.
   const isGroupSession =
-    typeof ctx.From === "string" &&
-    (ctx.From.includes("@g.us") || ctx.From.startsWith("group:"));
+    sessionEntry?.chatType === "group" || sessionEntry?.chatType === "room";
   const isMainSession =
     !isGroupSession && sessionKey === (sessionCfg?.mainKey ?? "main");
   if (isMainSession) {

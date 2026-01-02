@@ -11,7 +11,8 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 
 ## Goals
 - Talk to Clawdis via Discord DMs or guild channels.
-- Share the same `main` session used by WhatsApp/Telegram/WebChat; guild channels stay isolated as `group:<channelId>`.
+- Share the same `main` session used by WhatsApp/Telegram/WebChat; guild channels stay isolated as `discord:group:<channelId>`.
+- Group DMs are treated as group sessions (separate from `main`) and show up with a `discord:g-...` display label.
 - Keep routing deterministic: replies always go back to the surface they arrived on.
 
 ## How it works

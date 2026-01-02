@@ -18,12 +18,14 @@ All session state is **owned by the gateway** (the “master” Clawdis). UI cli
   - Store file: `~/.clawdis/sessions/sessions.json` (legacy: `~/.clawdis/sessions.json`).
   - Transcripts: `~/.clawdis/sessions/<SessionId>.jsonl` (one file per session id).
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
+- Group entries may include `displayName`, `surface`, `subject`, `room`, and `space` to label sessions in UIs.
 - Clawdis does **not** read legacy Pi/Tau session folders.
 
 ## Mapping transports → session keys
 - Direct chats (WhatsApp, Telegram, Discord, desktop Web Chat) all collapse to the **primary key** so they share context.
 - Multiple phone numbers can map to that same key; they act as transports into the same conversation.
-- Group chats still isolate state with `group:<jid>` keys; do not reuse the primary key for groups.
+- Group chats isolate state with `surface:group:<id>` keys (rooms/channels use `surface:channel:<id>`); do not reuse the primary key for groups.
+  - Legacy `group:<surface>:<id>` and `group:<id>` keys are still recognized.
 
 ## Lifecyle
 - Idle expiry: `session.idleMinutes` (default 60). After the timeout a new `sessionId` is minted on the next message.

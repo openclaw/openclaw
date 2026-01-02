@@ -412,7 +412,10 @@ function getSessionRecipients(cfg: ReturnType<typeof loadConfig>) {
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
   const isGroupKey = (key: string) =>
-    key.startsWith("group:") || key.includes("@g.us");
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:") ||
+    key.includes("@g.us");
   const isCronKey = (key: string) => key.startsWith("cron:");
 
   const recipients = Object.entries(store)
@@ -812,7 +815,7 @@ export async function monitorWebProvider(
   const resolveGroupActivationFor = (conversationId: string) => {
     const key = conversationId.startsWith("group:")
       ? conversationId
-      : `group:${conversationId}`;
+      : `whatsapp:group:${conversationId}`;
     const store = loadSessionStore(sessionStorePath);
     const entry = store[key];
     const requireMention = cfg.routing?.groupChat?.requireMention;

@@ -55,6 +55,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import {
+  buildGroupDisplayName,
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
@@ -455,6 +456,11 @@ type GatewaySessionsDefaults = {
 type GatewaySessionRow = {
   key: string;
   kind: "direct" | "group" | "global" | "unknown";
+  displayName?: string;
+  surface?: string;
+  subject?: string;
+  room?: string;
+  space?: string;
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;
@@ -862,11 +868,39 @@ function loadSessionEntry(sessionKey: string) {
   return { cfg, storePath, store, entry };
 }
 
-function classifySessionKey(key: string): GatewaySessionRow["kind"] {
+function classifySessionKey(
+  key: string,
+  entry?: SessionEntry,
+): GatewaySessionRow["kind"] {
   if (key === "global") return "global";
-  if (key.startsWith("group:")) return "group";
   if (key === "unknown") return "unknown";
+  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
+  if (
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:")
+  ) {
+    return "group";
+  }
   return "direct";
+}
+
+function parseGroupKey(
+  key: string,
+): { surface?: string; kind?: "group" | "channel"; id?: string } | null {
+  if (key.startsWith("group:")) {
+    const raw = key.slice("group:".length);
+    return raw ? { id: raw } : null;
+  }
+  const parts = key.split(":").filter(Boolean);
+  if (parts.length >= 3) {
+    const [surface, kind, ...rest] = parts;
+    if (kind === "group" || kind === "channel") {
+      const id = rest.join(":");
+      return { surface, kind, id };
+    }
+  }
+  return null;
 }
 
 function getSessionDefaults(cfg: ClawdisConfig): GatewaySessionsDefaults {
@@ -913,9 +947,32 @@ function listSessionsFromStore(params: {
       const input = entry?.inputTokens ?? 0;
       const output = entry?.outputTokens ?? 0;
       const total = entry?.totalTokens ?? input + output;
+      const parsed = parseGroupKey(key);
+      const surface = entry?.surface ?? parsed?.surface;
+      const subject = entry?.subject;
+      const room = entry?.room;
+      const space = entry?.space;
+      const id = parsed?.id;
+      const displayName =
+        entry?.displayName ??
+        (surface
+          ? buildGroupDisplayName({
+              surface,
+              subject,
+              room,
+              space,
+              id,
+              key,
+            })
+          : undefined);
       return {
         key,
-        kind: classifySessionKey(key),
+        kind: classifySessionKey(key, entry),
+        displayName,
+        surface,
+        subject,
+        room,
+        space,
         updatedAt,
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,
@@ -2881,6 +2938,12 @@ export async function startGatewayServer(
             verboseLevel: entry?.verboseLevel,
             model: entry?.model,
             contextTokens: entry?.contextTokens,
+            displayName: entry?.displayName,
+            chatType: entry?.chatType,
+            surface: entry?.surface,
+            subject: entry?.subject,
+            room: entry?.room,
+            space: entry?.space,
             lastChannel: entry?.lastChannel,
             lastTo: entry?.lastTo,
             skillsSnapshot: entry?.skillsSnapshot,

@@ -10,6 +10,11 @@ public struct ClawdisChatSessionEntry: Codable, Identifiable, Sendable, Hashable
 
     public let key: String
     public let kind: String?
+    public let displayName: String?
+    public let surface: String?
+    public let subject: String?
+    public let room: String?
+    public let space: String?
     public let updatedAt: Double?
     public let sessionId: String?
 
