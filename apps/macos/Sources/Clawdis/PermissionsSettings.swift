@@ -120,6 +120,7 @@ struct PermissionRow: View {
         case .screenRecording: "Screen Recording"
         case .microphone: "Microphone"
         case .speechRecognition: "Speech Recognition"
+        case .camera: "Camera"
         }
     }
 
@@ -132,6 +133,7 @@ struct PermissionRow: View {
         case .screenRecording: "Capture the screen for context or screenshots"
         case .microphone: "Allow Voice Wake and audio capture"
         case .speechRecognition: "Transcribe Voice Wake trigger phrases on-device"
+        case .camera: "Capture photos and video from the camera"
         }
     }
 
@@ -143,6 +145,7 @@ struct PermissionRow: View {
         case .screenRecording: "display"
         case .microphone: "mic"
         case .speechRecognition: "waveform"
+        case .camera: "camera"
         }
     }
 }
