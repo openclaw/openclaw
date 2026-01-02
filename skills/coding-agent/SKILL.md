@@ -8,91 +8,68 @@ metadata: {"clawdis":{"emoji":"🧩","requires":{"bins":["tmux"],"anyBins":["cla
 
 Use **tmux** for all coding-agent CLIs. Keep sessions resumable and logs visible.
 
-## Quick preflight
+## The Pattern: workdir + tmux
+
+**All coding agents need this pattern:**
 
 ```bash
-command -v claude codex opencode tmux
+# Start agent in target directory ("little box" - only sees relevant files)
+bash workdir:~/project/folder command:"tmux new -d -s task-name '<agent command>'"
+
+# Monitor progress
+tmux capture-pane -t task-name -p | tail -20
+
+# Attach to watch live
+tmux attach -t task-name
 ```
 
-If none of `claude`, `codex`, `opencode` exist, stop and ask to install.
+Why workdir matters: Agent wakes up in a focused directory, doesn't wander off reading unrelated files.
 
-## tmux baseline
-
-```bash
-# Create or attach
-tmux new -A -s coding-agent
-
-# Split panes
-tmux split-window -h
-tmux split-window -v
-
-# Leave running, detach
-tmux detach
-```
-
-## Claude Code
-
-Interactive (preferred in tmux):
-- `claude` — start session
-- `claude -c` — continue most recent
-- `claude -r ""` — picker
-- `claude -r <session_id>` — resume specific
+---
 
 ## Codex CLI
 
-⚠️ **Use gpt-5.2-codex — choose reasoning effort yourself:**
+**Model:** `gpt-5.2-codex` with reasoning effort (choose based on task):
 - `medium` — most tasks
 - `high` — complex/architectural tasks
 
-**One-shot with tmux (recommended):**
 ```bash
-# IMPORTANT: Use bash workdir param to start in the target folder!
-# This way Codex "wakes up in a little box" - only sees relevant files
-
-# Start Codex in target directory (choose medium or high based on task complexity)
-bash workdir:~/project/folder command:"tmux new -d -s codex-task 'codex exec --model gpt-5.2-codex -c reasoning_effort=\"medium\" -s workspace-write \"Your task\"'"
-
-# Monitor progress
-tmux capture-pane -t codex-task -p | tail -20
+bash workdir:~/project command:"tmux new -d -s codex-task 'codex exec --model gpt-5.2-codex -c reasoning_effort=\"medium\" -s workspace-write \"Your task\"'"
 ```
 
 **Interactive:**
-- `codex "Your prompt"`
-- `codex resume`
-- `codex resume --last`
-- `codex resume --session <id>`
+- `codex "prompt"` / `codex resume` / `codex resume --last`
 
-**Apply changes:**
-- `codex apply`
+**Flags:** `-s workspace-write`, `--full-auto`, `--skip-git-repo-check`
 
-**Useful flags:**
-- `-s workspace-write` — Allow writing to workspace
-- `--full-auto` — Sandboxed + auto-approve
-- `-C <dir>` — Set working directory
-- `--skip-git-repo-check` — Run outside git repos
+---
+
+## Claude Code
+
+```bash
+bash workdir:~/project command:"tmux new -d -s claude-task 'claude \"Your task\"'"
+```
+
+**Interactive:**
+- `claude` — start session
+- `claude -c` — continue most recent
+- `claude -r ""` — picker
+
+---
 
 ## OpenCode
 
-One-shot:
-- `opencode run "Your task"`
-- `opencode run -m anthropic/claude-sonnet-4-5 "Complex task"`
+```bash
+bash workdir:~/project command:"tmux new -d -s opencode-task 'opencode run \"Your task\"'"
+```
 
-Interactive:
-- `opencode`
-- `opencode -c`
-- `opencode -s <session-id>`
+**Interactive:**
+- `opencode` / `opencode -c` / `opencode -s <session-id>`
 
-## Notes
+---
 
-- **Always prefer tmux** — keeps history, survives disconnects, allows monitoring
-- For auth: `claude`, `codex login`, `opencode auth`
-- Check tmux session: `tmux attach -t <session-name>`
-- List sessions: `tmux list-sessions`
+## ⚠️ Rules
 
-## ⚠️ IMPORTANT: Respect Tool Choice!
-
-**If user asks for Codex/Claude Code/OpenCode → USE THAT TOOL!**
-- NEVER offer to "just build it yourself" instead
-- NEVER kill a running session because it's "too slow"
-- Let the tool complete its work — be patient!
-- The user wants to test/use that specific tool for a reason
+1. **Respect tool choice** — if user asks for Codex, use Codex. Don't offer to build it yourself!
+2. **Be patient** — don't kill sessions because they're "slow"
+3. **Monitor, don't interfere** — use `tmux capture-pane` to watch progress
