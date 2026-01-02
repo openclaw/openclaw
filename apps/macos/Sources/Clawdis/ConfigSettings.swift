@@ -334,7 +334,7 @@ struct ConfigSettings: View {
                                 .frame(maxWidth: .infinity)
                                 .disabled(self.hasEnvApiKey)
                                 .onChange(of: self.talkApiKey) { _, _ in self.autosaveConfig() }
-                            if !self.hasEnvApiKey && !self.talkApiKey.isEmpty {
+                            if !self.hasEnvApiKey, !self.talkApiKey.isEmpty {
                                 Button("Clear") {
                                     self.talkApiKey = ""
                                     self.autosaveConfig()
@@ -346,8 +346,8 @@ struct ConfigSettings: View {
                             Text("Using ELEVENLABS_API_KEY from the environment.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
-                        } else if self.gatewayApiKeyFound
-                            && self.talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        } else if self.gatewayApiKeyFound,
+                                  self.talkApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         {
                             Text("Using API key from the gateway profile.")
                                 .font(.footnote)
@@ -468,8 +468,7 @@ struct ConfigSettings: View {
             browserAttachOnly: browserAttachOnly,
             talkVoiceId: talkVoiceId,
             talkApiKey: talkApiKey,
-            talkInterruptOnSpeech: talkInterruptOnSpeech
-        )
+            talkInterruptOnSpeech: talkInterruptOnSpeech)
 
         let errorMessage = await ConfigSettings.buildAndSaveConfig(draft)
 
@@ -527,7 +526,7 @@ struct ConfigSettings: View {
         do {
             try await ConfigStore.save(root)
             return nil
-        } catch let error {
+        } catch {
             return error.localizedDescription
         }
     }

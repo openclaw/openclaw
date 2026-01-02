@@ -42,7 +42,9 @@ struct ConnectionsSettingsSmokeTests {
                     error: nil,
                     elapsedMs: 120,
                     bot: ProvidersStatusSnapshot.TelegramBot(id: 123, username: "clawdisbot"),
-                    webhook: ProvidersStatusSnapshot.TelegramWebhook(url: "https://example.com/hook", hasCustomCert: false)),
+                    webhook: ProvidersStatusSnapshot.TelegramWebhook(
+                        url: "https://example.com/hook",
+                        hasCustomCert: false)),
                 lastProbeAt: 1_700_000_050_000),
             discord: nil,
             signal: ProvidersStatusSnapshot.SignalStatus(

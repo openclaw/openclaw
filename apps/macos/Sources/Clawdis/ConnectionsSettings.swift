@@ -13,11 +13,11 @@ struct ConnectionsSettings: View {
 
         var sortOrder: Int {
             switch self {
-            case .whatsapp: return 0
-            case .telegram: return 1
-            case .discord: return 2
-            case .signal: return 3
-            case .imessage: return 4
+            case .whatsapp: 0
+            case .telegram: 1
+            case .discord: 2
+            case .signal: 3
+            case .imessage: 4
             }
         }
     }
