@@ -67,6 +67,18 @@ export type DiscordChannelConfigResolved = {
   requireMention?: boolean;
 };
 
+export function resolveDiscordReplyTarget(opts: {
+  replyToMode: ReplyToMode;
+  replyToId?: string;
+  hasReplied: boolean;
+}): string | undefined {
+  if (opts.replyToMode === "off") return undefined;
+  const replyToId = opts.replyToId?.trim();
+  if (!replyToId) return undefined;
+  if (opts.replyToMode === "all") return replyToId;
+  return opts.hasReplied ? undefined : replyToId;
+}
+
 function summarizeAllowList(list?: Array<string | number>) {
   if (!list || list.length === 0) return "any";
   const sample = list.slice(0, 4).map((entry) => String(entry));
@@ -1000,19 +1012,20 @@ async function deliverReplies({
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
-    const replyToId =
-      replyToMode === "off" ? undefined : payload.replyToId?.trim();
+    const replyToId = payload.replyToId;
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
       for (const chunk of chunkText(text, 2000)) {
+        const replyTo = resolveDiscordReplyTarget({
+          replyToMode,
+          replyToId,
+          hasReplied,
+        });
         await sendMessageDiscord(target, chunk, {
           token,
-          replyTo:
-            replyToId && (replyToMode === "all" || !hasReplied)
-              ? replyToId
-              : undefined,
+          replyTo,
         });
-        if (replyToId && !hasReplied) {
+        if (replyTo && !hasReplied) {
           hasReplied = true;
         }
       }
@@ -1021,15 +1034,17 @@ async function deliverReplies({
       for (const mediaUrl of mediaList) {
         const caption = first ? text : "";
         first = false;
+        const replyTo = resolveDiscordReplyTarget({
+          replyToMode,
+          replyToId,
+          hasReplied,
+        });
         await sendMessageDiscord(target, caption, {
           token,
           mediaUrl,
-          replyTo:
-            replyToId && (replyToMode === "all" || !hasReplied)
-              ? replyToId
-              : undefined,
+          replyTo,
         });
-        if (replyToId && !hasReplied) {
+        if (replyTo && !hasReplied) {
           hasReplied = true;
         }
       }

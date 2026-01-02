@@ -7,6 +7,7 @@ import {
   resolveDiscordChannelConfig,
   resolveDiscordGuildEntry,
   resolveGroupDmAllow,
+  resolveDiscordReplyTarget,
 } from "./monitor.js";
 
 const fakeGuild = (id: string, name: string) =>
@@ -158,5 +159,51 @@ describe("discord group DM gating", () => {
         channelSlug: "other",
       }),
     ).toBe(false);
+  });
+});
+
+describe("discord reply target selection", () => {
+  it("skips replies when mode is off", () => {
+    expect(
+      resolveDiscordReplyTarget({
+        replyToMode: "off",
+        replyToId: "123",
+        hasReplied: false,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("replies only once when mode is first", () => {
+    expect(
+      resolveDiscordReplyTarget({
+        replyToMode: "first",
+        replyToId: "123",
+        hasReplied: false,
+      }),
+    ).toBe("123");
+    expect(
+      resolveDiscordReplyTarget({
+        replyToMode: "first",
+        replyToId: "123",
+        hasReplied: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("replies on every message when mode is all", () => {
+    expect(
+      resolveDiscordReplyTarget({
+        replyToMode: "all",
+        replyToId: "123",
+        hasReplied: false,
+      }),
+    ).toBe("123");
+    expect(
+      resolveDiscordReplyTarget({
+        replyToMode: "all",
+        replyToId: "123",
+        hasReplied: true,
+      }),
+    ).toBe("123");
   });
 });

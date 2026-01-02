@@ -189,6 +189,74 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("honors replyToMode=first for threaded replies", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockResolvedValue({
+      text: "a".repeat(4500),
+      replyToId: "101",
+    });
+
+    createTelegramBot({ token: "tok", replyToMode: "first" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: 5, type: "private" },
+        text: "hi",
+        date: 1736380800,
+        message_id: 101,
+      },
+      me: { username: "clawdis_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
+    const [first, ...rest] = sendMessageSpy.mock.calls;
+    expect(first?.[2]?.reply_to_message_id).toBe(101);
+    for (const call of rest) {
+      expect(call[2]?.reply_to_message_id).toBeUndefined();
+    }
+  });
+
+  it("honors replyToMode=all for threaded replies", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockResolvedValue({
+      text: "a".repeat(4500),
+      replyToId: "101",
+    });
+
+    createTelegramBot({ token: "tok", replyToMode: "all" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: 5, type: "private" },
+        text: "hi",
+        date: 1736380800,
+        message_id: 101,
+      },
+      me: { username: "clawdis_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
+    for (const call of sendMessageSpy.mock.calls) {
+      expect(call[2]?.reply_to_message_id).toBe(101);
+    }
+  });
+
   it("skips group messages without mention when requireMention is enabled", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<
