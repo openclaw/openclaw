@@ -11,9 +11,13 @@ import {
 } from "@clack/prompts";
 import {
   loginAnthropic,
-  loginAntigravity,
   type OAuthCredentials,
 } from "@mariozechner/pi-ai";
+
+import {
+  loginAntigravityVpsAware,
+  isRemoteEnvironment,
+} from "./antigravity-oauth.js";
 
 import type { ClawdisConfig } from "../config/config.js";
 import {
@@ -248,23 +252,35 @@ export async function runInteractiveOnboarding(
       runtime.error(String(err));
     }
   } else if (authChoice === "antigravity") {
+    const isRemote = isRemoteEnvironment();
     note(
-      [
-        "Browser will open for Google authentication.",
-        "Sign in with your Google account that has Antigravity access.",
-        "The callback will be captured automatically on localhost:51121.",
-      ].join("\n"),
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, copy the redirect URL and paste it back here.",
+          ].join("\n")
+        : [
+            "Browser will open for Google authentication.",
+            "Sign in with your Google account that has Antigravity access.",
+            "The callback will be captured automatically on localhost:51121.",
+          ].join("\n"),
       "Google Antigravity OAuth",
     );
     const spin = spinner();
     spin.start("Starting OAuth flow…");
     let oauthCreds: OAuthCredentials | null = null;
     try {
-      oauthCreds = await loginAntigravity(
-        async ({ url, instructions }) => {
-          spin.message(instructions ?? "Complete sign-in in browser…");
-          await openUrl(url);
-          runtime.log(`Open: ${url}`);
+      oauthCreds = await loginAntigravityVpsAware(
+        async (url) => {
+          if (isRemote) {
+            spin.stop("OAuth URL ready");
+            runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
+          } else {
+            spin.message("Complete sign-in in browser…");
+            await openUrl(url);
+            runtime.log(`Open: ${url}`);
+          }
         },
         (msg) => spin.message(msg),
       );
