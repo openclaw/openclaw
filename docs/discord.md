@@ -11,8 +11,8 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 
 ## Goals
 - Talk to Clawdis via Discord DMs or guild channels.
-- Share the same `main` session used by WhatsApp/Telegram/WebChat; guild channels stay isolated as `discord:group:<channelId>`.
-- Group DMs are treated as group sessions (separate from `main`) and show up with a `discord:g-...` display label.
+- Share the same `main` session used by WhatsApp/Telegram/WebChat; guild channels stay isolated as `discord:group:<channelId>` (display names use `discord:<guildSlug>#<channelSlug>`).
+- Group DMs are ignored by default; enable via `discord.dm.groupEnabled` and optionally restrict by `discord.dm.groupChannels`.
 - Keep routing deterministic: replies always go back to the surface they arrived on.
 
 ## How it works
@@ -21,14 +21,14 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 3. Configure Clawdis with `DISCORD_BOT_TOKEN` (or `discord.token` in `~/.clawdis/clawdis.json`).
 4. Run the gateway; it auto-starts the Discord provider when the token is set (unless `discord.enabled = false`).
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session.
-6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default; disable with `discord.guild.requireMention = false` (legacy: `discord.requireMention`).
-7. Optional DM control: set `discord.dm.enabled = false` to ignore all DMs, or `discord.dm.allowFrom` to allow specific users (ids or names). Legacy: `discord.allowFrom`.
-8. Optional guild allowlist: set `discord.guild.allowFrom` with `guilds` and/or `users` (ids or names) to gate who can invoke the bot in servers. Legacy: `discord.guildAllowFrom`.
-9. Optional guild channel allowlist: set `discord.guild.channels` with channel ids or names to restrict where the bot listens.
-10. Optional guild context history: set `discord.guild.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable (legacy: `discord.historyLimit`).
-11. Reactions (default on): set `discord.enableReactions = false` to disable agent-triggered reactions via the `clawdis_discord` tool.
+6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
+7. Optional DM control: set `discord.dm.enabled = false` to ignore all DMs, or `discord.dm.allowFrom` to allow specific users (ids or names). Use `discord.dm.groupEnabled` + `discord.dm.groupChannels` to allow group DMs.
+8. Optional guild rules: set `discord.guilds` keyed by guild id (preferred) or slug, with per-channel rules.
+9. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
+10. Reactions (default on): set `discord.enableReactions = false` to disable agent-triggered reactions via the `clawdis_discord` tool.
 
 Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.
+Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
 
 ## Capabilities & limits
 - DMs and guild text channels (threads are treated as separate channels; voice not supported).
@@ -47,16 +47,20 @@ Note: Discord does not provide a simple username → id lookup without extra gui
     enableReactions: true,
     dm: {
       enabled: true,
-      allowFrom: ["123456789012345678", "steipete"]
+      allowFrom: ["123456789012345678", "steipete"],
+      groupEnabled: false,
+      groupChannels: ["clawd-dm"]
     },
-    guild: {
-      channels: ["general", "help"],
-      allowFrom: {
-        guilds: ["123456789012345678", "My Server"],
-        users: ["987654321098765432", "steipete"]
-      },
-      requireMention: true,
-      historyLimit: 20
+    guilds: {
+      "123456789012345678": {
+        slug: "friends-of-clawd",
+        requireMention: false,
+        users: ["987654321098765432", "steipete"],
+        channels: {
+          general: { allow: true },
+          help: { allow: true, requireMention: true }
+        }
+      }
     }
   }
 }
@@ -64,11 +68,15 @@ Note: Discord does not provide a simple username → id lookup without extra gui
 
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
 - `dm.allowFrom`: DM allowlist (user ids or names). Omit or set to `["*"]` to allow any DM sender.
-- `guild.allowFrom`: Optional allowlist for guild messages. Set `guilds` and/or `users` (ids or names). When both are set, both must match.
-- `guild.channels`: Optional allowlist for channel ids or names.
-- `guild.requireMention`: when `true`, messages in guild channels must mention the bot.
+- `dm.groupEnabled`: enable group DMs (default `false`).
+- `dm.groupChannels`: optional allowlist for group DM channel ids or slugs.
+- `guilds`: per-guild rules keyed by guild id (preferred) or slug.
+- `guilds.<id>.slug`: optional friendly slug used for display names.
+- `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
+- `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
+- `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
 - `mediaMaxMb`: clamp inbound media saved to disk.
-- `guild.historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
+- `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
 - `enableReactions`: allow agent-triggered reactions via the `clawdis_discord` tool (default `true`).
 
 ## Reactions

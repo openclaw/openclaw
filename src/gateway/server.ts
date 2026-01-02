@@ -2210,9 +2210,6 @@ export async function startGatewayServer(
       token: discordToken.trim(),
       runtime: discordRuntimeEnv,
       abortSignal: discordAbort.signal,
-      allowFrom: cfg.discord?.allowFrom,
-      guildAllowFrom: cfg.discord?.guildAllowFrom,
-      requireMention: cfg.discord?.requireMention,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
       historyLimit: cfg.discord?.historyLimit,
     })

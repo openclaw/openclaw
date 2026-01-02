@@ -25,12 +25,6 @@ export type MonitorDiscordOpts = {
   token?: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  allowFrom?: Array<string | number>;
-  guildAllowFrom?: {
-    guilds?: Array<string | number>;
-    users?: Array<string | number>;
-  };
-  requireMention?: boolean;
   mediaMaxMb?: number;
   historyLimit?: number;
 };
@@ -52,6 +46,19 @@ type DiscordAllowList = {
   allowAll: boolean;
   ids: Set<string>;
   names: Set<string>;
+};
+
+type DiscordGuildEntryResolved = {
+  id?: string;
+  slug?: string;
+  requireMention?: boolean;
+  users?: Array<string | number>;
+  channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+};
+
+type DiscordChannelConfigResolved = {
+  allowed: boolean;
+  requireMention?: boolean;
 };
 
 export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
@@ -77,29 +84,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   };
 
   const dmConfig = cfg.discord?.dm;
-  const guildConfig = cfg.discord?.guild;
-  const allowFrom =
-    opts.allowFrom ?? dmConfig?.allowFrom ?? cfg.discord?.allowFrom;
-  const guildAllowFrom =
-    opts.guildAllowFrom ??
-    guildConfig?.allowFrom ??
-    cfg.discord?.guildAllowFrom;
-  const guildChannels = guildConfig?.channels;
-  const requireMention =
-    opts.requireMention ??
-    guildConfig?.requireMention ??
-    cfg.discord?.requireMention ??
-    true;
+  const guildEntries = cfg.discord?.guilds;
+  const allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const historyLimit = Math.max(
     0,
-    opts.historyLimit ??
-      guildConfig?.historyLimit ??
-      cfg.discord?.historyLimit ??
-      20,
+    opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
   );
   const dmEnabled = dmConfig?.enabled ?? true;
+  const groupDmEnabled = dmConfig?.groupEnabled ?? false;
+  const groupDmChannels = dmConfig?.groupChannels;
 
   const client = new Client({
     intents: [
@@ -128,8 +123,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (!message.author) return;
 
       const channelType = message.channel.type;
+      const isGroupDm = channelType === ChannelType.GroupDM;
       const isDirectMessage = channelType === ChannelType.DM;
       const isGuildMessage = Boolean(message.guild);
+      if (isGroupDm && !groupDmEnabled) return;
       if (isDirectMessage && !dmEnabled) return;
       const botId = client.user?.id;
       const wasMentioned =
@@ -140,6 +137,58 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         (attachment ? inferPlaceholder(attachment) : "") ||
         message.embeds[0]?.description ||
         "";
+
+      const guildInfo = isGuildMessage
+        ? resolveDiscordGuildEntry({
+            guild: message.guild,
+            guildEntries,
+          })
+        : null;
+      if (
+        isGuildMessage &&
+        guildEntries &&
+        Object.keys(guildEntries).length > 0 &&
+        !guildInfo
+      ) {
+        logVerbose(
+          `Blocked discord guild ${message.guild?.id ?? "unknown"} (not in discord.guilds)`,
+        );
+        return;
+      }
+
+      const channelName =
+        (isGuildMessage || isGroupDm) && "name" in message.channel
+          ? message.channel.name
+          : undefined;
+      const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+      const guildSlug =
+        guildInfo?.slug ||
+        (message.guild?.name ? normalizeDiscordSlug(message.guild.name) : "");
+      const channelConfig = isGuildMessage
+        ? resolveDiscordChannelConfig({
+            guildInfo,
+            channelId: message.channelId,
+            channelName,
+            channelSlug,
+          })
+        : null;
+
+      const groupDmAllowed =
+        isGroupDm &&
+        resolveGroupDmAllow({
+          channels: groupDmChannels,
+          channelId: message.channelId,
+          channelName,
+          channelSlug,
+        });
+      if (isGroupDm && !groupDmAllowed) return;
+
+      if (isGuildMessage && channelConfig?.allowed === false) {
+        logVerbose(
+          `Blocked discord channel ${message.channelId} not in guild channel allowlist`,
+        );
+        return;
+      }
 
       if (isGuildMessage && historyLimit > 0 && baseText) {
         const history = guildHistories.get(message.channelId) ?? [];
@@ -153,7 +202,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         guildHistories.set(message.channelId, history);
       }
 
-      if (isGuildMessage && requireMention) {
+      const resolvedRequireMention =
+        channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
+      if (isGuildMessage && resolvedRequireMention) {
         if (botId && !wasMentioned) {
           logger.info(
             {
@@ -167,56 +218,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
 
       if (isGuildMessage) {
-        const channelAllow = normalizeDiscordAllowList(guildChannels, [
-          "channel:",
-        ]);
-        if (channelAllow) {
-          const channelName =
-            "name" in message.channel ? message.channel.name : undefined;
-          const channelOk = allowListMatches(channelAllow, {
-            id: message.channelId,
-            name: channelName,
-          });
-          if (!channelOk) {
-            logVerbose(
-              `Blocked discord channel ${message.channelId} not in guild.channels`,
-            );
-            return;
-          }
-        }
-      }
-
-      if (isGuildMessage && guildAllowFrom) {
-        const guilds = normalizeDiscordAllowList(guildAllowFrom.guilds, [
-          "guild:",
-        ]);
-        const users = normalizeDiscordAllowList(guildAllowFrom.users, [
-          "discord:",
-          "user:",
-        ]);
-        if (guilds || users) {
-          const guildId = message.guild?.id ?? "";
-          const userId = message.author.id;
-          const guildOk =
-            !guilds ||
-            allowListMatches(guilds, {
-              id: guildId,
-              name: message.guild?.name,
-            });
+        const userAllow = guildInfo?.users;
+        if (Array.isArray(userAllow) && userAllow.length > 0) {
+          const users = normalizeDiscordAllowList(userAllow, [
+            "discord:",
+            "user:",
+          ]);
           const userOk =
             !users ||
             allowListMatches(users, {
-              id: userId,
+              id: message.author.id,
               name: message.author.username,
               tag: message.author.tag,
             });
-          if (!guildOk || !userOk) {
+          if (!userOk) {
             logVerbose(
-              `Blocked discord guild sender ${userId} (guild ${guildId || "unknown"}) not in guildAllowFrom`,
+              `Blocked discord guild sender ${message.author.id} (not in guild users allowlist)`,
             );
             return;
           }
         }
+
       }
 
       if (isDirectMessage && Array.isArray(allowFrom) && allowFrom.length > 0) {
@@ -250,13 +272,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const fromLabel = isDirectMessage
         ? buildDirectLabel(message)
         : buildGuildLabel(message);
-      const groupSubject = (() => {
-        if (isDirectMessage) return undefined;
-        const channelName =
-          "name" in message.channel ? message.channel.name : message.channelId;
-        if (!channelName) return undefined;
-        return isGuildMessage ? `#${channelName}` : channelName;
-      })();
+      const groupRoom =
+        isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
+      const groupSubject = isDirectMessage ? undefined : groupRoom;
       const textWithId = `${text}\n[discord message id: ${message.id} channel: ${message.channelId}]`;
       let combinedBody = formatAgentEnvelope({
         surface: "Discord",
@@ -298,6 +316,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
         GroupSubject: groupSubject,
+        GroupRoom: groupRoom,
+        GroupSpace: isGuildMessage ? guildSlug || undefined : undefined,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
@@ -457,6 +477,8 @@ function normalizeDiscordAllowList(
     }
     const normalized = normalizeDiscordName(entry);
     if (normalized) names.add(normalized);
+    const slugged = normalizeDiscordSlug(entry);
+    if (slugged) names.add(slugged);
   }
 
   if (!allowAll && ids.size === 0 && names.size === 0) return null;
@@ -466,6 +488,17 @@ function normalizeDiscordAllowList(
 function normalizeDiscordName(value?: string | null) {
   if (!value) return "";
   return value.trim().toLowerCase();
+}
+
+function normalizeDiscordSlug(value?: string | null) {
+  if (!value) return "";
+  let text = value.trim().toLowerCase();
+  if (!text) return "";
+  text = text.replace(/^[@#]+/, "");
+  text = text.replace(/[\s_]+/g, "-");
+  text = text.replace(/[^a-z0-9-]+/g, "-");
+  text = text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+  return text;
 }
 
 function allowListMatches(
@@ -483,7 +516,98 @@ function allowListMatches(
   if (normalizedName && allowList.names.has(normalizedName)) return true;
   const normalizedTag = normalizeDiscordName(tag);
   if (normalizedTag && allowList.names.has(normalizedTag)) return true;
+  const slugName = normalizeDiscordSlug(name);
+  if (slugName && allowList.names.has(slugName)) return true;
+  const slugTag = normalizeDiscordSlug(tag);
+  if (slugTag && allowList.names.has(slugTag)) return true;
   return false;
+}
+
+function resolveDiscordGuildEntry(params: {
+  guild: import("discord.js").Guild | null;
+  guildEntries: Record<string, DiscordGuildEntryResolved> | undefined;
+}): DiscordGuildEntryResolved | null {
+  const { guild, guildEntries } = params;
+  if (!guild || !guildEntries || Object.keys(guildEntries).length === 0) {
+    return null;
+  }
+  const guildId = guild.id;
+  const guildSlug = normalizeDiscordSlug(guild.name);
+  const direct = guildEntries[guildId];
+  if (direct) {
+    return {
+      id: guildId,
+      slug: direct.slug ?? guildSlug,
+      requireMention: direct.requireMention,
+      users: direct.users,
+      channels: direct.channels,
+    };
+  }
+  if (guildSlug && guildEntries[guildSlug]) {
+    const entry = guildEntries[guildSlug];
+    return {
+      id: guildId,
+      slug: entry.slug ?? guildSlug,
+      requireMention: entry.requireMention,
+      users: entry.users,
+      channels: entry.channels,
+    };
+  }
+  const matchBySlug = Object.entries(guildEntries).find(([, entry]) => {
+    const entrySlug = normalizeDiscordSlug(entry.slug);
+    return entrySlug && entrySlug === guildSlug;
+  });
+  if (matchBySlug) {
+    const entry = matchBySlug[1];
+    return {
+      id: guildId,
+      slug: entry.slug ?? guildSlug,
+      requireMention: entry.requireMention,
+      users: entry.users,
+      channels: entry.channels,
+    };
+  }
+  return null;
+}
+
+function resolveDiscordChannelConfig(params: {
+  guildInfo: DiscordGuildEntryResolved | null;
+  channelId: string;
+  channelName?: string;
+  channelSlug?: string;
+}): DiscordChannelConfigResolved | null {
+  const { guildInfo, channelId, channelName, channelSlug } = params;
+  const channelEntries = guildInfo?.channels;
+  if (channelEntries && Object.keys(channelEntries).length > 0) {
+    const entry =
+      channelEntries[channelId] ??
+      (channelSlug
+        ? channelEntries[channelSlug] ??
+          channelEntries[`#${channelSlug}`]
+        : undefined) ??
+      (channelName
+        ? channelEntries[normalizeDiscordSlug(channelName)]
+        : undefined);
+    if (!entry) return { allowed: false };
+    return { allowed: entry.allow !== false, requireMention: entry.requireMention };
+  }
+  return { allowed: true };
+}
+
+function resolveGroupDmAllow(params: {
+  channels: Array<string | number> | undefined;
+  channelId: string;
+  channelName?: string;
+  channelSlug?: string;
+}) {
+  const { channels, channelId, channelName, channelSlug } = params;
+  if (!channels || channels.length === 0) return true;
+  const allowList = normalizeDiscordAllowList(channels, ["channel:"]);
+  if (!allowList) return true;
+  return allowListMatches(allowList, {
+    id: channelId,
+    name: channelSlug || channelName,
+  });
 }
 
 async function sendTyping(message: Message) {

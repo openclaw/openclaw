@@ -116,11 +116,13 @@ export function buildGroupDisplayName(params: {
   key: string;
 }) {
   const surfaceKey = (params.surface?.trim().toLowerCase() || "group").trim();
+  const room = params.room?.trim();
+  const space = params.space?.trim();
+  const subject = params.subject?.trim();
   const detail =
-    params.room?.trim() ||
-    params.subject?.trim() ||
-    params.space?.trim() ||
-    "";
+    (room && space
+      ? `${space}${room.startsWith("#") ? "" : "#"}${room}`
+      : room || subject || space || "") || "";
   const fallbackId = params.id?.trim() || params.key.replace(/^group:/, "");
   const rawLabel = detail || fallbackId;
   let token = normalizeGroupLabel(rawLabel);
@@ -130,7 +132,12 @@ export function buildGroupDisplayName(params: {
   if (!params.room && token.startsWith("#")) {
     token = token.replace(/^#+/, "");
   }
-  if (token && !/^[@#]/.test(token) && !token.startsWith("g-")) {
+  if (
+    token &&
+    !/^[@#]/.test(token) &&
+    !token.startsWith("g-") &&
+    !token.includes("#")
+  ) {
     token = `g-${token}`;
   }
   return token ? `${surfaceKey}:${token}` : surfaceKey;

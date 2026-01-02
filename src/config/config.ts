@@ -169,42 +169,35 @@ export type DiscordDmConfig = {
   enabled?: boolean;
   /** Allowlist for DM senders (ids or names). */
   allowFrom?: Array<string | number>;
+  /** If true, allow group DMs (default: false). */
+  groupEnabled?: boolean;
+  /** Optional allowlist for group DM channels (ids or slugs). */
+  groupChannels?: Array<string | number>;
 };
 
-export type DiscordGuildConfig = {
-  /** Allowlist for guild messages (guilds/users by id or name). */
-  allowFrom?: {
-    guilds?: Array<string | number>;
-    users?: Array<string | number>;
-  };
-  /** Allowlist for guild channels (ids or names). */
-  channels?: Array<string | number>;
-  /** Require @bot mention to respond in guilds. Default: true. */
+export type DiscordGuildChannelConfig = {
+  allow?: boolean;
   requireMention?: boolean;
-  /** Number of recent guild messages to include for context. */
-  historyLimit?: number;
+};
+
+export type DiscordGuildEntry = {
+  slug?: string;
+  requireMention?: boolean;
+  users?: Array<string | number>;
+  channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
 export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
   token?: string;
-  /** Legacy DM allowlist (ids). Prefer discord.dm.allowFrom. */
-  allowFrom?: Array<string | number>;
-  /** Legacy guild allowlist (ids). Prefer discord.guild.allowFrom. */
-  guildAllowFrom?: {
-    guilds?: Array<string | number>;
-    users?: Array<string | number>;
-  };
-  /** Legacy mention requirement. Prefer discord.guild.requireMention. */
-  requireMention?: boolean;
   mediaMaxMb?: number;
-  /** Legacy history limit. Prefer discord.guild.historyLimit. */
   historyLimit?: number;
   /** Allow agent-triggered Discord reactions (default: true). */
   enableReactions?: boolean;
   dm?: DiscordDmConfig;
-  guild?: DiscordGuildConfig;
+  /** New per-guild config keyed by guild id or slug. */
+  guilds?: Record<string, DiscordGuildEntry>;
 };
 
 export type SignalConfig = {
@@ -934,14 +927,6 @@ const ClawdisSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       token: z.string().optional(),
-      allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-      guildAllowFrom: z
-        .object({
-          guilds: z.array(z.union([z.string(), z.number()])).optional(),
-          users: z.array(z.union([z.string(), z.number()])).optional(),
-        })
-        .optional(),
-      requireMention: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),
@@ -949,7 +934,32 @@ const ClawdisSchema = z.object({
         .object({
           enabled: z.boolean().optional(),
           allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+          groupEnabled: z.boolean().optional(),
+          groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
         })
+        .optional(),
+      guilds: z
+        .record(
+          z.string(),
+          z
+            .object({
+              slug: z.string().optional(),
+              requireMention: z.boolean().optional(),
+              users: z.array(z.union([z.string(), z.number()])).optional(),
+              channels: z
+                .record(
+                  z.string(),
+                  z
+                    .object({
+                      allow: z.boolean().optional(),
+                      requireMention: z.boolean().optional(),
+                    })
+                    .optional(),
+                )
+                .optional(),
+            })
+            .optional(),
+        )
         .optional(),
       guild: z
         .object({

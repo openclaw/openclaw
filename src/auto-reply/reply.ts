@@ -453,14 +453,20 @@ export async function getReplyFromConfig(
   if (groupResolution?.surface) {
     const surface = groupResolution.surface;
     const subject = ctx.GroupSubject?.trim();
+    const space = ctx.GroupSpace?.trim();
+    const explicitRoom = ctx.GroupRoom?.trim();
     const isRoomSurface = surface === "discord" || surface === "slack";
     const nextRoom =
-      isRoomSurface && subject && subject.startsWith("#") ? subject : undefined;
+      explicitRoom ??
+      (isRoomSurface && subject && subject.startsWith("#")
+        ? subject
+        : undefined);
     const nextSubject = nextRoom ? undefined : subject;
     sessionEntry.chatType = groupResolution.chatType ?? "group";
     sessionEntry.surface = surface;
     if (nextSubject) sessionEntry.subject = nextSubject;
     if (nextRoom) sessionEntry.room = nextRoom;
+    if (space) sessionEntry.space = space;
     sessionEntry.displayName = buildGroupDisplayName({
       surface: sessionEntry.surface,
       subject: sessionEntry.subject,

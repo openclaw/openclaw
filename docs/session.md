@@ -24,7 +24,7 @@ All session state is **owned by the gateway** (the “master” Clawdis). UI cli
 ## Mapping transports → session keys
 - Direct chats (WhatsApp, Telegram, Discord, desktop Web Chat) all collapse to the **primary key** so they share context.
 - Multiple phone numbers can map to that same key; they act as transports into the same conversation.
-- Group chats isolate state with `surface:group:<id>` keys (rooms/channels use `surface:channel:<id>`); do not reuse the primary key for groups.
+- Group chats isolate state with `surface:group:<id>` keys (rooms/channels use `surface:channel:<id>`); do not reuse the primary key for groups. (Discord display names show `discord:<guildSlug>#<channelSlug>`.)
   - Legacy `group:<surface>:<id>` and `group:<id>` keys are still recognized.
 
 ## Lifecyle
