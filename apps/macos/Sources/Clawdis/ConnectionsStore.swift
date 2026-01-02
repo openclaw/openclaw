@@ -174,6 +174,21 @@ final class ConnectionsStore {
     var discordGroupChannels: String = ""
     var discordMediaMaxMb: String = ""
     var discordHistoryLimit: String = ""
+    var discordActionReactions = true
+    var discordActionStickers = true
+    var discordActionPolls = true
+    var discordActionPermissions = true
+    var discordActionMessages = true
+    var discordActionThreads = true
+    var discordActionPins = true
+    var discordActionSearch = true
+    var discordActionMemberInfo = true
+    var discordActionRoleInfo = true
+    var discordActionChannelInfo = true
+    var discordActionVoiceStatus = true
+    var discordActionEvents = true
+    var discordActionRoles = false
+    var discordActionModeration = false
     var discordSlashEnabled = false
     var discordSlashName: String = ""
     var discordSlashSessionPrefix: String = ""
@@ -419,6 +434,22 @@ final class ConnectionsStore {
             } else {
                 self.discordHistoryLimit = ""
             }
+            let discordActions = discord?["actions"]?.dictionaryValue
+            self.discordActionReactions = discordActions?["reactions"]?.boolValue ?? true
+            self.discordActionStickers = discordActions?["stickers"]?.boolValue ?? true
+            self.discordActionPolls = discordActions?["polls"]?.boolValue ?? true
+            self.discordActionPermissions = discordActions?["permissions"]?.boolValue ?? true
+            self.discordActionMessages = discordActions?["messages"]?.boolValue ?? true
+            self.discordActionThreads = discordActions?["threads"]?.boolValue ?? true
+            self.discordActionPins = discordActions?["pins"]?.boolValue ?? true
+            self.discordActionSearch = discordActions?["search"]?.boolValue ?? true
+            self.discordActionMemberInfo = discordActions?["memberInfo"]?.boolValue ?? true
+            self.discordActionRoleInfo = discordActions?["roleInfo"]?.boolValue ?? true
+            self.discordActionChannelInfo = discordActions?["channelInfo"]?.boolValue ?? true
+            self.discordActionVoiceStatus = discordActions?["voiceStatus"]?.boolValue ?? true
+            self.discordActionEvents = discordActions?["events"]?.boolValue ?? true
+            self.discordActionRoles = discordActions?["roles"]?.boolValue ?? false
+            self.discordActionModeration = discordActions?["moderation"]?.boolValue ?? false
             let slash = discord?["slashCommand"]?.dictionaryValue
             self.discordSlashEnabled = slash?["enabled"]?.boolValue ?? false
             self.discordSlashName = slash?["name"]?.stringValue ?? ""
@@ -640,6 +671,35 @@ final class ConnectionsStore {
             discord["historyLimit"] = value
         } else {
             discord.removeValue(forKey: "historyLimit")
+        }
+
+        var actions: [String: Any] = (discord["actions"] as? [String: Any]) ?? [:]
+        func setAction(_ key: String, value: Bool, defaultValue: Bool) {
+            if value == defaultValue {
+                actions.removeValue(forKey: key)
+            } else {
+                actions[key] = value
+            }
+        }
+        setAction("reactions", value: self.discordActionReactions, defaultValue: true)
+        setAction("stickers", value: self.discordActionStickers, defaultValue: true)
+        setAction("polls", value: self.discordActionPolls, defaultValue: true)
+        setAction("permissions", value: self.discordActionPermissions, defaultValue: true)
+        setAction("messages", value: self.discordActionMessages, defaultValue: true)
+        setAction("threads", value: self.discordActionThreads, defaultValue: true)
+        setAction("pins", value: self.discordActionPins, defaultValue: true)
+        setAction("search", value: self.discordActionSearch, defaultValue: true)
+        setAction("memberInfo", value: self.discordActionMemberInfo, defaultValue: true)
+        setAction("roleInfo", value: self.discordActionRoleInfo, defaultValue: true)
+        setAction("channelInfo", value: self.discordActionChannelInfo, defaultValue: true)
+        setAction("voiceStatus", value: self.discordActionVoiceStatus, defaultValue: true)
+        setAction("events", value: self.discordActionEvents, defaultValue: true)
+        setAction("roles", value: self.discordActionRoles, defaultValue: false)
+        setAction("moderation", value: self.discordActionModeration, defaultValue: false)
+        if actions.isEmpty {
+            discord.removeValue(forKey: "actions")
+        } else {
+            discord["actions"] = actions
         }
 
         var slash: [String: Any] = (discord["slashCommand"] as? [String: Any]) ?? [:]

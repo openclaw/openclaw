@@ -16,10 +16,47 @@ export type DiscordForm = {
   groupChannels: string;
   mediaMaxMb: string;
   historyLimit: string;
+  actions: DiscordActionForm;
   slashEnabled: boolean;
   slashName: string;
   slashSessionPrefix: string;
   slashEphemeral: boolean;
+};
+
+export type DiscordActionForm = {
+  reactions: boolean;
+  stickers: boolean;
+  polls: boolean;
+  permissions: boolean;
+  messages: boolean;
+  threads: boolean;
+  pins: boolean;
+  search: boolean;
+  memberInfo: boolean;
+  roleInfo: boolean;
+  channelInfo: boolean;
+  voiceStatus: boolean;
+  events: boolean;
+  roles: boolean;
+  moderation: boolean;
+};
+
+export const defaultDiscordActions: DiscordActionForm = {
+  reactions: true,
+  stickers: true,
+  polls: true,
+  permissions: true,
+  messages: true,
+  threads: true,
+  pins: true,
+  search: true,
+  memberInfo: true,
+  roleInfo: true,
+  channelInfo: true,
+  voiceStatus: true,
+  events: true,
+  roles: false,
+  moderation: false,
 };
 
 export type SignalForm = {

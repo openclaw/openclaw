@@ -26,12 +26,13 @@ import type {
   SkillStatusReport,
   StatusSummary,
 } from "./types";
-import type {
-  CronFormState,
-  DiscordForm,
-  IMessageForm,
-  SignalForm,
-  TelegramForm,
+import {
+  defaultDiscordActions,
+  type CronFormState,
+  type DiscordForm,
+  type IMessageForm,
+  type SignalForm,
+  type TelegramForm,
 } from "./ui-types";
 import { loadChatHistory, sendChat, handleChatEvent } from "./controllers/chat";
 import { loadNodes } from "./controllers/nodes";
@@ -143,6 +144,7 @@ export class ClawdisApp extends LitElement {
     groupChannels: "",
     mediaMaxMb: "",
     historyLimit: "",
+    actions: { ...defaultDiscordActions },
     slashEnabled: false,
     slashName: "",
     slashSessionPrefix: "",
