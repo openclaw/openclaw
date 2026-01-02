@@ -22,7 +22,11 @@ Your **workspace** (AGENTS.md, memory files, skills) is separate — configured 
 
 ### What platforms does Clawdis run on?
 
-**macOS, Windows, and Linux!** Anywhere Node.js 22+ runs. The onboarding wizard (`clawdis onboard`) works on all three.
+**macOS and Linux** are the primary targets. Anywhere Node.js 22+ runs should work in theory.
+
+- **macOS** — Fully supported, most tested
+- **Linux** — Works great, common for VPS/server deployments
+- **Windows** — Should work but largely untested! You're in pioneer territory 🤠
 
 Some features are platform-specific:
 - **iMessage** — macOS only (uses `imsg` CLI)
