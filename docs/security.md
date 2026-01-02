@@ -54,9 +54,13 @@ Only allow specific phone numbers to trigger your AI. Never use `["*"]` in produ
 
 ```json
 {
+  "whatsapp": {
+    "groups": {
+      "*": { "requireMention": true }
+    }
+  },
   "routing": {
     "groupChat": {
-      "requireMention": true,
       "mentionPatterns": ["@clawd", "@mybot"]
     }
   }

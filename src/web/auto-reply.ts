@@ -812,13 +812,23 @@ export async function monitorWebProvider(
       .join(", ");
   };
 
+  const resolveGroupRequireMentionFor = (conversationId: string) => {
+    const groupConfig = cfg.whatsapp?.groups?.[conversationId];
+    if (typeof groupConfig?.requireMention === "boolean") {
+      return groupConfig.requireMention;
+    }
+    const groupDefault = cfg.whatsapp?.groups?.["*"]?.requireMention;
+    if (typeof groupDefault === "boolean") return groupDefault;
+    return true;
+  };
+
   const resolveGroupActivationFor = (conversationId: string) => {
     const key = conversationId.startsWith("group:")
       ? conversationId
       : `whatsapp:group:${conversationId}`;
     const store = loadSessionStore(sessionStorePath);
     const entry = store[key];
-    const requireMention = cfg.routing?.groupChat?.requireMention;
+    const requireMention = resolveGroupRequireMentionFor(conversationId);
     const defaultActivation = requireMention === false ? "always" : "mention";
     return (
       normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation

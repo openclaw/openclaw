@@ -285,9 +285,10 @@ describe("trigger handling", () => {
           },
           whatsapp: {
             allowFrom: ["*"],
+            groups: { "*": { requireMention: false } },
           },
           routing: {
-            groupChat: { requireMention: false },
+            groupChat: {},
           },
           session: { store: join(home, "sessions.json") },
         },

@@ -10,7 +10,7 @@ CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comme
 
 If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
-- tune group mention behavior (`routing.groupChat`)
+- tune group mention behavior (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`)
 - customize message prefixes (`messages`)
 - set the agent’s workspace (`agent.workspace`)
 - tune the embedded agent (`agent`) and session behavior (`session`)
@@ -86,9 +86,24 @@ Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies.
 }
 ```
 
+### `whatsapp.groups`
+
+Per-group mention gating for WhatsApp groups. Default group config lives at `whatsapp.groups."*"`.
+
+```json5
+{
+  whatsapp: {
+    groups: {
+      "*": { requireMention: true },
+      "[redacted-email]": { requireMention: false } // group JID
+    }
+  }
+}
+```
+
 ### `routing.groupChat`
 
-Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
+Group mention patterns + history handling shared across surfaces (WhatsApp/iMessage/Telegram/Discord).
 
 ```json5
 {
@@ -100,6 +115,7 @@ Group messages default to **require mention** (either metadata mention or regex 
   }
 }
 ```
+Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`).
 
 ### `routing.queue`
 
@@ -153,7 +169,10 @@ Set `telegram.enabled: false` to disable automatic startup.
   telegram: {
     enabled: true,
     botToken: "your-bot-token",
-    requireMention: true,
+    groups: {
+      "*": { requireMention: true },
+      "123456789": { requireMention: false } // group chat id
+    },
     allowFrom: ["123456789"],
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
@@ -163,6 +182,7 @@ Set `telegram.enabled: false` to disable automatic startup.
   }
 }
 ```
+Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
 
 ### `discord` (bot transport)
 
@@ -217,6 +237,10 @@ Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
     cliPath: "imsg",
     dbPath: "~/Library/Messages/chat.db",
     allowFrom: ["+15555550123", "[redacted-email]", "chat_id:123"],
+    groups: {
+      "*": { requireMention: true },
+      "123": { requireMention: false } // chat_id for the group
+    },
     includeAttachments: false,
     mediaMaxMb: 16,
     service: "auto",
@@ -229,6 +253,7 @@ Notes:
 - Requires Full Disk Access to the Messages DB.
 - The first send will prompt for Messages automation permission.
 - Prefer `chat_id:<id>` targets. Use `imsg chats --limit 20` to list chats.
+- Group mention gating lives in `imessage.groups` (default at `imessage.groups."*"`).
 
 ### `agent.workspace`
 

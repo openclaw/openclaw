@@ -502,6 +502,18 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("rejects routing.groupChat.requireMention", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      routing: { groupChat: { requireMention: false } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("routing.groupChat.requireMention");
+    }
+  });
+
   it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
@@ -513,6 +525,52 @@ describe("legacy config detection", () => {
     );
     expect(res.config?.whatsapp?.allowFrom).toEqual(["+15555550123"]);
     expect(res.config?.routing?.allowFrom).toBeUndefined();
+  });
+
+  it("migrates routing.groupChat.requireMention to whatsapp/telegram/imessage groups", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      routing: { groupChat: { requireMention: false } },
+    });
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → whatsapp.groups."*".requireMention.',
+    );
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → telegram.groups."*".requireMention.',
+    );
+    expect(res.changes).toContain(
+      'Moved routing.groupChat.requireMention → imessage.groups."*".requireMention.',
+    );
+    expect(res.config?.whatsapp?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.imessage?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.routing?.groupChat?.requireMention).toBeUndefined();
+  });
+
+  it("rejects telegram.requireMention", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      telegram: { requireMention: true },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("telegram.requireMention");
+    }
+  });
+
+  it("migrates telegram.requireMention to telegram.groups.*.requireMention", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      telegram: { requireMention: false },
+    });
+    expect(res.changes).toContain(
+      'Moved telegram.requireMention → telegram.groups."*".requireMention.',
+    );
+    expect(res.config?.telegram?.groups?.["*"]?.requireMention).toBe(false);
+    expect(res.config?.telegram?.requireMention).toBeUndefined();
   });
 
   it("surfaces legacy issues in snapshot", async () => {

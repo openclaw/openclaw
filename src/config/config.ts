@@ -61,6 +61,12 @@ export type WebConfig = {
 export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+    }
+  >;
 };
 
 export type BrowserConfig = {
@@ -160,7 +166,12 @@ export type TelegramConfig = {
   botToken?: string;
   /** Path to file containing bot token (for secret managers like agenix) */
   tokenFile?: string;
-  requireMention?: boolean;
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+    }
+  >;
   allowFrom?: Array<string | number>;
   mediaMaxMb?: number;
   proxy?: string;
@@ -257,6 +268,12 @@ export type IMessageConfig = {
   includeAttachments?: boolean;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+    }
+  >;
 };
 
 export type QueueMode = "queue" | "interrupt";
@@ -271,7 +288,6 @@ export type QueueModeBySurface = {
 };
 
 export type GroupChatConfig = {
-  requireMention?: boolean;
   mentionPatterns?: string[];
   historyLimit?: number;
 };
@@ -628,7 +644,6 @@ const ModelsConfigSchema = z
 
 const GroupChatSchema = z
   .object({
-    requireMention: z.boolean().optional(),
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
   })
@@ -930,6 +945,16 @@ const ClawdisSchema = z.object({
   whatsapp: z
     .object({
       allowFrom: z.array(z.string()).optional(),
+      groups: z
+        .record(
+          z.string(),
+          z
+            .object({
+              requireMention: z.boolean().optional(),
+            })
+            .optional(),
+        )
+        .optional(),
     })
     .optional(),
   telegram: z
@@ -937,7 +962,16 @@ const ClawdisSchema = z.object({
       enabled: z.boolean().optional(),
       botToken: z.string().optional(),
       tokenFile: z.string().optional(),
-      requireMention: z.boolean().optional(),
+      groups: z
+        .record(
+          z.string(),
+          z
+            .object({
+              requireMention: z.boolean().optional(),
+            })
+            .optional(),
+        )
+        .optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
       mediaMaxMb: z.number().positive().optional(),
       proxy: z.string().optional(),
@@ -1025,6 +1059,16 @@ const ClawdisSchema = z.object({
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
       includeAttachments: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
+      groups: z
+        .record(
+          z.string(),
+          z
+            .object({
+              requireMention: z.boolean().optional(),
+            })
+            .optional(),
+        )
+        .optional(),
     })
     .optional(),
   bridge: z
@@ -1183,6 +1227,16 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     message:
       "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdis doctor` to migrate).",
   },
+  {
+    path: ["routing", "groupChat", "requireMention"],
+    message:
+      'routing.groupChat.requireMention was removed; use whatsapp/telegram/imessage groups defaults (e.g. whatsapp.groups."*".requireMention) instead (run `clawdis doctor` to migrate).',
+  },
+  {
+    path: ["telegram", "requireMention"],
+    message:
+      "telegram.requireMention was removed; use telegram.groups.\"*\".requireMention instead (run `clawdis doctor` to migrate).",
+  },
 ];
 
 const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
@@ -1214,6 +1268,105 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
         delete raw.routing;
       }
       raw.whatsapp = whatsapp;
+    },
+  },
+  {
+    id: "routing.groupChat.requireMention->groups.*.requireMention",
+    describe:
+      "Move routing.groupChat.requireMention to whatsapp/telegram/imessage groups",
+    apply: (raw, changes) => {
+      const routing = raw.routing;
+      if (!routing || typeof routing !== "object") return;
+      const groupChat =
+        (routing as Record<string, unknown>).groupChat &&
+        typeof (routing as Record<string, unknown>).groupChat === "object"
+          ? ((routing as Record<string, unknown>)
+              .groupChat as Record<string, unknown>)
+          : null;
+      if (!groupChat) return;
+      const requireMention = groupChat.requireMention;
+      if (requireMention === undefined) return;
+
+      const applyTo = (key: "whatsapp" | "telegram" | "imessage") => {
+        const section =
+          raw[key] && typeof raw[key] === "object"
+            ? (raw[key] as Record<string, unknown>)
+            : {};
+        const groups =
+          section.groups && typeof section.groups === "object"
+            ? (section.groups as Record<string, unknown>)
+            : {};
+        const defaultKey = "*";
+        const entry =
+          groups[defaultKey] && typeof groups[defaultKey] === "object"
+            ? (groups[defaultKey] as Record<string, unknown>)
+            : {};
+        if (entry.requireMention === undefined) {
+          entry.requireMention = requireMention;
+          groups[defaultKey] = entry;
+          section.groups = groups;
+          raw[key] = section;
+          changes.push(
+            `Moved routing.groupChat.requireMention → ${key}.groups."*".requireMention.`,
+          );
+        } else {
+          changes.push(
+            `Removed routing.groupChat.requireMention (${key}.groups."*" already set).`,
+          );
+        }
+      };
+
+      applyTo("whatsapp");
+      applyTo("telegram");
+      applyTo("imessage");
+
+      delete groupChat.requireMention;
+      if (Object.keys(groupChat).length === 0) {
+        delete (routing as Record<string, unknown>).groupChat;
+      }
+      if (Object.keys(routing as Record<string, unknown>).length === 0) {
+        delete raw.routing;
+      }
+    },
+  },
+  {
+    id: "telegram.requireMention->telegram.groups.*.requireMention",
+    describe: "Move telegram.requireMention to telegram.groups.*.requireMention",
+    apply: (raw, changes) => {
+      const telegram = raw.telegram;
+      if (!telegram || typeof telegram !== "object") return;
+      const requireMention = (telegram as Record<string, unknown>).requireMention;
+      if (requireMention === undefined) return;
+
+      const groups =
+        (telegram as Record<string, unknown>).groups &&
+        typeof (telegram as Record<string, unknown>).groups === "object"
+          ? ((telegram as Record<string, unknown>)
+              .groups as Record<string, unknown>)
+          : {};
+      const defaultKey = "*";
+      const entry =
+        groups[defaultKey] && typeof groups[defaultKey] === "object"
+          ? (groups[defaultKey] as Record<string, unknown>)
+          : {};
+
+      if (entry.requireMention === undefined) {
+        entry.requireMention = requireMention;
+        groups[defaultKey] = entry;
+        (telegram as Record<string, unknown>).groups = groups;
+        changes.push(
+          'Moved telegram.requireMention → telegram.groups."*".requireMention.',
+        );
+      } else {
+        changes.push(
+          'Removed telegram.requireMention (telegram.groups."*" already set).',
+        );
+      }
+
+      delete (telegram as Record<string, unknown>).requireMention;
+      if (Object.keys(telegram as Record<string, unknown>).length === 0) {
+        delete raw.telegram;
+      }
     },
   },
 ];

@@ -512,8 +512,48 @@ export async function getReplyFromConfig(
   sessionCtx.Body = queueCleaned;
   sessionCtx.BodyStripped = queueCleaned;
 
+  const resolveGroupRequireMention = () => {
+    const surface =
+      groupResolution?.surface ?? ctx.Surface?.trim().toLowerCase();
+    const groupId = groupResolution?.id ?? ctx.From?.replace(/^group:/, "");
+    if (surface === "telegram") {
+      if (groupId) {
+        const groupConfig = cfg.telegram?.groups?.[groupId];
+        if (typeof groupConfig?.requireMention === "boolean") {
+          return groupConfig.requireMention;
+        }
+      }
+      const groupDefault = cfg.telegram?.groups?.["*"]?.requireMention;
+      if (typeof groupDefault === "boolean") return groupDefault;
+      return true;
+    }
+    if (surface === "whatsapp") {
+      if (groupId) {
+        const groupConfig = cfg.whatsapp?.groups?.[groupId];
+        if (typeof groupConfig?.requireMention === "boolean") {
+          return groupConfig.requireMention;
+        }
+      }
+      const groupDefault = cfg.whatsapp?.groups?.["*"]?.requireMention;
+      if (typeof groupDefault === "boolean") return groupDefault;
+      return true;
+    }
+    if (surface === "imessage") {
+      if (groupId) {
+        const groupConfig = cfg.imessage?.groups?.[groupId];
+        if (typeof groupConfig?.requireMention === "boolean") {
+          return groupConfig.requireMention;
+        }
+      }
+      const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
+      if (typeof groupDefault === "boolean") return groupDefault;
+      return true;
+    }
+    return true;
+  };
+
   const defaultGroupActivation = () => {
-    const requireMention = cfg.routing?.groupChat?.requireMention;
+    const requireMention = resolveGroupRequireMention();
     return requireMention === false ? "always" : "mention";
   };
 
@@ -954,6 +994,10 @@ export async function getReplyFromConfig(
     const webLinked = await webAuthExists();
     const webAuthAgeMs = getWebAuthAgeMs();
     const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
+    const groupActivation = isGroup
+      ? normalizeGroupActivation(sessionEntry?.groupActivation) ??
+        defaultGroupActivation()
+      : undefined;
     const statusText = buildStatusMessage({
       agent: {
         model,
@@ -966,6 +1010,7 @@ export async function getReplyFromConfig(
       sessionKey,
       sessionScope,
       storePath,
+      groupActivation,
       resolvedThink: resolvedThinkLevel,
       resolvedVerbose: resolvedVerboseLevel,
       webLinked,

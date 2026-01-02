@@ -125,11 +125,13 @@ Example:
     heartbeat: { every: "0m" }
   },
   whatsapp: {
-    allowFrom: ["+15555550123"]
+    allowFrom: ["+15555550123"],
+    groups: {
+      "*": { requireMention: true }
+    }
   },
   routing: {
     groupChat: {
-      requireMention: true,
       mentionPatterns: ["@clawd", "clawd"]
     }
   },

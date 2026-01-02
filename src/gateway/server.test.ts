@@ -2353,7 +2353,10 @@ describe("gateway server", () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
     await writeConfigFile({
-      telegram: { botToken: "123:abc", requireMention: false },
+      telegram: {
+        botToken: "123:abc",
+        groups: { "*": { requireMention: false } },
+      },
     });
 
     const { server, ws } = await startServerWithClient();
@@ -2370,7 +2373,7 @@ describe("gateway server", () => {
     const snap = await readConfigFileSnapshot();
     expect(snap.valid).toBe(true);
     expect(snap.config?.telegram?.botToken).toBeUndefined();
-    expect(snap.config?.telegram?.requireMention).toBe(false);
+    expect(snap.config?.telegram?.groups?.["*"]?.requireMention).toBe(false);
 
     ws.close();
     await server.close();

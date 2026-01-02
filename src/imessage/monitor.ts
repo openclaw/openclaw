@@ -79,10 +79,22 @@ function resolveMentionRegexes(cfg: ReturnType<typeof loadConfig>): RegExp[] {
   );
 }
 
-function resolveRequireMention(opts: MonitorIMessageOpts): boolean {
-  const cfg = loadConfig();
+function resolveGroupRequireMention(
+  cfg: ReturnType<typeof loadConfig>,
+  opts: MonitorIMessageOpts,
+  chatId?: number | null,
+): boolean {
   if (typeof opts.requireMention === "boolean") return opts.requireMention;
-  return cfg.routing?.groupChat?.requireMention ?? true;
+  const groupId = chatId != null ? String(chatId) : undefined;
+  if (groupId) {
+    const groupConfig = cfg.imessage?.groups?.[groupId];
+    if (typeof groupConfig?.requireMention === "boolean") {
+      return groupConfig.requireMention;
+    }
+  }
+  const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
+  if (typeof groupDefault === "boolean") return groupDefault;
+  return true;
 }
 
 function isMentioned(text: string, regexes: RegExp[]): boolean {
@@ -133,7 +145,6 @@ export async function monitorIMessageProvider(
   const cfg = loadConfig();
   const allowFrom = resolveAllowFrom(opts);
   const mentionRegexes = resolveMentionRegexes(cfg);
-  const requireMention = resolveRequireMention(opts);
   const includeAttachments =
     opts.includeAttachments ?? cfg.imessage?.includeAttachments ?? false;
   const mediaMaxBytes =
@@ -170,6 +181,7 @@ export async function monitorIMessageProvider(
 
     const messageText = (message.text ?? "").trim();
     const mentioned = isGroup ? isMentioned(messageText, mentionRegexes) : true;
+    const requireMention = resolveGroupRequireMention(cfg, opts, chatId);
     if (isGroup && requireMention && !mentioned) {
       logVerbose(`imessage: skipping group message (no mention)`);
       return;

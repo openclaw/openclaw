@@ -8,7 +8,7 @@ read_when:
 Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that thread separate from the personal DM session.
 
 ## What’s implemented (2025-12-03)
-- Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Activation is controlled per group (command or UI), not via config.
+- Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Defaults can be set in config (`whatsapp.groups`) and overridden per group via `/activation`.
 - Group allowlist bypass: we still enforce `whatsapp.allowFrom` on the participant at inbox ingest, but group JIDs themselves no longer block replies.
 - Per-group sessions: session keys look like `whatsapp:group:<jid>` so commands such as `/verbose on` or `/think:high` are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
 - Context injection: last N (default 50) group messages are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`.
@@ -21,6 +21,11 @@ Add a `groupChat` block to `~/.clawdis/clawdis.json` so display-name pings work 
 
 ```json5
 {
+  "whatsapp": {
+    "groups": {
+      "*": { "requireMention": true }
+    }
+  },
   "routing": {
     "groupChat": {
       "historyLimit": 50,

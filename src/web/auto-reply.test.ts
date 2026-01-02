@@ -1005,6 +1005,55 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("[from: Bob (+222)]");
   });
 
+  it("allows group messages when whatsapp groups default disables mention gating", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+
+    setLoadConfigMock(() => ({
+      whatsapp: {
+        allowFrom: ["*"],
+        groups: { "*": { requireMention: false } },
+      },
+      routing: { groupChat: { mentionPatterns: ["@clawd"] } },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hello group",
+      from: "[redacted-email]",
+      conversationId: "[redacted-email]",
+      chatId: "[redacted-email]",
+      chatType: "group",
+      to: "+2",
+      id: "g-default-off",
+      senderE164: "+111",
+      senderName: "Alice",
+      selfE164: "+999",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    resetLoadConfigMock();
+  });
+
   it("supports always-on group activation with silent token and preserves history", async () => {
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -1100,10 +1149,10 @@ describe("web auto-reply", () => {
       whatsapp: {
         // Self-chat heuristic: allowFrom includes selfE164.
         allowFrom: ["+999"],
+        groups: { "*": { requireMention: true } },
       },
       routing: {
         groupChat: {
-          requireMention: true,
           mentionPatterns: ["\\bclawd\\b"],
         },
       },

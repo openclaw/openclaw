@@ -58,12 +58,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.api.config.use(apiThrottler());
 
   const cfg = loadConfig();
-  const requireMention =
-    opts.requireMention ?? cfg.telegram?.requireMention ?? true;
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.telegram?.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
+  const resolveGroupRequireMention = (chatId: string | number) => {
+    const groupId = String(chatId);
+    const groupConfig = cfg.telegram?.groups?.[groupId];
+    if (typeof groupConfig?.requireMention === "boolean") {
+      return groupConfig.requireMention;
+    }
+    const groupDefault = cfg.telegram?.groups?.["*"]?.requireMention;
+    if (typeof groupDefault === "boolean") return groupDefault;
+    if (typeof opts.requireMention === "boolean") return opts.requireMention;
+    return true;
+  };
 
   bot.on("message", async (ctx) => {
     try {
@@ -101,14 +110,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
 
       const botUsername = ctx.me?.username?.toLowerCase();
-      if (
-        isGroup &&
-        requireMention &&
-        botUsername &&
-        !hasBotMention(msg, botUsername)
-      ) {
-        logger.info({ chatId, reason: "no-mention" }, "skipping group message");
-        return;
+      const wasMentioned =
+        Boolean(botUsername) && hasBotMention(msg, botUsername);
+      if (isGroup && resolveGroupRequireMention(chatId) && botUsername) {
+        if (!wasMentioned) {
+          logger.info(
+            { chatId, reason: "no-mention" },
+            "skipping group message",
+          );
+          return;
+        }
       }
 
       const media = await resolveMedia(
@@ -150,6 +161,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ReplyToBody: replyTarget?.body,
         ReplyToSender: replyTarget?.sender,
         Timestamp: msg.date ? msg.date * 1000 : undefined,
+        WasMentioned: isGroup && botUsername ? wasMentioned : undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,

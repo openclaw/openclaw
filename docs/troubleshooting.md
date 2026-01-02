@@ -29,8 +29,8 @@ cat ~/.clawdis/clawdis.json | jq '.whatsapp.allowFrom'
 
 **Check 2:** For group chats, is mention required?
 ```bash
-# The message must contain a pattern from mentionPatterns
-cat ~/.clawdis/clawdis.json | jq '.routing.groupChat'
+# The message must match mentionPatterns or explicit mentions; defaults live in whatsapp.groups
+cat ~/.clawdis/clawdis.json | jq '.routing.groupChat, .whatsapp.groups'
 ```
 
 **Check 3:** Check the logs

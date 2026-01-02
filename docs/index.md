@@ -106,8 +106,11 @@ Example:
 
 ```json5
 {
-  whatsapp: { allowFrom: ["+15555550123"] },
-  routing: { groupChat: { requireMention: true, mentionPatterns: ["@clawd"] } }
+  whatsapp: {
+    allowFrom: ["+15555550123"],
+    groups: { "*": { requireMention: true } }
+  },
+  routing: { groupChat: { mentionPatterns: ["@clawd"] } }
 }
 ```
 

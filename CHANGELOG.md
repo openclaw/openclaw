@@ -15,12 +15,14 @@
 - Discord: remove legacy `discord.allowFrom`, `discord.guildAllowFrom`, and `discord.requireMention`; use `discord.dm` + `discord.guilds`.
 - Providers: Discord/Telegram no longer auto-start from env tokens alone; add `discord: { enabled: true }` / `telegram: { enabled: true }` to your config when using `DISCORD_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN`.
 - Config: remove `routing.allowFrom`; use `whatsapp.allowFrom` instead (run `clawdis doctor` to migrate).
+- Config: remove `routing.groupChat.requireMention` + `telegram.requireMention`; use `whatsapp.groups`, `imessage.groups`, and `telegram.groups` defaults instead (run `clawdis doctor` to migrate).
 
 ### Features
 - Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
 - Nix mode: opt-in declarative config + read-only settings UI when `CLAWDIS_NIX_MODE=1` (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).
 - Agent runtime: accept legacy `Z_AI_API_KEY` for Z.AI provider auth (maps to `ZAI_API_KEY`).
+- Groups: add per-group mention gating defaults/overrides for Telegram/WhatsApp/iMessage via `*.groups` with `"*"` defaults.
 - Discord: add user-installed slash command handling with per-user sessions and auto-registration (#94) — thanks @thewilloftheshadow.
 - Discord: add DM enable/allowlist plus guild channel/user/guild allowlists with id/name matching.
 - Signal: add `signal-cli` JSON-RPC support for send/receive via the Signal provider.

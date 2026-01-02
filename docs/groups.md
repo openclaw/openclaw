@@ -17,13 +17,30 @@ Clawdis treats group chats consistently across surfaces: WhatsApp, Telegram, Dis
 - `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
 ## Mention gating (default)
-Group messages require a mention unless overridden per group.
+Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
 ```json5
 {
+  whatsapp: {
+    groups: {
+      "*": { requireMention: true },
+      "[redacted-email]": { requireMention: false }
+    }
+  },
+  telegram: {
+    groups: {
+      "*": { requireMention: true },
+      "123456789": { requireMention: false }
+    }
+  },
+  imessage: {
+    groups: {
+      "*": { requireMention: true },
+      "123": { requireMention: false }
+    }
+  },
   routing: {
     groupChat: {
-      requireMention: true,
       mentionPatterns: ["@clawd", "clawdbot", "\\+15555550123"],
       historyLimit: 50
     }

@@ -59,10 +59,10 @@ async function waitForSubscribe() {
 
 beforeEach(() => {
   config = {
-    imessage: {},
+    imessage: { groups: { "*": { requireMention: true } } },
     session: { mainKey: "main" },
     routing: {
-      groupChat: { mentionPatterns: ["@clawd"], requireMention: true },
+      groupChat: { mentionPatterns: ["@clawd"] },
       allowFrom: [],
     },
   };
@@ -104,6 +104,35 @@ describe("monitorIMessageProvider", () => {
 
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
+  });
+
+  it("allows group messages when imessage groups default disables mention gating", async () => {
+    config = {
+      ...config,
+      imessage: { groups: { "*": { requireMention: false } } },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 11,
+          chat_id: 123,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello group",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).toHaveBeenCalled();
   });
 
   it("delivers group replies when mentioned", async () => {
