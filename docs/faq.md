@@ -66,6 +66,35 @@ pnpm clawdis doctor
 
 It checks your config, skills status, and gateway health. It can also restart the gateway daemon if needed.
 
+### Terminal onboarding vs macOS app?
+
+**Use terminal onboarding** (`pnpm clawdis onboard`) — it's more stable right now.
+
+The macOS app onboarding is still being polished and can have quirks (e.g., WhatsApp 515 errors, OAuth issues).
+
+---
+
+## Authentication
+
+### OAuth vs API key — what's the difference?
+
+- **OAuth** — Uses your Claude Pro/Max subscription ($20-100/mo flat). No per-token charges. ✅ Recommended!
+- **API key** — Pay-per-token via console.anthropic.com. Can get expensive fast.
+
+They're **separate billing**! An API key does NOT use your subscription.
+
+**For OAuth:** During onboarding, pick "Anthropic OAuth", log in to your Claude account, paste the code back.
+
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdis/` to your server. The auth is just a JSON file.
+
+### OAuth callback not working (containers/headless)?
+
+OAuth needs the callback to reach the machine running the CLI. Options:
+
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdis/credentials/` to the container.
+2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
+3. **Tailscale** — Put both machines on your tailnet.
+
 ---
 
 ## Migration & Deployment
@@ -108,16 +137,30 @@ There's no official Docker setup yet, but it works. Key considerations:
 
 - **WhatsApp login:** QR code works in terminal — no display needed.
 - **Persistence:** Mount `~/.clawdis/` and your workspace as volumes.
+- **pnpm doesn't persist:** Global npm installs don't survive container restarts. Install pnpm in your startup script.
 - **Browser automation:** Optional. If needed, install headless Chrome + Playwright deps, or connect to a remote browser via `--remote-debugging-port`.
 
-Basic approach:
-```dockerfile
-FROM node:22
-WORKDIR /app
-# Clone, pnpm install, pnpm build
-# Mount volumes for persistence
-CMD ["pnpm", "clawdis", "gateway"]
+**Volume mappings (e.g., Unraid):**
 ```
+/mnt/user/appdata/clawdis/config    → /root/.clawdis
+/mnt/user/appdata/clawdis/workspace → /root/clawd
+/mnt/user/appdata/clawdis/app       → /app
+```
+
+**Startup script (`start.sh`):**
+```bash
+#!/bin/bash
+npm install -g pnpm
+cd /app
+pnpm clawdis gateway
+```
+
+**Container command:**
+```
+bash /app/start.sh
+```
+
+Docker support is on the roadmap — PRs welcome!
 
 ### Can I run Clawdis headless on a VPS?
 
@@ -125,6 +168,18 @@ Yes! The terminal QR code login works fine over SSH. For long-running operation:
 
 - Use `pm2`, `systemd`, or a `launchd` plist to keep the gateway running.
 - Consider Tailscale for secure remote access.
+
+### bun binary vs Node runtime?
+
+Clawdis can run as:
+- **bun binary** — Single executable, easy distribution, auto-restarts via launchd
+- **Node runtime** (`pnpm clawdis gateway`) — More stable for WhatsApp
+
+If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys).
+
+**For stability:** Use launchd (macOS) or the Clawdis.app — they handle process supervision (auto-restart on crash).
+
+**For debugging:** Use `pnpm gateway:watch` for live reload during development.
 
 ---
 
@@ -226,11 +281,13 @@ No gateway restart needed!
 
 ### How do I run commands on other machines?
 
-Use **Tailscale** to create a secure network between your machines:
+Use **[Tailscale](https://tailscale.com/)** to create a secure network between your machines:
 
-1. Install Tailscale on all machines
+1. Install Tailscale on all machines (it's separate from Clawdis — set it up yourself)
 2. Each gets a stable IP (like `100.x.x.x`)
 3. SSH just works: `ssh user@100.x.x.x "command"`
+
+Clawdis can use Tailscale when you set `bridge.bind: "tailnet"` in your config — it auto-detects your Tailscale IP.
 
 For deeper integration, look into **Clawdis nodes** — pair remote machines with your gateway for camera/screen/automation access.
 
@@ -268,6 +325,11 @@ Common issues:
 - Port already in use (change with `--port`)
 - Missing API keys in config
 - Invalid config syntax (remember it's JSON5, but still check for errors)
+
+**Debug mode** — use watch for live reload:
+```bash
+pnpm gateway:watch
+```
 
 **Pro tip:** Use Codex to debug:
 ```bash
