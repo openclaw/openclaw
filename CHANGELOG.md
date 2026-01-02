@@ -30,6 +30,7 @@
 - Discord: revamp guild routing config with per-guild/channel rules and slugged display names; add optional group DM support (default off).
 - Discord: remove legacy guild/channel ignore lists in favor of per-guild allowlists (and proposed per-guild ignore lists).
 - Skills: add Trello skill for board/list/card management (thanks @clawd).
+- Docker: add containerized gateway/CLI setup via Dockerfile, compose, and setup script (thanks @dan-dr).
 - Tests: add a Z.AI live test gate for smoke validation when keys are present.
 - macOS Debug: add app log verbosity and rolling file log toggle for swift-log-backed app logs.
 - CLI: add onboarding wizard (gateway + workspace + skills) with daemon installers and Anthropic/Minimax setup paths.
