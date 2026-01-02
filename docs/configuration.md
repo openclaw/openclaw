@@ -173,15 +173,21 @@ Configure the Discord bot by setting the bot token and optional gating:
   discord: {
     enabled: true,
     token: "your-bot-token",
-    allowFrom: ["discord:1234567890", "*"], // optional DM allowlist (user ids)
-    guildAllowFrom: {
-      guilds: ["123456789012345678"],      // optional guild allowlist (ids)
-      users: ["987654321098765432"]        // optional user allowlist (ids)
-    },
-    requireMention: true,                   // require @bot mentions in guilds
     mediaMaxMb: 8,                          // clamp inbound media size
-    historyLimit: 20,                       // include last N guild messages as context
-    enableReactions: true                   // allow agent-triggered reactions
+    enableReactions: true,                  // allow agent-triggered reactions
+    dm: {
+      enabled: true,                        // disable all DMs when false
+      allowFrom: ["1234567890", "steipete"] // optional DM allowlist (ids or names)
+    },
+    guild: {
+      channels: ["general", "help"],        // optional channel allowlist (ids or names)
+      allowFrom: {
+        guilds: ["123456789012345678"],     // optional guild allowlist (ids or names)
+        users: ["987654321098765432"]       // optional user allowlist (ids or names)
+      },
+      requireMention: true,                 // require @bot mentions in guilds
+      historyLimit: 20                      // include last N guild messages as context
+    }
   }
 }
 ```
