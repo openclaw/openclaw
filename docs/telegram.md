@@ -31,13 +31,13 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 - Sees only messages sent after it’s added to a chat; no pre-history access.
 - Cannot DM users first; they must initiate. Channels are receive-only unless the bot is an admin poster.
 - File size caps follow Telegram Bot API (up to 2 GB for documents; smaller for some media types).
-- Typing indicators (`sendChatAction`) supported; outbound replies are sent as native replies to the triggering message (threaded where Telegram allows).
+- Typing indicators (`sendChatAction`) supported; native replies are **off by default** and enabled via `telegram.replyToMode` + reply tags.
 
 ## Planned implementation details
 - Library: grammY is the only client for send + gateway (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
-- Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block; groups require @bot mention by default (override per chat in config).
+- Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention by default (override per chat in config).
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
-- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
+- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
   - Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
 
 Example config:
@@ -46,6 +46,7 @@ Example config:
   telegram: {
     enabled: true,
     botToken: "123:abc",
+    replyToMode: "off",
     groups: {
       "*": { requireMention: true },
       "123456789": { requireMention: false } // group chat id
@@ -65,6 +66,17 @@ Example config:
 - Keep privacy mode off if you expect the bot to read all messages; with privacy on, it only sees commands/mentions.
 - Make the bot an admin if you need it to send in restricted groups or channels.
 - Mention the bot (`@yourbot`) or use commands to trigger; per-group overrides live in `telegram.groups` if you want always-on behavior.
+
+## Reply tags
+To request a threaded reply, the model can include one tag in its output:
+- `[[reply_to_current]]` — reply to the triggering Telegram message.
+- `[[reply_to:<id>]]` — reply to a specific message id from context.
+Current message ids are appended to prompts as `[message_id: …]`; reply context includes `id:` when available.
+
+Behavior is controlled by `telegram.replyToMode`:
+- `off`: ignore tags.
+- `first`: only the first outbound chunk/attachment is a reply.
+- `all`: every outbound chunk/attachment is a reply.
 
 ## Roadmap
 - ✅ Design and defaults (this doc)

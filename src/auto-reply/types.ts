@@ -9,4 +9,5 @@ export type ReplyPayload = {
   text?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
+  replyToId?: string;
 };

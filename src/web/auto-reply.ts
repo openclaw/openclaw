@@ -921,7 +921,8 @@ export async function monitorWebProvider(
     const formatReplyContext = (msg: WebInboundMsg) => {
       if (!msg.replyToBody) return null;
       const sender = msg.replyToSender ?? "unknown sender";
-      return `[Replying to ${sender}]\n${msg.replyToBody}\n[/Replying]`;
+      const idPart = msg.replyToId ? ` id:${msg.replyToId}` : "";
+      return `[Replying to ${sender}${idPart}]\n${msg.replyToBody}\n[/Replying]`;
     };
 
     const buildLine = (msg: WebInboundMsg) => {

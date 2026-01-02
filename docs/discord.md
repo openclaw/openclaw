@@ -40,6 +40,7 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
 - File uploads supported up to the configured `discord.mediaMaxMb` (default 8 MB).
 - Mention-gated guild replies by default to avoid noisy bots.
 - Reply context is injected when a message references another message (quoted content + ids).
+- Native reply threading is **off by default**; enable with `discord.replyToMode` and reply tags.
 
 ## Config
 
@@ -50,6 +51,7 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
     token: "abc.123",
     mediaMaxMb: 8,
     enableReactions: true,
+    replyToMode: "off",
     slashCommand: {
       enabled: true,
       name: "clawd",
@@ -92,6 +94,18 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
 - `mediaMaxMb`: clamp inbound media saved to disk.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
 - `enableReactions`: allow agent-triggered reactions via the `clawdis_discord` tool (default `true`).
+- `replyToMode`: `off` (default), `first`, or `all`. Applies only when the model includes a reply tag.
+
+## Reply tags
+To request a threaded reply, the model can include one tag in its output:
+- `[[reply_to_current]]` — reply to the triggering Discord message.
+- `[[reply_to:<id>]]` — reply to a specific message id from context/history.
+Current message ids are appended to prompts as `[message_id: …]`; history entries already include ids.
+
+Behavior is controlled by `discord.replyToMode`:
+- `off`: ignore tags.
+- `first`: only the first outbound chunk/attachment is a reply.
+- `all`: every outbound chunk/attachment is a reply.
 
 Allowlist matching notes:
 - `allowFrom`/`users`/`groupChannels` accept ids, names, tags, or mentions like `<@id>`.

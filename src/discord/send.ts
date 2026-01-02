@@ -22,6 +22,7 @@ type DiscordSendOpts = {
   mediaUrl?: string;
   verbose?: boolean;
   rest?: REST;
+  replyTo?: string;
 };
 
 export type DiscordSendResult = {
@@ -105,22 +106,35 @@ async function resolveChannelId(
   return { channelId: dmChannel.id, dm: true };
 }
 
-async function sendDiscordText(rest: REST, channelId: string, text: string) {
+async function sendDiscordText(
+  rest: REST,
+  channelId: string,
+  text: string,
+  replyTo?: string,
+) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
+  const messageReference = replyTo
+    ? { message_id: replyTo, fail_if_not_exists: false }
+    : undefined;
   if (text.length <= DISCORD_TEXT_LIMIT) {
     const res = (await rest.post(Routes.channelMessages(channelId), {
-      body: { content: text },
+      body: { content: text, message_reference: messageReference },
     })) as { id: string; channel_id: string };
     return res;
   }
   const chunks = chunkText(text, DISCORD_TEXT_LIMIT);
   let last: { id: string; channel_id: string } | null = null;
+  let isFirst = true;
   for (const chunk of chunks) {
     last = (await rest.post(Routes.channelMessages(channelId), {
-      body: { content: chunk },
+      body: {
+        content: chunk,
+        message_reference: isFirst ? messageReference : undefined,
+      },
     })) as { id: string; channel_id: string };
+    isFirst = false;
   }
   if (!last) {
     throw new Error("Discord send failed (empty chunk result)");
@@ -133,13 +147,18 @@ async function sendDiscordMedia(
   channelId: string,
   text: string,
   mediaUrl: string,
+  replyTo?: string,
 ) {
   const media = await loadWebMedia(mediaUrl);
   const caption =
     text.length > DISCORD_TEXT_LIMIT ? text.slice(0, DISCORD_TEXT_LIMIT) : text;
+  const messageReference = replyTo
+    ? { message_id: replyTo, fail_if_not_exists: false }
+    : undefined;
   const res = (await rest.post(Routes.channelMessages(channelId), {
     body: {
       content: caption || undefined,
+      message_reference: messageReference,
     },
     files: [
       {
@@ -171,9 +190,15 @@ export async function sendMessageDiscord(
     | { id: string | null; channel_id: string };
 
   if (opts.mediaUrl) {
-    result = await sendDiscordMedia(rest, channelId, text, opts.mediaUrl);
+    result = await sendDiscordMedia(
+      rest,
+      channelId,
+      text,
+      opts.mediaUrl,
+      opts.replyTo,
+    );
   } else {
-    result = await sendDiscordText(rest, channelId, text);
+    result = await sendDiscordText(rest, channelId, text, opts.replyTo);
   }
 
   return {

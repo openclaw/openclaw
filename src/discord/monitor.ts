@@ -14,7 +14,7 @@ import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { DiscordSlashCommandConfig } from "../config/config.js";
+import type { DiscordSlashCommandConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, isVerbose, logVerbose, warn } from "../globals.js";
@@ -32,6 +32,7 @@ export type MonitorDiscordOpts = {
   slashCommand?: DiscordSlashCommandConfig;
   mediaMaxMb?: number;
   historyLimit?: number;
+  replyToMode?: ReplyToMode;
 };
 
 type DiscordMediaInfo = {
@@ -117,6 +118,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     0,
     opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
   );
+  const replyToMode = opts.replyToMode ?? cfg.discord?.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
@@ -417,6 +419,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         target: ctxPayload.To,
         token,
         runtime,
+        replyToMode,
       });
       if (isVerbose()) {
         logVerbose(
@@ -984,20 +987,34 @@ async function deliverReplies({
   target,
   token,
   runtime,
+  replyToMode,
 }: {
   replies: ReplyPayload[];
   target: string;
   token: string;
   runtime: RuntimeEnv;
+  replyToMode: ReplyToMode;
 }) {
+  let hasReplied = false;
   for (const payload of replies) {
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
+    const replyToId =
+      replyToMode === "off" ? undefined : payload.replyToId?.trim();
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
       for (const chunk of chunkText(text, 2000)) {
-        await sendMessageDiscord(target, chunk, { token });
+        await sendMessageDiscord(target, chunk, {
+          token,
+          replyTo:
+            replyToId && (replyToMode === "all" || !hasReplied)
+              ? replyToId
+              : undefined,
+        });
+        if (replyToId && !hasReplied) {
+          hasReplied = true;
+        }
       }
     } else {
       let first = true;
@@ -1007,7 +1024,14 @@ async function deliverReplies({
         await sendMessageDiscord(target, caption, {
           token,
           mediaUrl,
+          replyTo:
+            replyToId && (replyToMode === "all" || !hasReplied)
+              ? replyToId
+              : undefined,
         });
+        if (replyToId && !hasReplied) {
+          hasReplied = true;
+        }
       }
     }
     runtime.log?.(`delivered reply to ${target}`);

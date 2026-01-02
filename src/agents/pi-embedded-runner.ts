@@ -79,6 +79,7 @@ export type EmbeddedPiRunResult = {
     text?: string;
     mediaUrl?: string;
     mediaUrls?: string[];
+    replyToId?: string;
   }>;
   meta: EmbeddedPiRunMeta;
 };

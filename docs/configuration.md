@@ -169,6 +169,7 @@ Set `telegram.enabled: false` to disable automatic startup.
   telegram: {
     enabled: true,
     botToken: "your-bot-token",
+    replyToMode: "off",
     groups: {
       "*": { requireMention: true },
       "123456789": { requireMention: false } // group chat id
@@ -183,6 +184,7 @@ Set `telegram.enabled: false` to disable automatic startup.
 }
 ```
 Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
+Reply threading is controlled via `telegram.replyToMode` (`off` | `first` | `all`) and reply tags in the model output.
 
 ### `discord` (bot transport)
 
@@ -195,6 +197,7 @@ Configure the Discord bot by setting the bot token and optional gating:
     token: "your-bot-token",
     mediaMaxMb: 8,                          // clamp inbound media size
     enableReactions: true,                  // allow agent-triggered reactions
+    replyToMode: "off",                     // off | first | all
     slashCommand: {                         // user-installed app slash commands
       enabled: true,
       name: "clawd",
@@ -225,6 +228,7 @@ Configure the Discord bot by setting the bot token and optional gating:
 ```
 
 Clawdis starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
+Reply threading is controlled via `discord.replyToMode` (`off` | `first` | `all`) and reply tags in the model output.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Use `discord.guilds."*"` for default per-guild settings.
 

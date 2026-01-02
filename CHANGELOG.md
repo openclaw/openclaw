@@ -18,6 +18,7 @@
 - Config: remove `routing.groupChat.requireMention` + `telegram.requireMention`; use `whatsapp.groups`, `imessage.groups`, and `telegram.groups` defaults instead (run `clawdis doctor` to migrate).
 
 ### Features
+- Discord/Telegram: add reply tags (`[[reply_to_current]]`, `[[reply_to:<id>]]`) with per-provider `replyToMode` (off|first|all) for native threaded replies.
 - Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
 - Nix mode: opt-in declarative config + read-only settings UI when `CLAWDIS_NIX_MODE=1` (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).

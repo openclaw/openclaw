@@ -54,7 +54,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - `Body` is the current message body with envelope.
 - Quoted reply context is **always appended**:
   ```
-  [Replying to +1555]
+  [Replying to +1555 id:ABC123]
   <quoted text or <media:...>>
   [/Replying]
   ```
@@ -81,8 +81,8 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Group metadata cached 5 min (subject + participants).
 
 ## Reply delivery (threading)
-- Outbound replies are sent as **native replies** (quoted message).
-- Model does not need IDs for threading; gateway attaches quote.
+- WhatsApp Web sends standard messages (no quoted reply threading in the current gateway).
+- Reply tags are ignored on this surface.
 
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.

@@ -18,6 +18,7 @@ export const isNixMode = process.env.CLAWDIS_NIX_MODE === "1";
 
 export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
+export type ReplyToMode = "off" | "first" | "all";
 
 export type SessionConfig = {
   scope?: SessionScope;
@@ -166,6 +167,8 @@ export type TelegramConfig = {
   botToken?: string;
   /** Path to file containing bot token (for secret managers like agenix) */
   tokenFile?: string;
+  /** Control reply threading when reply tags are present (off|first|all). */
+  replyToMode?: ReplyToMode;
   groups?: Record<
     string,
     {
@@ -222,6 +225,8 @@ export type DiscordConfig = {
   historyLimit?: number;
   /** Allow agent-triggered Discord reactions (default: true). */
   enableReactions?: boolean;
+  /** Control reply threading when reply tags are present (off|first|all). */
+  replyToMode?: ReplyToMode;
   slashCommand?: DiscordSlashCommandConfig;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
@@ -650,6 +655,11 @@ const GroupChatSchema = z
   .optional();
 
 const QueueModeSchema = z.union([z.literal("queue"), z.literal("interrupt")]);
+const ReplyToModeSchema = z.union([
+  z.literal("off"),
+  z.literal("first"),
+  z.literal("all"),
+]);
 
 const QueueModeBySurfaceSchema = z
   .object({
@@ -962,6 +972,7 @@ const ClawdisSchema = z.object({
       enabled: z.boolean().optional(),
       botToken: z.string().optional(),
       tokenFile: z.string().optional(),
+      replyToMode: ReplyToModeSchema.optional(),
       groups: z
         .record(
           z.string(),
@@ -995,6 +1006,7 @@ const ClawdisSchema = z.object({
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),
+      replyToMode: ReplyToModeSchema.optional(),
       dm: z
         .object({
           enabled: z.boolean().optional(),

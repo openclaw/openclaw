@@ -82,6 +82,12 @@ export function buildAgentSystemPromptAppend(params: {
     "Never send streaming/partial replies to external messaging surfaces; only final replies should be delivered there.",
     "Clawdis handles message transport automatically; respond normally and your reply will be delivered to the current chat.",
     "",
+    "## Reply Tags",
+    "To request a native reply/quote on supported surfaces, include one tag in your reply:",
+    "- [[reply_to_current]] replies to the triggering message.",
+    "- [[reply_to:<id>]] replies to a specific message id when you have it.",
+    "Tags are stripped before sending; support depends on the current provider config.",
+    "",
   ];
 
   if (extraSystemPrompt) {

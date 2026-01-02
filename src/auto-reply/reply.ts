@@ -164,6 +164,39 @@ export function extractQueueDirective(body?: string): {
   };
 }
 
+export function extractReplyToTag(
+  text?: string,
+  currentMessageId?: string,
+): {
+  cleaned: string;
+  replyToId?: string;
+  hasTag: boolean;
+} {
+  if (!text) return { cleaned: "", hasTag: false };
+  let cleaned = text;
+  let replyToId: string | undefined;
+  let hasTag = false;
+
+  const currentMatch = cleaned.match(/\[\[reply_to_current\]\]/i);
+  if (currentMatch) {
+    cleaned = cleaned.replace(/\[\[reply_to_current\]\]/gi, " ");
+    hasTag = true;
+    if (currentMessageId?.trim()) {
+      replyToId = currentMessageId.trim();
+    }
+  }
+
+  const idMatch = cleaned.match(/\[\[reply_to:([^\]\n]+)\]\]/i);
+  if (idMatch?.[1]) {
+    cleaned = cleaned.replace(/\[\[reply_to:[^\]\n]+\]\]/gi, " ");
+    replyToId = idMatch[1].trim();
+    hasTag = true;
+  }
+
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  return { cleaned, replyToId, hasTag };
+}
+
 function isAbortTrigger(text?: string): boolean {
   if (!text) return false;
   const normalized = text.trim().toLowerCase();
@@ -1123,6 +1156,12 @@ export async function getReplyFromConfig(
       ABORT_MEMORY.set(abortKey, false);
     }
   }
+  const messageIdHint = sessionCtx.MessageSid?.trim()
+    ? `[message_id: ${sessionCtx.MessageSid.trim()}]`
+    : "";
+  if (messageIdHint) {
+    prefixedBodyBase = `${prefixedBodyBase}\n${messageIdHint}`;
+  }
 
   // Prepend queued system events (transitions only) and (for new main sessions) a provider snapshot.
   // Token efficiency: we filter out periodic/heartbeat noise and keep the lines compact.
@@ -1399,9 +1438,28 @@ export async function getReplyFromConfig(
           return [{ ...payload, text: stripped.text }];
         });
 
-    if (sanitizedPayloads.length === 0) return undefined;
+    const replyTaggedPayloads: ReplyPayload[] = sanitizedPayloads
+      .map((payload) => {
+        const { cleaned, replyToId } = extractReplyToTag(
+          payload.text,
+          sessionCtx.MessageSid,
+        );
+        return {
+          ...payload,
+          text: cleaned ? cleaned : undefined,
+          replyToId: replyToId ?? payload.replyToId,
+        };
+      })
+      .filter(
+        (payload) =>
+          payload.text ||
+          payload.mediaUrl ||
+          (payload.mediaUrls && payload.mediaUrls.length > 0),
+      );
 
-    const shouldSignalTyping = sanitizedPayloads.some((payload) => {
+    if (replyTaggedPayloads.length === 0) return undefined;
+
+    const shouldSignalTyping = replyTaggedPayloads.some((payload) => {
       const trimmed = payload.text?.trim();
       if (trimmed && trimmed !== SILENT_REPLY_TOKEN) return true;
       if (payload.mediaUrl) return true;
@@ -1456,7 +1514,7 @@ export async function getReplyFromConfig(
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.
-    let finalPayloads = sanitizedPayloads;
+    let finalPayloads = replyTaggedPayloads;
     if (resolvedVerboseLevel === "on" && isNewSession) {
       finalPayloads = [
         { text: `🧭 New session: ${sessionIdFinal}` },
