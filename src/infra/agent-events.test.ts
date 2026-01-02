@@ -1,7 +1,22 @@
 import { describe, expect, test } from "vitest";
-import { emitAgentEvent, onAgentEvent } from "./agent-events.js";
+import {
+  emitAgentEvent,
+  onAgentEvent,
+  registerAgentRunContext,
+  getAgentRunContext,
+  clearAgentRunContext,
+  resetAgentRunContextForTest,
+} from "./agent-events.js";
 
 describe("agent-events sequencing", () => {
+  test("stores and clears run context", async () => {
+    resetAgentRunContextForTest();
+    registerAgentRunContext("run-1", { sessionKey: "main" });
+    expect(getAgentRunContext("run-1")?.sessionKey).toBe("main");
+    clearAgentRunContext("run-1");
+    expect(getAgentRunContext("run-1")).toBeUndefined();
+  });
+
   test("maintains monotonic seq per runId", async () => {
     const seen: Record<string, number[]> = {};
     const stop = onAgentEvent((evt) => {

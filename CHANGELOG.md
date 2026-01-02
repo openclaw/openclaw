@@ -32,6 +32,7 @@
 
 ### Fixes
 - Chat UI: keep the chat scrolled to the latest message after switching sessions.
+- WebChat: stream live updates for sessions even when runs start outside the chat UI.
 - Gateway CLI: read `CLAWDIS_GATEWAY_PASSWORD` from environment in `callGateway()` — allows `doctor`/`health` commands to auth without explicit `--password` flag.
 - Auto-reply: suppress stray `HEARTBEAT_OK` acks so they never get delivered as messages.
 - Discord: include recent guild context when replying to mentions and add `discord.historyLimit` to tune how many messages are captured.

@@ -74,8 +74,18 @@ import {
   sendMessageDiscord,
 } from "../discord/index.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
+import {
+  monitorIMessageProvider,
+  sendMessageIMessage,
+} from "../imessage/index.js";
+import { probeIMessage, type IMessageProbe } from "../imessage/probe.js";
 import { isVerbose } from "../globals.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  onAgentEvent,
+  registerAgentRunContext,
+} from "../infra/agent-events.js";
 import { startGatewayBonjourAdvertiser } from "../infra/bonjour.js";
 import { startNodeBridgeServer } from "../infra/bridge/server.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
@@ -287,11 +297,13 @@ const logWhatsApp = logProviders.child("whatsapp");
 const logTelegram = logProviders.child("telegram");
 const logDiscord = logProviders.child("discord");
 const logSignal = logProviders.child("signal");
+const logIMessage = logProviders.child("imessage");
 const canvasRuntime = runtimeForLogger(logCanvas);
 const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
 const telegramRuntimeEnv = runtimeForLogger(logTelegram);
 const discordRuntimeEnv = runtimeForLogger(logDiscord);
 const signalRuntimeEnv = runtimeForLogger(logSignal);
+const imessageRuntimeEnv = runtimeForLogger(logIMessage);
 
 function resolveBonjourCliPath(): string | undefined {
   const envPath = process.env.CLAWDIS_CLI_PATH?.trim();
@@ -1345,7 +1357,13 @@ export async function startGatewayServer(
           wakeMode: "now" | "next-heartbeat";
           sessionKey: string;
           deliver: boolean;
-          channel: "last" | "whatsapp" | "telegram" | "discord" | "signal";
+          channel:
+            | "last"
+            | "whatsapp"
+            | "telegram"
+            | "discord"
+            | "signal"
+            | "imessage";
           to?: string;
           thinking?: string;
           timeoutSeconds?: number;
@@ -1371,15 +1389,19 @@ export async function startGatewayServer(
       channelRaw === "telegram" ||
       channelRaw === "discord" ||
       channelRaw === "signal" ||
+      channelRaw === "imessage" ||
       channelRaw === "last"
         ? channelRaw
+        : channelRaw === "imsg"
+          ? "imessage"
         : channelRaw === undefined
           ? "last"
           : null;
     if (channel === null) {
       return {
         ok: false,
-        error: "channel must be last|whatsapp|telegram|discord|signal",
+        error:
+          "channel must be last|whatsapp|telegram|discord|signal|imessage",
       };
     }
     const toRaw = payload.to;
@@ -1430,7 +1452,13 @@ export async function startGatewayServer(
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    channel: "last" | "whatsapp" | "telegram" | "discord" | "signal";
+    channel:
+      | "last"
+      | "whatsapp"
+      | "telegram"
+      | "discord"
+      | "signal"
+      | "imessage";
     to?: string;
     thinking?: string;
     timeoutSeconds?: number;
@@ -1714,10 +1742,12 @@ export async function startGatewayServer(
   let telegramAbort: AbortController | null = null;
   let discordAbort: AbortController | null = null;
   let signalAbort: AbortController | null = null;
+  let imessageAbort: AbortController | null = null;
   let whatsappTask: Promise<unknown> | null = null;
   let telegramTask: Promise<unknown> | null = null;
   let discordTask: Promise<unknown> | null = null;
   let signalTask: Promise<unknown> | null = null;
+  let imessageTask: Promise<unknown> | null = null;
   let whatsappRuntime: WebProviderStatus = {
     running: false,
     connected: false,
@@ -1765,12 +1795,27 @@ export async function startGatewayServer(
     lastError: null,
     baseUrl: null,
   };
+  let imessageRuntime: {
+    running: boolean;
+    lastStartAt?: number | null;
+    lastStopAt?: number | null;
+    lastError?: string | null;
+    cliPath?: string | null;
+    dbPath?: string | null;
+  } = {
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+    cliPath: null,
+    dbPath: null,
+  };
   const clients = new Set<Client>();
   let seq = 0;
   // Track per-run sequence to detect out-of-order/lost agent events.
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, DedupeEntry>();
-  // Map agent sessionId -> pending chat runs for WebChat clients.
+  // Map agent runId -> pending chat runs for WebChat clients.
   const chatRunSessions = new Map<
     string,
     Array<{ sessionKey: string; clientRunId: string }>
@@ -1811,6 +1856,21 @@ export async function startGatewayServer(
     const [entry] = queue.splice(idx, 1);
     if (!queue.length) chatRunSessions.delete(sessionId);
     return entry;
+  };
+  const resolveSessionKeyForRun = (runId: string) => {
+    const cached = getAgentRunContext(runId)?.sessionKey;
+    if (cached) return cached;
+    const cfg = loadConfig();
+    const storePath = resolveStorePath(cfg.session?.store);
+    const store = loadSessionStore(storePath);
+    const found = Object.entries(store).find(
+      ([, entry]) => entry?.sessionId === runId,
+    );
+    const sessionKey = found?.[0];
+    if (sessionKey) {
+      registerAgentRunContext(runId, { sessionKey });
+    }
+    return sessionKey;
   };
   const chatRunBuffers = new Map<string, string>();
   const chatDeltaSentAt = new Map<string, number>();
@@ -2221,11 +2281,92 @@ export async function startGatewayServer(
     };
   };
 
+  const startIMessageProvider = async () => {
+    if (imessageTask) return;
+    const cfg = loadConfig();
+    if (!cfg.imessage) {
+      imessageRuntime = {
+        ...imessageRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      logIMessage.info("skipping provider start (imessage not configured)");
+      return;
+    }
+    if (cfg.imessage?.enabled === false) {
+      imessageRuntime = {
+        ...imessageRuntime,
+        running: false,
+        lastError: "disabled",
+      };
+      logIMessage.info("skipping provider start (imessage.enabled=false)");
+      return;
+    }
+    const cliPath = cfg.imessage?.cliPath?.trim() || "imsg";
+    const dbPath = cfg.imessage?.dbPath?.trim();
+    logIMessage.info(
+      `starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
+    );
+    imessageAbort = new AbortController();
+    imessageRuntime = {
+      ...imessageRuntime,
+      running: true,
+      lastStartAt: Date.now(),
+      lastError: null,
+      cliPath,
+      dbPath: dbPath ?? null,
+    };
+    const task = monitorIMessageProvider({
+      cliPath,
+      dbPath,
+      allowFrom: cfg.imessage?.allowFrom,
+      includeAttachments: cfg.imessage?.includeAttachments,
+      mediaMaxMb: cfg.imessage?.mediaMaxMb,
+      runtime: imessageRuntimeEnv,
+      abortSignal: imessageAbort.signal,
+    })
+      .catch((err) => {
+        imessageRuntime = {
+          ...imessageRuntime,
+          lastError: formatError(err),
+        };
+        logIMessage.error(`provider exited: ${formatError(err)}`);
+      })
+      .finally(() => {
+        imessageAbort = null;
+        imessageTask = null;
+        imessageRuntime = {
+          ...imessageRuntime,
+          running: false,
+          lastStopAt: Date.now(),
+        };
+      });
+    imessageTask = task;
+  };
+
+  const stopIMessageProvider = async () => {
+    if (!imessageAbort && !imessageTask) return;
+    imessageAbort?.abort();
+    try {
+      await imessageTask;
+    } catch {
+      // ignore
+    }
+    imessageAbort = null;
+    imessageTask = null;
+    imessageRuntime = {
+      ...imessageRuntime,
+      running: false,
+      lastStopAt: Date.now(),
+    };
+  };
+
   const startProviders = async () => {
     await startWhatsAppProvider();
     await startDiscordProvider();
     await startTelegramProvider();
     await startSignalProvider();
+    await startIMessageProvider();
   };
 
   const broadcast = (
@@ -3269,7 +3410,8 @@ export async function startGatewayServer(
         const provider =
           channel === "whatsapp" ||
           channel === "telegram" ||
-          channel === "signal"
+          channel === "signal" ||
+          channel === "imessage"
             ? channel
             : undefined;
         const to =
@@ -3586,80 +3728,151 @@ export async function startGatewayServer(
     broadcast("agent", evt);
 
     const chatLink = peekChatRun(evt.runId);
-    if (chatLink) {
-      // Map agent bus events to chat events for WS WebChat clients.
-      // Use clientRunId so the webchat can correlate with its pending promise.
-      const { sessionKey, clientRunId } = chatLink;
-      bridgeSendToSession(sessionKey, "agent", evt);
-      if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        const base = {
-          runId: clientRunId,
-          sessionKey,
-          seq: evt.seq,
-        };
-        chatRunBuffers.set(clientRunId, evt.data.text);
-        const now = Date.now();
-        const last = chatDeltaSentAt.get(clientRunId) ?? 0;
-        // Throttle UI delta events so slow clients don't accumulate unbounded buffers.
-        if (now - last >= 150) {
-          chatDeltaSentAt.set(clientRunId, now);
-          const payload = {
-            ...base,
-            state: "delta" as const,
-            message: {
-              role: "assistant",
-              content: [{ type: "text", text: evt.data.text }],
-              timestamp: now,
-            },
+    const sessionKey =
+      chatLink?.sessionKey ?? resolveSessionKeyForRun(evt.runId);
+    const jobState =
+      evt.stream === "job" && typeof evt.data?.state === "string"
+        ? evt.data.state
+        : null;
+
+    if (sessionKey) {
+      if (chatLink) {
+        // Map agent bus events to chat events for WS WebChat clients.
+        // Use clientRunId so the webchat can correlate with its pending promise.
+        const { clientRunId } = chatLink;
+        bridgeSendToSession(sessionKey, "agent", evt);
+        if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
+          const base = {
+            runId: clientRunId,
+            sessionKey,
+            seq: evt.seq,
           };
-          broadcast("chat", payload, { dropIfSlow: true });
-          bridgeSendToSession(sessionKey, "chat", payload);
+          chatRunBuffers.set(clientRunId, evt.data.text);
+          const now = Date.now();
+          const last = chatDeltaSentAt.get(clientRunId) ?? 0;
+          // Throttle UI delta events so slow clients don't accumulate unbounded buffers.
+          if (now - last >= 150) {
+            chatDeltaSentAt.set(clientRunId, now);
+            const payload = {
+              ...base,
+              state: "delta" as const,
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: evt.data.text }],
+                timestamp: now,
+              },
+            };
+            broadcast("chat", payload, { dropIfSlow: true });
+            bridgeSendToSession(sessionKey, "chat", payload);
+          }
+        } else if (jobState === "done" || jobState === "error") {
+          const finished = shiftChatRun(evt.runId);
+          if (!finished) {
+            if (jobState) clearAgentRunContext(evt.runId);
+            return;
+          }
+          const { sessionKey: finishedSessionKey, clientRunId: finishedRunId } =
+            finished;
+          const base = {
+            runId: finishedRunId,
+            sessionKey: finishedSessionKey,
+            seq: evt.seq,
+          };
+          const text = chatRunBuffers.get(finishedRunId)?.trim() ?? "";
+          chatRunBuffers.delete(finishedRunId);
+          chatDeltaSentAt.delete(finishedRunId);
+          if (jobState === "done") {
+            const payload = {
+              ...base,
+              state: "final",
+              message: text
+                ? {
+                    role: "assistant",
+                    content: [{ type: "text", text }],
+                    timestamp: Date.now(),
+                  }
+                : undefined,
+            };
+            broadcast("chat", payload);
+            bridgeSendToSession(finishedSessionKey, "chat", payload);
+          } else {
+            const payload = {
+              ...base,
+              state: "error",
+              errorMessage: evt.data.error
+                ? formatForLog(evt.data.error)
+                : undefined,
+            };
+            broadcast("chat", payload);
+            bridgeSendToSession(finishedSessionKey, "chat", payload);
+          }
         }
-      } else if (
-        evt.stream === "job" &&
-        typeof evt.data?.state === "string" &&
-        (evt.data.state === "done" || evt.data.state === "error")
-      ) {
-        const finished = shiftChatRun(evt.runId);
-        if (!finished) {
-          return;
-        }
-        const { sessionKey: finishedSessionKey, clientRunId: finishedRunId } =
-          finished;
-        const base = {
-          runId: finishedRunId,
-          sessionKey: finishedSessionKey,
-          seq: evt.seq,
-        };
-        const text = chatRunBuffers.get(finishedRunId)?.trim() ?? "";
-        chatRunBuffers.delete(finishedRunId);
-        chatDeltaSentAt.delete(finishedRunId);
-        if (evt.data.state === "done") {
-          const payload = {
-            ...base,
-            state: "final",
-            message: text
-              ? {
-                  role: "assistant",
-                  content: [{ type: "text", text }],
-                  timestamp: Date.now(),
-                }
-              : undefined,
+      } else {
+        const clientRunId = evt.runId;
+        bridgeSendToSession(sessionKey, "agent", evt);
+        if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
+          const base = {
+            runId: clientRunId,
+            sessionKey,
+            seq: evt.seq,
           };
-          broadcast("chat", payload);
-          bridgeSendToSession(finishedSessionKey, "chat", payload);
-        } else {
-          const payload = {
-            ...base,
-            state: "error",
-            errorMessage: evt.data.error
-              ? formatForLog(evt.data.error)
-              : undefined,
+          chatRunBuffers.set(clientRunId, evt.data.text);
+          const now = Date.now();
+          const last = chatDeltaSentAt.get(clientRunId) ?? 0;
+          if (now - last >= 150) {
+            chatDeltaSentAt.set(clientRunId, now);
+            const payload = {
+              ...base,
+              state: "delta" as const,
+              message: {
+                role: "assistant",
+                content: [{ type: "text", text: evt.data.text }],
+                timestamp: now,
+              },
+            };
+            broadcast("chat", payload, { dropIfSlow: true });
+            bridgeSendToSession(sessionKey, "chat", payload);
+          }
+        } else if (jobState === "done" || jobState === "error") {
+          const base = {
+            runId: clientRunId,
+            sessionKey,
+            seq: evt.seq,
           };
-          broadcast("chat", payload);
-          bridgeSendToSession(finishedSessionKey, "chat", payload);
+          const text = chatRunBuffers.get(clientRunId)?.trim() ?? "";
+          chatRunBuffers.delete(clientRunId);
+          chatDeltaSentAt.delete(clientRunId);
+          if (jobState === "done") {
+            const payload = {
+              ...base,
+              state: "final",
+              message: text
+                ? {
+                    role: "assistant",
+                    content: [{ type: "text", text }],
+                    timestamp: Date.now(),
+                  }
+                : undefined,
+            };
+            broadcast("chat", payload);
+            bridgeSendToSession(sessionKey, "chat", payload);
+          } else {
+            const payload = {
+              ...base,
+              state: "error",
+              errorMessage: evt.data.error
+                ? formatForLog(evt.data.error)
+                : undefined,
+            };
+            broadcast("chat", payload);
+            bridgeSendToSession(sessionKey, "chat", payload);
+          }
         }
       }
+    }
+
+    if (jobState === "done" || jobState === "error") {
+      clearAgentRunContext(evt.runId);
     }
   });
 
@@ -4116,6 +4329,16 @@ export async function startGatewayServer(
                 signalLastProbeAt = Date.now();
               }
 
+              const imessageCfg = cfg.imessage;
+              const imessageEnabled = imessageCfg?.enabled !== false;
+              const imessageConfigured = Boolean(imessageCfg) && imessageEnabled;
+              let imessageProbe: IMessageProbe | undefined;
+              let imessageLastProbeAt: number | null = null;
+              if (probe && imessageConfigured) {
+                imessageProbe = await probeIMessage(timeoutMs);
+                imessageLastProbeAt = Date.now();
+              }
+
               const linked = await webAuthExists();
               const authAgeMs = getWebAuthAgeMs();
               const self = readWebSelfId();
@@ -4168,6 +4391,17 @@ export async function startGatewayServer(
                     lastError: signalRuntime.lastError ?? null,
                     probe: signalProbe,
                     lastProbeAt: signalLastProbeAt,
+                  },
+                  imessage: {
+                    configured: imessageConfigured,
+                    running: imessageRuntime.running,
+                    lastStartAt: imessageRuntime.lastStartAt ?? null,
+                    lastStopAt: imessageRuntime.lastStopAt ?? null,
+                    lastError: imessageRuntime.lastError ?? null,
+                    cliPath: imessageRuntime.cliPath ?? null,
+                    dbPath: imessageRuntime.dbPath ?? null,
+                    probe: imessageProbe,
+                    lastProbeAt: imessageLastProbeAt,
                   },
                 },
                 undefined,
@@ -6022,7 +6256,9 @@ export async function startGatewayServer(
               }
               const to = params.to.trim();
               const message = params.message.trim();
-              const provider = (params.provider ?? "whatsapp").toLowerCase();
+              const providerRaw = (params.provider ?? "whatsapp").toLowerCase();
+              const provider =
+                providerRaw === "imsg" ? "imessage" : providerRaw;
               try {
                 if (provider === "telegram") {
                   const cfg = loadConfig();
@@ -6071,6 +6307,27 @@ export async function startGatewayServer(
                     mediaUrl: params.mediaUrl,
                     baseUrl,
                     account: cfg.signal?.account,
+                  });
+                  const payload = {
+                    runId: idem,
+                    messageId: result.messageId,
+                    provider,
+                  };
+                  dedupe.set(`send:${idem}`, {
+                    ts: Date.now(),
+                    ok: true,
+                    payload,
+                  });
+                  respond(true, payload, undefined, { provider });
+                } else if (provider === "imessage") {
+                  const cfg = loadConfig();
+                  const result = await sendMessageIMessage(to, message, {
+                    mediaUrl: params.mediaUrl,
+                    cliPath: cfg.imessage?.cliPath,
+                    dbPath: cfg.imessage?.dbPath,
+                    maxBytes: cfg.imessage?.mediaMaxMb
+                      ? cfg.imessage.mediaMaxMb * 1024 * 1024
+                      : undefined,
                   });
                   const payload = {
                     runId: idem,
@@ -6197,9 +6454,13 @@ export async function startGatewayServer(
 
               const requestedChannelRaw =
                 typeof params.channel === "string" ? params.channel.trim() : "";
-              const requestedChannel = requestedChannelRaw
+              const requestedChannelNormalized = requestedChannelRaw
                 ? requestedChannelRaw.toLowerCase()
                 : "last";
+              const requestedChannel =
+                requestedChannelNormalized === "imsg"
+                  ? "imessage"
+                  : requestedChannelNormalized;
 
               const lastChannel = sessionEntry?.lastChannel;
               const lastTo =
@@ -6220,6 +6481,7 @@ export async function startGatewayServer(
                   requestedChannel === "telegram" ||
                   requestedChannel === "discord" ||
                   requestedChannel === "signal" ||
+                  requestedChannel === "imessage" ||
                   requestedChannel === "webchat"
                 ) {
                   return requestedChannel;
@@ -6239,7 +6501,8 @@ export async function startGatewayServer(
                   resolvedChannel === "whatsapp" ||
                   resolvedChannel === "telegram" ||
                   resolvedChannel === "discord" ||
-                  resolvedChannel === "signal"
+                  resolvedChannel === "signal" ||
+                  resolvedChannel === "imessage"
                 ) {
                   return lastTo || undefined;
                 }
@@ -6485,6 +6748,7 @@ export async function startGatewayServer(
       await stopTelegramProvider();
       await stopDiscordProvider();
       await stopSignalProvider();
+      await stopIMessageProvider();
       cron.stop();
       heartbeatRunner.stop();
       broadcast("shutdown", {
@@ -6522,7 +6786,9 @@ export async function startGatewayServer(
         await stopBrowserControlServerIfStarted().catch(() => {});
       }
       await Promise.allSettled(
-        [whatsappTask, telegramTask, signalTask].filter(Boolean) as Array<
+        [whatsappTask, telegramTask, signalTask, imessageTask].filter(
+          Boolean,
+        ) as Array<
           Promise<unknown>
         >,
       );

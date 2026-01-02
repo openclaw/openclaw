@@ -24,6 +24,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
+import { registerAgentRunContext } from "../infra/agent-events.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import type { CronJob } from "./types.js";
@@ -54,7 +55,13 @@ function pickSummaryFromPayloads(
 function resolveDeliveryTarget(
   cfg: ClawdisConfig,
   jobPayload: {
-    channel?: "last" | "whatsapp" | "telegram" | "discord" | "signal";
+    channel?:
+      | "last"
+      | "whatsapp"
+      | "telegram"
+      | "discord"
+      | "signal"
+      | "imessage";
     to?: string;
   },
 ) {
@@ -81,7 +88,8 @@ function resolveDeliveryTarget(
       requestedChannel === "whatsapp" ||
       requestedChannel === "telegram" ||
       requestedChannel === "discord" ||
-      requestedChannel === "signal"
+      requestedChannel === "signal" ||
+      requestedChannel === "imessage"
     ) {
       return requestedChannel;
     }
@@ -244,6 +252,9 @@ export async function runCronIsolatedAgentTurn(params: {
     const sessionFile = resolveSessionTranscriptPath(
       cronSession.sessionEntry.sessionId,
     );
+    registerAgentRunContext(cronSession.sessionEntry.sessionId, {
+      sessionKey: params.sessionKey,
+    });
     runResult = await runEmbeddedPiAgent({
       sessionId: cronSession.sessionEntry.sessionId,
       sessionKey: params.sessionKey,
@@ -447,6 +458,44 @@ export async function runCronIsolatedAgentTurn(params: {
               const caption = first ? (payload.text ?? "") : "";
               first = false;
               await params.deps.sendMessageSignal(to, caption, {
+                mediaUrl: url,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        if (!bestEffortDeliver)
+          return { status: "error", summary, error: String(err) };
+        return { status: "ok", summary };
+      }
+    } else if (resolvedDelivery.channel === "imessage") {
+      if (!resolvedDelivery.to) {
+        if (!bestEffortDeliver)
+          return {
+            status: "error",
+            summary,
+            error: "Cron delivery to iMessage requires a recipient.",
+          };
+        return {
+          status: "skipped",
+          summary: "Delivery skipped (no iMessage recipient).",
+        };
+      }
+      const to = resolvedDelivery.to;
+      try {
+        for (const payload of payloads) {
+          const mediaList =
+            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+          if (mediaList.length === 0) {
+            for (const chunk of chunkText(payload.text ?? "", 4000)) {
+              await params.deps.sendMessageIMessage(to, chunk);
+            }
+          } else {
+            let first = true;
+            for (const url of mediaList) {
+              const caption = first ? (payload.text ?? "") : "";
+              first = false;
+              await params.deps.sendMessageIMessage(to, caption, {
                 mediaUrl: url,
               });
             }

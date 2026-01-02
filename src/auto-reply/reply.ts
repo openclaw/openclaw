@@ -37,6 +37,7 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
+import { registerAgentRunContext } from "../infra/agent-events.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { triggerClawdisRestart } from "../infra/restart.js";
 import {
@@ -1196,6 +1197,9 @@ export async function getReplyFromConfig(
       await startTypingLoop();
     }
     const runId = crypto.randomUUID();
+    if (sessionKey) {
+      registerAgentRunContext(runId, { sessionKey });
+    }
     let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
     try {
       runResult = await runEmbeddedPiAgent({

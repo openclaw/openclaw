@@ -12,7 +12,11 @@ import {
   STATE_DIR_CLAWDIS,
   writeConfigFile,
 } from "../config/config.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+  resetAgentRunContextForTest,
+} from "../infra/agent-events.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
@@ -277,6 +281,7 @@ beforeEach(async () => {
   testCanvasHostPort = undefined;
   cronIsolatedRun.mockClear();
   drainSystemEvents();
+  resetAgentRunContextForTest();
   __resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
   piSdkMock.discoverCalls = 0;
@@ -3616,6 +3621,73 @@ describe("gateway server", () => {
         ? (payload.message as Record<string, unknown>)
         : {};
     expect(message.role).toBe("assistant");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent events stream to webchat clients when run context is registered", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws, {
+      client: {
+        name: "webchat",
+        version: "1.0.0",
+        platform: "test",
+        mode: "webchat",
+      },
+    });
+
+    registerAgentRunContext("run-auto-1", { sessionKey: "main" });
+
+    const finalChatP = onceMessage<{
+      type: "event";
+      event: string;
+      payload?: unknown;
+    }>(
+      ws,
+      (o) => {
+        if (o.type !== "event" || o.event !== "chat") return false;
+        const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
+        return payload?.state === "final" && payload.runId === "run-auto-1";
+      },
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: "run-auto-1",
+      stream: "assistant",
+      data: { text: "hi from agent" },
+    });
+    emitAgentEvent({
+      runId: "run-auto-1",
+      stream: "job",
+      data: { state: "done" },
+    });
+
+    const evt = await finalChatP;
+    const payload =
+      evt.payload && typeof evt.payload === "object"
+        ? (evt.payload as Record<string, unknown>)
+        : {};
+    expect(payload.sessionKey).toBe("main");
+    expect(payload.runId).toBe("run-auto-1");
 
     ws.close();
     await server.close();
