@@ -2,6 +2,7 @@ export type MsgContext = {
   Body?: string;
   From?: string;
   To?: string;
+  SessionKey?: string;
   MessageSid?: string;
   ReplyToId?: string;
   ReplyToBody?: string;

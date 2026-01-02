@@ -1,4 +1,5 @@
 import {
+  type CommandInteractionOption,
   Client,
   Events,
   GatewayIntentBits,
@@ -10,6 +11,7 @@ import { chunkText } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, isVerbose, logVerbose } from "../globals.js";
@@ -19,6 +21,7 @@ import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
+import type { DiscordSlashCommandConfig } from "../config/config.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -30,6 +33,7 @@ export type MonitorDiscordOpts = {
     users?: Array<string | number>;
   };
   requireMention?: boolean;
+  slashCommand?: DiscordSlashCommandConfig;
   mediaMaxMb?: number;
   historyLimit?: number;
 };
@@ -73,6 +77,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const guildAllowFrom = opts.guildAllowFrom ?? cfg.discord?.guildAllowFrom;
   const requireMention =
     opts.requireMention ?? cfg.discord?.requireMention ?? true;
+  const slashCommand = resolveSlashCommandConfig(
+    opts.slashCommand ?? cfg.discord?.slashCommand,
+  );
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const historyLimit = Math.max(
@@ -298,6 +305,63 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
   });
 
+  client.on(Events.InteractionCreate, async (interaction) => {
+    try {
+      if (!slashCommand.enabled) return;
+      if (!interaction.isChatInputCommand()) return;
+      if (interaction.commandName !== slashCommand.name) return;
+      if (interaction.user?.bot) return;
+
+      const prompt = resolveSlashPrompt(interaction.options.data);
+      if (!prompt) {
+        await interaction.reply({
+          content: "Message required.",
+          ephemeral: true,
+        });
+        return;
+      }
+
+      await interaction.deferReply({ ephemeral: slashCommand.ephemeral });
+
+      const userId = interaction.user.id;
+      const ctxPayload = {
+        Body: prompt,
+        From: `discord:${userId}`,
+        To: `slash:${userId}`,
+        ChatType: "direct",
+        SenderName: interaction.user.username,
+        Surface: "discord" as const,
+        WasMentioned: true,
+        MessageSid: interaction.id,
+        Timestamp: interaction.createdTimestamp,
+        SessionKey: `${slashCommand.sessionPrefix}:${userId}`,
+      };
+
+      const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);
+      const replies = replyResult
+        ? Array.isArray(replyResult)
+          ? replyResult
+          : [replyResult]
+        : [];
+
+      await deliverSlashReplies({
+        replies,
+        interaction,
+        ephemeral: slashCommand.ephemeral,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`slash handler failed: ${String(err)}`));
+      if (interaction.isRepliable()) {
+        const content = "Sorry, something went wrong handling that command.";
+        if (interaction.deferred || interaction.replied) {
+          await interaction.followUp({ content, ephemeral: true });
+        } else {
+          await interaction.reply({ content, ephemeral: true });
+        }
+      }
+    }
+  });
+
   await client.login(token);
 
   await new Promise<void>((resolve, reject) => {
@@ -385,6 +449,41 @@ function normalizeDiscordAllowList(
   return { allowAll, ids };
 }
 
+function resolveSlashCommandConfig(
+  raw: DiscordSlashCommandConfig | undefined,
+): Required<DiscordSlashCommandConfig> {
+  return {
+    enabled: raw ? raw.enabled !== false : false,
+    name: raw?.name?.trim() || "clawd",
+    sessionPrefix: raw?.sessionPrefix?.trim() || "discord:slash",
+    ephemeral: raw?.ephemeral !== false,
+  };
+}
+
+function resolveSlashPrompt(
+  options: readonly CommandInteractionOption[],
+): string | undefined {
+  const direct = findFirstStringOption(options);
+  if (direct) return direct;
+  return undefined;
+}
+
+function findFirstStringOption(
+  options: readonly CommandInteractionOption[],
+): string | undefined {
+  for (const option of options) {
+    if (typeof option.value === "string") {
+      const trimmed = option.value.trim();
+      if (trimmed) return trimmed;
+    }
+    if (option.options && option.options.length > 0) {
+      const nested = findFirstStringOption(option.options);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
 async function sendTyping(message: Message) {
   try {
     const channel = message.channel;
@@ -428,5 +527,47 @@ async function deliverReplies({
       }
     }
     runtime.log?.(`delivered reply to ${target}`);
+  }
+}
+
+async function deliverSlashReplies({
+  replies,
+  interaction,
+  ephemeral,
+}: {
+  replies: ReplyPayload[];
+  interaction: import("discord.js").ChatInputCommandInteraction;
+  ephemeral: boolean;
+}) {
+  const messages: string[] = [];
+  for (const payload of replies) {
+    const textRaw = payload.text?.trim() ?? "";
+    const text =
+      textRaw && textRaw !== SILENT_REPLY_TOKEN ? textRaw : undefined;
+    const mediaList =
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+    const combined = [
+      text ?? "",
+      ...mediaList.map((url) => url.trim()).filter(Boolean),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (!combined) continue;
+    for (const chunk of chunkText(combined, 2000)) {
+      messages.push(chunk);
+    }
+  }
+
+  if (messages.length === 0) {
+    await interaction.editReply({
+      content: "No response was generated for that command.",
+    });
+    return;
+  }
+
+  const [first, ...rest] = messages;
+  await interaction.editReply({ content: first });
+  for (const message of rest) {
+    await interaction.followUp({ content: message, ephemeral });
   }
 }

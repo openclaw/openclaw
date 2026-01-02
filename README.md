@@ -184,7 +184,7 @@ Minimal `~/.clawdis/clawdis.json`:
 ### Discord
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
-- Optional: set `discord.requireMention`, `discord.allowFrom`, or `discord.mediaMaxMb` as needed.
+- Optional: set `discord.requireMention`, `discord.slashCommand`, `discord.allowFrom`, or `discord.mediaMaxMb` as needed.
 
 ```json5
 {

@@ -164,6 +164,17 @@ export type TelegramConfig = {
   webhookPath?: string;
 };
 
+export type DiscordSlashCommandConfig = {
+  /** Enable handling for the configured slash command (default: false). */
+  enabled?: boolean;
+  /** Slash command name (default: "clawd"). */
+  name?: string;
+  /** Session key prefix for slash commands (default: "discord:slash"). */
+  sessionPrefix?: string;
+  /** Reply ephemerally (default: true). */
+  ephemeral?: boolean;
+};
+
 export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
@@ -174,6 +185,7 @@ export type DiscordConfig = {
     users?: Array<string | number>;
   };
   requireMention?: boolean;
+  slashCommand?: DiscordSlashCommandConfig;
   mediaMaxMb?: number;
   /** Number of recent guild messages to include for context (default: 20). */
   historyLimit?: number;
@@ -916,6 +928,14 @@ const ClawdisSchema = z.object({
         })
         .optional(),
       requireMention: z.boolean().optional(),
+      slashCommand: z
+        .object({
+          enabled: z.boolean().optional(),
+          name: z.string().optional(),
+          sessionPrefix: z.string().optional(),
+          ephemeral: z.boolean().optional(),
+        })
+        .optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       enableReactions: z.boolean().optional(),
