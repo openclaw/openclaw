@@ -1,0 +1,38 @@
+services:
+  clawdis-gateway:
+    image: ${CLAWDIS_IMAGE:-clawdis:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      CLAWDIS_GATEWAY_TOKEN: ${CLAWDIS_GATEWAY_TOKEN}
+    volumes:
+      - ${CLAWDIS_CONFIG_DIR}:/home/node/.clawdis
+      - ${CLAWDIS_WORKSPACE_DIR}:/home/node/clawd
+    ports:
+      - "${CLAWDIS_GATEWAY_PORT:-18789}:18789"
+      - "${CLAWDIS_BRIDGE_PORT:-18790}:18790"
+    init: true
+    restart: unless-stopped
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway-daemon",
+        "--bind",
+        "${CLAWDIS_GATEWAY_BIND:-lan}",
+        "--port",
+        "${CLAWDIS_GATEWAY_PORT:-18789}"
+      ]
+
+  clawdis-cli:
+    image: ${CLAWDIS_IMAGE:-clawdis:local}
+    environment:
+      HOME: /home/node
+      TERM: xterm-256color
+      BROWSER: echo
+    volumes:
+      - ${CLAWDIS_CONFIG_DIR}:/home/node/.clawdis
+      - ${CLAWDIS_WORKSPACE_DIR}:/home/node/clawd
+    stdin_open: true
+    tty: true
+    entrypoint: ["node", "dist/index.js"]
