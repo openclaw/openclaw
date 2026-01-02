@@ -26,28 +26,27 @@ actor GatewayEndpointStore {
             mode: { await MainActor.run { AppStateStore.shared.connectionMode } },
             token: { ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_TOKEN"] },
             password: {
-                // First check environment variable
                 let raw = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_PASSWORD"] ?? ""
                 let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !trimmed.isEmpty {
                     return trimmed
                 }
-                // Then check config file based on connection mode
                 let root = ClawdisConfigFile.loadDict()
-                // Check gateway.auth.password (for local gateway auth)
+                if CommandResolver.connectionModeIsRemote() {
+                    if let gateway = root["gateway"] as? [String: Any],
+                       let remote = gateway["remote"] as? [String: Any],
+                       let password = remote["password"] as? String
+                    {
+                        let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !pw.isEmpty {
+                            return pw
+                        }
+                    }
+                    return nil
+                }
                 if let gateway = root["gateway"] as? [String: Any],
                    let auth = gateway["auth"] as? [String: Any],
                    let password = auth["password"] as? String
-                {
-                    let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !pw.isEmpty {
-                        return pw
-                    }
-                }
-                // Check gateway.remote.password (for remote gateway auth)
-                if let gateway = root["gateway"] as? [String: Any],
-                   let remote = gateway["remote"] as? [String: Any],
-                   let password = remote["password"] as? String
                 {
                     let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !pw.isEmpty {

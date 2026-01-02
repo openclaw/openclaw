@@ -29,6 +29,7 @@ import Testing
         let store = GatewayEndpointStore(deps: .init(
             mode: { mode.get() },
             token: { "t" },
+            password: { nil },
             localPort: { 1234 },
             remotePortIfRunning: { nil },
             ensureRemoteTunnel: { 18789 }))
@@ -44,6 +45,7 @@ import Testing
         let store = GatewayEndpointStore(deps: .init(
             mode: { mode.get() },
             token: { nil },
+            password: { nil },
             localPort: { 18789 },
             remotePortIfRunning: { nil },
             ensureRemoteTunnel: { 18789 }))
@@ -58,6 +60,7 @@ import Testing
         let store = GatewayEndpointStore(deps: .init(
             mode: { mode.get() },
             token: { "tok" },
+            password: { "pw" },
             localPort: { 1 },
             remotePortIfRunning: { 5555 },
             ensureRemoteTunnel: { 5555 }))
@@ -69,13 +72,14 @@ import Testing
         _ = try await store.ensureRemoteControlTunnel()
 
         let next = await iterator.next()
-        guard case let .ready(mode, url, token) = next else {
+        guard case let .ready(mode, url, token, password) = next else {
             Issue.record("expected .ready after ensure, got \(String(describing: next))")
             return
         }
         #expect(mode == .remote)
         #expect(url.absoluteString == "ws://127.0.0.1:5555")
         #expect(token == "tok")
+        #expect(password == "pw")
     }
 
     @Test func unconfiguredModeRejectsConfig() async {
@@ -83,6 +87,7 @@ import Testing
         let store = GatewayEndpointStore(deps: .init(
             mode: { mode.get() },
             token: { nil },
+            password: { nil },
             localPort: { 18789 },
             remotePortIfRunning: { nil },
             ensureRemoteTunnel: { 18789 }))

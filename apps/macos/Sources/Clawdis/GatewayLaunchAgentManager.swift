@@ -72,15 +72,17 @@ enum GatewayLaunchAgentManager {
             <string>sips</string>
         """
         if let token {
+            let escapedToken = self.escapePlistValue(token)
             envEntries += """
                 <key>CLAWDIS_GATEWAY_TOKEN</key>
-                <string>\(token)</string>
+                <string>\(escapedToken)</string>
             """
         }
         if let password {
+            let escapedPassword = self.escapePlistValue(password)
             envEntries += """
                 <key>CLAWDIS_GATEWAY_PASSWORD</key>
-                <string>\(password)</string>
+                <string>\(escapedPassword)</string>
             """
         }
         let plist = """
@@ -169,6 +171,15 @@ enum GatewayLaunchAgentManager {
             return password.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
+    }
+
+    private static func escapePlistValue(_ raw: String) -> String {
+        raw
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
     }
 
     private struct LaunchctlResult {
