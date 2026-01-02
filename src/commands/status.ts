@@ -169,7 +169,10 @@ const formatContextUsage = (
   return `tokens: ${formatKTokens(used)} used, ${formatKTokens(left)} left of ${formatKTokens(contextTokens)} (${pctLabel})`;
 };
 
-const classifyKey = (key: string, entry?: SessionEntry): SessionStatus["kind"] => {
+const classifyKey = (
+  key: string,
+  entry?: SessionEntry,
+): SessionStatus["kind"] => {
   if (key === "global") return "global";
   if (key === "unknown") return "unknown";
   if (entry?.chatType === "group" || entry?.chatType === "room") return "group";

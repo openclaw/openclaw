@@ -238,7 +238,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             return;
           }
         }
-
       }
 
       if (isDirectMessage && Array.isArray(allowFrom) && allowFrom.length > 0) {
@@ -584,14 +583,16 @@ export function resolveDiscordChannelConfig(params: {
     const entry =
       channelEntries[channelId] ??
       (channelSlug
-        ? channelEntries[channelSlug] ??
-          channelEntries[`#${channelSlug}`]
+        ? (channelEntries[channelSlug] ?? channelEntries[`#${channelSlug}`])
         : undefined) ??
       (channelName
         ? channelEntries[normalizeDiscordSlug(channelName)]
         : undefined);
     if (!entry) return { allowed: false };
-    return { allowed: entry.allow !== false, requireMention: entry.requireMention };
+    return {
+      allowed: entry.allow !== false,
+      requireMention: entry.requireMention,
+    };
   }
   return { allowed: true };
 }

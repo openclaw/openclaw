@@ -27,9 +27,9 @@ import {
 } from "../agents/workspace.js";
 import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
+  buildGroupDisplayName,
   DEFAULT_IDLE_MINUTES,
   DEFAULT_RESET_TRIGGERS,
-  buildGroupDisplayName,
   loadSessionStore,
   resolveGroupSessionKey,
   resolveSessionKey,
@@ -401,10 +401,7 @@ export async function getReplyFromConfig(
 
   sessionKey = resolveSessionKey(sessionScope, ctx, mainKey);
   sessionStore = loadSessionStore(storePath);
-  if (
-    groupResolution?.legacyKey &&
-    groupResolution.legacyKey !== sessionKey
-  ) {
+  if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
     const legacyEntry = sessionStore[groupResolution.legacyKey];
     if (legacyEntry && !sessionStore[sessionKey]) {
       sessionStore[sessionKey] = legacyEntry;

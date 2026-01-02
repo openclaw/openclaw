@@ -143,7 +143,9 @@ export function buildGroupDisplayName(params: {
   return token ? `${surfaceKey}:${token}` : surfaceKey;
 }
 
-export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | null {
+export function resolveGroupSessionKey(
+  ctx: MsgContext,
+): GroupKeyResolution | null {
   const from = typeof ctx.From === "string" ? ctx.From.trim() : "";
   if (!from) return null;
   const chatType = ctx.ChatType?.trim().toLowerCase();
@@ -157,7 +159,9 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
 
   const surfaceHint = ctx.Surface?.trim().toLowerCase();
   const hasLegacyGroupPrefix = from.startsWith("group:");
-  const raw = (hasLegacyGroupPrefix ? from.slice("group:".length) : from).trim();
+  const raw = (
+    hasLegacyGroupPrefix ? from.slice("group:".length) : from
+  ).trim();
 
   let surface: string | undefined;
   let kind: "group" | "channel" | undefined;
@@ -209,7 +213,12 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
   const resolvedSurface = surface ?? surfaceHint;
   if (!resolvedSurface) {
     const legacy = hasLegacyGroupPrefix ? `group:${raw}` : `group:${from}`;
-    return { key: legacy, id: raw || from, legacyKey: legacy, chatType: "group" };
+    return {
+      key: legacy,
+      id: raw || from,
+      legacyKey: legacy,
+      chatType: "group",
+    };
   }
 
   const resolvedKind = kind === "channel" ? "channel" : "group";
