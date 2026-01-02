@@ -62,6 +62,7 @@ actor CameraCaptureService {
         session.startRunning()
         defer { session.stopRunning() }
         await Self.warmUpCaptureSession()
+        await self.waitForExposureAndWhiteBalance(device: device)
 
         let settings: AVCapturePhotoSettings = {
             if output.availablePhotoCodecTypes.contains(.jpeg) {
@@ -256,6 +257,17 @@ actor CameraCaptureService {
     private nonisolated static func warmUpCaptureSession() async {
         // A short delay after `startRunning()` significantly reduces "blank first frame" captures on some devices.
         try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+    }
+
+    private func waitForExposureAndWhiteBalance(device: AVCaptureDevice) async {
+        let stepNs: UInt64 = 50_000_000
+        let maxSteps = 30 // ~1.5s
+        for _ in 0..<maxSteps {
+            if !(device.isAdjustingExposure || device.isAdjustingWhiteBalance) {
+                return
+            }
+            try? await Task.sleep(nanoseconds: stepNs)
+        }
     }
 }
 

@@ -78,6 +78,7 @@
 - macOS codesign: include camera entitlement so permission prompts work in the menu bar app.
 - Agent tools: map `camera.snap` JPEG payloads to `image/jpeg` to avoid MIME mismatch errors.
 - Tests: cover `camera.snap` MIME mapping to prevent image/png vs image/jpeg mismatches.
+- macOS camera: wait for exposure/white balance to settle before capturing a snap to avoid dark images.
 - macOS packaging: move rpath config into swift build for reliability (#69) — thanks @petter-b
 - macOS: prioritize main bundle for device resources to prevent crash (#73) — thanks @petter-b
 - macOS remote: route settings through gateway config and avoid local config reads in remote mode.
