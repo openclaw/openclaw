@@ -10,6 +10,7 @@ import {
   type Guild,
   type Message,
   type MessageReaction,
+  type MessageSnapshot,
   MessageType,
   type PartialMessage,
   type PartialMessageReaction,
@@ -208,7 +209,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botId = client.user?.id;
       const wasMentioned =
         !isDirectMessage && Boolean(botId && message.mentions.has(botId));
-      const baseText = resolveDiscordMessageText(message);
+      const forwardedSnapshot = resolveForwardedSnapshot(message);
+      const forwardedText = forwardedSnapshot
+        ? resolveDiscordSnapshotText(forwardedSnapshot.snapshot)
+        : "";
+      const baseText = resolveDiscordMessageText(message, forwardedText);
       if (shouldLogVerbose()) {
         logVerbose(
           `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${baseText ? "yes" : "no"}`,
@@ -362,6 +367,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         message.content?.trim() ??
         media?.placeholder ??
         message.embeds[0]?.description ??
+        (forwardedSnapshot ? "<forwarded message>" : "") ??
         "";
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
@@ -408,6 +414,42 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const replyContext = await resolveReplyContext(message);
       if (replyContext) {
         combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
+      }
+      if (forwardedSnapshot) {
+        const forwarderName = message.author.tag ?? message.author.username;
+        const forwarder = forwarderName
+          ? `${forwarderName} id:${message.author.id}`
+          : message.author.id;
+        const snapshotText =
+          resolveDiscordSnapshotText(forwardedSnapshot.snapshot) ||
+          "<forwarded message>";
+        const forwardMetaParts = [
+          forwardedSnapshot.messageId
+            ? `forwarded message id: ${forwardedSnapshot.messageId}`
+            : null,
+          forwardedSnapshot.channelId
+            ? `channel: ${forwardedSnapshot.channelId}`
+            : null,
+          forwardedSnapshot.guildId
+            ? `guild: ${forwardedSnapshot.guildId}`
+            : null,
+          typeof forwardedSnapshot.snapshot.type === "number"
+            ? `snapshot type: ${forwardedSnapshot.snapshot.type}`
+            : null,
+        ].filter((entry): entry is string => Boolean(entry));
+        const forwardedBody = forwardMetaParts.length
+          ? `${snapshotText}\n[${forwardMetaParts.join(" ")}]`
+          : snapshotText;
+        const forwardedEnvelope = formatAgentEnvelope({
+          surface: "Discord",
+          from: `Forwarded by ${forwarder}`,
+          timestamp:
+            forwardedSnapshot.snapshot.createdTimestamp ??
+            message.createdTimestamp ??
+            undefined,
+          body: forwardedBody,
+        });
+        combinedBody = `[Forwarded message]\n${forwardedEnvelope}\n\n${combinedBody}`;
       }
 
       const ctxPayload = {
@@ -848,14 +890,22 @@ function inferPlaceholder(attachment: Attachment): string {
   return "<media:document>";
 }
 
-function resolveDiscordMessageText(message: Message): string {
+function resolveDiscordMessageText(
+  message: Message,
+  fallbackText?: string,
+): string {
   const attachment = message.attachments.first();
   return (
     message.content?.trim() ||
     (attachment ? inferPlaceholder(attachment) : "") ||
     message.embeds[0]?.description ||
+    fallbackText?.trim() ||
     ""
   );
+}
+
+function resolveDiscordSnapshotText(snapshot: MessageSnapshot): string {
+  return snapshot.content?.trim() || snapshot.embeds[0]?.description || "";
 }
 
 async function resolveReplyContext(message: Message): Promise<string | null> {
@@ -950,6 +1000,25 @@ function resolveDiscordSystemEvent(message: Message): string | null {
     default:
       return null;
   }
+}
+
+function resolveForwardedSnapshot(message: Message): {
+  snapshot: MessageSnapshot;
+  messageId?: string;
+  channelId?: string;
+  guildId?: string;
+} | null {
+  const snapshots = message.messageSnapshots;
+  if (!snapshots || snapshots.size === 0) return null;
+  const snapshot = snapshots.first();
+  if (!snapshot) return null;
+  const reference = message.reference;
+  return {
+    snapshot,
+    messageId: reference?.messageId ?? undefined,
+    channelId: reference?.channelId ?? undefined,
+    guildId: reference?.guildId ?? undefined,
+  };
 }
 
 function buildDiscordSystemEvent(message: Message, action: string) {
