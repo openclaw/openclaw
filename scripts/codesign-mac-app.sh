@@ -57,8 +57,16 @@ select_identity() {
 
 if [ -z "$IDENTITY" ]; then
   if ! IDENTITY="$(select_identity)"; then
-    echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
-    IDENTITY="-"
+    if [[ "${ALLOW_ADHOC_SIGNING:-}" == "1" ]]; then
+      echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
+      echo "      !!! WARNING: Ad-hoc signed apps do NOT persist TCC permissions (Accessibility, etc) !!!" >&2
+      echo "      !!! You will need to re-grant permissions every time you restart the app.         !!!" >&2
+      IDENTITY="-"
+    else
+      echo "ERROR: No signing identity found. Set SIGN_IDENTITY to a valid codesigning certificate." >&2
+      echo "       Alternatively, set ALLOW_ADHOC_SIGNING=1 to fallback to ad-hoc signing (limitations apply)." >&2
+      exit 1
+    fi
   fi
 fi
 
