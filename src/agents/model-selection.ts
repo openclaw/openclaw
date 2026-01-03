@@ -6,6 +6,8 @@ export type ModelRef = {
   model: string;
 };
 
+export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
+
 export type ModelAliasIndex = {
   byAlias: Map<string, { alias: string; ref: ModelRef }>;
   byKey: Map<string, string[]>;
@@ -151,4 +153,20 @@ export function buildAllowedModelSet(params: {
   }
 
   return { allowAny: false, allowedCatalog, allowedKeys };
+}
+
+export function resolveThinkingDefault(params: {
+  cfg: ClawdisConfig;
+  provider: string;
+  model: string;
+  catalog?: ModelCatalogEntry[];
+}): ThinkLevel {
+  const configured = params.cfg.agent?.thinkingDefault;
+  if (configured) return configured;
+  const candidate = params.catalog?.find(
+    (entry) =>
+      entry.provider === params.provider && entry.id === params.model,
+  );
+  if (candidate?.reasoning) return "low";
+  return "off";
 }

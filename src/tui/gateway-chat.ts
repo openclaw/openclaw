@@ -52,6 +52,7 @@ export type GatewayModelChoice = {
   name: string;
   provider: string;
   contextWindow?: number;
+  reasoning?: boolean;
 };
 
 export class GatewayChatClient {

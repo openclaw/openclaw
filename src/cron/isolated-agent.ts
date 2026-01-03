@@ -5,7 +5,11 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
+import {
+  resolveConfiguredModelRef,
+  resolveThinkingDefault,
+} from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
@@ -189,7 +193,16 @@ export async function runCronIsolatedAgentTurn(params: {
       ? params.job.payload.thinking
       : undefined) ?? undefined,
   );
-  const thinkLevel = jobThink ?? thinkOverride;
+  let thinkLevel = jobThink ?? thinkOverride;
+  if (!thinkLevel) {
+    const catalog = await loadModelCatalog({ config: params.cfg });
+    thinkLevel = resolveThinkingDefault({
+      cfg: params.cfg,
+      provider,
+      model,
+      catalog,
+    });
+  }
 
   const timeoutSecondsRaw =
     params.job.payload.kind === "agentTurn" && params.job.payload.timeoutSeconds

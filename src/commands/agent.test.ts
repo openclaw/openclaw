@@ -17,8 +17,12 @@ vi.mock("../agents/pi-embedded.js", () => ({
   resolveEmbeddedSessionLane: (key: string) =>
     `session:${key.trim() || "main"}`,
 }));
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: vi.fn(),
+}));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
 import type { ClawdisConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -74,6 +78,7 @@ beforeEach(() => {
       agentMeta: { sessionId: "s", provider: "p", model: "m" },
     },
   });
+  vi.mocked(loadModelCatalog).mockResolvedValue([]);
 });
 
 describe("agentCommand", () => {
@@ -159,6 +164,26 @@ describe("agentCommand", () => {
       const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
       expect(callArgs?.provider).toBe("openai");
       expect(callArgs?.model).toBe("gpt-4.1-mini");
+    });
+  });
+
+  it("defaults thinking to low for reasoning-capable models", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store);
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "claude-opus-4-5",
+          name: "Opus 4.5",
+          provider: "anthropic",
+          reasoning: true,
+        },
+      ]);
+
+      await agentCommand({ message: "hi", to: "+1555" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.thinkLevel).toBe("low");
     });
   });
 

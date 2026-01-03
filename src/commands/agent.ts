@@ -10,6 +10,7 @@ import {
   buildAllowedModelSet,
   modelKey,
   resolveConfiguredModelRef,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
@@ -211,7 +212,7 @@ export async function agentCommand(
     registerAgentRunContext(sessionId, { sessionKey });
   }
 
-  const resolvedThinkLevel =
+  let resolvedThinkLevel =
     thinkOnce ??
     thinkOverride ??
     persistedThinking ??
@@ -275,15 +276,18 @@ export async function agentCommand(
   );
   const needsModelCatalog = hasAllowlist || hasStoredOverride;
   let allowedModelKeys = new Set<string>();
+  let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
+  let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
 
   if (needsModelCatalog) {
-    const catalog = await loadModelCatalog({ config: cfg });
+    modelCatalog = await loadModelCatalog({ config: cfg });
     const allowed = buildAllowedModelSet({
       cfg,
-      catalog,
+      catalog: modelCatalog,
       defaultProvider,
     });
     allowedModelKeys = allowed.allowedKeys;
+    allowedModelCatalog = allowed.allowedCatalog;
   }
 
   if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
@@ -311,6 +315,20 @@ export async function agentCommand(
       provider = candidateProvider;
       model = storedModelOverride;
     }
+  }
+
+  if (!resolvedThinkLevel) {
+    let catalogForThinking = modelCatalog ?? allowedModelCatalog;
+    if (!catalogForThinking || catalogForThinking.length === 0) {
+      modelCatalog = await loadModelCatalog({ config: cfg });
+      catalogForThinking = modelCatalog;
+    }
+    resolvedThinkLevel = resolveThinkingDefault({
+      cfg,
+      provider,
+      model,
+      catalog: catalogForThinking,
+    });
   }
   const sessionFile = resolveSessionTranscriptPath(sessionId);
 

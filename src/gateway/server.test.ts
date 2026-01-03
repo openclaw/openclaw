@@ -82,6 +82,7 @@ const piSdkMock = vi.hoisted(() => ({
     name?: string;
     provider: string;
     contextWindow?: number;
+    reasoning?: boolean;
   }>,
 }));
 const cronIsolatedRun = vi.hoisted(() =>
@@ -2802,6 +2803,57 @@ describe("gateway server", () => {
     const maxMsgs = maxRes.payload?.messages ?? [];
     expect(maxMsgs.length).toBe(1000);
     expect(firstContentText(maxMsgs[0])).toBe("b500");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("chat.history defaults thinking to low for reasoning-capable models", async () => {
+    piSdkMock.enabled = true;
+    piSdkMock.models = [
+      {
+        id: "claude-opus-4-5",
+        name: "Opus 4.5",
+        provider: "anthropic",
+        reasoning: true,
+      },
+    ];
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testSessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testSessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "hello" }],
+          timestamp: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{ thinkingLevel?: string }>(ws, "chat.history", {
+      sessionKey: "main",
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload?.thinkingLevel).toBe("low");
 
     ws.close();
     await server.close();

@@ -7,6 +7,7 @@ export type ModelCatalogEntry = {
   name: string;
   provider: string;
   contextWindow?: number;
+  reasoning?: boolean;
 };
 
 type DiscoveredModel = {
@@ -14,6 +15,7 @@ type DiscoveredModel = {
   name?: string;
   provider: string;
   contextWindow?: number;
+  reasoning?: boolean;
 };
 
 let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
@@ -56,7 +58,9 @@ export async function loadModelCatalog(params?: {
           typeof entry?.contextWindow === "number" && entry.contextWindow > 0
             ? entry.contextWindow
             : undefined;
-        models.push({ id, name, provider, contextWindow });
+        const reasoning =
+          typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
+        models.push({ id, name, provider, contextWindow, reasoning });
       }
     } catch {
       // Leave models empty on discovery errors.

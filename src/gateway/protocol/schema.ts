@@ -380,6 +380,7 @@ export const ModelChoiceSchema = Type.Object(
     name: NonEmptyString,
     provider: NonEmptyString,
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
+    reasoning: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

@@ -13,6 +13,7 @@ import {
   modelKey,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
@@ -1094,13 +1095,14 @@ export async function getReplyFromConfig(
     hasModelDirective || hasAllowlist || hasStoredOverride;
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
+  let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
   let resetModelOverride = false;
 
   if (needsModelCatalog) {
-    const catalog = await loadModelCatalog({ config: cfg });
+    modelCatalog = await loadModelCatalog({ config: cfg });
     const allowed = buildAllowedModelSet({
       cfg,
-      catalog,
+      catalog: modelCatalog,
       defaultProvider,
     });
     allowedModelCatalog = allowed.allowedCatalog;
@@ -1134,6 +1136,22 @@ export async function getReplyFromConfig(
       model = storedModelOverride;
     }
   }
+  let defaultThinkingLevel: ThinkLevel | undefined;
+  const resolveDefaultThinkingLevel = async () => {
+    if (defaultThinkingLevel) return defaultThinkingLevel;
+    let catalogForThinking = modelCatalog ?? allowedModelCatalog;
+    if (!catalogForThinking || catalogForThinking.length === 0) {
+      modelCatalog = await loadModelCatalog({ config: cfg });
+      catalogForThinking = modelCatalog;
+    }
+    defaultThinkingLevel = resolveThinkingDefault({
+      cfg,
+      provider,
+      model,
+      catalog: catalogForThinking,
+    });
+    return defaultThinkingLevel;
+  };
   contextTokens =
     agentCfg?.contextTokens ??
     lookupContextTokens(model) ??
@@ -1589,7 +1607,8 @@ export async function getReplyFromConfig(
       sessionScope,
       storePath,
       groupActivation,
-      resolvedThink: resolvedThinkLevel,
+      resolvedThink:
+        resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
       webLinked,
       webAuthAgeMs,
@@ -1819,6 +1838,9 @@ export async function getReplyFromConfig(
       resolvedThinkLevel = maybeLevel;
       commandBody = parts.slice(1).join(" ").trim();
     }
+  }
+  if (!resolvedThinkLevel) {
+    resolvedThinkLevel = await resolveDefaultThinkingLevel();
   }
 
   const sessionIdFinal = sessionId ?? crypto.randomUUID();

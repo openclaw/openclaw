@@ -26,6 +26,7 @@ import {
   modelKey,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
+  resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
@@ -923,6 +924,25 @@ function getSessionDefaults(cfg: ClawdisConfig): GatewaySessionsDefaults {
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
   };
+}
+
+function resolveSessionModelRef(
+  cfg: ClawdisConfig,
+  entry?: SessionEntry,
+): { provider: string; model: string } {
+  const resolved = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  let provider = resolved.provider;
+  let model = resolved.model;
+  const storedModelOverride = entry?.modelOverride?.trim();
+  if (storedModelOverride) {
+    provider = entry?.providerOverride?.trim() || provider;
+    model = storedModelOverride;
+  }
+  return { provider, model };
 }
 
 function listSessionsFromStore(params: {
@@ -3283,7 +3303,7 @@ export async function startGatewayServer(
             sessionKey: string;
             limit?: number;
           };
-          const { storePath, entry } = loadSessionEntry(sessionKey);
+          const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
           const sessionId = entry?.sessionId;
           const rawMessages =
             sessionId && storePath
@@ -3296,10 +3316,22 @@ export async function startGatewayServer(
             sliced,
             MAX_CHAT_HISTORY_MESSAGES_BYTES,
           ).items;
-          const thinkingLevel =
-            entry?.thinkingLevel ??
-            loadConfig().agent?.thinkingDefault ??
-            "off";
+          let thinkingLevel = entry?.thinkingLevel;
+          if (!thinkingLevel) {
+            const configured = cfg.agent?.thinkingDefault;
+            if (configured) {
+              thinkingLevel = configured;
+            } else {
+              const { provider, model } = resolveSessionModelRef(cfg, entry);
+              const catalog = await loadGatewayModelCatalog();
+              thinkingLevel = resolveThinkingDefault({
+                cfg,
+                provider,
+                model,
+                catalog,
+              });
+            }
+          }
           return {
             ok: true,
             payloadJSON: JSON.stringify({
@@ -4668,7 +4700,7 @@ export async function startGatewayServer(
                 sessionKey: string;
                 limit?: number;
               };
-              const { storePath, entry } = loadSessionEntry(sessionKey);
+              const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
               const sessionId = entry?.sessionId;
               const rawMessages =
                 sessionId && storePath
@@ -4687,10 +4719,22 @@ export async function startGatewayServer(
                 sliced,
                 MAX_CHAT_HISTORY_MESSAGES_BYTES,
               ).items;
-              const thinkingLevel =
-                entry?.thinkingLevel ??
-                loadConfig().agent?.thinkingDefault ??
-                "off";
+              let thinkingLevel = entry?.thinkingLevel;
+              if (!thinkingLevel) {
+                const configured = cfg.agent?.thinkingDefault;
+                if (configured) {
+                  thinkingLevel = configured;
+                } else {
+                  const { provider, model } = resolveSessionModelRef(cfg, entry);
+                  const catalog = await loadGatewayModelCatalog();
+                  thinkingLevel = resolveThinkingDefault({
+                    cfg,
+                    provider,
+                    model,
+                    catalog,
+                  });
+                }
+              }
               respond(true, {
                 sessionKey,
                 sessionId,
