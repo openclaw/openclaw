@@ -229,6 +229,10 @@ final class BridgeConnectionController {
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
         if voiceWakeEnabled { caps.append(ClawdisCapability.voiceWake.rawValue) }
 
+        let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
+        let locationMode = ClawdisLocationMode(rawValue: locationModeRaw) ?? .off
+        if locationMode != .off { caps.append(ClawdisCapability.location.rawValue) }
+
         return caps
     }
 
@@ -250,6 +254,9 @@ final class BridgeConnectionController {
             commands.append(ClawdisCameraCommand.list.rawValue)
             commands.append(ClawdisCameraCommand.snap.rawValue)
             commands.append(ClawdisCameraCommand.clip.rawValue)
+        }
+        if caps.contains(ClawdisCapability.location.rawValue) {
+            commands.append(ClawdisLocationCommand.get.rawValue)
         }
 
         return commands

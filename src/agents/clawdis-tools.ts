@@ -1217,6 +1217,22 @@ const NodesToolSchema = Type.Union([
     includeAudio: Type.Optional(Type.Boolean()),
     outPath: Type.Optional(Type.String()),
   }),
+  Type.Object({
+    action: Type.Literal("location_get"),
+    gatewayUrl: Type.Optional(Type.String()),
+    gatewayToken: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+    node: Type.String(),
+    maxAgeMs: Type.Optional(Type.Number()),
+    locationTimeoutMs: Type.Optional(Type.Number()),
+    desiredAccuracy: Type.Optional(
+      Type.Union([
+        Type.Literal("coarse"),
+        Type.Literal("balanced"),
+        Type.Literal("precise"),
+      ]),
+    ),
+  }),
 ]);
 
 function createNodesTool(): AnyAgentTool {
@@ -1224,7 +1240,7 @@ function createNodesTool(): AnyAgentTool {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -1515,6 +1531,36 @@ function createNodesTool(): AnyAgentTool {
               hasAudio: payload.hasAudio,
             },
           };
+        }
+        case "location_get": {
+          const node = readStringParam(params, "node", { required: true });
+          const nodeId = await resolveNodeId(gatewayOpts, node);
+          const maxAgeMs =
+            typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
+              ? params.maxAgeMs
+              : undefined;
+          const desiredAccuracy =
+            params.desiredAccuracy === "coarse" ||
+            params.desiredAccuracy === "balanced" ||
+            params.desiredAccuracy === "precise"
+              ? params.desiredAccuracy
+              : undefined;
+          const locationTimeoutMs =
+            typeof params.locationTimeoutMs === "number" &&
+            Number.isFinite(params.locationTimeoutMs)
+              ? params.locationTimeoutMs
+              : undefined;
+          const raw = (await callGatewayTool("node.invoke", gatewayOpts, {
+            nodeId,
+            command: "location.get",
+            params: {
+              maxAgeMs,
+              desiredAccuracy,
+              timeoutMs: locationTimeoutMs,
+            },
+            idempotencyKey: crypto.randomUUID(),
+          })) as { payload?: unknown };
+          return jsonResult(raw?.payload ?? {});
         }
         default:
           throw new Error(`Unknown action: ${action}`);

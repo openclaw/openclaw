@@ -31,6 +31,7 @@ final class NodeAppModel {
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     let voiceWake = VoiceWakeManager()
     let talkMode = TalkModeManager()
+    private let locationService = LocationService()
     private var lastAutoA2uiURL: String?
 
     var bridgeSession: BridgeSession { self.bridge }
@@ -186,6 +187,19 @@ final class NodeAppModel {
 
     func setTalkEnabled(_ enabled: Bool) {
         self.talkMode.setEnabled(enabled)
+    }
+
+    func requestLocationPermissions(mode: ClawdisLocationMode) async -> Bool {
+        guard mode != .off else { return true }
+        let status = await self.locationService.ensureAuthorization(mode: mode)
+        switch status {
+        case .authorizedAlways:
+            return true
+        case .authorizedWhenInUse:
+            return mode != .always
+        default:
+            return false
+        }
     }
 
     func connectToBridge(
@@ -466,6 +480,64 @@ final class NodeAppModel {
 
         do {
             switch command {
+            case ClawdisLocationCommand.get.rawValue:
+                let mode = self.locationMode()
+                guard mode != .off else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_DISABLED: enable Location in Settings"))
+                }
+                if self.isBackgrounded, mode != .always {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .backgroundUnavailable,
+                            message: "LOCATION_BACKGROUND_UNAVAILABLE: background location requires Always"))
+                }
+                let params = (try? Self.decodeParams(ClawdisLocationGetParams.self, from: req.paramsJSON)) ??
+                    ClawdisLocationGetParams()
+                let desired = params.desiredAccuracy ??
+                    (self.isLocationPreciseEnabled() ? .precise : .balanced)
+                let status = self.locationService.authorizationStatus()
+                if status != .authorizedAlways && status != .authorizedWhenInUse {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+                }
+                if self.isBackgrounded && status != .authorizedAlways {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_PERMISSION_REQUIRED: enable Always for background access"))
+                }
+                let location = try await self.locationService.currentLocation(
+                    params: params,
+                    desiredAccuracy: desired,
+                    maxAgeMs: params.maxAgeMs,
+                    timeoutMs: params.timeoutMs)
+                let isPrecise = self.locationService.accuracyAuthorization() == .fullAccuracy
+                let payload = ClawdisLocationPayload(
+                    lat: location.coordinate.latitude,
+                    lon: location.coordinate.longitude,
+                    accuracyMeters: location.horizontalAccuracy,
+                    altitudeMeters: location.verticalAccuracy >= 0 ? location.altitude : nil,
+                    speedMps: location.speed >= 0 ? location.speed : nil,
+                    headingDeg: location.course >= 0 ? location.course : nil,
+                    timestamp: ISO8601DateFormatter().string(from: location.timestamp),
+                    isPrecise: isPrecise,
+                    source: nil)
+                let json = try Self.encodePayload(payload)
+                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+
             case ClawdisCanvasCommand.present.rawValue:
                 let params = (try? Self.decodeParams(ClawdisCanvasPresentParams.self, from: req.paramsJSON)) ??
                     ClawdisCanvasPresentParams()
@@ -694,6 +766,16 @@ final class NodeAppModel {
                 ok: false,
                 error: ClawdisNodeError(code: .unavailable, message: error.localizedDescription))
         }
+    }
+
+    private func locationMode() -> ClawdisLocationMode {
+        let raw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
+        return ClawdisLocationMode(rawValue: raw) ?? .off
+    }
+
+    private func isLocationPreciseEnabled() -> Bool {
+        if UserDefaults.standard.object(forKey: "location.preciseEnabled") == nil { return true }
+        return UserDefaults.standard.bool(forKey: "location.preciseEnabled")
     }
 
     private static func decodeParams<T: Decodable>(_ type: T.Type, from json: String?) throws -> T {

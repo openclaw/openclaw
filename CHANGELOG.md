@@ -18,6 +18,7 @@
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
+- Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
 
 ### Fixes
 - CI: fix lint ordering after merge cleanup (#156) — thanks @steipete.

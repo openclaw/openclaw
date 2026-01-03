@@ -110,6 +110,10 @@ final class MacNodeModeCoordinator {
         if UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false {
             caps.append(ClawdisCapability.camera.rawValue)
         }
+        let rawLocationMode = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        if ClawdisLocationMode(rawValue: rawLocationMode) != .off {
+            caps.append(ClawdisCapability.location.rawValue)
+        }
         return caps
     }
 
@@ -138,6 +142,9 @@ final class MacNodeModeCoordinator {
             commands.append(ClawdisCameraCommand.list.rawValue)
             commands.append(ClawdisCameraCommand.snap.rawValue)
             commands.append(ClawdisCameraCommand.clip.rawValue)
+        }
+        if capsSet.contains(ClawdisCapability.location.rawValue) {
+            commands.append(ClawdisLocationCommand.get.rawValue)
         }
 
         return commands

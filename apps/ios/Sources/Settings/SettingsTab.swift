@@ -23,6 +23,8 @@ struct SettingsTab: View {
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
+    @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = ClawdisLocationMode.off.rawValue
+    @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("bridge.preferredStableID") private var preferredBridgeStableID: String = ""
     @AppStorage("bridge.lastDiscoveredStableID") private var lastDiscoveredBridgeStableID: String = ""
@@ -34,6 +36,7 @@ struct SettingsTab: View {
     @State private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
+    @State private var lastLocationModeRaw: String = ClawdisLocationMode.off.rawValue
 
     var body: some View {
         NavigationStack {
@@ -181,6 +184,22 @@ struct SettingsTab: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section("Location") {
+                    Picker("Location Access", selection: self.$locationEnabledModeRaw) {
+                        Text("Off").tag(ClawdisLocationMode.off.rawValue)
+                        Text("While Using").tag(ClawdisLocationMode.whileUsing.rawValue)
+                        Text("Always").tag(ClawdisLocationMode.always.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+
+                    Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
+                        .disabled(self.locationMode == .off)
+
+                    Text("Always requires system permission and may prompt to open Settings.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("Screen") {
                     Toggle("Prevent Sleep", isOn: self.$preventSleep)
                     Text("Keeps the screen awake while Clawdis is open.")
@@ -201,6 +220,7 @@ struct SettingsTab: View {
             }
             .onAppear {
                 self.localIPAddress = Self.primaryIPv4Address()
+                self.lastLocationModeRaw = self.locationEnabledModeRaw
             }
             .onChange(of: self.preferredBridgeStableID) { _, newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -209,6 +229,20 @@ struct SettingsTab: View {
             }
             .onChange(of: self.appModel.bridgeServerName) { _, _ in
                 self.connectStatus.text = nil
+            }
+            .onChange(of: self.locationEnabledModeRaw) { _, newValue in
+                let previous = self.lastLocationModeRaw
+                self.lastLocationModeRaw = newValue
+                guard let mode = ClawdisLocationMode(rawValue: newValue) else { return }
+                Task {
+                    let granted = await self.appModel.requestLocationPermissions(mode: mode)
+                    if !granted {
+                        await MainActor.run {
+                            self.locationEnabledModeRaw = previous
+                            self.lastLocationModeRaw = previous
+                        }
+                    }
+                }
             }
         }
     }
@@ -276,6 +310,10 @@ struct SettingsTab: View {
     private func platformString() -> String {
         let v = ProcessInfo.processInfo.operatingSystemVersion
         return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+    }
+
+    private var locationMode: ClawdisLocationMode {
+        ClawdisLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
     }
 
     private func appVersion() -> String {

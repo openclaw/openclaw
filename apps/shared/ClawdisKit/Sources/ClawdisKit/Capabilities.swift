@@ -5,4 +5,5 @@ public enum ClawdisCapability: String, Codable, Sendable {
     case camera
     case screen
     case voiceWake
+    case location
 }

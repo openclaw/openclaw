@@ -6,6 +6,7 @@ import Foundation
 actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
     @MainActor private let screenRecorder = ScreenRecordService()
+    @MainActor private let locationService = MacNodeLocationService()
 
     // swiftlint:disable:next function_body_length cyclomatic_complexity
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -167,6 +168,63 @@ actor MacNodeRuntime {
                 let devices = await self.cameraCapture.listDevices()
                 let payload = try Self.encodePayload(["devices": devices])
                 return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+
+            case ClawdisLocationCommand.get.rawValue:
+                let mode = Self.locationMode()
+                guard mode != .off else {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_DISABLED: enable Location in Settings"))
+                }
+                let params = (try? Self.decodeParams(ClawdisLocationGetParams.self, from: req.paramsJSON)) ??
+                    ClawdisLocationGetParams()
+                let desired = params.desiredAccuracy ??
+                    (Self.locationPreciseEnabled() ? .precise : .balanced)
+                let status = await self.locationService.authorizationStatus()
+                if status != .authorizedAlways && status != .authorizedWhenInUse {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+                }
+                do {
+                    let location = try await self.locationService.currentLocation(
+                        desiredAccuracy: desired,
+                        maxAgeMs: params.maxAgeMs,
+                        timeoutMs: params.timeoutMs)
+                    let isPrecise = await self.locationService.accuracyAuthorization() == .fullAccuracy
+                    let payload = ClawdisLocationPayload(
+                        lat: location.coordinate.latitude,
+                        lon: location.coordinate.longitude,
+                        accuracyMeters: location.horizontalAccuracy,
+                        altitudeMeters: location.verticalAccuracy >= 0 ? location.altitude : nil,
+                        speedMps: location.speed >= 0 ? location.speed : nil,
+                        headingDeg: location.course >= 0 ? location.course : nil,
+                        timestamp: ISO8601DateFormatter().string(from: location.timestamp),
+                        isPrecise: isPrecise,
+                        source: nil)
+                    let json = try Self.encodePayload(payload)
+                    return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+                } catch MacNodeLocationService.Error.timeout {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_TIMEOUT: no fix in time"))
+                } catch {
+                    return BridgeInvokeResponse(
+                        id: req.id,
+                        ok: false,
+                        error: ClawdisNodeError(
+                            code: .unavailable,
+                            message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
+                }
 
             case MacNodeScreenCommand.record.rawValue:
                 let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
@@ -411,6 +469,16 @@ actor MacNodeRuntime {
 
     private nonisolated static func cameraEnabled() -> Bool {
         UserDefaults.standard.object(forKey: cameraEnabledKey) as? Bool ?? false
+    }
+
+    private nonisolated static func locationMode() -> ClawdisLocationMode {
+        let raw = UserDefaults.standard.string(forKey: locationModeKey) ?? "off"
+        return ClawdisLocationMode(rawValue: raw) ?? .off
+    }
+
+    private nonisolated static func locationPreciseEnabled() -> Bool {
+        if UserDefaults.standard.object(forKey: locationPreciseKey) == nil { return true }
+        return UserDefaults.standard.bool(forKey: locationPreciseKey)
     }
 
     private static func errorResponse(

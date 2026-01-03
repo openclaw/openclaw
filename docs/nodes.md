@@ -94,6 +94,22 @@ Notes:
 - Screen recordings are clamped to `<= 60s`.
 - `--no-audio` disables microphone capture (supported on iOS/Android; macOS uses system capture audio).
 
+## Location (nodes)
+
+Nodes expose `location.get` when Location is enabled in settings.
+
+CLI helper:
+
+```bash
+clawdis nodes location get --node <idOrNameOrIp>
+clawdis nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+```
+
+Notes:
+- Location is **off by default**.
+- “Always” requires system permission; background fetch is best-effort.
+- The response includes lat/lon, accuracy (meters), and timestamp.
+
 ## System commands (mac node)
 
 The macOS node exposes `system.run` and `system.notify`.

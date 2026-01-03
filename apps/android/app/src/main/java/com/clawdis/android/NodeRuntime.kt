@@ -3,6 +3,7 @@ package com.clawdis.android
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.location.LocationManager
 import android.os.Build
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
@@ -16,6 +17,7 @@ import com.clawdis.android.bridge.BridgeEndpoint
 import com.clawdis.android.bridge.BridgePairingClient
 import com.clawdis.android.bridge.BridgeSession
 import com.clawdis.android.node.CameraCaptureManager
+import com.clawdis.android.node.LocationCaptureManager
 import com.clawdis.android.BuildConfig
 import com.clawdis.android.node.CanvasController
 import com.clawdis.android.node.ScreenRecordManager
@@ -24,6 +26,7 @@ import com.clawdis.android.protocol.ClawdisCameraCommand
 import com.clawdis.android.protocol.ClawdisCanvasA2UIAction
 import com.clawdis.android.protocol.ClawdisCanvasA2UICommand
 import com.clawdis.android.protocol.ClawdisCanvasCommand
+import com.clawdis.android.protocol.ClawdisLocationCommand
 import com.clawdis.android.protocol.ClawdisScreenCommand
 import com.clawdis.android.voice.TalkModeManager
 import com.clawdis.android.voice.VoiceWakeManager
@@ -31,6 +34,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -55,6 +59,7 @@ class NodeRuntime(context: Context) {
   val prefs = SecurePrefs(appContext)
   val canvas = CanvasController()
   val camera = CameraCaptureManager(appContext)
+  val location = LocationCaptureManager(appContext)
   val screenRecorder = ScreenRecordManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -186,6 +191,8 @@ class NodeRuntime(context: Context) {
   val instanceId: StateFlow<String> = prefs.instanceId
   val displayName: StateFlow<String> = prefs.displayName
   val cameraEnabled: StateFlow<Boolean> = prefs.cameraEnabled
+  val locationMode: StateFlow<LocationMode> = prefs.locationMode
+  val locationPreciseEnabled: StateFlow<Boolean> = prefs.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = prefs.preventSleep
   val wakeWords: StateFlow<List<String>> = prefs.wakeWords
   val voiceWakeMode: StateFlow<VoiceWakeMode> = prefs.voiceWakeMode
@@ -312,6 +319,14 @@ class NodeRuntime(context: Context) {
     prefs.setCameraEnabled(value)
   }
 
+  fun setLocationMode(mode: LocationMode) {
+    prefs.setLocationMode(mode)
+  }
+
+  fun setLocationPreciseEnabled(value: Boolean) {
+    prefs.setLocationPreciseEnabled(value)
+  }
+
   fun setPreventSleep(value: Boolean) {
     prefs.setPreventSleep(value)
   }
@@ -373,6 +388,9 @@ class NodeRuntime(context: Context) {
             add(ClawdisCameraCommand.Snap.rawValue)
             add(ClawdisCameraCommand.Clip.rawValue)
           }
+          if (locationMode.value != LocationMode.Off) {
+            add(ClawdisLocationCommand.Get.rawValue)
+          }
         }
       val resolved =
         if (storedToken.isNullOrBlank()) {
@@ -383,6 +401,9 @@ class NodeRuntime(context: Context) {
             if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
             if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
               add(ClawdisCapability.VoiceWake.rawValue)
+            }
+            if (locationMode.value != LocationMode.Off) {
+              add(ClawdisCapability.Location.rawValue)
             }
           }
           val versionName = BuildConfig.VERSION_NAME.trim().ifEmpty { "dev" }
@@ -444,6 +465,9 @@ class NodeRuntime(context: Context) {
                 if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
                   add(ClawdisCapability.VoiceWake.rawValue)
                 }
+                if (locationMode.value != LocationMode.Off) {
+                  add(ClawdisCapability.Location.rawValue)
+                }
               },
             commands = invokeCommands,
           ),
@@ -454,6 +478,28 @@ class NodeRuntime(context: Context) {
   private fun hasRecordAudioPermission(): Boolean {
     return (
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
+        PackageManager.PERMISSION_GRANTED
+      )
+  }
+
+  private fun hasFineLocationPermission(): Boolean {
+    return (
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+      )
+  }
+
+  private fun hasCoarseLocationPermission(): Boolean {
+    return (
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+      )
+  }
+
+  private fun hasBackgroundLocationPermission(): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
+    return (
+      ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
         PackageManager.PERMISSION_GRANTED
       )
   }
@@ -667,6 +713,14 @@ class NodeRuntime(context: Context) {
         message = "CAMERA_DISABLED: enable Camera in Settings",
       )
     }
+    if (command.startsWith(ClawdisLocationCommand.NamespacePrefix) &&
+      locationMode.value == LocationMode.Off
+    ) {
+      return BridgeSession.InvokeResult.error(
+        code = "LOCATION_DISABLED",
+        message = "LOCATION_DISABLED: enable Location in Settings",
+      )
+    }
 
     return when (command) {
       ClawdisCanvasCommand.Present.rawValue -> {
@@ -787,6 +841,59 @@ class NodeRuntime(context: Context) {
           if (includeAudio) externalAudioCaptureActive.value = false
         }
       }
+      ClawdisLocationCommand.Get.rawValue -> {
+        val mode = locationMode.value
+        if (!isForeground.value && mode != LocationMode.Always) {
+          return BridgeSession.InvokeResult.error(
+            code = "LOCATION_BACKGROUND_UNAVAILABLE",
+            message = "LOCATION_BACKGROUND_UNAVAILABLE: background location requires Always",
+          )
+        }
+        if (!hasFineLocationPermission() && !hasCoarseLocationPermission()) {
+          return BridgeSession.InvokeResult.error(
+            code = "LOCATION_PERMISSION_REQUIRED",
+            message = "LOCATION_PERMISSION_REQUIRED: grant Location permission",
+          )
+        }
+        if (!isForeground.value && mode == LocationMode.Always && !hasBackgroundLocationPermission()) {
+          return BridgeSession.InvokeResult.error(
+            code = "LOCATION_PERMISSION_REQUIRED",
+            message = "LOCATION_PERMISSION_REQUIRED: enable Always in system Settings",
+          )
+        }
+        val (maxAgeMs, timeoutMs, desiredAccuracy) = parseLocationParams(paramsJson)
+        val preciseEnabled = locationPreciseEnabled.value
+        val accuracy =
+          when (desiredAccuracy) {
+            "precise" -> if (preciseEnabled && hasFineLocationPermission()) "precise" else "balanced"
+            "coarse" -> "coarse"
+            else -> if (preciseEnabled && hasFineLocationPermission()) "precise" else "balanced"
+          }
+        val providers =
+          when (accuracy) {
+            "precise" -> listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
+            "coarse" -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+            else -> listOf(LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER)
+          }
+        try {
+          val payload =
+            location.getLocation(
+              desiredProviders = providers,
+              maxAgeMs = maxAgeMs,
+              timeoutMs = timeoutMs,
+              isPrecise = accuracy == "precise",
+            )
+          BridgeSession.InvokeResult.ok(payload.payloadJson)
+        } catch (err: TimeoutCancellationException) {
+          BridgeSession.InvokeResult.error(
+            code = "LOCATION_TIMEOUT",
+            message = "LOCATION_TIMEOUT: no fix in time",
+          )
+        } catch (err: Throwable) {
+          val message = err.message ?: "LOCATION_UNAVAILABLE: no fix"
+          BridgeSession.InvokeResult.error(code = "LOCATION_UNAVAILABLE", message = message)
+        }
+      }
       ClawdisScreenCommand.Record.rawValue -> {
         // Status pill mirrors screen recording state so it stays visible without overlay stacking.
         _screenRecordActive.value = true
@@ -838,6 +945,25 @@ class NodeRuntime(context: Context) {
     val message = raw.substring(idx + 1).trim().ifEmpty { raw }
     // Preserve full string for callers/logging, but keep the returned message human-friendly.
     return code to "$code: $message"
+  }
+
+  private fun parseLocationParams(paramsJson: String?): Triple<Long?, Long, String?> {
+    if (paramsJson.isNullOrBlank()) {
+      return Triple(null, 10_000L, null)
+    }
+    val root =
+      try {
+        json.parseToJsonElement(paramsJson).asObjectOrNull()
+      } catch (_: Throwable) {
+        null
+      }
+    val maxAgeMs = (root?.get("maxAgeMs") as? JsonPrimitive)?.content?.toLongOrNull()
+    val timeoutMs =
+      (root?.get("timeoutMs") as? JsonPrimitive)?.content?.toLongOrNull()?.coerceIn(1_000L, 60_000L)
+        ?: 10_000L
+    val desiredAccuracy =
+      (root?.get("desiredAccuracy") as? JsonPrimitive)?.content?.trim()?.lowercase()
+    return Triple(maxAgeMs, timeoutMs, desiredAccuracy)
   }
 
   private fun resolveA2uiHostUrl(): String? {

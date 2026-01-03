@@ -3,6 +3,7 @@ import ApplicationServices
 import AVFoundation
 import ClawdisIPC
 import CoreGraphics
+import CoreLocation
 import Foundation
 import Observation
 import Speech
@@ -33,6 +34,8 @@ enum PermissionManager {
             await self.ensureSpeechRecognition(interactive: interactive)
         case .camera:
             await self.ensureCamera(interactive: interactive)
+        case .location:
+            await self.ensureLocation(interactive: interactive)
         }
     }
 
@@ -134,6 +137,25 @@ enum PermissionManager {
         }
     }
 
+    private static func ensureLocation(interactive: Bool) async -> Bool {
+        let status = CLLocationManager.authorizationStatus()
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return true
+        case .notDetermined:
+            guard interactive else { return false }
+            let updated = await LocationPermissionRequester.shared.request(always: false)
+            return updated == .authorizedAlways || updated == .authorizedWhenInUse
+        case .denied, .restricted:
+            if interactive {
+                LocationPermissionHelper.openSettings()
+            }
+            return false
+        @unknown default:
+            return false
+        }
+    }
+
     static func voiceWakePermissionsGranted() -> Bool {
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let speech = SFSpeechRecognizer.authorizationStatus() == .authorized
@@ -176,6 +198,9 @@ enum PermissionManager {
 
             case .camera:
                 results[cap] = AVCaptureDevice.authorizationStatus(for: .video) == .authorized
+            case .location:
+                let status = CLLocationManager.authorizationStatus()
+                results[cap] = status == .authorizedAlways || status == .authorizedWhenInUse
             }
         }
         return results
@@ -224,6 +249,50 @@ enum CameraPermissionHelper {
                 return
             }
         }
+    }
+}
+
+enum LocationPermissionHelper {
+    static func openSettings() {
+        let candidates = [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_LocationServices",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ]
+
+        for candidate in candidates {
+            if let url = URL(string: candidate), NSWorkspace.shared.open(url) {
+                return
+            }
+        }
+    }
+}
+
+@MainActor
+final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
+    static let shared = LocationPermissionRequester()
+    private let manager = CLLocationManager()
+    private var continuation: CheckedContinuation<CLAuthorizationStatus, Never>?
+
+    override init() {
+        super.init()
+        self.manager.delegate = self
+    }
+
+    func request(always: Bool) async -> CLAuthorizationStatus {
+        if always {
+            self.manager.requestAlwaysAuthorization()
+        } else {
+            self.manager.requestWhenInUseAuthorization()
+        }
+        return await withCheckedContinuation { cont in
+            self.continuation = cont
+        }
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        guard let cont = self.continuation else { return }
+        self.continuation = nil
+        cont.resume(returning: manager.authorizationStatus)
     }
 }
 

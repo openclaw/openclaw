@@ -158,4 +158,47 @@ describe("nodes-cli coverage", () => {
       delivery: "overlay",
     });
   });
+
+  it("invokes location.get with params", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+
+    const { registerNodesCli } = await import("./nodes-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+
+    await program.parseAsync(
+      [
+        "nodes",
+        "location",
+        "get",
+        "--node",
+        "mac-1",
+        "--accuracy",
+        "precise",
+        "--max-age",
+        "1000",
+        "--location-timeout",
+        "5000",
+        "--invoke-timeout",
+        "6000",
+      ],
+      { from: "user" },
+    );
+
+    const invoke = callGateway.mock.calls.find(
+      (call) => call[0]?.method === "node.invoke",
+    )?.[0];
+
+    expect(invoke).toBeTruthy();
+    expect(invoke?.params?.command).toBe("location.get");
+    expect(invoke?.params?.params).toEqual({
+      maxAgeMs: 1000,
+      desiredAccuracy: "precise",
+      timeoutMs: 5000,
+    });
+    expect(invoke?.params?.timeoutMs).toBe(6000);
+  });
 });

@@ -1,8 +1,12 @@
 package com.clawdis.android.ui
 
 import android.Manifest
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -42,12 +46,14 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.clawdis.android.BuildConfig
+import com.clawdis.android.LocationMode
 import com.clawdis.android.MainViewModel
 import com.clawdis.android.NodeForegroundService
 import com.clawdis.android.VoiceWakeMode
@@ -58,6 +64,8 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val instanceId by viewModel.instanceId.collectAsState()
   val displayName by viewModel.displayName.collectAsState()
   val cameraEnabled by viewModel.cameraEnabled.collectAsState()
+  val locationMode by viewModel.locationMode.collectAsState()
+  val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
   val wakeWords by viewModel.wakeWords.collectAsState()
   val voiceWakeMode by viewModel.voiceWakeMode.collectAsState()
@@ -101,6 +109,41 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(cameraOk)
     }
 
+  var pendingLocationMode by remember { mutableStateOf<LocationMode?>(null) }
+  var pendingPreciseToggle by remember { mutableStateOf(false) }
+
+  val locationPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { perms ->
+      val fineOk = perms[Manifest.permission.ACCESS_FINE_LOCATION] == true
+      val coarseOk = perms[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+      val granted = fineOk || coarseOk
+      val requestedMode = pendingLocationMode
+      pendingLocationMode = null
+
+      if (pendingPreciseToggle) {
+        pendingPreciseToggle = false
+        viewModel.setLocationPreciseEnabled(fineOk)
+        return@rememberLauncherForActivityResult
+      }
+
+      if (!granted) {
+        viewModel.setLocationMode(LocationMode.Off)
+        return@rememberLauncherForActivityResult
+      }
+
+      if (requestedMode != null) {
+        viewModel.setLocationMode(requestedMode)
+        if (requestedMode == LocationMode.Always && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+          val backgroundOk =
+            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+              PackageManager.PERMISSION_GRANTED
+          if (!backgroundOk) {
+            openAppSettings(context)
+          }
+        }
+      }
+    }
+
   val audioPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { _ ->
       // Status text is handled by NodeRuntime.
@@ -119,6 +162,47 @@ fun SettingsSheet(viewModel: MainViewModel) {
       viewModel.setCameraEnabled(true)
     } else {
       permissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+    }
+  }
+
+  fun requestLocationPermissions(targetMode: LocationMode) {
+    val fineOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (fineOk || coarseOk) {
+      viewModel.setLocationMode(targetMode)
+      if (targetMode == LocationMode.Always && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        val backgroundOk =
+          ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
+            PackageManager.PERMISSION_GRANTED
+        if (!backgroundOk) {
+          openAppSettings(context)
+        }
+      }
+    } else {
+      pendingLocationMode = targetMode
+      locationPermissionLauncher.launch(
+        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+      )
+    }
+  }
+
+  fun setPreciseLocationChecked(checked: Boolean) {
+    if (!checked) {
+      viewModel.setLocationPreciseEnabled(false)
+      return
+    }
+    val fineOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (fineOk) {
+      viewModel.setLocationPreciseEnabled(true)
+    } else {
+      pendingPreciseToggle = true
+      locationPermissionLauncher.launch(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION))
     }
   }
 
@@ -149,7 +233,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    // Order parity: Node → Bridge → Voice → Camera → Screen.
+    // Order parity: Node → Bridge → Voice → Camera → Location → Screen.
     item { Text("Node", style = MaterialTheme.typography.titleSmall) }
     item {
       OutlinedTextField(
@@ -423,6 +507,64 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
     item { HorizontalDivider() }
 
+    // Location
+    item { Text("Location", style = MaterialTheme.typography.titleSmall) }
+    item {
+      Column(verticalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+        ListItem(
+          headlineContent = { Text("Off") },
+          supportingContent = { Text("Disable location sharing.") },
+          trailingContent = {
+            RadioButton(
+              selected = locationMode == LocationMode.Off,
+              onClick = { viewModel.setLocationMode(LocationMode.Off) },
+            )
+          },
+        )
+        ListItem(
+          headlineContent = { Text("While Using") },
+          supportingContent = { Text("Only while Clawdis is open.") },
+          trailingContent = {
+            RadioButton(
+              selected = locationMode == LocationMode.WhileUsing,
+              onClick = { requestLocationPermissions(LocationMode.WhileUsing) },
+            )
+          },
+        )
+        ListItem(
+          headlineContent = { Text("Always") },
+          supportingContent = { Text("Allow background location (requires system permission).") },
+          trailingContent = {
+            RadioButton(
+              selected = locationMode == LocationMode.Always,
+              onClick = { requestLocationPermissions(LocationMode.Always) },
+            )
+          },
+        )
+      }
+    }
+    item {
+      ListItem(
+        headlineContent = { Text("Precise Location") },
+        supportingContent = { Text("Use precise GPS when available.") },
+        trailingContent = {
+          Switch(
+            checked = locationPreciseEnabled,
+            onCheckedChange = ::setPreciseLocationChecked,
+            enabled = locationMode != LocationMode.Off,
+          )
+        },
+      )
+    }
+    item {
+      Text(
+        "Always may require Android Settings to allow background location.",
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+
+    item { HorizontalDivider() }
+
     // Screen
     item { Text("Screen", style = MaterialTheme.typography.titleSmall) }
     item {
@@ -452,4 +594,13 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
     item { Spacer(modifier = Modifier.height(20.dp)) }
   }
+}
+
+private fun openAppSettings(context: Context) {
+  val intent =
+    Intent(
+      Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+      Uri.fromParts("package", context.packageName, null),
+    )
+  context.startActivity(intent)
 }

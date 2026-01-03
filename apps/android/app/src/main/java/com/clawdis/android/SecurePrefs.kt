@@ -47,6 +47,14 @@ class SecurePrefs(context: Context) {
   private val _cameraEnabled = MutableStateFlow(prefs.getBoolean("camera.enabled", true))
   val cameraEnabled: StateFlow<Boolean> = _cameraEnabled
 
+  private val _locationMode =
+    MutableStateFlow(LocationMode.fromRawValue(prefs.getString("location.enabledMode", "off")))
+  val locationMode: StateFlow<LocationMode> = _locationMode
+
+  private val _locationPreciseEnabled =
+    MutableStateFlow(prefs.getBoolean("location.preciseEnabled", true))
+  val locationPreciseEnabled: StateFlow<Boolean> = _locationPreciseEnabled
+
   private val _preventSleep = MutableStateFlow(prefs.getBoolean("screen.preventSleep", true))
   val preventSleep: StateFlow<Boolean> = _preventSleep
 
@@ -91,6 +99,16 @@ class SecurePrefs(context: Context) {
   fun setCameraEnabled(value: Boolean) {
     prefs.edit { putBoolean("camera.enabled", value) }
     _cameraEnabled.value = value
+  }
+
+  fun setLocationMode(mode: LocationMode) {
+    prefs.edit { putString("location.enabledMode", mode.rawValue) }
+    _locationMode.value = mode
+  }
+
+  fun setLocationPreciseEnabled(value: Boolean) {
+    prefs.edit { putBoolean("location.preciseEnabled", value) }
+    _locationPreciseEnabled.value = value
   }
 
   fun setPreventSleep(value: Boolean) {

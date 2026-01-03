@@ -33,6 +33,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val instanceId: StateFlow<String> = runtime.instanceId
   val displayName: StateFlow<String> = runtime.displayName
   val cameraEnabled: StateFlow<Boolean> = runtime.cameraEnabled
+  val locationMode: StateFlow<LocationMode> = runtime.locationMode
+  val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = runtime.preventSleep
   val wakeWords: StateFlow<List<String>> = runtime.wakeWords
   val voiceWakeMode: StateFlow<VoiceWakeMode> = runtime.voiceWakeMode
@@ -68,6 +70,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setCameraEnabled(value: Boolean) {
     runtime.setCameraEnabled(value)
+  }
+
+  fun setLocationMode(mode: LocationMode) {
+    runtime.setLocationMode(mode)
+  }
+
+  fun setLocationPreciseEnabled(value: Boolean) {
+    runtime.setLocationPreciseEnabled(value)
   }
 
   fun setPreventSleep(value: Boolean) {

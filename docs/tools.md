@@ -78,11 +78,13 @@ Core actions:
 - `pending`, `approve`, `reject` (pairing)
 - `notify` (macOS `system.notify`)
 - `camera_snap`, `camera_clip`, `screen_record`
+- `location_get`
 
 Notes:
 - Camera/screen commands require the node app to be foregrounded.
 - Images return image blocks + `MEDIA:<path>`.
 - Videos return `FILE:<path>` (mp4).
+- Location returns a JSON payload (lat/lon/accuracy/timestamp).
 
 ### `cron`
 Manage Gateway cron jobs and wakeups.

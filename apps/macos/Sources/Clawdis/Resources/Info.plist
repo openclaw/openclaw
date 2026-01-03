@@ -47,6 +47,8 @@
     <string>Clawdis captures the screen when the agent needs screenshots for context.</string>
     <key>NSCameraUsageDescription</key>
     <string>Clawdis can capture photos or short video clips when requested by the agent.</string>
+    <key>NSLocationUsageDescription</key>
+    <string>Clawdis can share your location when requested by the agent.</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>Clawdis needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
