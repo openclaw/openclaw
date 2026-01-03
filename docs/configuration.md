@@ -281,6 +281,11 @@ Configure the Discord bot by setting the bot token and optional gating:
 
 Clawdis starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
+Reaction notification modes:
+- `off`: no reaction events.
+- `own`: all reactions on the bot's own messages.
+- `all`: all reactions on all messages.
+- `allowlist`: reactions from `guilds.<id>.users` on all messages.
 
 ### `imessage` (imsg CLI)
 

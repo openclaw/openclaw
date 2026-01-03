@@ -119,7 +119,11 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
   - `roles` (role add/remove, default `false`)
   - `moderation` (timeout/kick/ban, default `false`)
 
-Reaction notifications use `guilds.<id>.reactionNotifications`; `allowlist` checks `guilds.<id>.users`, while `all` ignores that allowlist.
+Reaction notifications use `guilds.<id>.reactionNotifications`:
+- `off`: no reaction events.
+- `own`: all reactions on the bot's own messages.
+- `all`: all reactions on all messages.
+- `allowlist`: reactions from `guilds.<id>.users` on all messages.
 
 ### Tool action defaults
 
