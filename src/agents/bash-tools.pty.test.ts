@@ -34,7 +34,10 @@ describe("bash tool pty mode", () => {
           onData = cb;
         },
         onExit: (
-          cb: (event: { exitCode: number | null; signal?: number | null }) => void,
+          cb: (event: {
+            exitCode: number | null;
+            signal?: number | null;
+          }) => void,
         ) => {
           onExit = cb;
         },

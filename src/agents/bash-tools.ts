@@ -159,8 +159,7 @@ export function createBashTool(
 
       const { shell, args: shellArgs } = getShellConfig();
       const env = params.env ? { ...process.env, ...params.env } : process.env;
-      const requestedStdinMode =
-        params.stdinMode === "pty" ? "pty" : "pipe";
+      const requestedStdinMode = params.stdinMode === "pty" ? "pty" : "pipe";
       let stdinMode: ProcessStdinMode = requestedStdinMode;
       let warning: string | null = null;
       let child: ChildProcessWithoutNullStreams | undefined;
