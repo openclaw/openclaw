@@ -82,7 +82,10 @@ Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies.
 
 ```json5
 {
-  whatsapp: { allowFrom: ["+15555550123", "+447700900123"] }
+  whatsapp: {
+    allowFrom: ["+15555550123", "+447700900123"],
+    textChunkLimit: 4000 // optional outbound chunk size (chars)
+  }
 }
 ```
 
@@ -169,6 +172,7 @@ Set `telegram.enabled: false` to disable automatic startup.
   telegram: {
     enabled: true,
     botToken: "your-bot-token",
+    textChunkLimit: 4000,                  // optional outbound chunk size (chars)
     replyToMode: "off",
     groups: {
       "*": { requireMention: true },
@@ -195,6 +199,7 @@ Configure the Discord bot by setting the bot token and optional gating:
   discord: {
     enabled: true,
     token: "your-bot-token",
+    textChunkLimit: 2000,                   // optional outbound chunk size (chars)
     mediaMaxMb: 8,                          // clamp inbound media size
     enableReactions: true,                  // allow agent-triggered reactions
     replyToMode: "off",                     // off | first | all
@@ -232,6 +237,20 @@ Reply threading is controlled via `discord.replyToMode` (`off` | `first` | `all`
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Use `discord.guilds."*"` for default per-guild settings.
 
+### `signal` (signal-cli JSON-RPC)
+
+Clawdis can send/receive Signal via `signal-cli` (daemon or existing HTTP URL).
+
+```json5
+{
+  signal: {
+    enabled: true,
+    textChunkLimit: 4000,                   // optional outbound chunk size (chars)
+    mediaMaxMb: 8
+  }
+}
+```
+
 ### `imessage` (imsg CLI)
 
 Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
@@ -242,6 +261,7 @@ Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
     enabled: true,
     cliPath: "imsg",
     dbPath: "~/Library/Messages/chat.db",
+    textChunkLimit: 4000,                   // optional outbound chunk size (chars)
     allowFrom: ["+15555550123", "[redacted-email]", "chat_id:123"],
     groups: {
       "*": { requireMention: true },
@@ -276,23 +296,14 @@ Default: `~/clawd`.
 ### `messages`
 
 Controls inbound/outbound prefixes and timestamps.
+Outbound text chunking is configured per provider via `*.textChunkLimit` (e.g. `whatsapp.textChunkLimit`, `telegram.textChunkLimit`).
 
 ```json5
 {
   messages: {
     messagePrefix: "[clawdis]",
     responsePrefix: "🦞",
-    timestampPrefix: "Europe/London",
-    // outbound chunk size (chars); defaults vary by surface (e.g. 4000, Discord 2000)
-    textChunkLimit: 4000,
-    // optional per-surface overrides
-    textChunkLimitBySurface: {
-      whatsapp: 4000,
-      telegram: 4000,
-      signal: 4000,
-      imessage: 4000,
-      discord: 2000
-    }
+    timestampPrefix: "Europe/London"
   }
 }
 ```

@@ -62,6 +62,8 @@ export type WebConfig = {
 export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
   groups?: Record<
     string,
     {
@@ -176,6 +178,8 @@ export type TelegramConfig = {
     }
   >;
   allowFrom?: Array<string | number>;
+  /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
   mediaMaxMb?: number;
   proxy?: string;
   webhookUrl?: string;
@@ -221,6 +225,8 @@ export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
   token?: string;
+  /** Outbound text chunk size (chars). Default: 2000. */
+  textChunkLimit?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
   /** Allow agent-triggered Discord reactions (default: true). */
@@ -253,6 +259,8 @@ export type SignalConfig = {
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
   allowFrom?: Array<string | number>;
+  /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
   mediaMaxMb?: number;
 };
 
@@ -273,6 +281,8 @@ export type IMessageConfig = {
   includeAttachments?: boolean;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
+  /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
   groups?: Record<
     string,
     {
@@ -314,15 +324,6 @@ export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdis]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
   timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
-  /** Outbound text chunk size (chars). Default varies by provider (e.g. 4000, Discord 2000). */
-  textChunkLimit?: number;
-  /** Optional per-surface chunk overrides. */
-  textChunkLimitBySurface?: Partial<
-    Record<
-      "whatsapp" | "telegram" | "discord" | "signal" | "imessage" | "webchat",
-      number
-    >
-  >;
 };
 
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
@@ -717,17 +718,6 @@ const MessagesSchema = z
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
     timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
-    textChunkLimit: z.number().int().positive().optional(),
-    textChunkLimitBySurface: z
-      .object({
-        whatsapp: z.number().int().positive().optional(),
-        telegram: z.number().int().positive().optional(),
-        discord: z.number().int().positive().optional(),
-        signal: z.number().int().positive().optional(),
-        imessage: z.number().int().positive().optional(),
-        webchat: z.number().int().positive().optional(),
-      })
-      .optional(),
   })
   .optional();
 
@@ -989,6 +979,7 @@ const ClawdisSchema = z.object({
   whatsapp: z
     .object({
       allowFrom: z.array(z.string()).optional(),
+      textChunkLimit: z.number().int().positive().optional(),
       groups: z
         .record(
           z.string(),
@@ -1018,6 +1009,7 @@ const ClawdisSchema = z.object({
         )
         .optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      textChunkLimit: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
       proxy: z.string().optional(),
       webhookUrl: z.string().optional(),
@@ -1029,6 +1021,7 @@ const ClawdisSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       token: z.string().optional(),
+      textChunkLimit: z.number().int().positive().optional(),
       slashCommand: z
         .object({
           enabled: z.boolean().optional(),
@@ -1090,6 +1083,7 @@ const ClawdisSchema = z.object({
       ignoreStories: z.boolean().optional(),
       sendReadReceipts: z.boolean().optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      textChunkLimit: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
     })
     .optional(),
@@ -1105,6 +1099,7 @@ const ClawdisSchema = z.object({
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
       includeAttachments: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
+      textChunkLimit: z.number().int().positive().optional(),
       groups: z
         .record(
           z.string(),

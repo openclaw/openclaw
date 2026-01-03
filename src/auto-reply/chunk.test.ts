@@ -55,20 +55,15 @@ describe("resolveTextChunkLimit", () => {
     expect(resolveTextChunkLimit(undefined, "discord")).toBe(2000);
   });
 
-  it("supports a global override", () => {
-    const cfg = { messages: { textChunkLimit: 1234 } };
-    expect(resolveTextChunkLimit(cfg, "whatsapp")).toBe(1234);
-    expect(resolveTextChunkLimit(cfg, "discord")).toBe(1234);
+  it("supports provider overrides", () => {
+    const cfg = { telegram: { textChunkLimit: 1234 } };
+    expect(resolveTextChunkLimit(cfg, "whatsapp")).toBe(4000);
+    expect(resolveTextChunkLimit(cfg, "telegram")).toBe(1234);
   });
 
-  it("prefers per-surface overrides over global", () => {
-    const cfg = {
-      messages: {
-        textChunkLimit: 1234,
-        textChunkLimitBySurface: { discord: 111 },
-      },
-    };
+  it("uses the matching provider override", () => {
+    const cfg = { discord: { textChunkLimit: 111 } };
     expect(resolveTextChunkLimit(cfg, "discord")).toBe(111);
-    expect(resolveTextChunkLimit(cfg, "telegram")).toBe(1234);
+    expect(resolveTextChunkLimit(cfg, "telegram")).toBe(4000);
   });
 });

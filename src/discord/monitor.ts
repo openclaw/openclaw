@@ -9,7 +9,7 @@ import {
   Partials,
 } from "discord.js";
 
-import { chunkText } from "../auto-reply/chunk.js";
+import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -129,6 +129,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
+  const textLimit = resolveTextChunkLimit(cfg, "discord");
   const historyLimit = Math.max(
     0,
     opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
@@ -433,6 +434,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
               token,
               runtime,
               replyToMode,
+              textLimit,
             });
             didSendReply = true;
           })
@@ -475,6 +477,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         token,
         runtime,
         replyToMode,
+        textLimit,
       });
       didSendReply = true;
       if (isVerbose()) {
@@ -653,6 +656,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         replies,
         interaction,
         ephemeral: slashCommand.ephemeral,
+        textLimit,
       });
     } catch (err) {
       runtime.error?.(danger(`slash handler failed: ${String(err)}`));
@@ -1049,14 +1053,17 @@ async function deliverReplies({
   token,
   runtime,
   replyToMode,
+  textLimit,
 }: {
   replies: ReplyPayload[];
   target: string;
   token: string;
   runtime: RuntimeEnv;
   replyToMode: ReplyToMode;
+  textLimit: number;
 }) {
   let hasReplied = false;
+  const chunkLimit = Math.min(textLimit, 2000);
   for (const payload of replies) {
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
@@ -1064,7 +1071,7 @@ async function deliverReplies({
     const replyToId = payload.replyToId;
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(text, 2000)) {
+      for (const chunk of chunkText(text, chunkLimit)) {
         const replyTo = resolveDiscordReplyTarget({
           replyToMode,
           replyToId,
@@ -1106,12 +1113,15 @@ async function deliverSlashReplies({
   replies,
   interaction,
   ephemeral,
+  textLimit,
 }: {
   replies: ReplyPayload[];
   interaction: import("discord.js").ChatInputCommandInteraction;
   ephemeral: boolean;
+  textLimit: number;
 }) {
   const messages: string[] = [];
+  const chunkLimit = Math.min(textLimit, 2000);
   for (const payload of replies) {
     const textRaw = payload.text?.trim() ?? "";
     const text =
@@ -1125,7 +1135,7 @@ async function deliverSlashReplies({
       .filter(Boolean)
       .join("\n");
     if (!combined) continue;
-    for (const chunk of chunkText(combined, 2000)) {
+    for (const chunk of chunkText(combined, chunkLimit)) {
       messages.push(chunk);
     }
   }

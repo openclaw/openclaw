@@ -22,18 +22,20 @@ const DEFAULT_CHUNK_LIMIT_BY_SURFACE: Record<TextChunkSurface, number> = {
 };
 
 export function resolveTextChunkLimit(
-  cfg: Pick<ClawdisConfig, "messages"> | undefined,
+  cfg: ClawdisConfig | undefined,
   surface?: TextChunkSurface,
 ): number {
-  const surfaceOverride = surface
-    ? cfg?.messages?.textChunkLimitBySurface?.[surface]
-    : undefined;
+  const surfaceOverride = (() => {
+    if (!surface) return undefined;
+    if (surface === "whatsapp") return cfg?.whatsapp?.textChunkLimit;
+    if (surface === "telegram") return cfg?.telegram?.textChunkLimit;
+    if (surface === "discord") return cfg?.discord?.textChunkLimit;
+    if (surface === "signal") return cfg?.signal?.textChunkLimit;
+    if (surface === "imessage") return cfg?.imessage?.textChunkLimit;
+    return undefined;
+  })();
   if (typeof surfaceOverride === "number" && surfaceOverride > 0) {
     return surfaceOverride;
-  }
-  const globalOverride = cfg?.messages?.textChunkLimit;
-  if (typeof globalOverride === "number" && globalOverride > 0) {
-    return globalOverride;
   }
   if (surface) return DEFAULT_CHUNK_LIMIT_BY_SURFACE[surface];
   return 4000;
