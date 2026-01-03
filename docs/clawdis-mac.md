@@ -31,6 +31,9 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
 - The gateway port is configurable via `gateway.port` or `CLAWDIS_GATEWAY_PORT` (default 18789). The mac app reads that value for launchd, probes, and remote SSH tunnels.
 - The mac app connects to the bridge as a **node** and advertises capabilities/commands.
 - Agent‑facing actions are exposed via `node.invoke` (no local control socket).
+- The mac app watches `~/.clawdis/clawdis.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
+- If `gateway.mode` is unset but `gateway.remote.url` is set, the mac app treats it as remote mode.
+- Changing connection mode in the mac app writes `gateway.mode` (and `gateway.remote.url` in remote mode) back to the config file.
 
 ### Node commands (mac)
 - Canvas: `canvas.present|navigate|eval|snapshot|a2ui.*`
