@@ -12,6 +12,7 @@
 
 ### Fixes
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
+- Gmail hooks: resolve gcloud Python to a real executable when PATH uses mise shims — thanks @joargp.
 - Agent tools: scope the Discord tool to Discord surface runs.
 - Agent tools: format verbose tool summaries without brackets, with unique emojis and `tool: detail` style.
 - macOS Connections: move to sidebar + detail layout with structured sections and header actions.

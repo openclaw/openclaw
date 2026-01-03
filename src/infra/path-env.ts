@@ -70,6 +70,11 @@ function candidateBinDirs(opts: EnsureClawdisPathOpts): string[] {
   if (isExecutable(path.join(localBinDir, "clawdis")))
     candidates.push(localBinDir);
 
+  const miseDataDir =
+    process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
+  const miseShims = path.join(miseDataDir, "shims");
+  if (isDirectory(miseShims)) candidates.push(miseShims);
+
   // Common global install locations (macOS first).
   if (platform === "darwin") {
     candidates.push(path.join(homeDir, "Library", "pnpm"));
