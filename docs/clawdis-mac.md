@@ -28,6 +28,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
 
 ## Gateway + node bridge
 - The mac app runs the Gateway in **local** mode (unless configured remote).
+- The gateway port is configurable via `gateway.port` or `CLAWDIS_GATEWAY_PORT` (default 18789). The mac app reads that value for launchd, probes, and remote SSH tunnels.
 - The mac app connects to the bridge as a **node** and advertises capabilities/commands.
 - Agent‑facing actions are exposed via `node.invoke` (no local control socket).
 

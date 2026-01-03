@@ -12,7 +12,7 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 
 ## The core idea
 
-- The Gateway WebSocket binds to **loopback**: `ws://127.0.0.1:18789`.
+- The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
 - For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
 ## SSH tunnel (CLI + tools)
@@ -26,6 +26,8 @@ ssh -N -L 18789:127.0.0.1:18789 user@host
 With the tunnel up:
 - `clawdis health` and `clawdis status --deep` now reach the remote gateway via `ws://127.0.0.1:18789`.
 - `clawdis gateway {status,health,send,agent,call}` can also target the forwarded URL via `--url` when needed.
+
+Note: replace `18789` with your configured `gateway.port` (or `--port`/`CLAWDIS_GATEWAY_PORT`).
 
 ## CLI remote defaults
 

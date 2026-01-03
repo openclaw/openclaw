@@ -615,11 +615,13 @@ Use `gateway.mode` to explicitly declare whether this machine should run the Gat
 Defaults:
 - mode: **unset** (treated as “do not auto-start”)
 - bind: `loopback`
+- port: `18789` (single port for WS + HTTP)
 
 ```json5
 {
   gateway: {
     mode: "local", // or "remote"
+    port: 18789, // WS + HTTP multiplex
     bind: "loopback",
     // controlUi: { enabled: true }
     // auth: { mode: "token", token: "your-token" } // token is for multi-machine CLI access
@@ -630,6 +632,8 @@ Defaults:
 
 Notes:
 - `clawdis gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
+- `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
+- Precedence: `--port` > `CLAWDIS_GATEWAY_PORT` > `gateway.port` > default `18789`.
 
 Auth and Tailscale:
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
@@ -657,6 +661,21 @@ Remote client defaults (CLI):
     }
   }
 }
+```
+
+### Multi-instance isolation
+
+To run multiple gateways on one host, isolate per-instance state + config and use unique ports:
+- `CLAWDIS_CONFIG_PATH` (per-instance config)
+- `CLAWDIS_STATE_DIR` (sessions/creds/logs)
+- `agent.workspace` (memories)
+- `gateway.port` (unique per instance)
+
+Example:
+```bash
+CLAWDIS_CONFIG_PATH=~/.clawdis/a.json \
+CLAWDIS_STATE_DIR=~/.clawdis-a \
+clawdis gateway --port 19001
 ```
 
 ### `hooks` (Gateway webhooks)

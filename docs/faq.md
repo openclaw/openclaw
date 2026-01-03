@@ -246,8 +246,9 @@ The intended design is **one Clawd, one identity**. Rather than running separate
 Why? A unified assistant knows your whole context. Your fitness coach knows when you've had a stressful work week.
 
 If you truly need full separation (different users, privacy boundaries), you'd need:
-- Separate config directories
-- Separate gateway ports
+- Separate config + state directories (`CLAWDIS_CONFIG_PATH`, `CLAWDIS_STATE_DIR`)
+- Separate agent workspaces (`agent.workspace`)
+- Separate gateway ports (`gateway.port` / `--port`)
 - Separate phone numbers for WhatsApp (one number = one account)
 
 ### Can I have separate "threads" for different topics?

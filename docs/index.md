@@ -89,6 +89,14 @@ clawdis login
 clawdis gateway --port 18789
 ```
 
+Multi-instance quickstart (optional):
+
+```bash
+CLAWDIS_CONFIG_PATH=~/.clawdis/a.json \
+CLAWDIS_STATE_DIR=~/.clawdis-a \
+clawdis gateway --port 19001
+```
+
 Send a test message (requires a running Gateway):
 
 ```bash
