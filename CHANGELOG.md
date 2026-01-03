@@ -16,6 +16,7 @@
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
 - Skills: add blogwatcher skill for RSS/Atom monitoring — thanks @Hyaxia.
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
+- Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 
 ### Fixes
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
@@ -53,6 +54,7 @@
 - Gateway: document config hot reload + reload matrix.
 - Onboarding/Config: add protocol notes for wizard + schema RPC.
 - Queue: clarify steer-backlog behavior with inline commands and update examples for streaming surfaces.
+- Sandbox: document per-session agent sandbox setup, config, and Docker build.
 
 ## 2.0.0-beta5 — 2026-01-03
 

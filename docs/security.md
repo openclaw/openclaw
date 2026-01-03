@@ -99,6 +99,12 @@ services:
     network_mode: bridge  # Limited network
 ```
 
+### Per-session sandbox (Clawdis-native)
+
+Clawdis can also run **non-main sessions** inside per-session Docker containers
+(`agent.sandbox`). This keeps the gateway on your host while isolating agent
+tools in a hard wall container. See `docs/configuration.md` for the full config.
+
 Expose only the services your AI needs:
 - ✅ GoWA API (for WhatsApp)
 - ✅ Specific HTTP APIs

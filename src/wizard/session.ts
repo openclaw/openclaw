@@ -132,7 +132,16 @@ class WizardSessionPrompter implements WizardPrompter {
       placeholder: params.placeholder,
       executor: "client",
     });
-    const value = String(res ?? "");
+    const value =
+      res === null || res === undefined
+        ? ""
+        : typeof res === "string"
+          ? res
+          : typeof res === "number" ||
+              typeof res === "boolean" ||
+              typeof res === "bigint"
+            ? String(res)
+            : "";
     const error = params.validate?.(value);
     if (error) {
       throw new Error(error);

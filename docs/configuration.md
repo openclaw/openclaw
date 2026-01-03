@@ -33,6 +33,11 @@ better forms without hard-coding config knowledge.
 }
 ```
 
+Build the default image once with:
+```bash
+scripts/sandbox-setup.sh
+```
+
 ## Self-chat mode (recommended for group control)
 
 To prevent the bot from responding to WhatsApp @-mentions in groups (only respond to specific text triggers):
@@ -323,6 +328,9 @@ Default: `~/clawd`.
 }
 ```
 
+If `agent.sandbox` is enabled, non-main sessions can override this with their
+own per-session workspaces under `agent.sandbox.workspaceRoot`.
+
 ### `messages`
 
 Controls inbound/outbound prefixes and timestamps.
@@ -434,6 +442,50 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `agent.maxConcurrent` sets the maximum number of embedded agent runs that can
 execute in parallel across sessions. Each session is still serialized (one run
 per session key at a time). Default: 1.
+
+### `agent.sandbox`
+
+Optional per-session **Docker sandboxing** for the embedded agent. Intended for
+non-main sessions so they cannot access your host system.
+
+Defaults (if enabled):
+- one container per session
+- Debian bookworm-slim based image
+- workspace per session under `~/.clawdis/sandboxes`
+- auto-prune: idle > 24h OR age > 7d
+- tools: allow only `bash`, `process`, `read`, `write`, `edit` (deny wins)
+
+```json5
+{
+  agent: {
+    sandbox: {
+      mode: "non-main", // off | non-main | all
+      perSession: true,
+      workspaceRoot: "~/.clawdis/sandboxes",
+      docker: {
+        image: "clawdis-sandbox:bookworm-slim",
+        containerPrefix: "clawdis-sbx-",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: ["/tmp", "/var/tmp", "/run"],
+        network: "bridge",
+        user: "1000:1000",
+        capDrop: ["ALL"],
+        env: { LANG: "C.UTF-8" },
+        setupCommand: "apt-get update && apt-get install -y git curl jq"
+      },
+      tools: {
+        allow: ["bash", "process", "read", "write", "edit"],
+        deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
+      },
+      prune: {
+        idleHours: 24,  // 0 disables idle pruning
+        maxAgeDays: 7   // 0 disables max-age pruning
+      }
+    }
+  }
+}
+```
 
 ### `models` (custom providers + base URLs)
 

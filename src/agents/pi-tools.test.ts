@@ -158,4 +158,33 @@ describe("createClawdisCodingTools", () => {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it("filters tools by sandbox policy", () => {
+    const sandbox = {
+      enabled: true,
+      sessionKey: "sandbox:test",
+      workspaceDir: path.join(os.tmpdir(), "clawdis-sandbox"),
+      containerName: "clawdis-sbx-test",
+      containerWorkdir: "/workspace",
+      docker: {
+        image: "clawdis-sandbox:bookworm-slim",
+        containerPrefix: "clawdis-sbx-",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: [],
+        network: "none",
+        user: "1000:1000",
+        capDrop: ["ALL"],
+        env: { LANG: "C.UTF-8" },
+      },
+      tools: {
+        allow: ["bash"],
+        deny: ["browser"],
+      },
+    };
+    const tools = createClawdisCodingTools({ sandbox });
+    expect(tools.some((tool) => tool.name === "bash")).toBe(true);
+    expect(tools.some((tool) => tool.name === "read")).toBe(false);
+    expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+  });
 });

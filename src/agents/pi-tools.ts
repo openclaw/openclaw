@@ -1,5 +1,11 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { codingTools, readTool } from "@mariozechner/pi-coding-agent";
+import {
+  codingTools,
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  readTool,
+} from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import { detectMime } from "../media/mime.js";
@@ -11,6 +17,8 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { createClawdisTools } from "./clawdis-tools.js";
+import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -284,6 +292,59 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
   };
 }
 
+function normalizeToolNames(list?: string[]) {
+  if (!list) return [];
+  return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+}
+
+function filterToolsByPolicy(
+  tools: AnyAgentTool[],
+  policy?: SandboxToolPolicy,
+) {
+  if (!policy) return tools;
+  const deny = new Set(normalizeToolNames(policy.deny));
+  const allowRaw = normalizeToolNames(policy.allow);
+  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
+  return tools.filter((tool) => {
+    const name = tool.name.toLowerCase();
+    if (deny.has(name)) return false;
+    if (allow) return allow.has(name);
+    return true;
+  });
+}
+
+function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, args, signal, onUpdate) => {
+      const record =
+        args && typeof args === "object"
+          ? (args as Record<string, unknown>)
+          : undefined;
+      const filePath = record?.path;
+      if (typeof filePath === "string" && filePath.trim()) {
+        await assertSandboxPath({ filePath, cwd: root, root });
+      }
+      return tool.execute(toolCallId, args, signal, onUpdate);
+    },
+  };
+}
+
+function createSandboxedReadTool(root: string) {
+  const base = createReadTool(root);
+  return wrapSandboxPathGuard(createClawdisReadTool(base), root);
+}
+
+function createSandboxedWriteTool(root: string) {
+  const base = createWriteTool(root);
+  return wrapSandboxPathGuard(base as unknown as AnyAgentTool, root);
+}
+
+function createSandboxedEditTool(root: string) {
+  const base = createEditTool(root);
+  return wrapSandboxPathGuard(base as unknown as AnyAgentTool, root);
+}
+
 function createWhatsAppLoginTool(): AnyAgentTool {
   return {
     label: "WhatsApp Login",
@@ -383,19 +444,45 @@ function shouldIncludeDiscordTool(surface?: string): boolean {
 export function createClawdisCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   surface?: string;
+  sandbox?: SandboxContext | null;
 }): AnyAgentTool[] {
   const bashToolName = "bash";
+  const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
+  const sandboxRoot = sandbox?.workspaceDir;
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
-    if (tool.name === readTool.name) return [createClawdisReadTool(tool)];
+    if (tool.name === readTool.name) {
+      return sandboxRoot
+        ? [createSandboxedReadTool(sandboxRoot)]
+        : [createClawdisReadTool(tool)];
+    }
     if (tool.name === bashToolName) return [];
+    if (sandboxRoot && (tool.name === "write" || tool.name === "edit")) {
+      return [];
+    }
     return [tool as AnyAgentTool];
   });
-  const bashTool = createBashTool(options?.bash);
+  const bashTool = createBashTool({
+    ...options?.bash,
+    sandbox: sandbox
+      ? {
+          containerName: sandbox.containerName,
+          workspaceDir: sandbox.workspaceDir,
+          containerWorkdir: sandbox.containerWorkdir,
+          env: sandbox.docker.env,
+        }
+      : undefined,
+  });
   const processTool = createProcessTool({
     cleanupMs: options?.bash?.cleanupMs,
   });
   const tools: AnyAgentTool[] = [
     ...base,
+    ...(sandboxRoot
+      ? [
+          createSandboxedEditTool(sandboxRoot),
+          createSandboxedWriteTool(sandboxRoot),
+        ]
+      : []),
     bashTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     createWhatsAppLoginTool(),
@@ -405,5 +492,8 @@ export function createClawdisCodingTools(options?: {
   const filtered = allowDiscord
     ? tools
     : tools.filter((tool) => tool.name !== "discord");
-  return filtered.map(normalizeToolParameters);
+  const sandboxed = sandbox
+    ? filterToolsByPolicy(filtered, sandbox.tools)
+    : filtered;
+  return sandboxed.map(normalizeToolParameters);
 }

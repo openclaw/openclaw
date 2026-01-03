@@ -1,6 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
+import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -18,6 +19,7 @@ import {
   markExited,
   setJobTtlMs,
 } from "./bash-process-registry.js";
+import { assertSandboxPath } from "./sandbox-paths.js";
 import {
   getShellConfig,
   killProcessTree,
@@ -47,10 +49,18 @@ const stringEnum = (
 export type BashToolDefaults = {
   backgroundMs?: number;
   timeoutSec?: number;
+  sandbox?: BashSandboxConfig;
 };
 
 export type ProcessToolDefaults = {
   cleanupMs?: number;
+};
+
+export type BashSandboxConfig = {
+  containerName: string;
+  workspaceDir: string;
+  containerWorkdir: string;
+  env?: Record<string, string>;
 };
 
 const bashSchema = Type.Object({
@@ -136,19 +146,55 @@ export function createBashTool(
       const startedAt = Date.now();
       const sessionId = randomUUID();
       const warnings: string[] = [];
-      const workdir = resolveWorkdir(
-        params.workdir?.trim() || process.cwd(),
-        warnings,
-      );
+      const sandbox = defaults?.sandbox;
+      const rawWorkdir = params.workdir?.trim() || process.cwd();
+      let workdir = rawWorkdir;
+      let containerWorkdir = sandbox?.containerWorkdir;
+      if (sandbox) {
+        const resolved = await resolveSandboxWorkdir({
+          workdir: rawWorkdir,
+          sandbox,
+          warnings,
+        });
+        workdir = resolved.hostWorkdir;
+        containerWorkdir = resolved.containerWorkdir;
+      } else {
+        workdir = resolveWorkdir(rawWorkdir, warnings);
+      }
 
       const { shell, args: shellArgs } = getShellConfig();
-      const env = params.env ? { ...process.env, ...params.env } : process.env;
-      const child = spawn(shell, [...shellArgs, params.command], {
-        cwd: workdir,
-        env,
-        detached: true,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
+      const baseEnv = coerceEnv(process.env);
+      const mergedEnv = params.env ? { ...baseEnv, ...params.env } : baseEnv;
+      const env = sandbox
+        ? buildSandboxEnv({
+            paramsEnv: params.env,
+            sandboxEnv: sandbox.env,
+            containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
+          })
+        : mergedEnv;
+      const child = sandbox
+        ? spawn(
+            "docker",
+            buildDockerExecArgs({
+              containerName: sandbox.containerName,
+              command: params.command,
+              workdir: containerWorkdir ?? sandbox.containerWorkdir,
+              env,
+              tty: false,
+            }),
+            {
+              cwd: workdir,
+              env: process.env,
+              detached: true,
+              stdio: ["pipe", "pipe", "pipe"],
+            },
+          )
+        : spawn(shell, [...shellArgs, params.command], {
+            cwd: workdir,
+            env,
+            detached: true,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
 
       const session = {
         id: sessionId,
@@ -775,6 +821,86 @@ export function createProcessTool(
 }
 
 export const processTool = createProcessTool();
+
+function buildSandboxEnv(params: {
+  paramsEnv?: Record<string, string>;
+  sandboxEnv?: Record<string, string>;
+  containerWorkdir: string;
+}) {
+  const env: Record<string, string> = {
+    PATH: DEFAULT_PATH,
+    HOME: params.containerWorkdir,
+  };
+  for (const [key, value] of Object.entries(params.sandboxEnv ?? {})) {
+    env[key] = value;
+  }
+  for (const [key, value] of Object.entries(params.paramsEnv ?? {})) {
+    env[key] = value;
+  }
+  return env;
+}
+
+function coerceEnv(env?: NodeJS.ProcessEnv | Record<string, string>) {
+  const record: Record<string, string> = {};
+  if (!env) return record;
+  for (const [key, value] of Object.entries(env)) {
+    if (typeof value === "string") record[key] = value;
+  }
+  return record;
+}
+
+function buildDockerExecArgs(params: {
+  containerName: string;
+  command: string;
+  workdir?: string;
+  env: Record<string, string>;
+  tty: boolean;
+}) {
+  const args = ["exec", "-i"];
+  if (params.tty) args.push("-t");
+  if (params.workdir) {
+    args.push("-w", params.workdir);
+  }
+  for (const [key, value] of Object.entries(params.env)) {
+    args.push("-e", `${key}=${value}`);
+  }
+  args.push(params.containerName, "sh", "-lc", params.command);
+  return args;
+}
+
+async function resolveSandboxWorkdir(params: {
+  workdir: string;
+  sandbox: BashSandboxConfig;
+  warnings: string[];
+}) {
+  const fallback = params.sandbox.workspaceDir;
+  try {
+    const resolved = await assertSandboxPath({
+      filePath: params.workdir,
+      cwd: process.cwd(),
+      root: params.sandbox.workspaceDir,
+    });
+    const stats = await fs.stat(resolved.resolved);
+    if (!stats.isDirectory()) {
+      throw new Error("workdir is not a directory");
+    }
+    const relative = resolved.relative
+      ? resolved.relative.split(path.sep).join(path.posix.sep)
+      : "";
+    const containerWorkdir = relative
+      ? path.posix.join(params.sandbox.containerWorkdir, relative)
+      : params.sandbox.containerWorkdir;
+    return { hostWorkdir: resolved.resolved, containerWorkdir };
+  } catch {
+    params.warnings.push(
+      `Warning: workdir "${params.workdir}" is unavailable; using "${fallback}".`,
+    );
+    return {
+      hostWorkdir: fallback,
+      containerWorkdir: params.sandbox.containerWorkdir,
+    };
+  }
+}
 
 function killSession(session: {
   pid?: number;
