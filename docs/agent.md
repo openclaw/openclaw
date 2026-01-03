@@ -83,6 +83,8 @@ current turn ends, then a new agent turn starts with the queued payloads. See
 Block streaming sends completed assistant blocks as soon as they finish; disable
 via `agent.blockStreamingDefault: "off"` if you only want the final response.
 Tune the boundary via `agent.blockStreamingBreak` (`text_end` vs `message_end`).
+Control soft block chunking with `agent.blockStreamingChunk` (defaults to
+800–1200 chars; prefers paragraph breaks, then newlines; sentences last).
 
 ## Configuration (minimal)
 

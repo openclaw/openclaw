@@ -391,6 +391,20 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 }
 ```
 
+Block streaming:
+- `agent.blockStreamingDefault`: `"on"`/`"off"` (default on).
+- `agent.blockStreamingBreak`: `"text_end"` or `"message_end"`.
+- `agent.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
+  800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
+  Example:
+  ```json5
+  {
+    agent: {
+      blockStreamingChunk: { minChars: 800, maxChars: 1200 }
+    }
+  }
+  ```
+
 `agent.model` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
 If `modelAliases` is configured, you may also use the alias key (e.g. `Opus`).
 If you omit the provider, CLAWDIS currently assumes `anthropic` as a temporary

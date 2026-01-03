@@ -19,6 +19,12 @@ const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
 const TOOL_RESULT_MAX_CHARS = 8000;
 
+export type BlockReplyChunking = {
+  minChars: number;
+  maxChars: number;
+  breakPreference?: "paragraph" | "newline" | "sentence";
+};
+
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
   return `${text.slice(0, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
@@ -93,6 +99,7 @@ export function subscribeEmbeddedPiSession(params: {
     mediaUrls?: string[];
   }) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
+  blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -108,6 +115,7 @@ export function subscribeEmbeddedPiSession(params: {
   const toolMetaById = new Map<string, string | undefined>();
   const blockReplyBreak = params.blockReplyBreak ?? "text_end";
   let deltaBuffer = "";
+  let blockBuffer = "";
   let lastStreamedAssistant: string | undefined;
   let lastBlockReplyText: string | undefined;
   let assistantTextBaseline = 0;
@@ -178,11 +186,111 @@ export function subscribeEmbeddedPiSession(params: {
     });
   });
 
+  const blockChunking = params.blockReplyChunking;
+
+  const findSentenceBreak = (window: string, minChars: number): number => {
+    if (!window) return -1;
+    const matches = window.matchAll(/[.!?](?=\s|$)/g);
+    let idx = -1;
+    for (const match of matches) {
+      const at = match.index ?? -1;
+      if (at < minChars) continue;
+      idx = at + 1;
+    }
+    return idx;
+  };
+
+  const findWhitespaceBreak = (window: string, minChars: number): number => {
+    for (let i = window.length - 1; i >= minChars; i--) {
+      if (/\s/.test(window[i])) return i;
+    }
+    return -1;
+  };
+
+  const pickBreakIndex = (buffer: string): number => {
+    if (!blockChunking) return -1;
+    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
+    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
+    if (buffer.length < minChars) return -1;
+    const window = buffer.slice(0, Math.min(maxChars, buffer.length));
+
+    const preference = blockChunking.breakPreference ?? "paragraph";
+    const paragraphIdx = window.lastIndexOf("\n\n");
+    if (preference === "paragraph" && paragraphIdx >= minChars) {
+      return paragraphIdx;
+    }
+
+    const newlineIdx = window.lastIndexOf("\n");
+    if (
+      (preference === "paragraph" || preference === "newline") &&
+      newlineIdx >= minChars
+    ) {
+      return newlineIdx;
+    }
+
+    if (preference !== "newline") {
+      const sentenceIdx = findSentenceBreak(window, minChars);
+      if (sentenceIdx >= minChars) return sentenceIdx;
+    }
+
+    const whitespaceIdx = findWhitespaceBreak(window, minChars);
+    if (whitespaceIdx >= minChars) return whitespaceIdx;
+
+    if (buffer.length >= maxChars) return maxChars;
+    return -1;
+  };
+
+  const emitBlockChunk = (text: string) => {
+    const chunk = text.trimEnd();
+    if (!chunk) return;
+    if (chunk === lastBlockReplyText) return;
+    lastBlockReplyText = chunk;
+    assistantTexts.push(chunk);
+    if (!params.onBlockReply) return;
+    const { text: cleanedText, mediaUrls } = splitMediaFromOutput(chunk);
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
+    void params.onBlockReply({
+      text: cleanedText,
+      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+    });
+  };
+
+  const drainBlockBuffer = (force: boolean) => {
+    if (!blockChunking) return;
+    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
+    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
+    if (blockBuffer.length < minChars && !force) return;
+    while (blockBuffer.length >= minChars || (force && blockBuffer.length > 0)) {
+      const breakIdx = pickBreakIndex(blockBuffer);
+      if (breakIdx <= 0) {
+        if (force) {
+          emitBlockChunk(blockBuffer);
+          blockBuffer = "";
+        }
+        return;
+      }
+      const rawChunk = blockBuffer.slice(0, breakIdx);
+      if (rawChunk.trim().length === 0) {
+        blockBuffer = blockBuffer.slice(breakIdx).trimStart();
+        continue;
+      }
+      emitBlockChunk(rawChunk);
+      const nextStart =
+        breakIdx < blockBuffer.length && /\s/.test(blockBuffer[breakIdx])
+          ? breakIdx + 1
+          : breakIdx;
+      blockBuffer = blockBuffer.slice(nextStart).trimStart();
+      if (blockBuffer.length < minChars && !force) return;
+      if (blockBuffer.length < maxChars && !force) return;
+    }
+  };
+
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
     deltaBuffer = "";
+    blockBuffer = "";
     lastStreamedAssistant = undefined;
     lastBlockReplyText = undefined;
     assistantTextBaseline = 0;
@@ -337,6 +445,7 @@ export function subscribeEmbeddedPiSession(params: {
                   : "";
             if (chunk) {
               deltaBuffer += chunk;
+              blockBuffer += chunk;
             }
 
             const cleaned = params.enforceFinalTag
@@ -372,25 +481,29 @@ export function subscribeEmbeddedPiSession(params: {
               }
             }
 
+            if (params.onBlockReply && blockChunking) {
+              drainBlockBuffer(false);
+            }
+
             if (evtType === "text_end" && blockReplyBreak === "text_end") {
-              if (next && next === lastBlockReplyText) {
-                deltaBuffer = "";
-                lastStreamedAssistant = undefined;
-                return;
-              }
-              lastBlockReplyText = next || undefined;
-              if (next) assistantTexts.push(next);
-              if (next && params.onBlockReply) {
-                const { text: cleanedText, mediaUrls } =
-                  splitMediaFromOutput(next);
-                if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-                  void params.onBlockReply({
-                    text: cleanedText,
-                    mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-                  });
+              if (blockChunking && blockBuffer.length > 0) {
+                drainBlockBuffer(true);
+              } else if (next && next !== lastBlockReplyText) {
+                lastBlockReplyText = next || undefined;
+                if (next) assistantTexts.push(next);
+                if (next && params.onBlockReply) {
+                  const { text: cleanedText, mediaUrls } =
+                    splitMediaFromOutput(next);
+                  if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
+                    void params.onBlockReply({
+                      text: cleanedText,
+                      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                    });
+                  }
                 }
               }
               deltaBuffer = "";
+              blockBuffer = "";
               lastStreamedAssistant = undefined;
             }
           }
@@ -420,25 +533,26 @@ export function subscribeEmbeddedPiSession(params: {
           assistantTextBaseline = assistantTexts.length;
 
           if (
-            blockReplyBreak === "message_end" &&
+            (blockReplyBreak === "message_end" || blockBuffer.length > 0) &&
             text &&
             params.onBlockReply
           ) {
-            if (text === lastBlockReplyText) {
-              deltaBuffer = "";
-              lastStreamedAssistant = undefined;
-              return;
-            }
-            lastBlockReplyText = text;
-            const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
-            if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-              void params.onBlockReply({
-                text: cleanedText,
-                mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-              });
+            if (blockChunking && blockBuffer.length > 0) {
+              drainBlockBuffer(true);
+            } else if (text !== lastBlockReplyText) {
+              lastBlockReplyText = text;
+              const { text: cleanedText, mediaUrls } =
+                splitMediaFromOutput(text);
+              if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
+                void params.onBlockReply({
+                  text: cleanedText,
+                  mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                });
+              }
             }
           }
           deltaBuffer = "";
+          blockBuffer = "";
           lastStreamedAssistant = undefined;
           lastBlockReplyText = undefined;
         }

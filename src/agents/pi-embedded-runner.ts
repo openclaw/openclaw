@@ -42,7 +42,10 @@ import {
   formatAssistantErrorText,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
-import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import {
+  subscribeEmbeddedPiSession,
+  type BlockReplyChunking,
+} from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
 import { createClawdisCodingTools } from "./pi-tools.js";
 import {
@@ -334,6 +337,7 @@ export async function runEmbeddedPiAgent(params: {
     mediaUrls?: string[];
   }) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
+  blockReplyChunking?: BlockReplyChunking;
   onToolResult?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -503,6 +507,7 @@ export async function runEmbeddedPiAgent(params: {
           onToolResult: params.onToolResult,
           onBlockReply: params.onBlockReply,
           blockReplyBreak: params.blockReplyBreak,
+          blockReplyChunking: params.blockReplyChunking,
           onPartialReply: params.onPartialReply,
           onAgentEvent: params.onAgentEvent,
           enforceFinalTag: params.enforceFinalTag,
