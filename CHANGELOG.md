@@ -12,6 +12,7 @@
 - Control UI: support configurable base paths (`gateway.controlUi.basePath`, default unchanged) for hosting under URL prefixes.
 - Onboarding: shared wizard engine powering CLI + macOS via gateway wizard RPC.
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
+- Skills: add blogwatcher skill for RSS/Atom monitoring.
 
 ### Fixes
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
