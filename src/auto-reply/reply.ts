@@ -74,6 +74,7 @@ import {
 } from "./thinking.js";
 import { SILENT_REPLY_TOKEN } from "./tokens.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
+import { resolveTextChunkLimit, type TextChunkSurface } from "./chunk.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
@@ -81,6 +82,54 @@ export type { GetReplyOptions, ReplyPayload } from "./types.js";
 const ABORT_TRIGGERS = new Set(["stop", "esc", "abort", "wait", "exit"]);
 const ABORT_MEMORY = new Map<string, boolean>();
 const SYSTEM_MARK = "⚙️";
+const DEFAULT_BLOCK_STREAM_MIN = 800;
+const DEFAULT_BLOCK_STREAM_MAX = 1200;
+
+const BLOCK_CHUNK_SURFACES = new Set<TextChunkSurface>([
+  "whatsapp",
+  "telegram",
+  "discord",
+  "signal",
+  "imessage",
+  "webchat",
+]);
+
+function normalizeChunkSurface(surface?: string): TextChunkSurface | undefined {
+  if (!surface) return undefined;
+  const cleaned = surface.trim().toLowerCase();
+  return BLOCK_CHUNK_SURFACES.has(cleaned as TextChunkSurface)
+    ? (cleaned as TextChunkSurface)
+    : undefined;
+}
+
+function resolveBlockStreamingChunking(
+  cfg: ClawdisConfig | undefined,
+  surface?: string,
+): {
+  minChars: number;
+  maxChars: number;
+  breakPreference: "paragraph" | "newline" | "sentence";
+} {
+  const surfaceKey = normalizeChunkSurface(surface);
+  const textLimit = resolveTextChunkLimit(cfg, surfaceKey);
+  const chunkCfg = cfg?.agent?.blockStreamingChunk;
+  const maxRequested = Math.max(
+    1,
+    Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX),
+  );
+  const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
+  const minRequested = Math.max(
+    1,
+    Math.floor(chunkCfg?.minChars ?? DEFAULT_BLOCK_STREAM_MIN),
+  );
+  const minChars = Math.min(minRequested, maxChars);
+  const breakPreference =
+    chunkCfg?.breakPreference === "newline" ||
+    chunkCfg?.breakPreference === "sentence"
+      ? chunkCfg.breakPreference
+      : "paragraph";
+  return { minChars, maxChars, breakPreference };
+}
 
 type QueueMode =
   | "steer"
@@ -1079,6 +1128,9 @@ export async function getReplyFromConfig(
   const resolvedBlockStreamingBreak =
     agentCfg?.blockStreamingBreak === "text_end" ? "text_end" : "message_end";
   const blockStreamingEnabled = resolvedBlockStreaming === "on";
+  const blockReplyChunking = blockStreamingEnabled
+    ? resolveBlockStreamingChunking(cfg, sessionCtx.Surface)
+    : undefined;
   const streamedPayloadKeys = new Set<string>();
   const pendingBlockTasks = new Set<Promise<void>>();
   const buildPayloadKey = (payload: ReplyPayload) => {
@@ -2124,6 +2176,7 @@ export async function getReplyFromConfig(
         timeoutMs,
         runId,
         blockReplyBreak: resolvedBlockStreamingBreak,
+        blockReplyChunking,
         onPartialReply: opts?.onPartialReply
           ? async (payload) => {
               let text = payload.text;
