@@ -396,6 +396,10 @@ const SUBSYSTEM_COLORS = [
   "magenta",
   "red",
 ] as const;
+const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number]> =
+  {
+    "gmail-watcher": "blue",
+  };
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 
@@ -403,6 +407,8 @@ function pickSubsystemColor(
   color: ChalkInstance,
   subsystem: string,
 ): ChalkInstance {
+  const override = SUBSYSTEM_COLOR_OVERRIDES[subsystem];
+  if (override) return color[override];
   let hash = 0;
   for (let i = 0; i < subsystem.length; i += 1) {
     hash = (hash * 31 + subsystem.charCodeAt(i)) | 0;
