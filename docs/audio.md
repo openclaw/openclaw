@@ -58,6 +58,27 @@ GIGA_MODEL=e2e_ctc
 GIGA_DEVICE=cpu
 ```
 
+## Config example (Vosk local)
+Requires `python3`, `pip install vosk`, and a downloaded model:
+https://alphacephei.com/vosk/models (e.g. `vosk-model-small-ru-0.22`)
+
+```json5
+{
+  routing: {
+    transcribeAudio: {
+      command: ["/path/to/clawdis/scripts/transcribe-vosk.sh", "{{MediaPath}}"],
+      timeoutSeconds: 45
+    }
+  }
+}
+```
+
+Optional environment variables:
+```
+VOSK_MODEL=~/TOOLS/vosk-model-small-ru-0.22
+VOSK_TRANSCODE=1
+```
+
 ## Notes & limits
 - We don't ship a transcriber; you opt in with any CLI that prints text to stdout (Whisper cloud, whisper.cpp, vosk, Deepgram, etc.).
 - Size guard: inbound audio must be <= 5 MB (matches the temp media store and transcript pipeline).
