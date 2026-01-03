@@ -1134,12 +1134,15 @@ export async function getReplyFromConfig(
           activation === "always"
             ? "Be extremely selective: reply only when you are directly addressed, asked a question, or can add clear value. Otherwise stay silent."
             : undefined;
+        const lurkLine =
+          "Be a good group participant: lurk and follow the conversation, but only chime in when you have something genuinely helpful or relevant to add. Don't feel obligated to respond to every message — quality over quantity.";
         return [
           subjectLine,
           membersLine,
           activationLine,
           silenceLine,
           cautionLine,
+          lurkLine,
         ]
           .filter(Boolean)
           .join(" ")
