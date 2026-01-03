@@ -144,12 +144,11 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
 function cleanSchemaForGemini(schema: unknown): unknown {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
-  
+
   const obj = schema as Record<string, unknown>;
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
-  const hasConst = "const" in obj;
   const cleaned: Record<string, unknown> = {};
-  
+
   for (const [key, value] of Object.entries(obj)) {
     // Skip unsupported schema features for Gemini:
     // - patternProperties: not in OpenAPI 3.0 subset
@@ -158,44 +157,48 @@ function cleanSchemaForGemini(schema: unknown): unknown {
       // Gemini doesn't support patternProperties - skip it
       continue;
     }
-    
+
     // Convert const to enum (Gemini doesn't support const)
     if (key === "const") {
       cleaned.enum = [value];
       continue;
     }
-    
+
     // Skip 'type' if we have 'anyOf' — Gemini doesn't allow both
     if (key === "type" && hasAnyOf) {
       continue;
     }
-    
+
     if (key === "properties" && value && typeof value === "object") {
       // Recursively clean nested properties
       const props = value as Record<string, unknown>;
       cleaned[key] = Object.fromEntries(
-        Object.entries(props).map(([k, v]) => [k, cleanSchemaForGemini(v)])
+        Object.entries(props).map(([k, v]) => [k, cleanSchemaForGemini(v)]),
       );
     } else if (key === "items" && value && typeof value === "object") {
       // Recursively clean array items schema
       cleaned[key] = cleanSchemaForGemini(value);
     } else if (key === "anyOf" && Array.isArray(value)) {
       // Clean each anyOf variant
-      cleaned[key] = value.map(v => cleanSchemaForGemini(v));
+      cleaned[key] = value.map((v) => cleanSchemaForGemini(v));
     } else if (key === "oneOf" && Array.isArray(value)) {
       // Clean each oneOf variant
-      cleaned[key] = value.map(v => cleanSchemaForGemini(v));
+      cleaned[key] = value.map((v) => cleanSchemaForGemini(v));
     } else if (key === "allOf" && Array.isArray(value)) {
       // Clean each allOf variant
-      cleaned[key] = value.map(v => cleanSchemaForGemini(v));
-    } else if (key === "additionalProperties" && value && typeof value === "object") {
+      cleaned[key] = value.map((v) => cleanSchemaForGemini(v));
+    } else if (
+      key === "additionalProperties" &&
+      value &&
+      typeof value === "object"
+    ) {
       // Recursively clean additionalProperties schema
       cleaned[key] = cleanSchemaForGemini(value);
     } else {
       cleaned[key] = value;
     }
   }
-  
+
   return cleaned;
 }
 
@@ -205,16 +208,20 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
       ? (tool.parameters as Record<string, unknown>)
       : undefined;
   if (!schema) return tool;
-  
+
   // If schema already has type + properties (no top-level anyOf to merge),
   // still clean it for Gemini compatibility
-  if ("type" in schema && "properties" in schema && !Array.isArray(schema.anyOf)) {
+  if (
+    "type" in schema &&
+    "properties" in schema &&
+    !Array.isArray(schema.anyOf)
+  ) {
     return {
       ...tool,
       parameters: cleanSchemaForGemini(schema),
     };
   }
-  
+
   if (!Array.isArray(schema.anyOf)) return tool;
   const mergedProperties: Record<string, unknown> = {};
   const requiredCounts = new Map<string, number>();

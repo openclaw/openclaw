@@ -22,7 +22,7 @@ describe("resolvePythonExecutablePath", () => {
       const shim = path.join(shimDir, "python3");
       await fs.writeFile(
         shim,
-        `#!/bin/sh\nif [ \"$1\" = \"-c\" ]; then\n  echo \"${realPython}\"\n  exit 0\nfi\nexit 1\n`,
+        `#!/bin/sh\nif [ "$1" = "-c" ]; then\n  echo "${realPython}"\n  exit 0\nfi\nexit 1\n`,
         "utf-8",
       );
       await fs.chmod(shim, 0o755);

@@ -378,16 +378,16 @@ export async function runEmbeddedPiAgent(params: {
       const apiKey = await getApiKeyForModel(model, authStorage);
       authStorage.setRuntimeApiKey(model.provider, apiKey);
 
-        const thinkingLevel = mapThinkingLevel(params.thinkLevel);
+      const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
-        logVerbose(
-          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
-        );
+      logVerbose(
+        `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
+      );
 
-        await fs.mkdir(resolvedWorkspace, { recursive: true });
-        await ensureSessionHeader({
-          sessionFile: params.sessionFile,
-          sessionId: params.sessionId,
+      await fs.mkdir(resolvedWorkspace, { recursive: true });
+      await ensureSessionHeader({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
         cwd: resolvedWorkspace,
       });
 
@@ -510,20 +510,23 @@ export async function runEmbeddedPiAgent(params: {
         });
 
         let abortWarnTimer: NodeJS.Timeout | undefined;
-        const abortTimer = setTimeout(() => {
-          defaultRuntime.warn?.(
-            `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
-          );
-          abortRun();
-          if (!abortWarnTimer) {
-            abortWarnTimer = setTimeout(() => {
-              if (!session.isStreaming) return;
-              defaultRuntime.warn?.(
-                `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
-              );
-            }, 10_000);
-          }
-        }, Math.max(1, params.timeoutMs));
+        const abortTimer = setTimeout(
+          () => {
+            defaultRuntime.warn?.(
+              `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+            );
+            abortRun();
+            if (!abortWarnTimer) {
+              abortWarnTimer = setTimeout(() => {
+                if (!session.isStreaming) return;
+                defaultRuntime.warn?.(
+                  `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+                );
+              }, 10_000);
+            }
+          },
+          Math.max(1, params.timeoutMs),
+        );
 
         let messagesSnapshot: AgentMessage[] = [];
         let sessionIdUsed = session.sessionId;

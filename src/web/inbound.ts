@@ -190,7 +190,7 @@ export async function monitorWebInbox(options: {
           await sock.readMessages([
             { remoteJid, id, participant, fromMe: false },
           ]);
-        if (shouldLogVerbose()) {
+          if (shouldLogVerbose()) {
             const suffix = participant ? ` (participant ${participant})` : "";
             logVerbose(
               `Marked message ${id} as read for ${remoteJid}${suffix}`,

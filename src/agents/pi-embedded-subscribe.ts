@@ -6,13 +6,13 @@ import {
   createToolDebouncer,
   formatToolAggregate,
 } from "../auto-reply/tool-meta.js";
+import { logVerbose } from "../globals.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import {
   extractAssistantText,
   inferToolMetaFromArgs,
 } from "./pi-embedded-utils.js";
-import { logVerbose } from "../globals.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
 const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
