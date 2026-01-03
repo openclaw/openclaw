@@ -28,6 +28,7 @@
 - Auto-reply: expand queue modes (steer/followup/collect/steer-backlog) with debounce/cap/drop options and followup backlog handling.
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
 - Nix mode: opt-in declarative config + read-only settings UI when `CLAWDIS_NIX_MODE=1` (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).
+- CLI: add Google Antigravity OAuth auth option for Claude Opus 4.5/Gemini 3 (#88) — thanks @mukhtharcm.
 - Agent runtime: accept legacy `Z_AI_API_KEY` for Z.AI provider auth (maps to `ZAI_API_KEY`).
 - Groups: add per-group mention gating defaults/overrides for Telegram/WhatsApp/iMessage via `*.groups` with `"*"` defaults; Discord now supports `discord.guilds."*"` as a default.
 - Discord: add user-installed slash command handling with per-user sessions and auto-registration (#94) — thanks @thewilloftheshadow.
