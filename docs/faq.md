@@ -530,6 +530,32 @@ Use `/model` to switch without restarting:
 
 **Tip:** `/model` is processed at the gateway level — it works even if you're rate-limited (429) on the current model!
 
+### Alternative providers (OpenRouter, Z.AI)?
+
+If you don't want to use Anthropic directly, you can use alternative providers:
+
+**OpenRouter** (pay-per-token, many models):
+```json5
+{
+  agent: {
+    model: "openrouter/anthropic/claude-sonnet-4",
+    env: { OPENROUTER_API_KEY: "sk-or-..." }
+  }
+}
+```
+
+**Z.AI** (flat-rate plans, GLM models):
+```json5
+{
+  agent: {
+    model: "zai/glm-4.7",
+    env: { ZAI_API_KEY: "..." }
+  }
+}
+```
+
+**Important:** Always use the latest Claude models (4.5 series). Don't use older 3.x models — they're deprecated and less capable. Check [OpenRouter models](https://openrouter.ai/models?q=claude) for exact IDs.
+
 ### Model + thinking mode issues?
 
 Some models don't support extended thinking well:
