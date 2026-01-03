@@ -603,9 +603,7 @@ export function subscribeEmbeddedPiSession(params: {
       if (evt.type === "auto_compaction_start") {
         compactionInFlight = true;
         ensureCompactionPromise();
-        log.debug(
-          `embedded run compaction start: runId=${params.runId}`,
-        );
+        log.debug(`embedded run compaction start: runId=${params.runId}`);
       }
 
       if (evt.type === "auto_compaction_end") {
@@ -614,9 +612,7 @@ export function subscribeEmbeddedPiSession(params: {
         if (willRetry) {
           noteCompactionRetry();
           resetForCompactionRetry();
-          log.debug(
-            `embedded run compaction retry: runId=${params.runId}`,
-          );
+          log.debug(`embedded run compaction retry: runId=${params.runId}`);
         } else {
           maybeResolveCompactionWait();
         }
