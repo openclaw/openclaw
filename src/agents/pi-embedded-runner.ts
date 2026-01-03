@@ -48,6 +48,7 @@ import {
 } from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
 import { createClawdisCodingTools } from "./pi-tools.js";
+import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -103,6 +104,12 @@ const DEFAULT_OAUTH_DIR = path.join(CONFIG_DIR, "credentials");
 let oauthStorageConfigured = false;
 
 type OAuthStorage = Record<string, OAuthCredentials>;
+type EmbeddedSandboxInfo = {
+  enabled: boolean;
+  workspaceDir?: string;
+  browserControlUrl?: string;
+  browserNoVncUrl?: string;
+};
 
 function resolveSessionLane(key: string) {
   const cleaned = key.trim() || "main";
@@ -112,6 +119,18 @@ function resolveSessionLane(key: string) {
 function resolveGlobalLane(lane?: string) {
   const cleaned = lane?.trim();
   return cleaned ? cleaned : "main";
+}
+
+export function buildEmbeddedSandboxInfo(
+  sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
+): EmbeddedSandboxInfo | undefined {
+  if (!sandbox?.enabled) return undefined;
+  return {
+    enabled: true,
+    workspaceDir: sandbox.workspaceDir,
+    browserControlUrl: sandbox.browser?.controlUrl,
+    browserNoVncUrl: sandbox.browser?.noVncUrl,
+  };
 }
 
 function resolveClawdisOAuthPath(): string {
@@ -410,6 +429,12 @@ export async function runEmbeddedPiAgent(params: {
             config: params.config,
             entries: skillEntries,
           });
+        const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const sandbox = await resolveSandboxContext({
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          workspaceDir: resolvedWorkspace,
+        });
         restoreSkillEnv = params.skillsSnapshot
           ? applySkillEnvOverridesFromSnapshot({
               snapshot: params.skillsSnapshot,
@@ -426,6 +451,7 @@ export async function runEmbeddedPiAgent(params: {
         const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
         const tools = createClawdisCodingTools({
           bash: params.config?.agent?.bash,
+          sandbox,
           surface: params.surface,
         });
         const machineName = await getMachineDisplayName();
@@ -436,14 +462,7 @@ export async function runEmbeddedPiAgent(params: {
           node: process.version,
           model: `${provider}/${modelId}`,
         };
-        const sandboxInfo = sandbox?.enabled
-          ? {
-              enabled: true,
-              workspaceDir: sandbox.workspaceDir,
-              browserControlUrl: sandbox.browser?.controlUrl,
-              browserNoVncUrl: sandbox.browser?.noVncUrl,
-            }
-          : undefined;
+        const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
         const reasoningTagHint = provider === "ollama";
         const systemPrompt = buildSystemPrompt({
           appendPrompt: buildAgentSystemPromptAppend({
