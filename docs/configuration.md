@@ -762,6 +762,11 @@ Remote client defaults (CLI):
 - `gateway.remote.token` supplies the token for remote calls (leave unset for no auth).
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
 
+macOS app behavior:
+- Clawdis.app watches `~/.clawdis/clawdis.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
+- If `gateway.mode` is unset but `gateway.remote.url` is set, the macOS app treats it as remote mode.
+- When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` in remote mode) back to the config file.
+
 ```json5
 {
   gateway: {
