@@ -665,6 +665,17 @@ export type ClawdisConfig = {
         /** Optional setup command run once after container creation. */
         setupCommand?: string;
       };
+      /** Optional sandboxed browser settings. */
+      browser?: {
+        enabled?: boolean;
+        image?: string;
+        containerPrefix?: string;
+        cdpPort?: number;
+        vncPort?: number;
+        noVncPort?: number;
+        headless?: boolean;
+        enableNoVnc?: boolean;
+      };
       /** Tool allow/deny policy (deny wins). */
       tools?: {
         allow?: string[];
@@ -1104,6 +1115,18 @@ export const ClawdisSchema = z.object({
               capDrop: z.array(z.string()).optional(),
               env: z.record(z.string(), z.string()).optional(),
               setupCommand: z.string().optional(),
+            })
+            .optional(),
+          browser: z
+            .object({
+              enabled: z.boolean().optional(),
+              image: z.string().optional(),
+              containerPrefix: z.string().optional(),
+              cdpPort: z.number().int().positive().optional(),
+              vncPort: z.number().int().positive().optional(),
+              noVncPort: z.number().int().positive().optional(),
+              headless: z.boolean().optional(),
+              enableNoVnc: z.boolean().optional(),
             })
             .optional(),
           tools: z

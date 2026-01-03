@@ -6,6 +6,13 @@ import path from "node:path";
 
 import type { ClawdisConfig } from "../config/config.js";
 import { STATE_DIR_CLAWDIS } from "../config/config.js";
+import { DEFAULT_CLAWD_BROWSER_COLOR } from "../browser/constants.js";
+import type { ResolvedBrowserConfig } from "../browser/config.js";
+import {
+  type BrowserBridge,
+  startBrowserBridgeServer,
+  stopBrowserBridgeServer,
+} from "../browser/bridge-server.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -22,6 +29,17 @@ import {
 export type SandboxToolPolicy = {
   allow?: string[];
   deny?: string[];
+};
+
+export type SandboxBrowserConfig = {
+  enabled: boolean;
+  image: string;
+  containerPrefix: string;
+  cdpPort: number;
+  vncPort: number;
+  noVncPort: number;
+  headless: boolean;
+  enableNoVnc: boolean;
 };
 
 export type SandboxDockerConfig = {
@@ -47,8 +65,15 @@ export type SandboxConfig = {
   perSession: boolean;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
+  browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
+};
+
+export type SandboxBrowserContext = {
+  controlUrl: string;
+  noVncUrl?: string;
+  containerName: string;
 };
 
 export type SandboxContext = {
@@ -59,6 +84,7 @@ export type SandboxContext = {
   containerWorkdir: string;
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
+  browser?: SandboxBrowserContext;
 };
 
 const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(
@@ -80,9 +106,18 @@ const DEFAULT_TOOL_DENY = [
   "discord",
   "gateway",
 ];
+const DEFAULT_SANDBOX_BROWSER_IMAGE = "clawdis-sandbox-browser:bookworm-slim";
+const DEFAULT_SANDBOX_BROWSER_PREFIX = "clawdis-sbx-browser-";
+const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
+const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
+const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
 
 const SANDBOX_STATE_DIR = path.join(STATE_DIR_CLAWDIS, "sandbox");
 const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
+const SANDBOX_BROWSER_REGISTRY_PATH = path.join(
+  SANDBOX_STATE_DIR,
+  "browsers.json",
+);
 
 type SandboxRegistryEntry = {
   containerName: string;
@@ -96,7 +131,41 @@ type SandboxRegistry = {
   entries: SandboxRegistryEntry[];
 };
 
+type SandboxBrowserRegistryEntry = {
+  containerName: string;
+  sessionKey: string;
+  createdAtMs: number;
+  lastUsedAtMs: number;
+  image: string;
+  cdpPort: number;
+  noVncPort?: number;
+};
+
+type SandboxBrowserRegistry = {
+  entries: SandboxBrowserRegistryEntry[];
+};
+
 let lastPruneAtMs = 0;
+const BROWSER_BRIDGES = new Map<
+  string,
+  { bridge: BrowserBridge; containerName: string }
+>();
+
+function normalizeToolList(values?: string[]) {
+  if (!values) return [];
+  return values
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .map((value) => value.toLowerCase());
+}
+
+function isToolAllowed(policy: SandboxToolPolicy, name: string) {
+  const deny = new Set(normalizeToolList(policy.deny));
+  if (deny.has(name.toLowerCase())) return false;
+  const allow = normalizeToolList(policy.allow);
+  if (allow.length === 0) return true;
+  return allow.includes(name.toLowerCase());
+}
 
 function defaultSandboxConfig(cfg?: ClawdisConfig): SandboxConfig {
   const agent = cfg?.agent?.sandbox;
@@ -116,6 +185,18 @@ function defaultSandboxConfig(cfg?: ClawdisConfig): SandboxConfig {
       capDrop: agent?.docker?.capDrop ?? ["ALL"],
       env: agent?.docker?.env ?? { LANG: "C.UTF-8" },
       setupCommand: agent?.docker?.setupCommand,
+    },
+    browser: {
+      enabled: agent?.browser?.enabled ?? false,
+      image: agent?.browser?.image ?? DEFAULT_SANDBOX_BROWSER_IMAGE,
+      containerPrefix:
+        agent?.browser?.containerPrefix ?? DEFAULT_SANDBOX_BROWSER_PREFIX,
+      cdpPort: agent?.browser?.cdpPort ?? DEFAULT_SANDBOX_BROWSER_CDP_PORT,
+      vncPort: agent?.browser?.vncPort ?? DEFAULT_SANDBOX_BROWSER_VNC_PORT,
+      noVncPort:
+        agent?.browser?.noVncPort ?? DEFAULT_SANDBOX_BROWSER_NOVNC_PORT,
+      headless: agent?.browser?.headless ?? false,
+      enableNoVnc: agent?.browser?.enableNoVnc ?? true,
     },
     tools: {
       allow: agent?.tools?.allow ?? DEFAULT_TOOL_ALLOW,
@@ -204,6 +285,51 @@ async function removeRegistryEntry(containerName: string) {
   await writeRegistry({ entries: next });
 }
 
+async function readBrowserRegistry(): Promise<SandboxBrowserRegistry> {
+  try {
+    const raw = await fs.readFile(SANDBOX_BROWSER_REGISTRY_PATH, "utf-8");
+    const parsed = JSON.parse(raw) as SandboxBrowserRegistry;
+    if (parsed && Array.isArray(parsed.entries)) return parsed;
+  } catch {
+    // ignore
+  }
+  return { entries: [] };
+}
+
+async function writeBrowserRegistry(registry: SandboxBrowserRegistry) {
+  await fs.mkdir(SANDBOX_STATE_DIR, { recursive: true });
+  await fs.writeFile(
+    SANDBOX_BROWSER_REGISTRY_PATH,
+    `${JSON.stringify(registry, null, 2)}\n`,
+    "utf-8",
+  );
+}
+
+async function updateBrowserRegistry(entry: SandboxBrowserRegistryEntry) {
+  const registry = await readBrowserRegistry();
+  const existing = registry.entries.find(
+    (item) => item.containerName === entry.containerName,
+  );
+  const next = registry.entries.filter(
+    (item) => item.containerName !== entry.containerName,
+  );
+  next.push({
+    ...entry,
+    createdAtMs: existing?.createdAtMs ?? entry.createdAtMs,
+    image: existing?.image ?? entry.image,
+  });
+  await writeBrowserRegistry({ entries: next });
+}
+
+async function removeBrowserRegistryEntry(containerName: string) {
+  const registry = await readBrowserRegistry();
+  const next = registry.entries.filter(
+    (item) => item.containerName !== containerName,
+  );
+  if (next.length === registry.entries.length) return;
+  await writeBrowserRegistry({ entries: next });
+}
+
 function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
   return new Promise<{ stdout: string; stderr: string; code: number }>(
     (resolve, reject) => {
@@ -228,6 +354,19 @@ function execDocker(args: string[], opts?: { allowFailure?: boolean }) {
       });
     },
   );
+}
+
+async function readDockerPort(containerName: string, port: number) {
+  const result = await execDocker(
+    ["port", containerName, `${port}/tcp`],
+    { allowFailure: true },
+  );
+  if (result.code !== 0) return null;
+  const line = result.stdout.trim().split(/\r?\n/)[0] ?? "";
+  const match = line.match(/:(\d+)\s*$/);
+  if (!match) return null;
+  const mapped = Number.parseInt(match[1] ?? "", 10);
+  return Number.isFinite(mapped) ? mapped : null;
 }
 
 async function dockerImageExists(image: string) {
@@ -354,6 +493,170 @@ async function ensureSandboxContainer(params: {
   return containerName;
 }
 
+async function ensureSandboxBrowserImage(image: string) {
+  const exists = await dockerImageExists(image);
+  if (exists) return;
+  throw new Error(
+    `Sandbox browser image not found: ${image}. Build it with scripts/sandbox-browser-setup.sh.`,
+  );
+}
+
+function buildSandboxBrowserResolvedConfig(params: {
+  controlPort: number;
+  cdpPort: number;
+  headless: boolean;
+}): ResolvedBrowserConfig {
+  const controlHost = "127.0.0.1";
+  const controlUrl = `http://${controlHost}:${params.controlPort}`;
+  const cdpHost = "127.0.0.1";
+  const cdpUrl = `http://${cdpHost}:${params.cdpPort}`;
+  return {
+    enabled: true,
+    controlUrl,
+    controlHost,
+    controlPort: params.controlPort,
+    cdpUrl,
+    cdpHost,
+    cdpPort: params.cdpPort,
+    cdpIsLoopback: true,
+    color: DEFAULT_CLAWD_BROWSER_COLOR,
+    executablePath: undefined,
+    headless: params.headless,
+    noSandbox: false,
+    attachOnly: true,
+  };
+}
+
+async function ensureSandboxBrowser(params: {
+  sessionKey: string;
+  workspaceDir: string;
+  cfg: SandboxConfig;
+}): Promise<SandboxBrowserContext | null> {
+  if (!params.cfg.browser.enabled) return null;
+  if (!isToolAllowed(params.cfg.tools, "browser")) return null;
+
+  const slug = params.cfg.perSession
+    ? slugifySessionKey(params.sessionKey)
+    : "shared";
+  const name = `${params.cfg.browser.containerPrefix}${slug}`;
+  const containerName = name.slice(0, 63);
+  const state = await dockerContainerState(containerName);
+  if (!state.exists) {
+    await ensureSandboxBrowserImage(params.cfg.browser.image);
+    const args = ["create", "--name", containerName];
+    args.push("--label", "clawdis.sandbox=1");
+    args.push("--label", "clawdis.sandboxBrowser=1");
+    args.push("--label", `clawdis.sessionKey=${params.sessionKey}`);
+    args.push("--label", `clawdis.createdAtMs=${Date.now()}`);
+    if (params.cfg.docker.readOnlyRoot) args.push("--read-only");
+    for (const entry of params.cfg.docker.tmpfs) {
+      args.push("--tmpfs", entry);
+    }
+    if (params.cfg.docker.network) args.push("--network", params.cfg.docker.network);
+    if (params.cfg.docker.user) args.push("--user", params.cfg.docker.user);
+    for (const cap of params.cfg.docker.capDrop) {
+      args.push("--cap-drop", cap);
+    }
+    args.push("--security-opt", "no-new-privileges");
+    args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}`);
+    args.push(
+      "-p",
+      `127.0.0.1::${params.cfg.browser.cdpPort}`,
+    );
+    if (params.cfg.browser.enableNoVnc && !params.cfg.browser.headless) {
+      args.push(
+        "-p",
+        `127.0.0.1::${params.cfg.browser.noVncPort}`,
+      );
+    }
+    args.push(
+      "-e",
+      `CLAWDIS_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`,
+    );
+    args.push(
+      "-e",
+      `CLAWDIS_BROWSER_ENABLE_NOVNC=${
+        params.cfg.browser.enableNoVnc ? "1" : "0"
+      }`,
+    );
+    args.push(
+      "-e",
+      `CLAWDIS_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`,
+    );
+    args.push(
+      "-e",
+      `CLAWDIS_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`,
+    );
+    args.push(
+      "-e",
+      `CLAWDIS_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`,
+    );
+    args.push(params.cfg.browser.image);
+    await execDocker(args);
+    await execDocker(["start", containerName]);
+  } else if (!state.running) {
+    await execDocker(["start", containerName]);
+  }
+
+  const mappedCdp = await readDockerPort(
+    containerName,
+    params.cfg.browser.cdpPort,
+  );
+  if (!mappedCdp) {
+    throw new Error(
+      `Failed to resolve CDP port mapping for ${containerName}.`,
+    );
+  }
+
+  const mappedNoVnc = params.cfg.browser.enableNoVnc && !params.cfg.browser.headless
+    ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
+    : null;
+
+  const existing = BROWSER_BRIDGES.get(params.sessionKey);
+  const shouldReuse =
+    existing &&
+    existing.containerName === containerName &&
+    existing.bridge.state.resolved.cdpPort === mappedCdp;
+  if (existing && !shouldReuse) {
+    await stopBrowserBridgeServer(existing.bridge.server).catch(() => undefined);
+    BROWSER_BRIDGES.delete(params.sessionKey);
+  }
+  const bridge = shouldReuse
+    ? existing!.bridge
+    : await startBrowserBridgeServer({
+        resolved: buildSandboxBrowserResolvedConfig({
+          controlPort: 0,
+          cdpPort: mappedCdp,
+          headless: params.cfg.browser.headless,
+        }),
+      });
+  if (!shouldReuse) {
+    BROWSER_BRIDGES.set(params.sessionKey, { bridge, containerName });
+  }
+
+  const now = Date.now();
+  await updateBrowserRegistry({
+    containerName,
+    sessionKey: params.sessionKey,
+    createdAtMs: now,
+    lastUsedAtMs: now,
+    image: params.cfg.browser.image,
+    cdpPort: mappedCdp,
+    noVncPort: mappedNoVnc ?? undefined,
+  });
+
+  const noVncUrl =
+    mappedNoVnc && params.cfg.browser.enableNoVnc && !params.cfg.browser.headless
+      ? `http://127.0.0.1:${mappedNoVnc}/vnc.html?autoconnect=1&resize=remote`
+      : undefined;
+
+  return {
+    controlUrl: bridge.baseUrl,
+    noVncUrl,
+    containerName,
+  };
+}
+
 async function pruneSandboxContainers(cfg: SandboxConfig) {
   const now = Date.now();
   const idleHours = cfg.prune.idleHours;
@@ -380,12 +683,46 @@ async function pruneSandboxContainers(cfg: SandboxConfig) {
   }
 }
 
+async function pruneSandboxBrowsers(cfg: SandboxConfig) {
+  const now = Date.now();
+  const idleHours = cfg.prune.idleHours;
+  const maxAgeDays = cfg.prune.maxAgeDays;
+  if (idleHours === 0 && maxAgeDays === 0) return;
+  const registry = await readBrowserRegistry();
+  for (const entry of registry.entries) {
+    const idleMs = now - entry.lastUsedAtMs;
+    const ageMs = now - entry.createdAtMs;
+    if (
+      (idleHours > 0 && idleMs > idleHours * 60 * 60 * 1000) ||
+      (maxAgeDays > 0 && ageMs > maxAgeDays * 24 * 60 * 60 * 1000)
+    ) {
+      try {
+        await execDocker(["rm", "-f", entry.containerName], {
+          allowFailure: true,
+        });
+      } catch {
+        // ignore prune failures
+      } finally {
+        await removeBrowserRegistryEntry(entry.containerName);
+        const bridge = BROWSER_BRIDGES.get(entry.sessionKey);
+        if (bridge?.containerName === entry.containerName) {
+          await stopBrowserBridgeServer(bridge.bridge.server).catch(
+            () => undefined,
+          );
+          BROWSER_BRIDGES.delete(entry.sessionKey);
+        }
+      }
+    }
+  }
+}
+
 async function maybePruneSandboxes(cfg: SandboxConfig) {
   const now = Date.now();
   if (now - lastPruneAtMs < 5 * 60 * 1000) return;
   lastPruneAtMs = now;
   try {
     await pruneSandboxContainers(cfg);
+    await pruneSandboxBrowsers(cfg);
   } catch (error) {
     const message =
       error instanceof Error
@@ -426,6 +763,12 @@ export async function resolveSandboxContext(params: {
     cfg,
   });
 
+  const browser = await ensureSandboxBrowser({
+    sessionKey: rawSessionKey,
+    workspaceDir,
+    cfg,
+  });
+
   return {
     enabled: true,
     sessionKey: rawSessionKey,
@@ -434,5 +777,6 @@ export async function resolveSandboxContext(params: {
     containerWorkdir: cfg.docker.workdir,
     docker: cfg.docker,
     tools: cfg.tools,
+    browser: browser ?? undefined,
   };
 }

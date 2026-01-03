@@ -1,0 +1,27 @@
+FROM debian:bookworm-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    chromium \
+    curl \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    git \
+    jq \
+    novnc \
+    python3 \
+    websockify \
+    x11vnc \
+    xvfb \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY scripts/sandbox-browser-entrypoint.sh /usr/local/bin/clawdis-sandbox-browser
+RUN chmod +x /usr/local/bin/clawdis-sandbox-browser
+
+EXPOSE 9222 5900 6080
+
+CMD ["clawdis-sandbox-browser"]

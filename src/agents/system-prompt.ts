@@ -13,6 +13,12 @@ export function buildAgentSystemPromptAppend(params: {
     node?: string;
     model?: string;
   };
+  sandboxInfo?: {
+    enabled: boolean;
+    workspaceDir?: string;
+    browserControlUrl?: string;
+    browserNoVncUrl?: string;
+  };
 }) {
   const thinkHint =
     params.defaultThinkLevel && params.defaultThinkLevel !== "off"
@@ -72,6 +78,25 @@ export function buildAgentSystemPromptAppend(params: {
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",
     "",
+    params.sandboxInfo?.enabled ? "## Sandbox" : "",
+    params.sandboxInfo?.enabled
+      ? [
+          "Tool execution is isolated in a Docker sandbox.",
+          "Some tools may be unavailable due to sandbox policy.",
+          params.sandboxInfo.workspaceDir
+            ? `Sandbox workspace: ${params.sandboxInfo.workspaceDir}`
+            : "",
+          params.sandboxInfo.browserControlUrl
+            ? `Sandbox browser control URL: ${params.sandboxInfo.browserControlUrl}`
+            : "",
+          params.sandboxInfo.browserNoVncUrl
+            ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
+            : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
+    params.sandboxInfo?.enabled ? "" : "",
     ownerLine ? "## User Identity" : "",
     ownerLine ?? "",
     ownerLine ? "" : "",

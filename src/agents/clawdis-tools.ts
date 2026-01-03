@@ -256,7 +256,7 @@ async function imageResultFromFile(params: {
 function resolveBrowserBaseUrl(controlUrl?: string) {
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser);
-  if (!resolved.enabled) {
+  if (!resolved.enabled && !controlUrl?.trim()) {
     throw new Error(
       "Browser control is disabled. Set browser.enabled=true in ~/.clawdis/clawdis.json.",
     );
@@ -575,7 +575,7 @@ const BrowserToolSchema = Type.Union([
   }),
 ]);
 
-function createBrowserTool(): AnyAgentTool {
+function createBrowserTool(opts?: { defaultControlUrl?: string }): AnyAgentTool {
   return {
     label: "Browser",
     name: "browser",
@@ -586,7 +586,9 @@ function createBrowserTool(): AnyAgentTool {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const controlUrl = readStringParam(params, "controlUrl");
-      const baseUrl = resolveBrowserBaseUrl(controlUrl);
+      const baseUrl = resolveBrowserBaseUrl(
+        controlUrl ?? opts?.defaultControlUrl,
+      );
 
       switch (action) {
         case "status":
@@ -2304,9 +2306,11 @@ function createGatewayTool(): AnyAgentTool {
   };
 }
 
-export function createClawdisTools(): AnyAgentTool[] {
+export function createClawdisTools(options?: {
+  browserControlUrl?: string;
+}): AnyAgentTool[] {
   return [
-    createBrowserTool(),
+    createBrowserTool({ defaultControlUrl: options?.browserControlUrl }),
     createCanvasTool(),
     createNodesTool(),
     createCronTool(),

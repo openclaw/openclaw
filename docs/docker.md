@@ -124,6 +124,53 @@ scripts/sandbox-setup.sh
 
 This builds `clawdis-sandbox:bookworm-slim` using `Dockerfile.sandbox`.
 
+### Sandbox browser image
+
+To run the browser tool inside the sandbox, build the browser image:
+
+```bash
+scripts/sandbox-browser-setup.sh
+```
+
+This builds `clawdis-sandbox-browser:bookworm-slim` using
+`Dockerfile.sandbox-browser`. The container runs Chromium with CDP enabled and
+an optional noVNC observer (headful via Xvfb).
+
+Notes:
+- Headful (Xvfb) reduces bot blocking vs headless.
+- Headless can still be used by setting `agent.sandbox.browser.headless=true`.
+- No full desktop environment (GNOME) is needed; Xvfb provides the display.
+
+Use config:
+
+```json5
+{
+  agent: {
+    sandbox: {
+      browser: { enabled: true }
+    }
+  }
+}
+```
+
+Custom browser image:
+
+```json5
+{
+  agent: {
+    sandbox: { browser: { image: "my-clawdis-browser" } }
+  }
+}
+```
+
+When enabled, the agent receives:
+- a sandbox browser control URL (for the `browser` tool)
+- a noVNC URL (if enabled and headless=false)
+
+Remember: if you use an allowlist for tools, add `browser` (and remove it from
+deny) or the tool remains blocked.
+Prune rules (`agent.sandbox.prune`) apply to browser containers too.
+
 ### Custom sandbox image
 
 Build your own image and point config to it:

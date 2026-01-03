@@ -454,6 +454,7 @@ Defaults (if enabled):
 - workspace per session under `~/.clawdis/sandboxes`
 - auto-prune: idle > 24h OR age > 7d
 - tools: allow only `bash`, `process`, `read`, `write`, `edit` (deny wins)
+- optional sandboxed browser (Chromium + CDP, noVNC observer)
 
 ```json5
 {
@@ -474,6 +475,16 @@ Defaults (if enabled):
         env: { LANG: "C.UTF-8" },
         setupCommand: "apt-get update && apt-get install -y git curl jq"
       },
+      browser: {
+        enabled: false,
+        image: "clawdis-sandbox-browser:bookworm-slim",
+        containerPrefix: "clawdis-sbx-browser-",
+        cdpPort: 9222,
+        vncPort: 5900,
+        noVncPort: 6080,
+        headless: false,
+        enableNoVnc: true
+      },
       tools: {
         allow: ["bash", "process", "read", "write", "edit"],
         deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
@@ -486,6 +497,22 @@ Defaults (if enabled):
   }
 }
 ```
+
+Build the default sandbox image once with:
+```bash
+scripts/sandbox-setup.sh
+```
+
+Build the optional browser image with:
+```bash
+scripts/sandbox-browser-setup.sh
+```
+
+When `agent.sandbox.browser.enabled=true`, the browser tool uses a sandboxed
+Chromium instance (CDP). If noVNC is enabled (default when headless=false),
+the noVNC URL is injected into the system prompt so the agent can reference it.
+This does not require `browser.enabled` in the main config; the sandbox control
+URL is injected per session.
 
 ### `models` (custom providers + base URLs)
 

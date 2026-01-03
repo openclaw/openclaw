@@ -436,6 +436,14 @@ export async function runEmbeddedPiAgent(params: {
           node: process.version,
           model: `${provider}/${modelId}`,
         };
+        const sandboxInfo = sandbox?.enabled
+          ? {
+              enabled: true,
+              workspaceDir: sandbox.workspaceDir,
+              browserControlUrl: sandbox.browser?.controlUrl,
+              browserNoVncUrl: sandbox.browser?.noVncUrl,
+            }
+          : undefined;
         const reasoningTagHint = provider === "ollama";
         const systemPrompt = buildSystemPrompt({
           appendPrompt: buildAgentSystemPromptAppend({
@@ -445,6 +453,7 @@ export async function runEmbeddedPiAgent(params: {
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
             runtimeInfo,
+            sandboxInfo,
           }),
           contextFiles,
           skills: promptSkills,

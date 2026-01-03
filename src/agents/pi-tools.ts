@@ -486,7 +486,9 @@ export function createClawdisCodingTools(options?: {
     bashTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     createWhatsAppLoginTool(),
-    ...createClawdisTools(),
+    ...createClawdisTools({
+      browserControlUrl: sandbox?.browser?.controlUrl,
+    }),
   ];
   const allowDiscord = shouldIncludeDiscordTool(options?.surface);
   const filtered = allowDiscord
