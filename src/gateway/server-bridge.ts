@@ -33,12 +33,12 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
-import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
 import { defaultRuntime } from "../runtime.js";
+import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
   ErrorCodes,

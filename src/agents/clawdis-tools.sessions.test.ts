@@ -17,8 +17,9 @@ import { createClawdisTools } from "./clawdis-tools.js";
 
 describe("sessions tools", () => {
   it("sessions_list filters kinds and includes messages", async () => {
-    callGatewayMock.mockImplementation(async (opts: any) => {
-      if (opts.method === "sessions.list") {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",
           sessions: [
@@ -48,7 +49,7 @@ describe("sessions tools", () => {
           ],
         };
       }
-      if (opts.method === "chat.history") {
+      if (request.method === "chat.history") {
         return {
           messages: [
             { role: "toolResult", content: [] },
@@ -69,7 +70,9 @@ describe("sessions tools", () => {
     if (!tool) throw new Error("missing sessions_list tool");
 
     const result = await tool.execute("call1", { messageLimit: 1 });
-    const details = result.details as { sessions?: any[] };
+    const details = result.details as {
+      sessions?: Array<Record<string, unknown>>;
+    };
     expect(details.sessions).toHaveLength(3);
     const main = details.sessions?.find((s) => s.key === "main");
     expect(main?.provider).toBe("whatsapp");
@@ -77,14 +80,17 @@ describe("sessions tools", () => {
     expect(main?.messages?.[0]?.role).toBe("assistant");
 
     const cronOnly = await tool.execute("call2", { kinds: ["cron"] });
-    const cronDetails = cronOnly.details as { sessions?: any[] };
+    const cronDetails = cronOnly.details as {
+      sessions?: Array<Record<string, unknown>>;
+    };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
   });
 
   it("sessions_history filters tool messages by default", async () => {
-    callGatewayMock.mockImplementation(async (opts: any) => {
-      if (opts.method === "chat.history") {
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "chat.history") {
         return {
           messages: [
             { role: "toolResult", content: [] },
@@ -102,7 +108,7 @@ describe("sessions tools", () => {
     if (!tool) throw new Error("missing sessions_history tool");
 
     const result = await tool.execute("call3", { sessionKey: "main" });
-    const details = result.details as { messages?: any[] };
+    const details = result.details as { messages?: unknown[] };
     expect(details.messages).toHaveLength(1);
     expect(details.messages?.[0]?.role).toBe("assistant");
 
@@ -110,18 +116,19 @@ describe("sessions tools", () => {
       sessionKey: "main",
       includeTools: true,
     });
-    const withToolsDetails = withTools.details as { messages?: any[] };
+    const withToolsDetails = withTools.details as { messages?: unknown[] };
     expect(withToolsDetails.messages).toHaveLength(2);
   });
 
   it("sessions_send supports fire-and-forget and wait", async () => {
-    callGatewayMock.mockImplementation(async (opts: any) => {
-      if (opts.method === "agent") {
-        return opts.expectFinal
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; expectFinal?: boolean };
+      if (request.method === "agent") {
+        return request.expectFinal
           ? { runId: "run-1", status: "ok" }
           : { runId: "run-1", status: "accepted" };
       }
-      if (opts.method === "chat.history") {
+      if (request.method === "chat.history") {
         return {
           messages: [
             { role: "assistant", content: [{ type: "text", text: "done" }] },

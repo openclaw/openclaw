@@ -34,7 +34,8 @@ const DEFAULT_MAX_OUTPUT = clampNumber(
   1_000,
   150_000,
 );
-const DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+const DEFAULT_PATH =
+  "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
 const stringEnum = (
   values: readonly string[],

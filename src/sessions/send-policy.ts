@@ -1,5 +1,5 @@
 import type { ClawdisConfig } from "../config/config.js";
-import type { SessionEntry, SessionChatType } from "../config/sessions.js";
+import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 
 export type SessionSendPolicyDecision = "allow" | "deny";
 

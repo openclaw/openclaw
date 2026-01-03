@@ -299,11 +299,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     sendPolicy: Type.Optional(
-      Type.Union([
-        Type.Literal("allow"),
-        Type.Literal("deny"),
-        Type.Null(),
-      ]),
+      Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),
     groupActivation: Type.Optional(
       Type.Union([

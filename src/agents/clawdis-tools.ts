@@ -294,7 +294,11 @@ function deriveProvider(params: {
   surface?: string | null;
   lastChannel?: string | null;
 }): string {
-  if (params.kind === "cron" || params.kind === "hook" || params.kind === "node")
+  if (
+    params.kind === "cron" ||
+    params.kind === "hook" ||
+    params.kind === "node"
+  )
     return "internal";
   const surface = normalizeKey(params.surface ?? undefined);
   if (surface) return surface;
@@ -2503,8 +2507,7 @@ function createSessionsListTool(): AnyAgentTool {
       };
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-      const storePath =
-        typeof list?.path === "string" ? list.path : undefined;
+      const storePath = typeof list?.path === "string" ? list.path : undefined;
       const rows: SessionListRow[] = [];
 
       for (const entry of sessions) {
@@ -2572,7 +2575,9 @@ function createSessionsListTool(): AnyAgentTool {
               ? entry.verboseLevel
               : undefined,
           systemSent:
-            typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
+            typeof entry.systemSent === "boolean"
+              ? entry.systemSent
+              : undefined,
           abortedLastRun:
             typeof entry.abortedLastRun === "boolean"
               ? entry.abortedLastRun

@@ -64,9 +64,9 @@ import {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "./group-activation.js";
-import { parseSendPolicyCommand } from "./send-policy.js";
 import { stripHeartbeatToken } from "./heartbeat.js";
 import { extractModelDirective } from "./model.js";
+import { parseSendPolicyCommand } from "./send-policy.js";
 import { buildStatusMessage } from "./status.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
@@ -1639,9 +1639,7 @@ export async function getReplyFromConfig(
 
   if (sendPolicyCommand.hasCommand) {
     if (!isOwnerSender) {
-      logVerbose(
-        `Ignoring /send from non-owner: ${senderE164 || "<unknown>"}`,
-      );
+      logVerbose(`Ignoring /send from non-owner: ${senderE164 || "<unknown>"}`);
       cleanupTyping();
       return undefined;
     }
@@ -1754,9 +1752,7 @@ export async function getReplyFromConfig(
     chatType: sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {
-    logVerbose(
-      `Send blocked by policy for session ${sessionKey ?? "unknown"}`,
-    );
+    logVerbose(`Send blocked by policy for session ${sessionKey ?? "unknown"}`);
     cleanupTyping();
     return undefined;
   }

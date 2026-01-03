@@ -13,7 +13,11 @@ describe("resolveSendPolicy", () => {
     const cfg = {
       session: { sendPolicy: { default: "allow" } },
     } as ClawdisConfig;
-    const entry: SessionEntry = { sessionId: "s", updatedAt: 0, sendPolicy: "deny" };
+    const entry: SessionEntry = {
+      sessionId: "s",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
     expect(resolveSendPolicy({ cfg, entry })).toBe("deny");
   });
 
@@ -23,7 +27,10 @@ describe("resolveSendPolicy", () => {
         sendPolicy: {
           default: "allow",
           rules: [
-            { action: "deny", match: { surface: "discord", chatType: "group" } },
+            {
+              action: "deny",
+              match: { surface: "discord", chatType: "group" },
+            },
           ],
         },
       },
@@ -34,9 +41,9 @@ describe("resolveSendPolicy", () => {
       surface: "discord",
       chatType: "group",
     };
-    expect(resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" })).toBe(
-      "deny",
-    );
+    expect(
+      resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" }),
+    ).toBe("deny");
   });
 
   it("rule match by keyPrefix", () => {
