@@ -28,10 +28,11 @@ async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
       "WhatsApp: links via WhatsApp Web (scan QR), stores creds for future sends.",
+      "WhatsApp: dedicated second number recommended; primary number OK (self-chat).",
       "Telegram: Bot API (token from @BotFather), replies via your bot.",
       "Discord: Bot token from Discord Developer Portal; invite bot to your server.",
-      "Signal: signal-cli as a linked device (recommended: separate bot number).",
-      "iMessage: local imsg CLI (JSON-RPC over stdio) reading Messages DB.",
+      "Signal: signal-cli as a linked device; separate number recommended.",
+      "iMessage: local imsg CLI; separate Apple ID recommended only on a separate Mac.",
     ].join("\n"),
     "How providers work",
   );
