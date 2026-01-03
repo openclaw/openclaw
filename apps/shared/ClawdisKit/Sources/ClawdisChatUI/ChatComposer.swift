@@ -209,7 +209,7 @@ struct ClawdisChatComposer: View {
             Circle()
                 .fill(self.viewModel.healthOK ? .green : .orange)
                 .frame(width: 7, height: 7)
-            Text(self.viewModel.sessionKey)
+            Text(self.activeSessionLabel)
                 .font(.caption2.weight(.semibold))
             Text(self.viewModel.healthOK ? "Connected" : "Connecting…")
                 .font(.caption2)
@@ -219,6 +219,12 @@ struct ClawdisChatComposer: View {
         .padding(.vertical, 4)
         .background(ClawdisChatTheme.subtleCard)
         .clipShape(Capsule())
+    }
+
+    private var activeSessionLabel: String {
+        let match = self.viewModel.sessions.first { $0.key == self.viewModel.sessionKey }
+        let trimmed = match?.displayName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? self.viewModel.sessionKey : trimmed
     }
 
     private var editorOverlay: some View {

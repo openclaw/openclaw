@@ -43,7 +43,10 @@ export function renderChat(props: ChatProps) {
                 props.onSessionKeyChange((e.target as HTMLSelectElement).value)}
             >
               ${sessionOptions.map(
-                (entry) => html`<option value=${entry.key}>${entry.key}</option>`,
+                (entry) =>
+                  html`<option value=${entry.key}>
+                    ${entry.displayName ?? entry.key}
+                  </option>`,
               )}
             </select>
           </label>
@@ -115,6 +118,7 @@ export function renderChat(props: ChatProps) {
 type SessionOption = {
   key: string;
   updatedAt?: number | null;
+  displayName?: string;
 };
 
 function resolveSessionOptions(

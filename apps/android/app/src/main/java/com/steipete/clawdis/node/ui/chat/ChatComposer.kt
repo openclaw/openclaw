@@ -148,7 +148,7 @@ fun ChatComposer(
       )
 
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ConnectionPill(sessionKey = sessionKey, healthOk = healthOk)
+        ConnectionPill(sessionLabel = currentSessionLabel, healthOk = healthOk)
         Spacer(modifier = Modifier.weight(1f))
 
         if (pendingRunCount > 0) {
@@ -186,7 +186,7 @@ fun ChatComposer(
 }
 
 @Composable
-private fun ConnectionPill(sessionKey: String, healthOk: Boolean) {
+private fun ConnectionPill(sessionLabel: String, healthOk: Boolean) {
   Surface(
     shape = RoundedCornerShape(999.dp),
     color = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -201,7 +201,7 @@ private fun ConnectionPill(sessionKey: String, healthOk: Boolean) {
         shape = androidx.compose.foundation.shape.CircleShape,
         color = if (healthOk) Color(0xFF2ECC71) else Color(0xFFF39C12),
       ) {}
-      Text(sessionKey, style = MaterialTheme.typography.labelSmall)
+      Text(sessionLabel, style = MaterialTheme.typography.labelSmall)
       Text(
         if (healthOk) "Connected" else "Connecting…",
         style = MaterialTheme.typography.labelSmall,
