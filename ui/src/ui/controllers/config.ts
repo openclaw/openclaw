@@ -203,7 +203,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
                   entry.reactionNotifications === "own" ||
                   entry.reactionNotifications === "allowlist"
                     ? entry.reactionNotifications
-                    : "allowlist",
+                    : "own",
                 users: toList(entry.users),
                 channels,
               };

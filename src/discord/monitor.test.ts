@@ -8,6 +8,7 @@ import {
   resolveDiscordGuildEntry,
   resolveDiscordReplyTarget,
   resolveGroupDmAllow,
+  shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
 
 const fakeGuild = (id: string, name: string) =>
@@ -21,6 +22,7 @@ const makeEntries = (
     out[key] = {
       slug: value.slug,
       requireMention: value.requireMention,
+      reactionNotifications: value.reactionNotifications,
       users: value.users,
       channels: value.channels,
     };
@@ -205,5 +207,89 @@ describe("discord reply target selection", () => {
         hasReplied: true,
       }),
     ).toBe("123");
+  });
+});
+
+describe("discord reaction notification gating", () => {
+  it("defaults to own when mode is unset", () => {
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: undefined,
+        botId: "bot-1",
+        messageAuthorId: "bot-1",
+        userId: "user-1",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: undefined,
+        botId: "bot-1",
+        messageAuthorId: "user-1",
+        userId: "user-2",
+      }),
+    ).toBe(false);
+  });
+
+  it("skips when mode is off", () => {
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: "off",
+        botId: "bot-1",
+        messageAuthorId: "bot-1",
+        userId: "user-1",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows all reactions when mode is all", () => {
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: "all",
+        botId: "bot-1",
+        messageAuthorId: "user-1",
+        userId: "user-2",
+      }),
+    ).toBe(true);
+  });
+
+  it("requires bot ownership when mode is own", () => {
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: "own",
+        botId: "bot-1",
+        messageAuthorId: "bot-1",
+        userId: "user-2",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: "own",
+        botId: "bot-1",
+        messageAuthorId: "user-2",
+        userId: "user-3",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires allowlist matches when mode is allowlist", () => {
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: "allowlist",
+        botId: "bot-1",
+        messageAuthorId: "user-1",
+        userId: "user-2",
+        allowlist: [],
+      }),
+    ).toBe(false);
+    expect(
+      shouldEmitDiscordReactionNotification({
+        mode: "allowlist",
+        botId: "bot-1",
+        messageAuthorId: "user-1",
+        userId: "123",
+        userName: "steipete",
+        allowlist: ["123", "other"],
+      }),
+    ).toBe(true);
   });
 });

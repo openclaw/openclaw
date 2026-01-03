@@ -654,7 +654,7 @@ function renderProvider(
                               next[guildIndex] = {
                                 ...next[guildIndex],
                                 reactionNotifications: (e.target as HTMLSelectElement)
-                                  .value as "off" | "own" | "all",
+                                  .value as "off" | "own" | "all" | "allowlist",
                               };
                               props.onDiscordChange({ guilds: next });
                             }}
@@ -832,7 +832,7 @@ function renderProvider(
                         key: "",
                         slug: "",
                         requireMention: false,
-                        reactionNotifications: "allowlist",
+                        reactionNotifications: "own",
                         users: "",
                         channels: [],
                       },

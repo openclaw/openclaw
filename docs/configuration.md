@@ -266,7 +266,7 @@ Configure the Discord bot by setting the bot token and optional gating:
       "123456789012345678": {               // guild id (preferred) or slug
         slug: "friends-of-clawd",
         requireMention: false,              // per-guild default
-        reactionNotifications: "allowlist", // off | own | all | allowlist
+        reactionNotifications: "own",       // off | own | all | allowlist
         users: ["987654321098765432"],      // optional per-guild user allowlist
         channels: {
           general: { allow: true },
@@ -283,9 +283,9 @@ Clawdis starts Discord only when a `discord` config section exists. The token is
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Reaction notification modes:
 - `off`: no reaction events.
-- `own`: all reactions on the bot's own messages.
+- `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
-- `allowlist`: reactions from `guilds.<id>.users` on all messages.
+- `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
 
 ### `imessage` (imsg CLI)
 

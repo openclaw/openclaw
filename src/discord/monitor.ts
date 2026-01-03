@@ -559,28 +559,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const botId = client.user?.id;
       if (botId && user.id === botId) return;
 
-      const reactionMode = guildInfo?.reactionNotifications ?? "allowlist";
-      if (reactionMode === "off") return;
-      if (reactionMode === "own") {
-        const authorId = message.author?.id;
-        if (!botId || authorId !== botId) return;
-      }
-      if (reactionMode === "allowlist") {
-        const userAllow = guildInfo?.users;
-        if (!Array.isArray(userAllow) || userAllow.length === 0) return;
-        const users = normalizeDiscordAllowList(userAllow, [
-          "discord:",
-          "user:",
-        ]);
-        const userOk =
-          !!users &&
-          allowListMatches(users, {
-            id: user.id,
-            name: user.username,
-            tag: user.tag,
-          });
-        if (!userOk) return;
-      }
+      const reactionMode = guildInfo?.reactionNotifications ?? "own";
+      const shouldNotify = shouldEmitDiscordReactionNotification({
+        mode: reactionMode,
+        botId,
+        messageAuthorId: message.author?.id,
+        userId: user.id,
+        userName: user.username,
+        userTag: user.tag,
+        allowlist: guildInfo?.users,
+      });
+      if (!shouldNotify) return;
 
       const emojiLabel = formatDiscordReactionEmoji(resolvedReaction);
       const actorLabel = user.tag ?? user.username ?? user.id;
@@ -983,6 +972,43 @@ export function allowListMatches(
   const slugTag = normalizeDiscordSlug(tag);
   if (slugTag && allowList.names.has(slugTag)) return true;
   return false;
+}
+
+export function shouldEmitDiscordReactionNotification(params: {
+  mode: "off" | "own" | "all" | "allowlist" | undefined;
+  botId?: string | null;
+  messageAuthorId?: string | null;
+  userId: string;
+  userName?: string | null;
+  userTag?: string | null;
+  allowlist?: Array<string | number> | null;
+}) {
+  const {
+    mode,
+    botId,
+    messageAuthorId,
+    userId,
+    userName,
+    userTag,
+    allowlist,
+  } = params;
+  const effectiveMode = mode ?? "own";
+  if (effectiveMode === "off") return false;
+  if (effectiveMode === "own") {
+    if (!botId || !messageAuthorId) return false;
+    return messageAuthorId === botId;
+  }
+  if (effectiveMode === "allowlist") {
+    if (!Array.isArray(allowlist) || allowlist.length === 0) return false;
+    const users = normalizeDiscordAllowList(allowlist, ["discord:", "user:"]);
+    if (!users) return false;
+    return allowListMatches(users, {
+      id: userId,
+      name: userName ?? undefined,
+      tag: userTag ?? undefined,
+    });
+  }
+  return true;
 }
 
 export function resolveDiscordGuildEntry(params: {

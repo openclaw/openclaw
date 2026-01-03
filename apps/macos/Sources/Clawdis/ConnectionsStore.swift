@@ -170,7 +170,7 @@ struct DiscordGuildForm: Identifiable {
         key: String = "",
         slug: String = "",
         requireMention: Bool = false,
-        reactionNotifications: String = "allowlist",
+        reactionNotifications: String = "own",
         users: String = "",
         channels: [DiscordGuildChannelForm] = []
     ) {
@@ -497,7 +497,7 @@ final class ConnectionsStore {
                         let reactionModeRaw = entry["reactionNotifications"]?.stringValue ?? ""
                         let reactionNotifications = ["off", "own", "all", "allowlist"].contains(reactionModeRaw)
                             ? reactionModeRaw
-                            : "allowlist"
+                            : "own"
                         let users = entry["users"]?.arrayValue?
                             .compactMap { item -> String? in
                                 if let str = item.stringValue { return str }

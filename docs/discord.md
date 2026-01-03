@@ -86,7 +86,7 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
       "123456789012345678": {
         slug: "friends-of-clawd",
         requireMention: false,
-        reactionNotifications: "allowlist",
+        reactionNotifications: "own",
         users: ["987654321098765432", "steipete"],
         channels: {
           general: { allow: true },
@@ -121,9 +121,9 @@ Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-rea
 
 Reaction notifications use `guilds.<id>.reactionNotifications`:
 - `off`: no reaction events.
-- `own`: all reactions on the bot's own messages.
+- `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
-- `allowlist`: reactions from `guilds.<id>.users` on all messages.
+- `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
 
 ### Tool action defaults
 
