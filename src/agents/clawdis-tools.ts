@@ -40,7 +40,7 @@ import {
   writeScreenRecordToFile,
 } from "../cli/nodes-screen.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { loadConfig, type DiscordActionConfig } from "../config/config.js";
+import { type DiscordActionConfig, loadConfig } from "../config/config.js";
 import {
   addRoleDiscord,
   banMemberDiscord,
