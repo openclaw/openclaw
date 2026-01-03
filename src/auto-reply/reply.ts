@@ -2291,7 +2291,7 @@ export async function getReplyFromConfig(
       return finalizeWithFollowup({
         text: isContextOverflow
           ? "⚠️ Context overflow - conversation too long. Starting fresh might help!"
-          : "⚠️ Agent failed. Check gateway logs.",
+          : `⚠️ Agent failed before reply: ${message}. Check gateway logs for details.`,
       });
     }
 

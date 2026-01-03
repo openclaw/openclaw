@@ -131,6 +131,30 @@ describe("trigger handling", () => {
     });
   });
 
+  it("includes the error cause when the embedded agent throws", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockRejectedValue(
+        new Error("sandbox is not defined"),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "hello",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe(
+        "⚠️ Agent failed before reply: sandbox is not defined. Check gateway logs for details.",
+      );
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    });
+  });
+
   it("uses heartbeat model override for heartbeat runs", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
