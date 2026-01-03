@@ -99,7 +99,9 @@ export async function runNonInteractiveOnboarding(
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
   } else if (authChoice === "oauth" || authChoice === "antigravity") {
-    runtime.error(`${authChoice === "oauth" ? "OAuth" : "Antigravity"} requires interactive mode.`);
+    runtime.error(
+      `${authChoice === "oauth" ? "OAuth" : "Antigravity"} requires interactive mode.`,
+    );
     runtime.exit(1);
     return;
   }

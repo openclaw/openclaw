@@ -197,7 +197,10 @@ export function createBashTool(
               rows: 30,
             });
           } catch (error) {
-            if (ptyShell !== DEFAULT_SHELL_PATH && existsSync(DEFAULT_SHELL_PATH)) {
+            if (
+              ptyShell !== DEFAULT_SHELL_PATH &&
+              existsSync(DEFAULT_SHELL_PATH)
+            ) {
               try {
                 pty = ptyModule.spawn(
                   DEFAULT_SHELL_PATH,

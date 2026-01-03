@@ -1,5 +1,5 @@
-import chalk from "chalk";
 import type { MarkdownTheme } from "@mariozechner/pi-tui";
+import chalk from "chalk";
 
 export const markdownTheme: MarkdownTheme = {
   heading: (text) => chalk.bold.cyan(text),

@@ -30,6 +30,7 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import { type ClawdisConfig, loadConfig } from "../config/config.js";
 import {
   buildGroupDisplayName,
@@ -54,7 +55,6 @@ import {
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
 import {
@@ -192,10 +192,18 @@ function normalizeQueueMode(raw?: string): QueueMode | undefined {
   if (!raw) return undefined;
   const cleaned = raw.trim().toLowerCase();
   if (cleaned === "queue" || cleaned === "queued") return "steer";
-  if (cleaned === "interrupt" || cleaned === "interrupts" || cleaned === "abort")
+  if (
+    cleaned === "interrupt" ||
+    cleaned === "interrupts" ||
+    cleaned === "abort"
+  )
     return "interrupt";
   if (cleaned === "steer" || cleaned === "steering") return "steer";
-  if (cleaned === "followup" || cleaned === "follow-ups" || cleaned === "followups")
+  if (
+    cleaned === "followup" ||
+    cleaned === "follow-ups" ||
+    cleaned === "followups"
+  )
     return "followup";
   if (cleaned === "collect" || cleaned === "coalesce") return "collect";
   if (
@@ -536,10 +544,7 @@ function buildSummaryPrompt(queue: FollowupQueueState): string | undefined {
   return lines.join("\n");
 }
 
-function buildCollectPrompt(
-  items: FollowupRun[],
-  summary?: string,
-): string {
+function buildCollectPrompt(items: FollowupRun[], summary?: string): string {
   const blocks: string[] = ["[Queued messages while agent was busy]"];
   if (summary) {
     blocks.push(summary);
@@ -706,7 +711,8 @@ function resolveQueueSettings(params: {
     mode: resolvedMode,
     debounceMs:
       typeof debounceRaw === "number" ? Math.max(0, debounceRaw) : undefined,
-    cap: typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
+    cap:
+      typeof capRaw === "number" ? Math.max(1, Math.floor(capRaw)) : undefined,
     dropPolicy: dropRaw,
   };
 }
@@ -1954,9 +1960,7 @@ export async function getReplyFromConfig(
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      defaultRuntime.error?.(
-        `Followup agent failed before reply: ${message}`,
-      );
+      defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
       return;
     }
 
@@ -2010,7 +2014,8 @@ export async function getReplyFromConfig(
             ...entry,
             inputTokens: input,
             outputTokens: output,
-            totalTokens: promptTokens > 0 ? promptTokens : usage.total ?? input,
+            totalTokens:
+              promptTokens > 0 ? promptTokens : (usage.total ?? input),
             model: modelUsed,
             contextTokens: contextTokensUsed ?? entry.contextTokens,
             updatedAt: Date.now(),

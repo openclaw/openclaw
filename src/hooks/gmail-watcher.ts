@@ -5,7 +5,7 @@
  * if hooks.gmail is configured with an account.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import { hasBinary } from "../agents/skills.js";
 import type { ClawdisConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -13,8 +13,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import {
   buildGogWatchServeArgs,
   buildGogWatchStartArgs,
-  resolveGmailHookRuntimeConfig,
   type GmailHookRuntimeConfig,
+  resolveGmailHookRuntimeConfig,
 } from "./gmail.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
 
@@ -42,7 +42,8 @@ async function startGmailWatch(
   try {
     const result = await runCommandWithTimeout(args, { timeoutMs: 120_000 });
     if (result.code !== 0) {
-      const message = result.stderr || result.stdout || "gog watch start failed";
+      const message =
+        result.stderr || result.stdout || "gog watch start failed";
       log.error(`watch start failed: ${message}`);
       return false;
     }
@@ -60,7 +61,7 @@ async function startGmailWatch(
 function spawnGogServe(cfg: GmailHookRuntimeConfig): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${args.join(" ")}`);
-  
+
   const child = spawn("gog", args, {
     stdio: ["ignore", "pipe", "pipe"],
     detached: false,
@@ -142,7 +143,10 @@ export async function startGmailWatcher(
       );
     } catch (err) {
       log.error(`tailscale setup failed: ${String(err)}`);
-      return { started: false, reason: `tailscale setup failed: ${String(err)}` };
+      return {
+        started: false,
+        reason: `tailscale setup failed: ${String(err)}`,
+      };
     }
   }
 
@@ -184,7 +188,7 @@ export async function stopGmailWatcher(): Promise<void> {
   if (watcherProcess) {
     log.info("stopping gmail watcher");
     watcherProcess.kill("SIGTERM");
-    
+
     // Wait a bit for graceful shutdown
     await new Promise<void>((resolve) => {
       const timeout = setTimeout(() => {

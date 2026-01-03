@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
+import type { DefaultTextStyle, MarkdownTheme } from "@mariozechner/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
-import type { MarkdownTheme, DefaultTextStyle } from "@mariozechner/pi-tui";
 import { theme } from "./theme.js";
 
 export class MessageList extends Container {
@@ -38,7 +38,13 @@ export class MessageList extends Container {
   addAssistant(text: string, id?: string): string {
     const messageId = id ?? crypto.randomUUID();
     const label = new Text(theme.assistant("clawd"), 1, 0);
-    const body = new Markdown(text, 1, 0, this.markdownTheme, this.styles.assistant);
+    const body = new Markdown(
+      text,
+      1,
+      0,
+      this.markdownTheme,
+      this.styles.assistant,
+    );
     const group = new Container();
     group.addChild(label);
     group.addChild(body);
@@ -60,7 +66,6 @@ export class MessageList extends Container {
     text: string,
     style: DefaultTextStyle,
   ) {
-    const messageId = crypto.randomUUID();
     const label = new Text(
       role === "user"
         ? theme.user("you")
@@ -76,6 +81,5 @@ export class MessageList extends Container {
     group.addChild(body);
     this.addChild(group);
     this.addChild(new Spacer(1));
-
   }
 }
