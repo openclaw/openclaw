@@ -8,6 +8,8 @@ import SwiftUI
 @Observable
 final class AppState {
     private let isPreview: Bool
+    private var isInitializing = true
+    private var configWatcher: ConfigFileWatcher?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
 
@@ -153,6 +155,7 @@ final class AppState {
     var connectionMode: ConnectionMode {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.connectionMode.rawValue, forKey: connectionModeKey) }
+            self.syncGatewayConfigIfNeeded()
         }
     }
 
@@ -181,7 +184,10 @@ final class AppState {
     }
 
     var remoteTarget: String {
-        didSet { self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) } }
+        didSet {
+            self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
+            self.syncGatewayConfigIfNeeded()
+        }
     }
 
     var remoteIdentity: String {
@@ -245,13 +251,44 @@ final class AppState {
             UserDefaults.standard.set(IconOverrideSelection.system.rawValue, forKey: iconOverrideKey)
         }
 
+        let configRoot = ClawdisConfigFile.loadDict()
+        let configGateway = configRoot["gateway"] as? [String: Any]
+        let configModeRaw = (configGateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let configMode: ConnectionMode? = {
+            switch configModeRaw {
+            case "local":
+                return .local
+            case "remote":
+                return .remote
+            default:
+                return nil
+            }
+        }()
+        let configRemoteUrl = (configGateway?["remote"] as? [String: Any])?["url"] as? String
+        let configHasRemoteUrl = !(configRemoteUrl?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+
         let storedMode = UserDefaults.standard.string(forKey: connectionModeKey)
-        if let storedMode {
+        if let configMode {
+            self.connectionMode = configMode
+        } else if configHasRemoteUrl {
+            self.connectionMode = .remote
+        } else if let storedMode {
             self.connectionMode = ConnectionMode(rawValue: storedMode) ?? .local
         } else {
             self.connectionMode = onboardingSeen ? .local : .unconfigured
         }
-        self.remoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
+
+        let storedRemoteTarget = UserDefaults.standard.string(forKey: remoteTargetKey) ?? ""
+        if self.connectionMode == .remote,
+           storedRemoteTarget.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           let host = AppState.remoteHost(from: configRemoteUrl)
+        {
+            self.remoteTarget = "\(NSUserName())@\(host)"
+        } else {
+            self.remoteTarget = storedRemoteTarget
+        }
         self.remoteIdentity = UserDefaults.standard.string(forKey: remoteIdentityKey) ?? ""
         self.remoteProjectRoot = UserDefaults.standard.string(forKey: remoteProjectRootKey) ?? ""
         self.remoteCliPath = UserDefaults.standard.string(forKey: remoteCliPathKey) ?? ""
@@ -278,6 +315,138 @@ final class AppState {
             Task { await VoiceWakeRuntime.shared.refresh(state: self) }
             Task { await TalkModeController.shared.setEnabled(self.talkEnabled) }
         }
+
+        self.isInitializing = false
+        if !self.isPreview {
+            self.startConfigWatcher()
+        }
+    }
+
+    deinit {
+        self.configWatcher?.stop()
+    }
+
+    private static func remoteHost(from urlString: String?) -> String? {
+        guard let raw = urlString?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty,
+              let url = URL(string: raw),
+              let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !host.isEmpty
+        else {
+            return nil
+        }
+        return host
+    }
+
+    private func startConfigWatcher() {
+        let configUrl = ClawdisConfigFile.url()
+        self.configWatcher = ConfigFileWatcher(url: configUrl) { [weak self] in
+            Task { @MainActor in
+                self?.applyConfigFromDisk()
+            }
+        }
+        self.configWatcher?.start()
+    }
+
+    private func applyConfigFromDisk() {
+        let root = ClawdisConfigFile.loadDict()
+        self.applyConfigOverrides(root)
+    }
+
+    private func applyConfigOverrides(_ root: [String: Any]) {
+        let gateway = root["gateway"] as? [String: Any]
+        let modeRaw = (gateway?["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let remoteUrl = (gateway?["remote"] as? [String: Any])?["url"] as? String
+        let hasRemoteUrl = !(remoteUrl?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .isEmpty ?? true)
+
+        let desiredMode: ConnectionMode? = {
+            switch modeRaw {
+            case "local":
+                return .local
+            case "remote":
+                return .remote
+            case "unconfigured":
+                return .unconfigured
+            default:
+                return nil
+            }
+        }()
+
+        if let desiredMode {
+            if desiredMode != self.connectionMode {
+                self.connectionMode = desiredMode
+            }
+        } else if hasRemoteUrl, self.connectionMode != .remote {
+            self.connectionMode = .remote
+        }
+
+        let targetMode = desiredMode ?? self.connectionMode
+        if targetMode == .remote,
+           let host = AppState.remoteHost(from: remoteUrl)
+        {
+            self.updateRemoteTarget(host: host)
+        }
+    }
+
+    private func updateRemoteTarget(host: String) {
+        let parsed = CommandResolver.parseSSHTarget(self.remoteTarget)
+        let user = parsed?.user ?? NSUserName()
+        let port = parsed?.port ?? 22
+        let assembled = port == 22 ? "\(user)@\(host)" : "\(user)@\(host):\(port)"
+        if assembled != self.remoteTarget {
+            self.remoteTarget = assembled
+        }
+    }
+
+    private func syncGatewayConfigIfNeeded() {
+        guard !self.isPreview, !self.isInitializing else { return }
+
+        var root = ClawdisConfigFile.loadDict()
+        var gateway = root["gateway"] as? [String: Any] ?? [:]
+        var changed = false
+
+        let desiredMode: String?
+        switch self.connectionMode {
+        case .local:
+            desiredMode = "local"
+        case .remote:
+            desiredMode = "remote"
+        case .unconfigured:
+            desiredMode = nil
+        }
+
+        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let desiredMode {
+            if currentMode != desiredMode {
+                gateway["mode"] = desiredMode
+                changed = true
+            }
+        } else if currentMode != nil {
+            gateway.removeValue(forKey: "mode")
+            changed = true
+        }
+
+        if self.connectionMode == .remote,
+           let host = CommandResolver.parseSSHTarget(self.remoteTarget)?.host
+        {
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            let existingUrl = (remote["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
+            let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
+            let port = parsedExisting?.port ?? 18789
+            let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
+            if existingUrl != desiredUrl {
+                remote["url"] = desiredUrl
+                gateway["remote"] = remote
+                changed = true
+            }
+        }
+
+        guard changed else { return }
+        root["gateway"] = gateway
+        ClawdisConfigFile.saveDict(root)
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
