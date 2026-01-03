@@ -5,7 +5,7 @@ import OSLog
 final class ConnectionModeCoordinator {
     static let shared = ConnectionModeCoordinator()
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "connection")
+    private let logger = Logger(subsystem: "com.clawdis", category: "connection")
 
     /// Apply the requested connection mode by starting/stopping local gateway,
     /// managing the control-channel SSH tunnel, and cleaning up chat windows/panels.

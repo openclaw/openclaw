@@ -24,7 +24,7 @@ import Testing
         listener.newConnectionHandler = { connection in
             connection.cancel()
         }
-        listener.start(queue: DispatchQueue(label: "com.steipete.clawdis.tests.bridge-listener"))
+        listener.start(queue: DispatchQueue(label: "com.clawdis.tests.bridge-listener"))
         try await waitForListenerReady(listener, timeoutSeconds: 1.0)
 
         guard let port = listener.port else {

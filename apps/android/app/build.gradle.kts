@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-  namespace = "com.steipete.clawdis.node"
+  namespace = "com.clawdis.android"
   compileSdk = 36
 
   sourceSets {
@@ -16,7 +16,7 @@ android {
   }
 
   defaultConfig {
-    applicationId = "com.steipete.clawdis.node"
+    applicationId = "com.clawdis.android"
     minSdk = 31
     targetSdk = 36
     versionCode = 1

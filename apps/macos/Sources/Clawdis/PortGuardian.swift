@@ -22,7 +22,7 @@ actor PortGuardian {
     }
 
     private var records: [Record] = []
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "portguard")
+    private let logger = Logger(subsystem: "com.clawdis", category: "portguard")
     private nonisolated static let appSupportDir: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         return base.appendingPathComponent("Clawdis", isDirectory: true)

@@ -99,7 +99,7 @@ final class BridgeConnectionController {
         guard !instanceId.isEmpty else { return }
 
         let token = KeychainStore.loadString(
-            service: "com.steipete.clawdis.bridge",
+            service: "com.clawdis.bridge",
             account: self.keychainAccount(instanceId: instanceId))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !token.isEmpty else { return }
@@ -189,7 +189,7 @@ final class BridgeConnectionController {
                 if !refreshed.isEmpty, refreshed != token {
                     _ = KeychainStore.saveString(
                         refreshed,
-                        service: "com.steipete.clawdis.bridge",
+                        service: "com.clawdis.bridge",
                         account: self.keychainAccount(instanceId: instanceId))
                 }
                 appModel.connectToBridge(endpoint: endpoint, hello: self.makeHello(token: resolvedToken))

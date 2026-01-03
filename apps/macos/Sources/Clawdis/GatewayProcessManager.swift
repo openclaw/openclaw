@@ -42,7 +42,7 @@ final class GatewayProcessManager {
     private var environmentRefreshTask: Task<Void, Never>?
     private var lastEnvironmentRefresh: Date?
     private var logRefreshTask: Task<Void, Never>?
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.process")
+    private let logger = Logger(subsystem: "com.clawdis", category: "gateway.process")
 
     private let logLimit = 20000 // characters to keep in-memory
     private let environmentRefreshMinInterval: TimeInterval = 30

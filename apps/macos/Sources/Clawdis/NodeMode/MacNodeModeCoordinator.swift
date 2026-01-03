@@ -7,7 +7,7 @@ import OSLog
 final class MacNodeModeCoordinator {
     static let shared = MacNodeModeCoordinator()
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "mac-node")
+    private let logger = Logger(subsystem: "com.clawdis", category: "mac-node")
     private var task: Task<Void, Never>?
     private let runtime = MacNodeRuntime()
     private let session = MacNodeBridgeSession()
@@ -198,7 +198,7 @@ final class MacNodeModeCoordinator {
     static func probeEndpoint(_ endpoint: NWEndpoint, timeoutSeconds: Double) async -> Bool {
         let connection = NWConnection(to: endpoint, using: .tcp)
         let stream = Self.makeStateStream(for: connection)
-        connection.start(queue: DispatchQueue(label: "com.steipete.clawdis.macos.bridge-loopback-probe"))
+        connection.start(queue: DispatchQueue(label: "com.clawdis.macos.bridge-loopback-probe"))
         do {
             try await Self.waitForReady(stream, timeoutSeconds: timeoutSeconds)
             connection.cancel()
@@ -339,7 +339,7 @@ final class MacNodeModeCoordinator {
                     }
                 }
                 state.browsers.append(browser)
-                browser.start(queue: DispatchQueue(label: "com.steipete.clawdis.macos.bridge-discovery.\(domain)"))
+                browser.start(queue: DispatchQueue(label: "com.clawdis.macos.bridge-discovery.\(domain)"))
             }
 
             Task {
@@ -351,7 +351,7 @@ final class MacNodeModeCoordinator {
 }
 
 enum MacNodeTokenStore {
-    private static let suiteName = "com.steipete.clawdis.shared"
+    private static let suiteName = "com.clawdis.shared"
     private static let tokenKey = "mac.node.bridge.token"
 
     private static var defaults: UserDefaults {

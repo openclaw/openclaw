@@ -5,7 +5,7 @@ import UserNotifications
 
 @MainActor
 struct NotificationManager {
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "notifications")
+    private let logger = Logger(subsystem: "com.clawdis", category: "notifications")
 
     private static let hasTimeSensitiveEntitlement: Bool = {
         guard let task = SecTaskCreateFromSelf(nil) else { return false }

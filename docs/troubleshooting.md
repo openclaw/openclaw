@@ -142,7 +142,7 @@ If the app disappears or shows "Abort trap 6" when you click "Allow" on a privac
 
 **Fix 1: Reset TCC Cache**
 ```bash
-tccutil reset All com.steipete.clawdis.debug
+tccutil reset All com.clawdis.mac.debug
 ```
 
 **Fix 2: Force New Bundle ID**

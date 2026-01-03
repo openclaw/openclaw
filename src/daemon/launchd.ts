@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "./constants.js";
 
 const execFileAsync = promisify(execFile);
+const LEGACY_GATEWAY_LAUNCH_AGENT_LABEL = "com.steipete.clawdis.gateway";
 
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
@@ -22,6 +23,18 @@ export function resolveLaunchAgentPlistPath(
     "Library",
     "LaunchAgents",
     `${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
+  );
+}
+
+function resolveLegacyLaunchAgentPlistPath(
+  env: Record<string, string | undefined>,
+): string {
+  const home = resolveHomeDir(env);
+  return path.join(
+    home,
+    "Library",
+    "LaunchAgents",
+    `${LEGACY_GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
   );
 }
 
@@ -246,6 +259,16 @@ export async function installLaunchAgent({
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await fs.mkdir(logDir, { recursive: true });
 
+  const legacyPlistPath = resolveLegacyLaunchAgentPlistPath(env);
+  const domain = resolveGuiDomain();
+  await execLaunchctl(["bootout", domain, legacyPlistPath]);
+  await execLaunchctl(["unload", legacyPlistPath]);
+  try {
+    await fs.unlink(legacyPlistPath);
+  } catch {
+    // ignore
+  }
+
   const plistPath = resolveLaunchAgentPlistPath(env);
   await fs.mkdir(path.dirname(plistPath), { recursive: true });
 
@@ -258,7 +281,6 @@ export async function installLaunchAgent({
   });
   await fs.writeFile(plistPath, plist, "utf8");
 
-  const domain = resolveGuiDomain();
   await execLaunchctl(["bootout", domain, plistPath]);
   await execLaunchctl(["unload", plistPath]);
   const boot = await execLaunchctl(["bootstrap", domain, plistPath]);

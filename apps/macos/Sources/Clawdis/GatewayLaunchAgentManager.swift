@@ -1,12 +1,18 @@
 import Foundation
 
 enum GatewayLaunchAgentManager {
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.launchd")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "gateway.launchd")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let legacyGatewayLaunchdLabel = "com.steipete.clawdis.gateway"
 
     private static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
+    }
+
+    private static var legacyPlistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(legacyGatewayLaunchdLabel).plist")
     }
 
     private static func gatewayExecutablePath(bundlePath: String) -> String {
@@ -45,6 +51,8 @@ enum GatewayLaunchAgentManager {
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         if enabled {
+            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(legacyGatewayLaunchdLabel)"])
+            try? FileManager.default.removeItem(at: self.legacyPlistURL)
             let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
             guard FileManager.default.isExecutableFile(atPath: gatewayBin) else {
                 self.logger.error("launchd enable failed: gateway missing at \(gatewayBin)")

@@ -125,7 +125,7 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 
 Bundled mac app:
-- Clawdis.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.steipete.clawdis.gateway`.
+- Clawdis.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdis.gateway`.
 
 ## Supervision (systemd example)
 ```

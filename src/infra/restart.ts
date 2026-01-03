@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-const DEFAULT_LAUNCHD_LABEL = "com.steipete.clawdis";
+const DEFAULT_LAUNCHD_LABEL = "com.clawdis.mac";
 const DEFAULT_SYSTEMD_UNIT = "clawdis-gateway.service";
 
 export function triggerClawdisRestart():

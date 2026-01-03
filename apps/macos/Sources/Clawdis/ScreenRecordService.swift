@@ -25,7 +25,7 @@ final class ScreenRecordService {
         }
     }
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "screenRecord")
+    private let logger = Logger(subsystem: "com.clawdis", category: "screenRecord")
 
     func record(
         screenIndex: Int?,
@@ -110,7 +110,7 @@ final class ScreenRecordService {
 }
 
 private final class StreamRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    let queue = DispatchQueue(label: "com.steipete.clawdis.screenRecord.writer")
+    let queue = DispatchQueue(label: "com.clawdis.screenRecord.writer")
 
     private let logger: Logger
     private let writer: AVAssetWriter

@@ -8,7 +8,7 @@ import SwiftUI
 final class VoiceWakeOverlayController {
     static let shared = VoiceWakeOverlayController()
 
-    let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.overlay")
+    let logger = Logger(subsystem: "com.clawdis", category: "voicewake.overlay")
     let enableUI: Bool
 
     /// Keep the voice wake overlay above any other Clawdis windows, but below the system’s pop-up menus.

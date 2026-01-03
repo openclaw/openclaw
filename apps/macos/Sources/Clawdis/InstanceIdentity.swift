@@ -2,7 +2,7 @@ import Darwin
 import Foundation
 
 enum InstanceIdentity {
-    private static let suiteName = "com.steipete.clawdis.shared"
+    private static let suiteName = "com.clawdis.shared"
     private static let instanceIdKey = "instanceId"
 
     private static var defaults: UserDefaults {

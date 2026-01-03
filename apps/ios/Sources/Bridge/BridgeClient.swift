@@ -14,7 +14,7 @@ actor BridgeClient {
     {
         self.lineBuffer = Data()
         let connection = NWConnection(to: endpoint, using: .tcp)
-        let queue = DispatchQueue(label: "com.steipete.clawdis.ios.bridge-client")
+        let queue = DispatchQueue(label: "com.clawdis.ios.bridge-client")
         defer { connection.cancel() }
         try await self.withTimeout(seconds: 8, purpose: "connect") {
             try await self.startAndWaitForReady(connection, queue: queue)

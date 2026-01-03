@@ -68,7 +68,7 @@ final class ScreenRecordService: @unchecked Sendable {
         try? FileManager.default.removeItem(at: outURL)
 
         let state = CaptureState()
-        let recordQueue = DispatchQueue(label: "com.steipete.clawdis.screenrecord")
+        let recordQueue = DispatchQueue(label: "com.clawdis.screenrecord")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
             let handler: @Sendable (CMSampleBuffer, RPSampleBufferType, Error?) -> Void = { sample, type, error in

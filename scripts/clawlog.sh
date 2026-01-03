@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-SUBSYSTEM="com.steipete.clawdis"
+SUBSYSTEM="com.clawdis"
 DEFAULT_LEVEL="info"
 
 # Colors for output
@@ -58,7 +58,7 @@ DESCRIPTION:
     Requires sudo access configured for /usr/bin/log command.
 
 LOG FLOW ARCHITECTURE:
-    Clawdis logs flow through the macOS unified log (subsystem: com.steipete.clawdis).
+    Clawdis logs flow through the macOS unified log (subsystem: com.clawdis).
 
 LOG CATEGORIES (examples):
     • voicewake           - Voice wake detection/test harness

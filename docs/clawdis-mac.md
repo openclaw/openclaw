@@ -21,7 +21,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
 - Targets:
   - `ClawdisIPC` (shared Codable types + helpers for app‑internal actions).
   - `Clawdis` (LSUIElement MenuBarExtra app; hosts Gateway + node bridge + PeekabooBridgeHost).
-- Bundle ID: `com.steipete.clawdis`.
+- Bundle ID: `com.clawdis.mac`.
 - Bundled runtime binaries live under `Contents/Resources/Relay/`:
   - `clawdis` (bun‑compiled relay: CLI + gateway-daemon)
 - The app symlinks `clawdis` into `/usr/local/bin` and `/opt/homebrew/bin`.

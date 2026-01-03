@@ -17,7 +17,7 @@ On macOS, the GUI app does not automatically inherit shell env vars. You can
 also enable Nix mode via defaults:
 
 ```
-defaults write com.steipete.clawdis clawdis.nixMode -bool true
+defaults write com.clawdis.mac clawdis.nixMode -bool true
 ```
 
 ## Config + state paths

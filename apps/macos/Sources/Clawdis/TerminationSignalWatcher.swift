@@ -6,7 +6,7 @@ import OSLog
 final class TerminationSignalWatcher {
     static let shared = TerminationSignalWatcher()
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "lifecycle")
+    private let logger = Logger(subsystem: "com.clawdis", category: "lifecycle")
     private var sources: [DispatchSourceSignal] = []
     private var terminationRequested = false
 

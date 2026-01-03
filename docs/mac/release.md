@@ -28,7 +28,7 @@ Notes:
 ```bash
 # From repo root; set release IDs so Sparkle feed is enabled.
 # APP_BUILD must be numeric + monotonic for Sparkle compare.
-BUNDLE_ID=com.steipete.clawdis \
+BUNDLE_ID=com.clawdis.mac \
 APP_VERSION=0.1.0 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
@@ -46,7 +46,7 @@ scripts/create-dmg.sh dist/Clawdis.app dist/Clawdis-0.1.0.dmg
 #   xcrun notarytool store-credentials "clawdis-notary" \
 #     --apple-id "<apple-id>" --team-id "<team-id>" --password "<app-specific-password>"
 NOTARIZE=1 NOTARYTOOL_PROFILE=clawdis-notary \
-BUNDLE_ID=com.steipete.clawdis \
+BUNDLE_ID=com.clawdis.mac \
 APP_VERSION=0.1.0 \
 APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \

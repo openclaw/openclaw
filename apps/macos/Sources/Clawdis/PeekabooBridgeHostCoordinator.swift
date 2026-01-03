@@ -9,7 +9,7 @@ import PeekabooFoundation
 final class PeekabooBridgeHostCoordinator {
     static let shared = PeekabooBridgeHostCoordinator()
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "PeekabooBridge")
+    private let logger = Logger(subsystem: "com.clawdis", category: "PeekabooBridge")
 
     private var host: PeekabooBridgeHost?
     private var services: ClawdisPeekabooBridgeServices?
@@ -102,7 +102,7 @@ private final class ClawdisPeekabooBridgeServices: PeekabooBridgeServiceProvidin
     let snapshots: any SnapshotManagerProtocol
 
     init() {
-        let logging = LoggingService(subsystem: "com.steipete.clawdis.peekaboo")
+        let logging = LoggingService(subsystem: "com.clawdis.peekaboo")
         let feedbackClient: any AutomationFeedbackClient = NoopAutomationFeedbackClient()
 
         let snapshots = InMemorySnapshotManager(options: .init(

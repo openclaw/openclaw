@@ -7,7 +7,7 @@
     <key>CFBundleExecutable</key>
     <string>Clawdis</string>
     <key>CFBundleIdentifier</key>
-    <string>com.steipete.clawdis</string>
+    <string>com.clawdis.mac</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
@@ -24,7 +24,7 @@
     <array>
         <dict>
             <key>CFBundleURLName</key>
-            <string>com.steipete.clawdis.deeplink</string>
+            <string>com.clawdis.mac.deeplink</string>
             <key>CFBundleURLSchemes</key>
             <array>
                 <string>clawdis</string>

@@ -157,5 +157,5 @@ Recommended defaults:
 
 Suggested debugging hooks:
 - Enable Web Inspector for Canvas builds (same approach as WebChat).
-- Log scheme requests + resolution decisions to OSLog (subsystem `com.steipete.clawdis`, category `Canvas`).
+- Log scheme requests + resolution decisions to OSLog (subsystem `com.clawdis`, category `Canvas`).
 - Provide a “copy canvas dir” action in debug settings to quickly reveal the session directory in Finder.

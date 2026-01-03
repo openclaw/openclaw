@@ -52,10 +52,10 @@ Version injection:
 ## Launchd (Gateway as LaunchAgent)
 
 Label:
-- `com.steipete.clawdis.gateway`
+- `com.clawdis.gateway`
 
 Plist location (per-user):
-- `~/Library/LaunchAgents/com.steipete.clawdis.gateway.plist`
+- `~/Library/LaunchAgents/com.clawdis.gateway.plist`
 
 Manager:
 - `apps/macos/Sources/Clawdis/GatewayLaunchAgentManager.swift`

@@ -22,7 +22,7 @@ final class VoiceWakeTester {
     private var lastHeard: Date?
     private var holdingAfterDetect = false
     private var detectedText: String?
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake")
+    private let logger = Logger(subsystem: "com.clawdis", category: "voicewake")
     private let silenceWindow: TimeInterval = 1.0
 
     init(locale: Locale = .current) {

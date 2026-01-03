@@ -10,7 +10,7 @@ final class CanvasFileWatcher: @unchecked Sendable {
 
     init(url: URL, onChange: @escaping () -> Void) {
         self.url = url
-        self.queue = DispatchQueue(label: "com.steipete.clawdis.canvaswatcher")
+        self.queue = DispatchQueue(label: "com.clawdis.canvaswatcher")
         self.onChange = onChange
     }
 

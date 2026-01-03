@@ -19,7 +19,7 @@ actor BridgeConnectionHandler {
     private let logger: Logger
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private let queue = DispatchQueue(label: "com.steipete.clawdis.bridge.connection")
+    private let queue = DispatchQueue(label: "com.clawdis.bridge.connection")
 
     private var buffer = Data()
     private var isAuthenticated = false

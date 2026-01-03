@@ -68,7 +68,7 @@ If the app crashes when you try to allow **Speech Recognition** or **Microphone*
 **Fix:**
 1. Reset the TCC permissions:
    ```bash
-   tccutil reset All com.steipete.clawdis.debug
+   tccutil reset All com.clawdis.mac.debug
    ```
 2. If that fails, change the `BUNDLE_ID` temporarily in `scripts/package-mac-app.sh` to force a "clean slate" from macOS.
 

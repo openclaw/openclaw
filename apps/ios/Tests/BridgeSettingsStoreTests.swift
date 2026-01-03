@@ -7,8 +7,8 @@ private struct KeychainEntry: Hashable {
     let account: String
 }
 
-private let bridgeService = "com.steipete.clawdis.bridge"
-private let nodeService = "com.steipete.clawdis.node"
+private let bridgeService = "com.clawdis.bridge"
+private let nodeService = "com.clawdis.node"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredBridgeEntry = KeychainEntry(service: bridgeService, account: "preferredStableID")
 private let lastBridgeEntry = KeychainEntry(service: bridgeService, account: "lastDiscoveredStableID")

@@ -4,7 +4,7 @@ import Foundation
 import OSLog
 import Security
 
-private let deepLinkLogger = Logger(subsystem: "com.steipete.clawdis", category: "DeepLink")
+private let deepLinkLogger = Logger(subsystem: "com.clawdis", category: "DeepLink")
 
 @MainActor
 final class DeepLinkHandler {

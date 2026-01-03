@@ -8,7 +8,7 @@ import OSLog
 actor BridgeServer {
     static let shared = BridgeServer()
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "bridge")
+    private let logger = Logger(subsystem: "com.clawdis", category: "bridge")
     private var listener: NWListener?
     private var isRunning = false
     private var store: PairedNodesStore?
@@ -42,7 +42,7 @@ actor BridgeServer {
                 Task { await self.handleListenerState(state) }
             }
 
-            listener.start(queue: DispatchQueue(label: "com.steipete.clawdis.bridge"))
+            listener.start(queue: DispatchQueue(label: "com.clawdis.bridge"))
             self.listener = listener
         } catch {
             self.logger.error("bridge start failed: \(error.localizedDescription, privacy: .public)")
