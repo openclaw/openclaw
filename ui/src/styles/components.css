@@ -575,6 +575,49 @@
   color: var(--chat-text);
 }
 
+.chat-tool-card {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.22);
+  display: grid;
+  gap: 4px;
+}
+
+:root[data-theme="light"] .chat-tool-card {
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.chat-tool-card__title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--chat-text);
+}
+
+.chat-tool-card__detail {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-tool-card__output {
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  color: var(--chat-text);
+  padding: 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="light"] .chat-tool-card__output {
+  background: rgba(16, 24, 40, 0.05);
+}
+
 .chat-stamp {
   font-size: 11px;
   color: var(--muted);

@@ -1,29 +1,8 @@
+import { resolveToolDisplay, formatToolSummary } from "../agents/tool-display.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 export const TOOL_RESULT_DEBOUNCE_MS = 500;
 export const TOOL_RESULT_FLUSH_COUNT = 5;
-
-const TOOL_EMOJI_BY_NAME: Record<string, string> = {
-  bash: "🛠️",
-  process: "🧰",
-  read: "📖",
-  write: "✍️",
-  edit: "📝",
-  attach: "📎",
-  browser: "🌐",
-  canvas: "🖼️",
-  nodes: "📱",
-  cron: "⏰",
-  gateway: "🔌",
-  whatsapp_login: "🟢",
-  discord: "💬",
-};
-
-function resolveToolEmoji(toolName?: string): string {
-  const key = toolName?.trim().toLowerCase();
-  if (key && TOOL_EMOJI_BY_NAME[key]) return TOOL_EMOJI_BY_NAME[key];
-  return "🧩";
-}
 
 export function shortenPath(p: string): string {
   return shortenHomePath(p);
@@ -43,14 +22,18 @@ export function formatToolAggregate(
   metas?: string[],
 ): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
-  const label = toolName?.trim() || "tool";
-  const prefix = `${resolveToolEmoji(label)} ${label}`;
+  const display = resolveToolDisplay({ name: toolName });
+  const prefix = `${display.emoji} ${display.label}`;
   if (!filtered.length) return prefix;
 
   const rawSegments: string[] = [];
   // Group by directory and brace-collapse filenames
   const grouped: Record<string, string[]> = {};
   for (const m of filtered) {
+    if (!isPathLike(m)) {
+      rawSegments.push(m);
+      continue;
+    }
     if (m.includes("→")) {
       rawSegments.push(m);
       continue;
@@ -78,10 +61,18 @@ export function formatToolAggregate(
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {
-  const label = toolName?.trim() || "tool";
-  const emoji = resolveToolEmoji(label);
   const extra = meta?.trim() ? shortenMeta(meta) : undefined;
-  return extra ? `${emoji} ${label}: ${extra}` : `${emoji} ${label}`;
+  const display = resolveToolDisplay({ name: toolName, meta: extra });
+  return formatToolSummary(display);
+}
+
+function isPathLike(value: string): boolean {
+  if (!value) return false;
+  if (value.includes(" ")) return false;
+  if (value.includes("://")) return false;
+  if (value.includes("·")) return false;
+  if (value.includes("&&") || value.includes("||")) return false;
+  return /^~?(\\/[^\\s]+)+$/.test(value);
 }
 
 export function createToolDebouncer(

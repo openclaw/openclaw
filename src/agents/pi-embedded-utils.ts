@@ -1,4 +1,5 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
 export function extractAssistantText(msg: AssistantMessage): string {
   const isTextBlock = (
@@ -22,23 +23,6 @@ export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,
 ): string | undefined {
-  if (!args || typeof args !== "object") return undefined;
-  const record = args as Record<string, unknown>;
-
-  const p = typeof record.path === "string" ? record.path : undefined;
-  const command =
-    typeof record.command === "string" ? record.command : undefined;
-
-  if (toolName === "read" && p) {
-    const offset =
-      typeof record.offset === "number" ? record.offset : undefined;
-    const limit = typeof record.limit === "number" ? record.limit : undefined;
-    if (offset !== undefined && limit !== undefined) {
-      return `${p}:${offset}-${offset + limit}`;
-    }
-    return p;
-  }
-  if ((toolName === "edit" || toolName === "write") && p) return p;
-  if (toolName === "bash" && command) return command;
-  return p ?? command;
+  const display = resolveToolDisplay({ name: toolName, args });
+  return formatToolDetail(display);
 }

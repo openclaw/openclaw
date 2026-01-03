@@ -1,3 +1,4 @@
+import ClawdisKit
 import Foundation
 import Observation
 import SwiftUI
@@ -55,7 +56,7 @@ final class WorkActivityStore {
         args: [String: AnyCodable]?)
     {
         let toolKind = Self.mapToolKind(name)
-        let label = Self.buildLabel(kind: toolKind, meta: meta, args: args)
+        let label = Self.buildLabel(name: name, meta: meta, args: args)
         if phase.lowercased() == "start" {
             self.lastToolLabel = label
             self.lastToolUpdatedAt = Date()
@@ -208,41 +209,37 @@ final class WorkActivityStore {
     }
 
     private static func buildLabel(
-        kind: ToolKind,
+        name: String?,
         meta: String?,
         args: [String: AnyCodable]?) -> String
     {
-        switch kind {
-        case .bash:
-            if let cmd = args?["command"]?.value as? String {
-                return "bash: \(cmd.split(separator: "\n").first ?? "")"
-            }
-            return "bash"
-        case .read, .write, .edit, .attach:
-            if let path = extractPath(args: args, meta: meta) {
-                return "\(kind.rawValue): \(path)"
-            }
-            return kind.rawValue
-        case .other:
-            if let name = args?["name"]?.value as? String {
-                return name
-            }
-            return "tool"
+        let wrappedArgs = wrapToolArgs(args)
+        let display = ToolDisplayRegistry.resolve(name: name ?? "tool", args: wrappedArgs, meta: meta)
+        if let detail = display.detailLine, !detail.isEmpty {
+            return "\(display.label): \(detail)"
         }
+        return display.label
     }
 
-    private static func extractPath(args: [String: AnyCodable]?, meta: String?) -> String? {
-        if let p = args?["path"]?.value as? String { return self.shortenHome(path: p) }
-        if let p = args?["file_path"]?.value as? String { return self.shortenHome(path: p) }
-        if let meta { return self.shortenHome(path: meta) }
-        return nil
+    private static func wrapToolArgs(_ args: [String: AnyCodable]?) -> ClawdisKit.AnyCodable? {
+        guard let args else { return nil }
+        let converted: [String: Any] = args.mapValues { unwrapJSONValue($0.value) }
+        return ClawdisKit.AnyCodable(converted)
     }
 
-    private static func shortenHome(path: String) -> String {
-        let home = NSHomeDirectory()
-        if path.hasPrefix(home) {
-            return "~" + path.dropFirst(home.count)
+    private static func unwrapJSONValue(_ value: Any) -> Any {
+        if let dict = value as? [String: AnyCodable] {
+            return dict.mapValues { unwrapJSONValue($0.value) }
         }
-        return path
+        if let array = value as? [AnyCodable] {
+            return array.map { unwrapJSONValue($0.value) }
+        }
+        if let dict = value as? [String: Any] {
+            return dict.mapValues { unwrapJSONValue($0) }
+        }
+        if let array = value as? [Any] {
+            return array.map { unwrapJSONValue($0) }
+        }
+        return value
     }
 }

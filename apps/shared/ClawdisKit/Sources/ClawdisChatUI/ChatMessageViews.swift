@@ -219,8 +219,9 @@ private struct ChatMessageBody: View {
             if !self.inlineToolResults.isEmpty {
                 ForEach(self.inlineToolResults.indices, id: \.self) { idx in
                     let toolResult = self.inlineToolResults[idx]
+                    let display = ToolDisplayRegistry.resolve(name: toolResult.name ?? "tool", args: nil)
                     ToolResultCard(
-                        title: toolResult.name ?? "Tool result",
+                        title: "\(display.emoji) \(display.title)",
                         text: toolResult.text ?? "",
                         isUser: self.isUser)
                 }
@@ -282,9 +283,11 @@ private struct ChatMessageBody: View {
 
     private var toolResultTitle: String {
         if let name = self.message.toolName, !name.isEmpty {
-            return name
+            let display = ToolDisplayRegistry.resolve(name: name, args: nil)
+            return "\(display.emoji) \(display.title)"
         }
-        return "Tool result"
+        let display = ToolDisplayRegistry.resolve(name: "tool", args: nil)
+        return "\(display.emoji) \(display.title)"
     }
 
     private var bubbleFillColor: Color {
@@ -377,8 +380,6 @@ private struct ToolCallCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: "hammer")
-                    .imageScale(.small)
                 Text(self.toolName)
                     .font(.footnote.weight(.semibold))
                 Spacer(minLength: 0)
@@ -401,50 +402,15 @@ private struct ToolCallCard: View {
     }
 
     private var toolName: String {
-        self.content.name?.isEmpty == false ? (self.content.name ?? "Tool") : "Tool"
+        "\(self.display.emoji) \(self.display.title)"
     }
 
     private var summary: String? {
-        guard let args = self.content.arguments else { return nil }
-        if let dict = args.value as? [String: AnyCodable] {
-            if let command = dict["command"]?.value as? String { return command }
-            if let path = dict["path"]?.value as? String { return path }
-            if let pattern = dict["pattern"]?.value as? String { return pattern }
-            if let query = dict["query"]?.value as? String { return query }
-            if let url = dict["url"]?.value as? String { return url }
-            return Self.renderArgs(dict)
-        }
-        return Self.renderValue(args)
+        self.display.detailLine
     }
 
-    private static func renderArgs(_ dict: [String: AnyCodable]) -> String? {
-        let keys = dict.keys.sorted()
-        let pairs = keys.prefix(6).compactMap { key -> String? in
-            guard let value = dict[key] else { return nil }
-            return "\(key)=\(self.renderValue(value) ?? "…")"
-        }
-        guard !pairs.isEmpty else { return nil }
-        return pairs.joined(separator: " ")
-    }
-
-    private static func renderValue(_ value: AnyCodable) -> String? {
-        switch value.value {
-        case let str as String:
-            return str
-        case let num as Int:
-            return String(num)
-        case let num as Double:
-            return String(num)
-        case let bool as Bool:
-            return bool ? "true" : "false"
-        default:
-            if let data = try? JSONEncoder().encode(value),
-               let string = String(data: data, encoding: .utf8)
-            {
-                return string
-            }
-            return nil
-        }
+    private var display: ToolDisplaySummary {
+        ToolDisplayRegistry.resolve(name: self.content.name ?? "tool", args: self.content.arguments)
     }
 }
 
@@ -457,8 +423,6 @@ private struct ToolResultCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
-                Image(systemName: "terminal")
-                    .imageScale(.small)
                 Text(self.title)
                     .font(.footnote.weight(.semibold))
                 Spacer(minLength: 0)
@@ -567,12 +531,21 @@ struct ChatPendingToolsBubble: View {
                 .foregroundStyle(.secondary)
 
             ForEach(self.toolCalls) { call in
-                HStack(alignment: .firstTextBaseline, spacing: 8) {
-                    Text(call.name)
-                        .font(.footnote.monospaced())
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    ProgressView().controlSize(.mini)
+                let display = ToolDisplayRegistry.resolve(name: call.name, args: call.args)
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text("\(display.emoji) \(display.label)")
+                            .font(.footnote.monospaced())
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                        ProgressView().controlSize(.mini)
+                    }
+                    if let detail = display.detailLine, !detail.isEmpty {
+                        Text(detail)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
                 .padding(10)
                 .background(Color.white.opacity(0.06))

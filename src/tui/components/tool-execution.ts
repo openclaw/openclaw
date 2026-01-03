@@ -1,4 +1,5 @@
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 
 type ToolResultContent = {
@@ -17,13 +18,10 @@ type ToolResult = {
 const PREVIEW_LINES = 12;
 
 function formatArgs(toolName: string, args: unknown): string {
+  const display = resolveToolDisplay({ name: toolName, args });
+  const detail = formatToolDetail(display);
+  if (detail) return detail;
   if (!args || typeof args !== "object") return "";
-  const record = args as Record<string, unknown>;
-  if (toolName === "bash" && typeof record.command === "string") {
-    return record.command;
-  }
-  const path = typeof record.path === "string" ? record.path : undefined;
-  if (path) return path;
   try {
     return JSON.stringify(args);
   } catch {
@@ -108,7 +106,8 @@ export class ToolExecutionComponent extends Container {
         : theme.toolSuccessBg;
     this.box.setBgFn((line) => bg(line));
 
-    const title = `${this.toolName}${this.isPartial ? " (running)" : ""}`;
+    const display = resolveToolDisplay({ name: this.toolName, args: this.args });
+    const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 
     const argLine = formatArgs(this.toolName, this.args);

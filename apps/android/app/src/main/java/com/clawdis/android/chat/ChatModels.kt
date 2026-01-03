@@ -18,6 +18,7 @@ data class ChatMessageContent(
 data class ChatPendingToolCall(
   val toolCallId: String,
   val name: String,
+  val args: kotlinx.serialization.json.JsonObject? = null,
   val startedAtMs: Long,
   val isError: Boolean? = null,
 )

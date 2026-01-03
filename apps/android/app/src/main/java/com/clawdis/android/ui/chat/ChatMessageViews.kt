@@ -34,8 +34,10 @@ import androidx.compose.foundation.Image
 import com.clawdis.android.chat.ChatMessage
 import com.clawdis.android.chat.ChatMessageContent
 import com.clawdis.android.chat.ChatPendingToolCall
+import com.clawdis.android.tools.ToolDisplayRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.platform.LocalContext
 
 @Composable
 fun ChatMessageBubble(message: ChatMessage) {
@@ -104,18 +106,42 @@ fun ChatTypingIndicatorBubble() {
 
 @Composable
 fun ChatPendingToolsBubble(toolCalls: List<ChatPendingToolCall>) {
+  val context = LocalContext.current
+  val displays =
+    remember(toolCalls, context) {
+      toolCalls.map { ToolDisplayRegistry.resolve(context, it.name, it.args) }
+    }
   Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Start) {
     Surface(
       shape = RoundedCornerShape(16.dp),
       color = MaterialTheme.colorScheme.surfaceContainer,
     ) {
       Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text("Tools", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
-        for (t in toolCalls.take(6)) {
-          Text("· ${t.name}", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Running tools…", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurface)
+        for (display in displays.take(6)) {
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+              "${display.emoji} ${display.label}",
+              style = MaterialTheme.typography.bodyMedium,
+              color = MaterialTheme.colorScheme.onSurfaceVariant,
+              fontFamily = FontFamily.Monospace,
+            )
+            display.detailLine?.let { detail ->
+              Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontFamily = FontFamily.Monospace,
+              )
+            }
+          }
         }
         if (toolCalls.size > 6) {
-          Text("… +${toolCalls.size - 6} more", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+          Text(
+            "… +${toolCalls.size - 6} more",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+          )
         }
       }
     }
