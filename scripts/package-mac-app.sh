@@ -115,7 +115,15 @@ build_relay_binary() {
       echo "ERROR: Rosetta is required to build the x86_64 relay. Install Rosetta and retry." >&2
       exit 1
     fi
-    local bun_x86="${BUN_X86_64_BIN:-$HOME/.bun-x64/bin/bun}"
+    local bun_x86="${BUN_X86_64_BIN:-$HOME/.bun-x64/bun-darwin-x64/bun}"
+    if [[ ! -x "$bun_x86" ]]; then
+      bun_x86="$HOME/.bun-x64/bin/bun"
+    fi
+    if [[ "$bun_x86" == *baseline* ]]; then
+      echo "ERROR: x86_64 relay builds are locked to AVX2; baseline Bun is not allowed." >&2
+      echo "Set BUN_X86_64_BIN to a non-baseline Bun (bun-darwin-x64)." >&2
+      exit 1
+    fi
     if [[ -x "$bun_x86" ]]; then
       cmd=("$bun_x86" build "$ROOT_DIR/dist/macos/relay.js" --compile --bytecode --outfile "$out" -e electron --define "$define_arg")
     fi
