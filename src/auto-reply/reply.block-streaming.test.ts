@@ -102,4 +102,45 @@ describe("block streaming", () => {
       expect(onBlockReply).toHaveBeenCalledTimes(1);
     });
   });
+
+  it("drops final payloads when block replies streamed", async () => {
+    await withTempHome(async (home) => {
+      const onBlockReply = vi.fn().mockResolvedValue(undefined);
+
+      vi.mocked(runEmbeddedPiAgent).mockImplementation(async (params) => {
+        void params.onBlockReply?.({ text: "chunk-1" });
+        return {
+          payloads: [{ text: "chunk-1\nchunk-2" }],
+          meta: {
+            durationMs: 5,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        };
+      });
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-124",
+          Surface: "discord",
+        },
+        {
+          onBlockReply,
+        },
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(res).toBeUndefined();
+      expect(onBlockReply).toHaveBeenCalledTimes(1);
+    });
+  });
 });
