@@ -40,39 +40,41 @@ export type BridgeStartOpts = {
   >;
 };
 
-export const bridgeStartCalls = vi.hoisted(() => [] as BridgeStartOpts[]);
-export const bridgeInvoke = vi.hoisted(() =>
-  vi.fn(async () => ({
+const hoisted = vi.hoisted(() => ({
+  bridgeStartCalls: [] as BridgeStartOpts[],
+  bridgeInvoke: vi.fn(async () => ({
     type: "invoke-res",
     id: "1",
     ok: true,
     payloadJSON: JSON.stringify({ ok: true }),
     error: null,
   })),
-);
-export const bridgeListConnected = vi.hoisted(() =>
-  vi.fn(() => [] as BridgeClientInfo[]),
-);
-export const bridgeSendEvent = vi.hoisted(() => vi.fn());
-export const testTailnetIPv4 = vi.hoisted(() => ({
-  value: undefined as string | undefined,
+  bridgeListConnected: vi.fn(() => [] as BridgeClientInfo[]),
+  bridgeSendEvent: vi.fn(),
+  testTailnetIPv4: { value: undefined as string | undefined },
+  piSdkMock: {
+    enabled: false,
+    discoverCalls: 0,
+    models: [] as Array<{
+      id: string;
+      name?: string;
+      provider: string;
+      contextWindow?: number;
+      reasoning?: boolean;
+    }>,
+  },
+  cronIsolatedRun: vi.fn(async () => ({ status: "ok", summary: "ok" })),
+  testIsNixMode: { value: false },
+  sessionStoreSaveDelayMs: { value: 0 },
 }));
 
-export const piSdkMock = vi.hoisted(() => ({
-  enabled: false,
-  discoverCalls: 0,
-  models: [] as Array<{
-    id: string;
-    name?: string;
-    provider: string;
-    contextWindow?: number;
-    reasoning?: boolean;
-  }>,
-}));
-
-export const cronIsolatedRun = vi.hoisted(() =>
-  vi.fn(async () => ({ status: "ok", summary: "ok" })),
-);
+export const bridgeStartCalls = hoisted.bridgeStartCalls;
+export const bridgeInvoke = hoisted.bridgeInvoke;
+export const bridgeListConnected = hoisted.bridgeListConnected;
+export const bridgeSendEvent = hoisted.bridgeSendEvent;
+export const testTailnetIPv4 = hoisted.testTailnetIPv4;
+export const piSdkMock = hoisted.piSdkMock;
+export const cronIsolatedRun = hoisted.cronIsolatedRun;
 
 export const testState = {
   sessionStorePath: undefined as string | undefined,
@@ -89,8 +91,8 @@ export const testState = {
   migrationChanges: [] as string[],
 };
 
-export const testIsNixMode = vi.hoisted(() => ({ value: false }));
-export const sessionStoreSaveDelayMs = vi.hoisted(() => ({ value: 0 }));
+export const testIsNixMode = hoisted.testIsNixMode;
+export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<
