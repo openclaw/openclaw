@@ -37,21 +37,21 @@ class BridgePairingClient {
     withContext(Dispatchers.IO) {
       val socket = Socket()
       socket.tcpNoDelay = true
-      socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 8_000)
-      socket.soTimeout = 60_000
-
-      val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
-      val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
-
-      fun send(line: String) {
-        writer.write(line)
-        writer.write("\n")
-        writer.flush()
-      }
-
-      fun sendJson(obj: JsonObject) = send(obj.toString())
-
       try {
+        socket.connect(InetSocketAddress(endpoint.host, endpoint.port), 8_000)
+        socket.soTimeout = 60_000
+
+        val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
+        val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream(), Charsets.UTF_8))
+
+        fun send(line: String) {
+          writer.write(line)
+          writer.write("\n")
+          writer.flush()
+        }
+
+        fun sendJson(obj: JsonObject) = send(obj.toString())
+
         sendJson(
           buildJsonObject {
             put("type", JsonPrimitive("hello"))
@@ -111,6 +111,9 @@ class BridgePairingClient {
           }
           else -> PairResult(ok = false, token = null, error = "unexpected bridge response")
         }
+      } catch (e: Exception) {
+        val message = e.message?.trim().orEmpty().ifEmpty { "gateway unreachable" }
+        PairResult(ok = false, token = null, error = message)
       } finally {
         try {
           socket.close()
