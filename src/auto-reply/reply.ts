@@ -2240,13 +2240,13 @@ export async function getReplyFromConfig(
                   return;
                 }
                 pendingStreamedPayloadKeys.add(payloadKey);
-                didStreamBlockReply = true;
                 const task = (async () => {
                   await startTypingOnText(cleaned);
                   await opts.onBlockReply?.(blockPayload);
                 })()
                   .then(() => {
                     streamedPayloadKeys.add(payloadKey);
+                    didStreamBlockReply = true;
                   })
                   .catch((err) => {
                     logVerbose(`block reply delivery failed: ${String(err)}`);
@@ -2348,7 +2348,7 @@ export async function getReplyFromConfig(
       );
 
     const shouldDropFinalPayloads =
-      blockStreamingEnabled && blockReplyChunking && didStreamBlockReply;
+      blockStreamingEnabled && didStreamBlockReply;
     const filteredPayloads = shouldDropFinalPayloads
       ? []
       : blockStreamingEnabled

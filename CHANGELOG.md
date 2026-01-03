@@ -14,6 +14,7 @@
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
 
 ### Fixes
+- Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Block streaming: default to text_end and suppress duplicate block sends while in-flight.
 - Block streaming: drop final payloads after soft chunking to keep Discord order intact.
