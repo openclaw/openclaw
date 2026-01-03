@@ -14,7 +14,7 @@ export type ChatState = {
   lastError: string | null;
 };
 
-type ChatEventPayload = {
+export type ChatEventPayload = {
   runId: string;
   sessionKey: string;
   state: "delta" | "final" | "aborted" | "error";

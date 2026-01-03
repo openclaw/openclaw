@@ -10,6 +10,24 @@ import type {
   TelegramForm,
 } from "../ui-types";
 
+const discordActionOptions = [
+  { key: "reactions", label: "Reactions" },
+  { key: "stickers", label: "Stickers" },
+  { key: "polls", label: "Polls" },
+  { key: "permissions", label: "Permissions" },
+  { key: "messages", label: "Messages" },
+  { key: "threads", label: "Threads" },
+  { key: "pins", label: "Pins" },
+  { key: "search", label: "Search" },
+  { key: "memberInfo", label: "Member info" },
+  { key: "roleInfo", label: "Role info" },
+  { key: "channelInfo", label: "Channel info" },
+  { key: "voiceStatus", label: "Voice status" },
+  { key: "events", label: "Events" },
+  { key: "roles", label: "Role changes" },
+  { key: "moderation", label: "Moderation" },
+] satisfies Array<{ key: keyof DiscordActionForm; label: string }>;
+
 export type ConnectionsProps = {
   connected: boolean;
   loading: boolean;
@@ -54,24 +72,6 @@ export function renderConnections(props: ConnectionsProps) {
   const discord = props.snapshot?.discord ?? null;
   const signal = props.snapshot?.signal ?? null;
   const imessage = props.snapshot?.imessage ?? null;
-  const discordActionOptions: Array<{ key: keyof DiscordActionForm; label: string }> =
-    [
-      { key: "reactions", label: "Reactions" },
-      { key: "stickers", label: "Stickers" },
-      { key: "polls", label: "Polls" },
-      { key: "permissions", label: "Permissions" },
-      { key: "messages", label: "Messages" },
-      { key: "threads", label: "Threads" },
-      { key: "pins", label: "Pins" },
-      { key: "search", label: "Search" },
-      { key: "memberInfo", label: "Member info" },
-      { key: "roleInfo", label: "Role info" },
-      { key: "channelInfo", label: "Channel info" },
-      { key: "voiceStatus", label: "Voice status" },
-      { key: "events", label: "Events" },
-      { key: "roles", label: "Role changes" },
-      { key: "moderation", label: "Moderation" },
-    ];
   const providerOrder: ProviderKey[] = [
     "whatsapp",
     "telegram",
@@ -501,6 +501,19 @@ function renderProvider(
               />
             </label>
             <label class="field">
+              <span>DMs enabled</span>
+              <select
+                .value=${props.discordForm.dmEnabled ? "yes" : "no"}
+                @change=${(e: Event) =>
+                  props.onDiscordChange({
+                    dmEnabled: (e.target as HTMLSelectElement).value === "yes",
+                  })}
+              >
+                <option value="yes">Enabled</option>
+                <option value="no">Disabled</option>
+              </select>
+            </label>
+            <label class="field">
               <span>Group DMs</span>
               <select
                 .value=${props.discordForm.groupEnabled ? "yes" : "no"}
@@ -546,6 +559,268 @@ function renderProvider(
                 placeholder="20"
               />
             </label>
+            <label class="field">
+              <span>Text chunk limit</span>
+              <input
+                .value=${props.discordForm.textChunkLimit}
+                @input=${(e: Event) =>
+                  props.onDiscordChange({
+                    textChunkLimit: (e.target as HTMLInputElement).value,
+                  })}
+                placeholder="2000"
+              />
+            </label>
+            <label class="field">
+              <span>Reply to mode</span>
+              <select
+                .value=${props.discordForm.replyToMode}
+                @change=${(e: Event) =>
+                  props.onDiscordChange({
+                    replyToMode: (e.target as HTMLSelectElement).value as
+                      | "off"
+                      | "first"
+                      | "all",
+                  })}
+              >
+                <option value="off">Off</option>
+                <option value="first">First</option>
+                <option value="all">All</option>
+              </select>
+            </label>
+            <div class="field full">
+              <span>Guilds</span>
+              <div class="card-sub">
+                Add each guild (id or slug) and optional channel rules. Empty channel
+                entries still allow that channel.
+              </div>
+              <div class="list">
+                ${props.discordForm.guilds.map(
+                  (guild, guildIndex) => html`
+                    <div class="list-item">
+                      <div class="list-main">
+                        <div class="form-grid">
+                          <label class="field">
+                            <span>Guild id / slug</span>
+                            <input
+                            .value=${guild.key}
+                            @input=${(e: Event) => {
+                              const next = [...props.discordForm.guilds];
+                              next[guildIndex] = {
+                                ...next[guildIndex],
+                                key: (e.target as HTMLInputElement).value,
+                              };
+                              props.onDiscordChange({ guilds: next });
+                            }}
+                          />
+                        </label>
+                        <label class="field">
+                          <span>Slug</span>
+                          <input
+                            .value=${guild.slug}
+                            @input=${(e: Event) => {
+                              const next = [...props.discordForm.guilds];
+                              next[guildIndex] = {
+                                ...next[guildIndex],
+                                slug: (e.target as HTMLInputElement).value,
+                              };
+                              props.onDiscordChange({ guilds: next });
+                            }}
+                          />
+                        </label>
+                        <label class="field">
+                          <span>Require mention</span>
+                          <select
+                            .value=${guild.requireMention ? "yes" : "no"}
+                            @change=${(e: Event) => {
+                              const next = [...props.discordForm.guilds];
+                              next[guildIndex] = {
+                                ...next[guildIndex],
+                                requireMention:
+                                  (e.target as HTMLSelectElement).value === "yes",
+                              };
+                              props.onDiscordChange({ guilds: next });
+                            }}
+                          >
+                            <option value="yes">Yes</option>
+                            <option value="no">No</option>
+                          </select>
+                        </label>
+                        <label class="field">
+                          <span>Users allowlist</span>
+                          <input
+                            .value=${guild.users}
+                            @input=${(e: Event) => {
+                              const next = [...props.discordForm.guilds];
+                              next[guildIndex] = {
+                                ...next[guildIndex],
+                                users: (e.target as HTMLInputElement).value,
+                              };
+                              props.onDiscordChange({ guilds: next });
+                            }}
+                            placeholder="123456789, username#1234"
+                          />
+                        </label>
+                        </div>
+                        ${guild.channels.length
+                          ? html`
+                              <div class="form-grid" style="margin-top: 8px;">
+                                ${guild.channels.map(
+                                  (channel, channelIndex) => html`
+                                    <label class="field">
+                                      <span>Channel id / slug</span>
+                                      <input
+                                        .value=${channel.key}
+                                        @input=${(e: Event) => {
+                                          const next = [...props.discordForm.guilds];
+                                          const channels = [
+                                            ...(next[guildIndex].channels ?? []),
+                                          ];
+                                          channels[channelIndex] = {
+                                            ...channels[channelIndex],
+                                            key: (e.target as HTMLInputElement).value,
+                                          };
+                                          next[guildIndex] = {
+                                            ...next[guildIndex],
+                                            channels,
+                                          };
+                                          props.onDiscordChange({ guilds: next });
+                                        }}
+                                      />
+                                    </label>
+                                    <label class="field">
+                                      <span>Allow</span>
+                                      <select
+                                        .value=${channel.allow ? "yes" : "no"}
+                                        @change=${(e: Event) => {
+                                          const next = [...props.discordForm.guilds];
+                                          const channels = [
+                                            ...(next[guildIndex].channels ?? []),
+                                          ];
+                                          channels[channelIndex] = {
+                                            ...channels[channelIndex],
+                                            allow:
+                                              (e.target as HTMLSelectElement).value ===
+                                              "yes",
+                                          };
+                                          next[guildIndex] = {
+                                            ...next[guildIndex],
+                                            channels,
+                                          };
+                                          props.onDiscordChange({ guilds: next });
+                                        }}
+                                      >
+                                        <option value="yes">Yes</option>
+                                        <option value="no">No</option>
+                                      </select>
+                                    </label>
+                                    <label class="field">
+                                      <span>Require mention</span>
+                                      <select
+                                        .value=${channel.requireMention ? "yes" : "no"}
+                                        @change=${(e: Event) => {
+                                          const next = [...props.discordForm.guilds];
+                                          const channels = [
+                                            ...(next[guildIndex].channels ?? []),
+                                          ];
+                                          channels[channelIndex] = {
+                                            ...channels[channelIndex],
+                                            requireMention:
+                                              (e.target as HTMLSelectElement).value ===
+                                              "yes",
+                                          };
+                                          next[guildIndex] = {
+                                            ...next[guildIndex],
+                                            channels,
+                                          };
+                                          props.onDiscordChange({ guilds: next });
+                                        }}
+                                      >
+                                        <option value="yes">Yes</option>
+                                        <option value="no">No</option>
+                                      </select>
+                                    </label>
+                                    <label class="field">
+                                      <span>&nbsp;</span>
+                                      <button
+                                        class="btn"
+                                        @click=${() => {
+                                          const next = [
+                                            ...props.discordForm.guilds,
+                                          ];
+                                          const channels = [
+                                            ...(next[guildIndex].channels ?? []),
+                                          ];
+                                          channels.splice(channelIndex, 1);
+                                          next[guildIndex] = {
+                                            ...next[guildIndex],
+                                            channels,
+                                          };
+                                          props.onDiscordChange({ guilds: next });
+                                        }}
+                                      >
+                                        Remove
+                                      </button>
+                                    </label>
+                                  `,
+                                )}
+                              </div>
+                            `
+                          : nothing}
+                      </div>
+                      <div class="list-meta">
+                        <span>Channels</span>
+                        <button
+                          class="btn"
+                          @click=${() => {
+                            const next = [...props.discordForm.guilds];
+                            const channels = [
+                              ...(next[guildIndex].channels ?? []),
+                              { key: "", allow: true, requireMention: false },
+                            ];
+                            next[guildIndex] = {
+                              ...next[guildIndex],
+                              channels,
+                            };
+                            props.onDiscordChange({ guilds: next });
+                          }}
+                        >
+                          Add channel
+                        </button>
+                        <button
+                          class="btn danger"
+                          @click=${() => {
+                            const next = [...props.discordForm.guilds];
+                            next.splice(guildIndex, 1);
+                            props.onDiscordChange({ guilds: next });
+                          }}
+                        >
+                          Remove guild
+                        </button>
+                      </div>
+                    </div>
+                  `,
+                )}
+              </div>
+              <button
+                class="btn"
+                style="margin-top: 8px;"
+                @click=${() =>
+                  props.onDiscordChange({
+                    guilds: [
+                      ...props.discordForm.guilds,
+                      {
+                        key: "",
+                        slug: "",
+                        requireMention: false,
+                        users: "",
+                        channels: [],
+                      },
+                    ],
+                  })}
+              >
+                Add guild
+              </button>
+            </div>
             <label class="field">
               <span>Slash command</span>
               <select

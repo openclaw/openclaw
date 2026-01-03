@@ -11,16 +11,34 @@ export type TelegramForm = {
 export type DiscordForm = {
   enabled: boolean;
   token: string;
+  dmEnabled: boolean;
   allowFrom: string;
   groupEnabled: boolean;
   groupChannels: string;
   mediaMaxMb: string;
   historyLimit: string;
+  textChunkLimit: string;
+  replyToMode: "off" | "first" | "all";
+  guilds: DiscordGuildForm[];
   actions: DiscordActionForm;
   slashEnabled: boolean;
   slashName: string;
   slashSessionPrefix: string;
   slashEphemeral: boolean;
+};
+
+export type DiscordGuildForm = {
+  key: string;
+  slug: string;
+  requireMention: boolean;
+  users: string;
+  channels: DiscordGuildChannelForm[];
+};
+
+export type DiscordGuildChannelForm = {
+  key: string;
+  allow: boolean;
+  requireMention: boolean;
 };
 
 export type DiscordActionForm = {

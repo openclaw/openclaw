@@ -5,6 +5,8 @@ import {
   defaultDiscordActions,
   type DiscordActionForm,
   type DiscordForm,
+  type DiscordGuildChannelForm,
+  type DiscordGuildForm,
   type IMessageForm,
   type SignalForm,
   type TelegramForm,
@@ -233,6 +235,8 @@ export async function saveDiscordConfig(state: ConnectionsState) {
     const allowFrom = parseList(form.allowFrom);
     const groupChannels = parseList(form.groupChannels);
     const dm = { ...(discord.dm ?? {}) } as Record<string, unknown>;
+    if (form.dmEnabled) delete dm.enabled;
+    else dm.enabled = false;
     if (allowFrom.length > 0) dm.allowFrom = allowFrom;
     else delete dm.allowFrom;
     if (form.groupEnabled) dm.groupEnabled = true;
@@ -260,6 +264,51 @@ export async function saveDiscordConfig(state: ConnectionsState) {
         delete discord.historyLimit;
       }
     }
+
+    const chunkLimitRaw = form.textChunkLimit.trim();
+    if (chunkLimitRaw.length === 0) {
+      delete discord.textChunkLimit;
+    } else {
+      const chunkLimit = Number(chunkLimitRaw);
+      if (Number.isFinite(chunkLimit) && chunkLimit > 0) {
+        discord.textChunkLimit = chunkLimit;
+      } else {
+        delete discord.textChunkLimit;
+      }
+    }
+
+    if (form.replyToMode === "off") {
+      delete discord.replyToMode;
+    } else {
+      discord.replyToMode = form.replyToMode;
+    }
+
+    const guildsForm = Array.isArray(form.guilds) ? form.guilds : [];
+    const guilds: Record<string, unknown> = {};
+    guildsForm.forEach((guild: DiscordGuildForm) => {
+      const key = String(guild.key ?? "").trim();
+      if (!key) return;
+      const entry: Record<string, unknown> = {};
+      const slug = String(guild.slug ?? "").trim();
+      if (slug) entry.slug = slug;
+      if (guild.requireMention) entry.requireMention = true;
+      const users = parseList(guild.users);
+      if (users.length > 0) entry.users = users;
+      const channels: Record<string, unknown> = {};
+      const channelForms = Array.isArray(guild.channels) ? guild.channels : [];
+      channelForms.forEach((channel: DiscordGuildChannelForm) => {
+        const channelKey = String(channel.key ?? "").trim();
+        if (!channelKey) return;
+        const channelEntry: Record<string, unknown> = {};
+        if (channel.allow === false) channelEntry.allow = false;
+        if (channel.requireMention) channelEntry.requireMention = true;
+        channels[channelKey] = channelEntry;
+      });
+      if (Object.keys(channels).length > 0) entry.channels = channels;
+      guilds[key] = entry;
+    });
+    if (Object.keys(guilds).length > 0) discord.guilds = guilds;
+    else delete discord.guilds;
 
     const actions: Partial<DiscordActionForm> = {};
     const applyAction = (key: keyof DiscordActionForm) => {
