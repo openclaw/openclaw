@@ -21,6 +21,7 @@
 
 ### Fixes
 - CI: fix lint ordering after merge cleanup (#156) — thanks @steipete.
+- CI: consolidate checks to avoid redundant installs (#144) — thanks @thewilloftheshadow.
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
 - Bash tool: default auto-background delay to 10s.
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
