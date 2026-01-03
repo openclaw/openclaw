@@ -34,7 +34,12 @@ import {
   type SignalForm,
   type TelegramForm,
 } from "./ui-types";
-import { loadChatHistory, sendChat, handleChatEvent } from "./controllers/chat";
+import {
+  loadChatHistory,
+  sendChat,
+  handleChatEvent,
+  type ChatEventPayload,
+} from "./controllers/chat";
 import { loadNodes } from "./controllers/nodes";
 import { loadConfig } from "./controllers/config";
 import {
@@ -139,11 +144,15 @@ export class ClawdisApp extends LitElement {
   @state() discordForm: DiscordForm = {
     enabled: true,
     token: "",
+    dmEnabled: true,
     allowFrom: "",
     groupEnabled: false,
     groupChannels: "",
     mediaMaxMb: "",
     historyLimit: "",
+    textChunkLimit: "",
+    replyToMode: "off",
+    guilds: [],
     actions: { ...defaultDiscordActions },
     slashEnabled: false,
     slashName: "",
@@ -350,7 +359,8 @@ export class ClawdisApp extends LitElement {
     ].slice(0, 250);
 
     if (evt.event === "chat") {
-      const state = handleChatEvent(this, evt.payload as unknown);
+      const payload = evt.payload as ChatEventPayload | undefined;
+      const state = handleChatEvent(this, payload);
       if (state === "final") void loadChatHistory(this);
       return;
     }
@@ -469,20 +479,26 @@ export class ClawdisApp extends LitElement {
       if (this.theme !== "system") return;
       this.applyResolvedTheme(event.matches ? "dark" : "light");
     };
-    if ("addEventListener" in this.themeMedia) {
+    if (typeof this.themeMedia.addEventListener === "function") {
       this.themeMedia.addEventListener("change", this.themeMediaHandler);
-    } else {
-      this.themeMedia.addListener(this.themeMediaHandler);
+      return;
     }
+    const legacy = this.themeMedia as MediaQueryList & {
+      addListener: (cb: (event: MediaQueryListEvent) => void) => void;
+    };
+    legacy.addListener(this.themeMediaHandler);
   }
 
   private detachThemeListener() {
     if (!this.themeMedia || !this.themeMediaHandler) return;
-    if ("removeEventListener" in this.themeMedia) {
+    if (typeof this.themeMedia.removeEventListener === "function") {
       this.themeMedia.removeEventListener("change", this.themeMediaHandler);
-    } else {
-      this.themeMedia.removeListener(this.themeMediaHandler);
+      return;
     }
+    const legacy = this.themeMedia as MediaQueryList & {
+      removeListener: (cb: (event: MediaQueryListEvent) => void) => void;
+    };
+    legacy.removeListener(this.themeMediaHandler);
     this.themeMedia = null;
     this.themeMediaHandler = null;
   }
