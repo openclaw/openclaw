@@ -71,6 +71,26 @@ if [ -z "$IDENTITY" ]; then
 fi
 
 echo "Using signing identity: $IDENTITY"
+if [[ "$IDENTITY" == "-" ]]; then
+  cat <<'WARN' >&2
+
+================================================================================
+!!! AD-HOC SIGNING IN USE - PERMISSIONS WILL NOT STICK (macOS RESTRICTION) !!!
+
+macOS ties permissions to the code signature, bundle ID, and app path.
+Ad-hoc signing generates a new signature every build, so macOS treats the app
+as a different binary and will forget permissions (prompts may vanish).
+
+For correct permission behavior you MUST sign with a real Apple Development or
+Developer ID certificate.
+
+If prompts disappear: remove the app entry in System Settings -> Privacy & Security,
+relaunch the app, and re-grant. Some permissions only reappear after a full
+macOS restart.
+================================================================================
+
+WARN
+fi
 
 timestamp_arg="--timestamp=none"
 case "$TIMESTAMP_MODE" in
@@ -90,6 +110,9 @@ case "$TIMESTAMP_MODE" in
     exit 1
     ;;
 esac
+if [[ "$IDENTITY" == "-" ]]; then
+  timestamp_arg="--timestamp=none"
+fi
 
 options_args=()
 if [[ "$IDENTITY" != "-" ]]; then

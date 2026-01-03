@@ -108,6 +108,7 @@
 - Skills: add tmux-first coding-agent skill + `requires.anyBins` gate for multi-CLI setup (thanks @sreekaransrinath).
 
 ### Fixes
+- macOS codesign: make ad-hoc signing opt-in with loud warnings and document TCC permission fragility — thanks @mcinteerj.
 - Gog calendar: format date ranges as RFC 3339 with timezone to satisfy Google Calendar API (thanks @jayhickey).
 - macOS onboarding: add scrollable page gutter for overflowing content (#105) — thanks @thewilloftheshadow.
 - Chat UI: keep the chat scrolled to the latest message after switching sessions.

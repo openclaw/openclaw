@@ -9,22 +9,24 @@ This app is usually built from `scripts/package-mac-app.sh`, which now:
 
 - sets a stable debug bundle identifier: `com.clawdis.mac.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
-- calls `scripts/codesign-mac-app.sh` to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). Requires a valid signing identity.
+- calls `scripts/codesign-mac-app.sh` to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see `docs/mac/permissions.md`).
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
 - inject build metadata into Info.plist: `ClawdisBuildTimestamp` (UTC) and `ClawdisGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
 - **Packaging requires Bun**: The embedded gateway relay is compiled using `bun`. Ensure it is installed (`curl -fsSL https://bun.sh/install | bash`).
-- reads `SIGN_IDENTITY` from the environment. Add `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (or your Developer ID Application cert) to your shell rc to always sign with your cert; otherwise signing falls back to ad‑hoc.
+- reads `SIGN_IDENTITY` from the environment. Add `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (or your Developer ID Application cert) to your shell rc to always sign with your cert. Ad-hoc signing requires explicit opt-in via `ALLOW_ADHOC_SIGNING=1` or `SIGN_IDENTITY="-"` (not recommended for permission testing).
 
 ## Usage
 
 ```bash
 # from repo root
-scripts/package-mac-app.sh               # ad-hoc signing
+scripts/package-mac-app.sh               # auto-selects identity; errors if none found
 SIGN_IDENTITY="Developer ID Application: Your Name" scripts/package-mac-app.sh   # real cert
+ALLOW_ADHOC_SIGNING=1 scripts/package-mac-app.sh    # ad-hoc (permissions will not stick)
+SIGN_IDENTITY="-" scripts/package-mac-app.sh        # explicit ad-hoc (same caveat)
 ```
 
 ### Ad-hoc Signing Note
-When signing with `SIGN_IDENTITY="-"` (ad-hoc), the script automatically disables the **Hardened Runtime** (`--options runtime`). This is necessary to prevent crashes when the app attempts to load embedded frameworks (like Sparkle) that do not share the same Team ID.
+When signing with `SIGN_IDENTITY="-"` (ad-hoc), the script automatically disables the **Hardened Runtime** (`--options runtime`). This is necessary to prevent crashes when the app attempts to load embedded frameworks (like Sparkle) that do not share the same Team ID. Ad-hoc signatures also break TCC permission persistence; see `docs/mac/permissions.md` for recovery steps.
 
 ## Build metadata for About
 
