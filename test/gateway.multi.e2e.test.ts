@@ -1,12 +1,15 @@
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import fs from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { approveNodePairing, listNodePairing } from "../src/infra/node-pairing.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+} from "../src/infra/node-pairing.js";
 
 type GatewayInstance = {
   name: string;
@@ -96,7 +99,9 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
   const port = await getFreePort();
   const bridgePort = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
-  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), `clawdis-e2e-${name}-`));
+  const homeDir = await fs.mkdtemp(
+    path.join(os.tmpdir(), `clawdis-e2e-${name}-`),
+  );
   const configDir = path.join(homeDir, ".clawdis");
   await fs.mkdir(configDir, { recursive: true });
   const configPath = path.join(configDir, "clawdis.json");
@@ -226,8 +231,11 @@ const runCliJson = async (
   child.stderr?.setEncoding("utf8");
   child.stdout?.on("data", (d) => stdout.push(String(d)));
   child.stderr?.on("data", (d) => stderr.push(String(d)));
-  const result = await new Promise<{ code: number | null; signal: string | null }>(
-    (resolve) => child.once("exit", (code, signal) => resolve({ code, signal })),
+  const result = await new Promise<{
+    code: number | null;
+    signal: string | null;
+  }>((resolve) =>
+    child.once("exit", (code, signal) => resolve({ code, signal })),
   );
   const out = stdout.join("").trim();
   if (result.code !== 0) {
@@ -249,41 +257,43 @@ const runCliJson = async (
 const postJson = async (url: string, body: unknown) => {
   const payload = JSON.stringify(body);
   const parsed = new URL(url);
-  return await new Promise<{ status: number; json: unknown }>((resolve, reject) => {
-    const req = httpRequest(
-      {
-        method: "POST",
-        hostname: parsed.hostname,
-        port: Number(parsed.port),
-        path: `${parsed.pathname}${parsed.search}`,
-        headers: {
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload),
+  return await new Promise<{ status: number; json: unknown }>(
+    (resolve, reject) => {
+      const req = httpRequest(
+        {
+          method: "POST",
+          hostname: parsed.hostname,
+          port: Number(parsed.port),
+          path: `${parsed.pathname}${parsed.search}`,
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(payload),
+          },
         },
-      },
-      (res) => {
-        let data = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          data += chunk;
-        });
-        res.on("end", () => {
-          let json: unknown = null;
-          if (data.trim()) {
-            try {
-              json = JSON.parse(data);
-            } catch {
-              json = data;
+        (res) => {
+          let data = "";
+          res.setEncoding("utf8");
+          res.on("data", (chunk) => {
+            data += chunk;
+          });
+          res.on("end", () => {
+            let json: unknown = null;
+            if (data.trim()) {
+              try {
+                json = JSON.parse(data);
+              } catch {
+                json = data;
+              }
             }
-          }
-          resolve({ status: res.statusCode ?? 0, json });
-        });
-      },
-    );
-    req.on("error", reject);
-    req.write(payload);
-    req.end();
-  });
+            resolve({ status: res.statusCode ?? 0, json });
+          });
+        },
+      );
+      req.on("error", reject);
+      req.write(payload);
+      req.end();
+    },
+  );
 };
 
 const createLineReader = (socket: net.Socket) => {
@@ -437,26 +447,14 @@ describe("gateway multi-instance e2e", () => {
 
       const [nodeListA, nodeListB] = (await Promise.all([
         runCliJson(
-          [
-            "nodes",
-            "status",
-            "--json",
-            "--url",
-            `ws://127.0.0.1:${gwA.port}`,
-          ],
+          ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwA.port}`],
           {
             CLAWDIS_GATEWAY_TOKEN: "",
             CLAWDIS_GATEWAY_PASSWORD: "",
           },
         ),
         runCliJson(
-          [
-            "nodes",
-            "status",
-            "--json",
-            "--url",
-            `ws://127.0.0.1:${gwB.port}`,
-          ],
+          ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwB.port}`],
           {
             CLAWDIS_GATEWAY_TOKEN: "",
             CLAWDIS_GATEWAY_PASSWORD: "",
@@ -466,17 +464,13 @@ describe("gateway multi-instance e2e", () => {
       expect(
         nodeListA.nodes?.some(
           (n) =>
-            n.nodeId === "node-a" &&
-            n.connected === true &&
-            n.paired === true,
+            n.nodeId === "node-a" && n.connected === true && n.paired === true,
         ),
       ).toBe(true);
       expect(
         nodeListB.nodes?.some(
           (n) =>
-            n.nodeId === "node-b" &&
-            n.connected === true &&
-            n.paired === true,
+            n.nodeId === "node-b" && n.connected === true && n.paired === true,
         ),
       ).toBe(true);
 

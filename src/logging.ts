@@ -396,10 +396,12 @@ const SUBSYSTEM_COLORS = [
   "magenta",
   "red",
 ] as const;
-const SUBSYSTEM_COLOR_OVERRIDES: Record<string, (typeof SUBSYSTEM_COLORS)[number]> =
-  {
-    "gmail-watcher": "blue",
-  };
+const SUBSYSTEM_COLOR_OVERRIDES: Record<
+  string,
+  (typeof SUBSYSTEM_COLORS)[number]
+> = {
+  "gmail-watcher": "blue",
+};
 const SUBSYSTEM_PREFIXES_TO_DROP = ["gateway", "providers"] as const;
 const SUBSYSTEM_MAX_SEGMENTS = 2;
 

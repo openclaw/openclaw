@@ -58,7 +58,9 @@ function ensureGcloudOnPath(): boolean {
   return false;
 }
 
-export async function resolvePythonExecutablePath(): Promise<string | undefined> {
+export async function resolvePythonExecutablePath(): Promise<
+  string | undefined
+> {
   if (cachedPythonPath !== undefined) {
     return cachedPythonPath ?? undefined;
   }
@@ -171,7 +173,14 @@ export async function ensureSubscription(
   pushEndpoint: string,
 ) {
   const describe = await runGcloudCommand(
-    ["pubsub", "subscriptions", "describe", subscription, "--project", projectId],
+    [
+      "pubsub",
+      "subscriptions",
+      "describe",
+      subscription,
+      "--project",
+      projectId,
+    ],
     30_000,
   );
   if (describe.code === 0) {

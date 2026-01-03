@@ -782,10 +782,7 @@ export async function getReplyFromConfig(
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const typingIntervalMs = typingIntervalSeconds * 1000;
-  const typingTtlMs = Math.min(
-    Math.max(15_000, typingIntervalMs * 5),
-    60_000,
-  );
+  const typingTtlMs = Math.min(Math.max(15_000, typingIntervalMs * 5), 60_000);
   const cleanupTyping = () => {
     if (typingTtlTimer) {
       clearTimeout(typingTtlTimer);
