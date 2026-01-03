@@ -108,11 +108,16 @@ build_relay_binary() {
   local arch="$1"
   local out="$2"
   local define_arg="__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
-  local -a cmd=(bun build "$ROOT_DIR/dist/macos/relay.js" --compile --bytecode --outfile "$out" -e electron --define "$define_arg")
+  local bun_bin="bun"
+  local -a cmd=("$bun_bin" build "$ROOT_DIR/dist/macos/relay.js" --compile --bytecode --outfile "$out" -e electron --define "$define_arg")
   if [[ "$arch" == "x86_64" ]]; then
     if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
       echo "ERROR: Rosetta is required to build the x86_64 relay. Install Rosetta and retry." >&2
       exit 1
+    fi
+    local bun_x86="${BUN_X86_64_BIN:-$HOME/.bun-x64/bin/bun}"
+    if [[ -x "$bun_x86" ]]; then
+      cmd=("$bun_x86" build "$ROOT_DIR/dist/macos/relay.js" --compile --bytecode --outfile "$out" -e electron --define "$define_arg")
     fi
     arch -x86_64 "${cmd[@]}"
   else
