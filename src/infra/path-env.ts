@@ -79,6 +79,7 @@ function candidateBinDirs(opts: EnsureClawdisPathOpts): string[] {
   if (platform === "darwin") {
     candidates.push(path.join(homeDir, "Library", "pnpm"));
   }
+  if (process.env.XDG_BIN_HOME) candidates.push(process.env.XDG_BIN_HOME);
   candidates.push(path.join(homeDir, ".local", "bin"));
   candidates.push(path.join(homeDir, ".local", "share", "pnpm"));
   candidates.push(path.join(homeDir, ".bun", "bin"));
