@@ -1,0 +1,1148 @@
+import fs from "node:fs";
+import { randomUUID } from "node:crypto";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+  resolveThinkingDefault,
+} from "../agents/model-selection.js";
+import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
+import {
+  normalizeThinkLevel,
+  normalizeVerboseLevel,
+} from "../auto-reply/thinking.js";
+import { buildConfigSchema } from "../config/schema.js";
+import {
+  CONFIG_PATH_CLAWDIS,
+  loadConfig,
+  parseConfigJson5,
+  readConfigFileSnapshot,
+  validateConfigObject,
+  writeConfigFile,
+} from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  type SessionEntry,
+  saveSessionStore,
+} from "../config/sessions.js";
+import type { CliDeps } from "../cli/deps.js";
+import { agentCommand } from "../commands/agent.js";
+import { type HealthSummary } from "../commands/health.js";
+import { defaultRuntime } from "../runtime.js";
+import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../infra/voicewake.js";
+import {
+  archiveFileOnDisk,
+  capArrayByJsonBytes,
+  listSessionsFromStore,
+  loadSessionEntry,
+  readSessionMessages,
+  resolveSessionModelRef,
+  resolveSessionTranscriptCandidates,
+  type SessionsPatchResult,
+} from "./session-utils.js";
+import { buildMessageWithAttachments } from "./chat-attachments.js";
+import { normalizeVoiceWakeTriggers } from "./server-utils.js";
+import {
+  ErrorCodes,
+  errorShape,
+  formatValidationErrors,
+  type SessionsCompactParams,
+  type SessionsDeleteParams,
+  type SessionsListParams,
+  type SessionsPatchParams,
+  type SessionsResetParams,
+  validateChatAbortParams,
+  validateChatHistoryParams,
+  validateChatSendParams,
+  validateConfigGetParams,
+  validateConfigSchemaParams,
+  validateConfigSetParams,
+  validateModelsListParams,
+  validateSessionsCompactParams,
+  validateSessionsDeleteParams,
+  validateSessionsListParams,
+  validateSessionsPatchParams,
+  validateSessionsResetParams,
+  validateTalkModeParams,
+} from "./protocol/index.js";
+import {
+  HEALTH_REFRESH_INTERVAL_MS,
+  MAX_CHAT_HISTORY_MESSAGES_BYTES,
+} from "./server-constants.js";
+import { formatForLog } from "./ws-log.js";
+import type { ChatRunEntry } from "./server-chat.js";
+import type { DedupeEntry } from "./server-shared.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+
+export type BridgeHandlersContext = {
+  deps: CliDeps;
+  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  bridgeSendToSession: (
+    sessionKey: string,
+    event: string,
+    payload: unknown,
+  ) => void;
+  bridgeSubscribe: (nodeId: string, sessionKey: string) => void;
+  bridgeUnsubscribe: (nodeId: string, sessionKey: string) => void;
+  broadcastVoiceWakeChanged: (triggers: string[]) => void;
+  addChatRun: (sessionId: string, entry: ChatRunEntry) => void;
+  removeChatRun: (
+    sessionId: string,
+    clientRunId: string,
+    sessionKey?: string,
+  ) => ChatRunEntry | undefined;
+  chatAbortControllers: Map<
+    string,
+    { controller: AbortController; sessionId: string; sessionKey: string }
+  >;
+  chatRunBuffers: Map<string, string>;
+  chatDeltaSentAt: Map<string, number>;
+  dedupe: Map<string, DedupeEntry>;
+  agentRunSeq: Map<string, number>;
+  getHealthCache: () => HealthSummary | null;
+  refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
+  loadGatewayModelCatalog: () => Promise<ModelCatalogEntry[]>;
+  logBridge: { warn: (msg: string) => void };
+};
+
+export function createBridgeHandlers(ctx: BridgeHandlersContext) {
+  const handleBridgeRequest = async (
+    nodeId: string,
+    req: { id: string; method: string; paramsJSON?: string | null },
+  ): Promise<
+    | { ok: true; payloadJSON?: string | null }
+    | { ok: false; error: { code: string; message: string; details?: unknown } }
+  > => {
+    const method = req.method.trim();
+
+    const parseParams = (): Record<string, unknown> => {
+      const raw = typeof req.paramsJSON === "string" ? req.paramsJSON : "";
+      const trimmed = raw.trim();
+      if (!trimmed) return {};
+      const parsed = JSON.parse(trimmed) as unknown;
+      return typeof parsed === "object" && parsed !== null
+        ? (parsed as Record<string, unknown>)
+        : {};
+    };
+
+    try {
+      switch (method) {
+        case "voicewake.get": {
+          const cfg = await loadVoiceWakeConfig();
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ triggers: cfg.triggers }),
+          };
+        }
+        case "voicewake.set": {
+          const params = parseParams();
+          const triggers = normalizeVoiceWakeTriggers(params.triggers);
+          const cfg = await setVoiceWakeTriggers(triggers);
+          ctx.broadcastVoiceWakeChanged(cfg.triggers);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ triggers: cfg.triggers }),
+          };
+        }
+        case "health": {
+          const now = Date.now();
+          const cached = ctx.getHealthCache();
+          if (cached && now - cached.ts < HEALTH_REFRESH_INTERVAL_MS) {
+            return { ok: true, payloadJSON: JSON.stringify(cached) };
+          }
+          const snap = await ctx.refreshHealthSnapshot({ probe: false });
+          return { ok: true, payloadJSON: JSON.stringify(snap) };
+        }
+        case "config.get": {
+          const params = parseParams();
+          if (!validateConfigGetParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid config.get params: ${formatValidationErrors(validateConfigGetParams.errors)}`,
+              },
+            };
+          }
+          const snapshot = await readConfigFileSnapshot();
+          return { ok: true, payloadJSON: JSON.stringify(snapshot) };
+        }
+        case "config.schema": {
+          const params = parseParams();
+          if (!validateConfigSchemaParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid config.schema params: ${formatValidationErrors(validateConfigSchemaParams.errors)}`,
+              },
+            };
+          }
+          const schema = buildConfigSchema();
+          return { ok: true, payloadJSON: JSON.stringify(schema) };
+        }
+        case "config.set": {
+          const params = parseParams();
+          if (!validateConfigSetParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid config.set params: ${formatValidationErrors(validateConfigSetParams.errors)}`,
+              },
+            };
+          }
+          const rawValue = (params as { raw?: unknown }).raw;
+          if (typeof rawValue !== "string") {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "invalid config.set params: raw (string) required",
+              },
+            };
+          }
+          const parsedRes = parseConfigJson5(rawValue);
+          if (!parsedRes.ok) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: parsedRes.error,
+              },
+            };
+          }
+          const validated = validateConfigObject(parsedRes.parsed);
+          if (!validated.ok) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "invalid config",
+                details: { issues: validated.issues },
+              },
+            };
+          }
+          await writeConfigFile(validated.config);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              ok: true,
+              path: CONFIG_PATH_CLAWDIS,
+              config: validated.config,
+            }),
+          };
+        }
+        case "talk.mode": {
+          const params = parseParams();
+          if (!validateTalkModeParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid talk.mode params: ${formatValidationErrors(validateTalkModeParams.errors)}`,
+              },
+            };
+          }
+          const payload = {
+            enabled: (params as { enabled: boolean }).enabled,
+            phase: (params as { phase?: string }).phase ?? null,
+            ts: Date.now(),
+          };
+          ctx.broadcast("talk.mode", payload, { dropIfSlow: true });
+          return { ok: true, payloadJSON: JSON.stringify(payload) };
+        }
+        case "models.list": {
+          const params = parseParams();
+          if (!validateModelsListParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid models.list params: ${formatValidationErrors(validateModelsListParams.errors)}`,
+              },
+            };
+          }
+          const models = await ctx.loadGatewayModelCatalog();
+          return { ok: true, payloadJSON: JSON.stringify({ models }) };
+        }
+        case "sessions.list": {
+          const params = parseParams();
+          if (!validateSessionsListParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.list params: ${formatValidationErrors(validateSessionsListParams.errors)}`,
+              },
+            };
+          }
+          const p = params as SessionsListParams;
+          const cfg = loadConfig();
+          const storePath = resolveStorePath(cfg.session?.store);
+          const store = loadSessionStore(storePath);
+          const result = listSessionsFromStore({
+            cfg,
+            storePath,
+            store,
+            opts: p,
+          });
+          return { ok: true, payloadJSON: JSON.stringify(result) };
+        }
+        case "sessions.patch": {
+          const params = parseParams();
+          if (!validateSessionsPatchParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.patch params: ${formatValidationErrors(validateSessionsPatchParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as SessionsPatchParams;
+          const key = String(p.key ?? "").trim();
+          if (!key) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "key required",
+              },
+            };
+          }
+
+          const cfg = loadConfig();
+          const storePath = resolveStorePath(cfg.session?.store);
+          const store = loadSessionStore(storePath);
+          const now = Date.now();
+
+          const existing = store[key];
+          const next: SessionEntry = existing
+            ? {
+                ...existing,
+                updatedAt: Math.max(existing.updatedAt ?? 0, now),
+              }
+            : { sessionId: randomUUID(), updatedAt: now };
+
+          if ("thinkingLevel" in p) {
+            const raw = p.thinkingLevel;
+            if (raw === null) {
+              delete next.thinkingLevel;
+            } else if (raw !== undefined) {
+              const normalized = normalizeThinkLevel(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid thinkingLevel: ${String(raw)}`,
+                  },
+                };
+              }
+              next.thinkingLevel = normalized;
+            }
+          }
+
+          if ("verboseLevel" in p) {
+            const raw = p.verboseLevel;
+            if (raw === null) {
+              delete next.verboseLevel;
+            } else if (raw !== undefined) {
+              const normalized = normalizeVerboseLevel(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid verboseLevel: ${String(raw)}`,
+                  },
+                };
+              }
+              next.verboseLevel = normalized;
+            }
+          }
+
+          if ("model" in p) {
+            const raw = p.model;
+            if (raw === null) {
+              delete next.providerOverride;
+              delete next.modelOverride;
+            } else if (raw !== undefined) {
+              const trimmed = String(raw).trim();
+              if (!trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "invalid model: empty",
+                  },
+                };
+              }
+              const resolvedDefault = resolveConfiguredModelRef({
+                cfg,
+                defaultProvider: DEFAULT_PROVIDER,
+                defaultModel: DEFAULT_MODEL,
+              });
+              const aliasIndex = buildModelAliasIndex({
+                cfg,
+                defaultProvider: resolvedDefault.provider,
+              });
+              const resolved = resolveModelRefFromString({
+                raw: trimmed,
+                defaultProvider: resolvedDefault.provider,
+                aliasIndex,
+              });
+              if (!resolved) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid model: ${trimmed}`,
+                  },
+                };
+              }
+              const catalog = await ctx.loadGatewayModelCatalog();
+              const allowed = buildAllowedModelSet({
+                cfg,
+                catalog,
+                defaultProvider: resolvedDefault.provider,
+              });
+              const key = modelKey(resolved.ref.provider, resolved.ref.model);
+              if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `model not allowed: ${key}`,
+                  },
+                };
+              }
+              if (
+                resolved.ref.provider === resolvedDefault.provider &&
+                resolved.ref.model === resolvedDefault.model
+              ) {
+                delete next.providerOverride;
+                delete next.modelOverride;
+              } else {
+                next.providerOverride = resolved.ref.provider;
+                next.modelOverride = resolved.ref.model;
+              }
+            }
+          }
+
+          if ("groupActivation" in p) {
+            const raw = p.groupActivation;
+            if (raw === null) {
+              delete next.groupActivation;
+            } else if (raw !== undefined) {
+              const normalized = normalizeGroupActivation(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid groupActivation: ${String(raw)}`,
+                  },
+                };
+              }
+              next.groupActivation = normalized;
+            }
+          }
+
+          store[key] = next;
+          await saveSessionStore(storePath, store);
+          const payload: SessionsPatchResult = {
+            ok: true,
+            path: storePath,
+            key,
+            entry: next,
+          };
+          return { ok: true, payloadJSON: JSON.stringify(payload) };
+        }
+        case "sessions.reset": {
+          const params = parseParams();
+          if (!validateSessionsResetParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.reset params: ${formatValidationErrors(validateSessionsResetParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as SessionsResetParams;
+          const key = String(p.key ?? "").trim();
+          if (!key) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "key required",
+              },
+            };
+          }
+
+          const { storePath, store, entry } = loadSessionEntry(key);
+          const now = Date.now();
+          const next: SessionEntry = {
+            sessionId: randomUUID(),
+            updatedAt: now,
+            systemSent: false,
+            abortedLastRun: false,
+            thinkingLevel: entry?.thinkingLevel,
+            verboseLevel: entry?.verboseLevel,
+            model: entry?.model,
+            contextTokens: entry?.contextTokens,
+            displayName: entry?.displayName,
+            chatType: entry?.chatType,
+            surface: entry?.surface,
+            subject: entry?.subject,
+            room: entry?.room,
+            space: entry?.space,
+            lastChannel: entry?.lastChannel,
+            lastTo: entry?.lastTo,
+            skillsSnapshot: entry?.skillsSnapshot,
+          };
+          store[key] = next;
+          await saveSessionStore(storePath, store);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ ok: true, key, entry: next }),
+          };
+        }
+        case "sessions.delete": {
+          const params = parseParams();
+          if (!validateSessionsDeleteParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.delete params: ${formatValidationErrors(validateSessionsDeleteParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as SessionsDeleteParams;
+          const key = String(p.key ?? "").trim();
+          if (!key) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "key required",
+              },
+            };
+          }
+
+          const deleteTranscript =
+            typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
+
+          const { storePath, store, entry } = loadSessionEntry(key);
+          const sessionId = entry?.sessionId;
+          const existed = Boolean(store[key]);
+          if (existed) delete store[key];
+          await saveSessionStore(storePath, store);
+
+          const archived: string[] = [];
+          if (deleteTranscript && sessionId) {
+            for (const candidate of resolveSessionTranscriptCandidates(
+              sessionId,
+              storePath,
+            )) {
+              if (!fs.existsSync(candidate)) continue;
+              try {
+                archived.push(archiveFileOnDisk(candidate, "deleted"));
+              } catch {
+                // Best-effort; deleting the store entry is the main operation.
+              }
+            }
+          }
+
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              ok: true,
+              key,
+              deleted: existed,
+              archived,
+            }),
+          };
+        }
+        case "sessions.compact": {
+          const params = parseParams();
+          if (!validateSessionsCompactParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.compact params: ${formatValidationErrors(validateSessionsCompactParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as SessionsCompactParams;
+          const key = String(p.key ?? "").trim();
+          if (!key) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "key required",
+              },
+            };
+          }
+
+          const maxLines =
+            typeof p.maxLines === "number" && Number.isFinite(p.maxLines)
+              ? Math.max(1, Math.floor(p.maxLines))
+              : 400;
+
+          const { storePath, store, entry } = loadSessionEntry(key);
+          const sessionId = entry?.sessionId;
+          if (!sessionId) {
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                key,
+                compacted: false,
+                reason: "no sessionId",
+              }),
+            };
+          }
+
+          const filePath = resolveSessionTranscriptCandidates(
+            sessionId,
+            storePath,
+          ).find((candidate) => fs.existsSync(candidate));
+          if (!filePath) {
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                key,
+                compacted: false,
+                reason: "no transcript",
+              }),
+            };
+          }
+
+          const raw = fs.readFileSync(filePath, "utf-8");
+          const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
+          if (lines.length <= maxLines) {
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                key,
+                compacted: false,
+                kept: lines.length,
+              }),
+            };
+          }
+
+          const archived = archiveFileOnDisk(filePath, "bak");
+          const keptLines = lines.slice(-maxLines);
+          fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
+
+          // Token counts no longer match; clear so status + UI reflect reality after the next turn.
+          if (store[key]) {
+            delete store[key].inputTokens;
+            delete store[key].outputTokens;
+            delete store[key].totalTokens;
+            store[key].updatedAt = Date.now();
+            await saveSessionStore(storePath, store);
+          }
+
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              ok: true,
+              key,
+              compacted: true,
+              archived,
+              kept: keptLines.length,
+            }),
+          };
+        }
+        case "chat.history": {
+          const params = parseParams();
+          if (!validateChatHistoryParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid chat.history params: ${formatValidationErrors(validateChatHistoryParams.errors)}`,
+              },
+            };
+          }
+          const { sessionKey, limit } = params as {
+            sessionKey: string;
+            limit?: number;
+          };
+          const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
+          const sessionId = entry?.sessionId;
+          const rawMessages =
+            sessionId && storePath
+              ? readSessionMessages(sessionId, storePath)
+              : [];
+          const max = typeof limit === "number" ? limit : 200;
+          const sliced =
+            rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+          const capped = capArrayByJsonBytes(
+            sliced,
+            MAX_CHAT_HISTORY_MESSAGES_BYTES,
+          ).items;
+          let thinkingLevel = entry?.thinkingLevel;
+          if (!thinkingLevel) {
+            const configured = cfg.agent?.thinkingDefault;
+            if (configured) {
+              thinkingLevel = configured;
+            } else {
+              const { provider, model } = resolveSessionModelRef(cfg, entry);
+              const catalog = await ctx.loadGatewayModelCatalog();
+              thinkingLevel = resolveThinkingDefault({
+                cfg,
+                provider,
+                model,
+                catalog,
+              });
+            }
+          }
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              sessionKey,
+              sessionId,
+              messages: capped,
+              thinkingLevel,
+            }),
+          };
+        }
+        case "chat.abort": {
+          const params = parseParams();
+          if (!validateChatAbortParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid chat.abort params: ${formatValidationErrors(validateChatAbortParams.errors)}`,
+              },
+            };
+          }
+
+          const { sessionKey, runId } = params as {
+            sessionKey: string;
+            runId: string;
+          };
+          const active = ctx.chatAbortControllers.get(runId);
+          if (!active) {
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({ ok: true, aborted: false }),
+            };
+          }
+          if (active.sessionKey !== sessionKey) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "runId does not match sessionKey",
+              },
+            };
+          }
+
+          active.controller.abort();
+          ctx.chatAbortControllers.delete(runId);
+          ctx.chatRunBuffers.delete(runId);
+          ctx.chatDeltaSentAt.delete(runId);
+          ctx.removeChatRun(active.sessionId, runId, sessionKey);
+
+          const payload = {
+            runId,
+            sessionKey,
+            seq: (ctx.agentRunSeq.get(active.sessionId) ?? 0) + 1,
+            state: "aborted" as const,
+          };
+          ctx.broadcast("chat", payload);
+          ctx.bridgeSendToSession(sessionKey, "chat", payload);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ ok: true, aborted: true }),
+          };
+        }
+        case "chat.send": {
+          const params = parseParams();
+          if (!validateChatSendParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid chat.send params: ${formatValidationErrors(validateChatSendParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as {
+            sessionKey: string;
+            message: string;
+            thinking?: string;
+            deliver?: boolean;
+            attachments?: Array<{
+              type?: string;
+              mimeType?: string;
+              fileName?: string;
+              content?: unknown;
+            }>;
+            timeoutMs?: number;
+            idempotencyKey: string;
+          };
+          const timeoutMs = Math.min(
+            Math.max(p.timeoutMs ?? 30_000, 0),
+            30_000,
+          );
+          const normalizedAttachments =
+            p.attachments?.map((a) => ({
+              type: typeof a?.type === "string" ? a.type : undefined,
+              mimeType:
+                typeof a?.mimeType === "string" ? a.mimeType : undefined,
+              fileName:
+                typeof a?.fileName === "string" ? a.fileName : undefined,
+              content:
+                typeof a?.content === "string"
+                  ? a.content
+                  : ArrayBuffer.isView(a?.content)
+                    ? Buffer.from(
+                        a.content.buffer,
+                        a.content.byteOffset,
+                        a.content.byteLength,
+                      ).toString("base64")
+                    : undefined,
+            })) ?? [];
+
+          let messageWithAttachments = p.message;
+          if (normalizedAttachments.length > 0) {
+            try {
+              messageWithAttachments = buildMessageWithAttachments(
+                p.message,
+                normalizedAttachments,
+                { maxBytes: 5_000_000 },
+              );
+            } catch (err) {
+              return {
+                ok: false,
+                error: {
+                  code: ErrorCodes.INVALID_REQUEST,
+                  message: String(err),
+                },
+              };
+            }
+          }
+
+          const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
+          const now = Date.now();
+          const sessionId = entry?.sessionId ?? randomUUID();
+          const sessionEntry: SessionEntry = {
+            sessionId,
+            updatedAt: now,
+            thinkingLevel: entry?.thinkingLevel,
+            verboseLevel: entry?.verboseLevel,
+            systemSent: entry?.systemSent,
+            lastChannel: entry?.lastChannel,
+            lastTo: entry?.lastTo,
+          };
+          const clientRunId = p.idempotencyKey;
+
+          const cached = ctx.dedupe.get(`chat:${clientRunId}`);
+          if (cached) {
+            if (cached.ok) {
+              return { ok: true, payloadJSON: JSON.stringify(cached.payload) };
+            }
+            return {
+              ok: false,
+              error: cached.error ?? {
+                code: ErrorCodes.UNAVAILABLE,
+                message: "request failed",
+              },
+            };
+          }
+
+          try {
+            const abortController = new AbortController();
+            ctx.chatAbortControllers.set(clientRunId, {
+              controller: abortController,
+              sessionId,
+              sessionKey: p.sessionKey,
+            });
+            ctx.addChatRun(sessionId, {
+              sessionKey: p.sessionKey,
+              clientRunId,
+            });
+
+            if (store) {
+              store[p.sessionKey] = sessionEntry;
+              if (storePath) {
+                await saveSessionStore(storePath, store);
+              }
+            }
+
+            await agentCommand(
+              {
+                message: messageWithAttachments,
+                sessionId,
+                thinking: p.thinking,
+                deliver: p.deliver,
+                timeout: Math.ceil(timeoutMs / 1000).toString(),
+                surface: `Node(${nodeId})`,
+                abortSignal: abortController.signal,
+              },
+              defaultRuntime,
+              ctx.deps,
+            );
+            const payload = {
+              runId: clientRunId,
+              status: "ok" as const,
+            };
+            ctx.dedupe.set(`chat:${clientRunId}`, {
+              ts: Date.now(),
+              ok: true,
+              payload,
+            });
+            return { ok: true, payloadJSON: JSON.stringify(payload) };
+          } catch (err) {
+            const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+            const payload = {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: String(err),
+            };
+            ctx.dedupe.set(`chat:${clientRunId}`, {
+              ts: Date.now(),
+              ok: false,
+              payload,
+              error,
+            });
+            return {
+              ok: false,
+              error: error ?? {
+                code: ErrorCodes.UNAVAILABLE,
+                message: String(err),
+              },
+            };
+          } finally {
+            ctx.chatAbortControllers.delete(clientRunId);
+          }
+        }
+        default:
+          return {
+            ok: false,
+            error: {
+              code: "FORBIDDEN",
+              message: "Method not allowed",
+              details: { method },
+            },
+          };
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        error: { code: ErrorCodes.INVALID_REQUEST, message: String(err) },
+      };
+    }
+  };
+
+  const handleBridgeEvent = async (
+    nodeId: string,
+    evt: { event: string; payloadJSON?: string | null },
+  ) => {
+    switch (evt.event) {
+      case "voice.transcript": {
+        if (!evt.payloadJSON) return;
+        let payload: unknown;
+        try {
+          payload = JSON.parse(evt.payloadJSON) as unknown;
+        } catch {
+          return;
+        }
+        const obj =
+          typeof payload === "object" && payload !== null
+            ? (payload as Record<string, unknown>)
+            : {};
+        const text = typeof obj.text === "string" ? obj.text.trim() : "";
+        if (!text) return;
+        if (text.length > 20_000) return;
+        const sessionKeyRaw =
+          typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+        const mainKey =
+          (loadConfig().session?.mainKey ?? "main").trim() || "main";
+        const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : mainKey;
+        const { storePath, store, entry } = loadSessionEntry(sessionKey);
+        const now = Date.now();
+        const sessionId = entry?.sessionId ?? randomUUID();
+        store[sessionKey] = {
+          sessionId,
+          updatedAt: now,
+          thinkingLevel: entry?.thinkingLevel,
+          verboseLevel: entry?.verboseLevel,
+          systemSent: entry?.systemSent,
+          lastChannel: entry?.lastChannel,
+          lastTo: entry?.lastTo,
+        };
+        if (storePath) {
+          await saveSessionStore(storePath, store);
+        }
+
+        // Ensure chat UI clients refresh when this run completes (even though it wasn't started via chat.send).
+        // This maps agent bus events (keyed by sessionId) to chat events (keyed by clientRunId).
+        ctx.addChatRun(sessionId, {
+          sessionKey,
+          clientRunId: `voice-${randomUUID()}`,
+        });
+
+        void agentCommand(
+          {
+            message: text,
+            sessionId,
+            thinking: "low",
+            deliver: false,
+            surface: "Node",
+          },
+          defaultRuntime,
+          ctx.deps,
+        ).catch((err) => {
+          ctx.logBridge.warn(
+            `agent failed node=${nodeId}: ${formatForLog(err)}`,
+          );
+        });
+        return;
+      }
+      case "agent.request": {
+        if (!evt.payloadJSON) return;
+        type AgentDeepLink = {
+          message?: string;
+          sessionKey?: string | null;
+          thinking?: string | null;
+          deliver?: boolean;
+          to?: string | null;
+          channel?: string | null;
+          timeoutSeconds?: number | null;
+          key?: string | null;
+        };
+        let link: AgentDeepLink | null = null;
+        try {
+          link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
+        } catch {
+          return;
+        }
+        const message = (link?.message ?? "").trim();
+        if (!message) return;
+        if (message.length > 20_000) return;
+
+        const channelRaw =
+          typeof link?.channel === "string" ? link.channel.trim() : "";
+        const channel = channelRaw.toLowerCase();
+        const provider =
+          channel === "whatsapp" ||
+          channel === "telegram" ||
+          channel === "signal" ||
+          channel === "imessage"
+            ? channel
+            : undefined;
+        const to =
+          typeof link?.to === "string" && link.to.trim()
+            ? link.to.trim()
+            : undefined;
+        const deliver = Boolean(link?.deliver) && Boolean(provider);
+
+        const sessionKeyRaw = (link?.sessionKey ?? "").trim();
+        const sessionKey =
+          sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
+        const { storePath, store, entry } = loadSessionEntry(sessionKey);
+        const now = Date.now();
+        const sessionId = entry?.sessionId ?? randomUUID();
+        store[sessionKey] = {
+          sessionId,
+          updatedAt: now,
+          thinkingLevel: entry?.thinkingLevel,
+          verboseLevel: entry?.verboseLevel,
+          systemSent: entry?.systemSent,
+          lastChannel: entry?.lastChannel,
+          lastTo: entry?.lastTo,
+        };
+        if (storePath) {
+          await saveSessionStore(storePath, store);
+        }
+
+        void agentCommand(
+          {
+            message,
+            sessionId,
+            thinking: link?.thinking ?? undefined,
+            deliver,
+            to,
+            provider,
+            timeout:
+              typeof link?.timeoutSeconds === "number"
+                ? link.timeoutSeconds.toString()
+                : undefined,
+            surface: "Node",
+          },
+          defaultRuntime,
+          ctx.deps,
+        ).catch((err) => {
+          ctx.logBridge.warn(
+            `agent failed node=${nodeId}: ${formatForLog(err)}`,
+          );
+        });
+        return;
+      }
+      case "chat.subscribe": {
+        if (!evt.payloadJSON) return;
+        let payload: unknown;
+        try {
+          payload = JSON.parse(evt.payloadJSON) as unknown;
+        } catch {
+          return;
+        }
+        const obj =
+          typeof payload === "object" && payload !== null
+            ? (payload as Record<string, unknown>)
+            : {};
+        const sessionKey =
+          typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+        if (!sessionKey) return;
+        ctx.bridgeSubscribe(nodeId, sessionKey);
+        return;
+      }
+      case "chat.unsubscribe": {
+        if (!evt.payloadJSON) return;
+        let payload: unknown;
+        try {
+          payload = JSON.parse(evt.payloadJSON) as unknown;
+        } catch {
+          return;
+        }
+        const obj =
+          typeof payload === "object" && payload !== null
+            ? (payload as Record<string, unknown>)
+            : {};
+        const sessionKey =
+          typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
+        if (!sessionKey) return;
+        ctx.bridgeUnsubscribe(nodeId, sessionKey);
+        return;
+      }
+      default:
+        return;
+    }
+  };
+
+  return { handleBridgeRequest, handleBridgeEvent };
+}
