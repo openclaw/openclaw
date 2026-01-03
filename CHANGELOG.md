@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0-beta5 — Unreleased
+## 2.0.0-beta5 — 2026-01-03
 
 ### Fixed
 - Media: preserve GIF animation when uploading to Discord/other providers (skip JPEG optimization for image/gif).
