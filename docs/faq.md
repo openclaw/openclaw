@@ -32,6 +32,33 @@ Some features are platform-specific:
 - **iMessage** — macOS only (uses `imsg` CLI)
 - **Clawdis.app** — macOS native app (optional, gateway works without it)
 
+### What are the minimum system requirements?
+
+**Basically nothing!** The gateway is very lightweight — all heavy compute happens on Anthropic's servers.
+
+- **RAM:** 512MB-1GB is enough (community member runs on 1GB VPS!)
+- **CPU:** 1 core is fine for personal use
+- **Disk:** ~500MB for Clawdis + deps, plus space for logs/media
+
+The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. You can also use **Bun** instead of Node for even lower memory footprint:
+
+```bash
+bun clawdis gateway
+```
+
+### How do I install on Linux without Homebrew?
+
+Build CLIs from source! Example for `gogcli`:
+
+```bash
+git clone https://github.com/steipete/gogcli.git
+cd gogcli
+make
+sudo mv bin/gog /usr/local/bin/
+```
+
+Most of Peter's tools are Go binaries — clone, build, move to PATH. No brew needed.
+
 ### I'm getting "unauthorized" errors on health check
 
 You need a config file. Run the onboarding wizard:
@@ -83,9 +110,19 @@ The macOS app onboarding is still being polished and can have quirks (e.g., What
 
 They're **separate billing**! An API key does NOT use your subscription.
 
-**For OAuth:** During onboarding, pick "Anthropic OAuth", log in to your Claude account, paste the code back.
+**For OAuth:** During onboarding, pick "Anthropic OAuth", log in to your Claude account, paste the code back. Or just run:
+
+```bash
+pnpm clawdis login
+```
 
 **If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdis/` to your server. The auth is just a JSON file.
+
+### Does enterprise OAuth work?
+
+**Not currently.** Enterprise accounts use SSO which requires a different auth flow that pi-coding-agent doesn't support yet.
+
+**Workaround:** Ask your enterprise admin to provision an API key via the Anthropic console, then use that with `ANTHROPIC_API_KEY`.
 
 ### OAuth callback not working (containers/headless)?
 
@@ -271,6 +308,33 @@ cat ~/.clawdis/clawdis.json | grep workspace
 - **Signal** — Via `signal-cli` (see [signal.md](./signal.md)).
 - **WebChat** — Browser-based chat UI.
 
+### Discord: Bot works in channels but not DMs?
+
+Discord has **separate allowlists** for channels vs DMs:
+
+- `discord.guilds.*.users` — controls who can talk in server channels
+- `discord.dm.allowFrom` — controls who can DM the bot
+
+If channels work but DMs don't, add `discord.dm.allowFrom` to your config:
+
+```json
+{
+  "discord": {
+    "dm": {
+      "enabled": true,
+      "allowFrom": ["YOUR_DISCORD_USER_ID"]
+    },
+    "guilds": {
+      "your-server": {
+        "users": ["YOUR_DISCORD_USER_ID"]
+      }
+    }
+  }
+}
+```
+
+Find your user ID: Discord Settings → Advanced → Developer Mode → right-click yourself → Copy User ID.
+
 ### Can I use multiple platforms at once?
 
 Yes! One Clawdis gateway can connect to WhatsApp, Telegram, Discord, and more simultaneously. Each platform maintains its own sessions.
@@ -399,6 +463,50 @@ Quick reference (send these in chat):
 | `/think <level>` | Set thinking level (off\|minimal\|low\|medium\|high) |
 | `/verbose on\|off` | Toggle verbose mode |
 | `/activation mention\|always` | Group activation (owner-only) |
+| `/model <name>` | Switch AI model (see below) |
+| `/queue instant\|batch\|serial` | Message queuing mode |
+
+### How do I switch models on the fly?
+
+Use `/model` to switch without restarting:
+
+```
+/model sonnet
+/model haiku
+/model opus
+```
+
+**Setup:** Configure allowed models and aliases in `clawdis.json`:
+
+```json
+{
+  "agent": {
+    "model": "anthropic/claude-opus-4-5-20251022",
+    "allowedModels": [
+      "anthropic/claude-opus-4-5-20251022",
+      "anthropic/claude-sonnet-4-5-20251022",
+      "anthropic/claude-haiku-4-5-20251001"
+    ],
+    "modelAliases": {
+      "opus": "anthropic/claude-opus-4-5-20251022",
+      "sonnet": "anthropic/claude-sonnet-4-5-20251022",
+      "haiku": "anthropic/claude-haiku-4-5-20251001"
+    }
+  }
+}
+```
+
+**Tip:** `/model` is processed at the gateway level — it works even if you're rate-limited (429) on the current model!
+
+### How do rapid-fire messages work?
+
+Use `/queue` to control how messages sent in quick succession are handled:
+
+- **`/queue instant`** — New messages interrupt/steer the current response
+- **`/queue batch`** — Messages queue up, processed after current turn
+- **`/queue serial`** — One at a time, in order
+
+If you tend to send multiple short messages, `/queue instant` feels most natural.
 
 ---
 
