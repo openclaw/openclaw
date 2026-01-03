@@ -95,6 +95,14 @@ function formatTokens(total?: number | null, context?: number | null) {
   return `tokens ${total ?? 0}/${context}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
+function asString(value: unknown, fallback = ""): string {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return fallback;
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const defaultSession =
@@ -235,8 +243,8 @@ export async function runTui(opts: TuiOptions) {
           continue;
         }
         if (message.role === "toolResult") {
-          const toolCallId = String(message.toolCallId ?? "");
-          const toolName = String(message.toolName ?? "tool");
+          const toolCallId = asString(message.toolCallId, "");
+          const toolName = asString(message.toolName, "tool");
           const component = chatLog.startTool(toolCallId, toolName, {});
           component.setResult(
             {
@@ -327,9 +335,9 @@ export async function runTui(opts: TuiOptions) {
     if (!currentSessionId || evt.runId !== currentSessionId) return;
     if (evt.stream === "tool") {
       const data = evt.data ?? {};
-      const phase = String(data.phase ?? "");
-      const toolCallId = String(data.toolCallId ?? "");
-      const toolName = String(data.name ?? "tool");
+      const phase = asString(data.phase, "");
+      const toolCallId = asString(data.toolCallId, "");
+      const toolName = asString(data.name, "tool");
       if (!toolCallId) return;
       if (phase === "start") {
         chatLog.startTool(toolCallId, toolName, data.args);
