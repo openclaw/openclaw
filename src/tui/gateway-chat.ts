@@ -40,10 +40,18 @@ export type GatewaySessionList = {
     updatedAt?: number | null;
     thinkingLevel?: string;
     verboseLevel?: string;
+    sendPolicy?: string;
     model?: string;
     contextTokens?: number | null;
     totalTokens?: number | null;
     displayName?: string;
+    surface?: string;
+    room?: string;
+    space?: string;
+    subject?: string;
+    chatType?: string;
+    lastChannel?: string;
+    lastTo?: string;
   }>;
 };
 

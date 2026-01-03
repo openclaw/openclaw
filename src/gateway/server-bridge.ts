@@ -33,6 +33,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
+import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
@@ -443,6 +444,25 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             }
           }
 
+          if ("sendPolicy" in p) {
+            const raw = p.sendPolicy;
+            if (raw === null) {
+              delete next.sendPolicy;
+            } else if (raw !== undefined) {
+              const normalized = normalizeSendPolicy(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: 'invalid sendPolicy (use "allow"|"deny")',
+                  },
+                };
+              }
+              next.sendPolicy = normalized;
+            }
+          }
+
           if ("groupActivation" in p) {
             const raw = p.groupActivation;
             if (raw === null) {
@@ -507,6 +527,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             verboseLevel: entry?.verboseLevel,
             model: entry?.model,
             contextTokens: entry?.contextTokens,
+            sendPolicy: entry?.sendPolicy,
             displayName: entry?.displayName,
             chatType: entry?.chatType,
             surface: entry?.surface,
@@ -999,6 +1020,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           thinkingLevel: entry?.thinkingLevel,
           verboseLevel: entry?.verboseLevel,
           systemSent: entry?.systemSent,
+          sendPolicy: entry?.sendPolicy,
           lastChannel: entry?.lastChannel,
           lastTo: entry?.lastTo,
         };
@@ -1080,6 +1102,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           thinkingLevel: entry?.thinkingLevel,
           verboseLevel: entry?.verboseLevel,
           systemSent: entry?.systemSent,
+          sendPolicy: entry?.sendPolicy,
           lastChannel: entry?.lastChannel,
           lastTo: entry?.lastTo,
         };

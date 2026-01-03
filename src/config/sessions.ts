@@ -34,6 +34,7 @@ export type SessionEntry = {
   modelOverride?: string;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
+  sendPolicy?: "allow" | "deny";
   queueMode?:
     | "steer"
     | "followup"
@@ -320,6 +321,7 @@ export async function updateLastRoute(params: {
     verboseLevel: existing?.verboseLevel,
     providerOverride: existing?.providerOverride,
     modelOverride: existing?.modelOverride,
+    sendPolicy: existing?.sendPolicy,
     queueMode: existing?.queueMode,
     inputTokens: existing?.inputTokens,
     outputTokens: existing?.outputTokens,

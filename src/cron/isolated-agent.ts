@@ -150,6 +150,7 @@ function resolveCronSession(params: {
     verboseLevel: entry?.verboseLevel,
     model: entry?.model,
     contextTokens: entry?.contextTokens,
+    sendPolicy: entry?.sendPolicy,
     lastChannel: entry?.lastChannel,
     lastTo: entry?.lastTo,
   };

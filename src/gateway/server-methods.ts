@@ -75,6 +75,10 @@ import {
 } from "../infra/voicewake.js";
 import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  normalizeSendPolicy,
+  resolveSendPolicy,
+} from "../sessions/send-policy.js";
 import { sendMessageSignal } from "../signal/index.js";
 import { probeSignal, type SignalProbe } from "../signal/probe.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
@@ -701,7 +705,7 @@ export async function handleGatewayRequest(
           break;
         }
       }
-      const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
+      const { cfg, storePath, store, entry } = loadSessionEntry(p.sessionKey);
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       const sessionEntry: SessionEntry = {
@@ -710,10 +714,30 @@ export async function handleGatewayRequest(
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         systemSent: entry?.systemSent,
+        sendPolicy: entry?.sendPolicy,
         lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
       };
       const clientRunId = p.idempotencyKey;
+
+      const sendPolicy = resolveSendPolicy({
+        cfg,
+        entry,
+        sessionKey: p.sessionKey,
+        surface: entry?.surface,
+        chatType: entry?.chatType,
+      });
+      if (sendPolicy === "deny") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "send blocked by session policy",
+          ),
+        );
+        break;
+      }
 
       const cached = dedupe.get(`chat:${clientRunId}`);
       if (cached) {
@@ -1677,6 +1701,27 @@ export async function handleGatewayRequest(
         }
       }
 
+      if ("sendPolicy" in p) {
+        const raw = p.sendPolicy;
+        if (raw === null) {
+          delete next.sendPolicy;
+        } else if (raw !== undefined) {
+          const normalized = normalizeSendPolicy(String(raw));
+          if (!normalized) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                'invalid sendPolicy (use "allow"|"deny")',
+              ),
+            );
+            break;
+          }
+          next.sendPolicy = normalized;
+        }
+      }
+
       if ("groupActivation" in p) {
         const raw = p.groupActivation;
         if (raw === null) {
@@ -1744,6 +1789,7 @@ export async function handleGatewayRequest(
         verboseLevel: entry?.verboseLevel,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
+        sendPolicy: entry?.sendPolicy,
         lastChannel: entry?.lastChannel,
         lastTo: entry?.lastTo,
         skillsSnapshot: entry?.skillsSnapshot,
@@ -2739,10 +2785,29 @@ export async function handleGatewayRequest(
           thinkingLevel: entry?.thinkingLevel,
           verboseLevel: entry?.verboseLevel,
           systemSent: entry?.systemSent,
+          sendPolicy: entry?.sendPolicy,
           skillsSnapshot: entry?.skillsSnapshot,
           lastChannel: entry?.lastChannel,
           lastTo: entry?.lastTo,
         };
+        const sendPolicy = resolveSendPolicy({
+          cfg,
+          entry,
+          sessionKey: requestedSessionKey,
+          surface: entry?.surface,
+          chatType: entry?.chatType,
+        });
+        if (sendPolicy === "deny") {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "send blocked by session policy",
+            ),
+          );
+          break;
+        }
         if (store) {
           store[requestedSessionKey] = sessionEntry;
           if (storePath) {

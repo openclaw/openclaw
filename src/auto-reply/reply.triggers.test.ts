@@ -107,6 +107,39 @@ describe("trigger handling", () => {
     });
   });
 
+  it("allows owner to set send policy", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/send off",
+          From: "+1000",
+          To: "+2000",
+          Surface: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Send policy set to off");
+
+      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const store = JSON.parse(storeRaw) as Record<string, { sendPolicy?: string }>;
+      expect(store.main?.sendPolicy).toBe("deny");
+    });
+  });
+
   it("returns a context overflow fallback when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockRejectedValue(

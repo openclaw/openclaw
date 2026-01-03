@@ -55,6 +55,7 @@ import {
 } from "../infra/system-events.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
@@ -63,6 +64,7 @@ import {
   normalizeGroupActivation,
   parseActivationCommand,
 } from "./group-activation.js";
+import { parseSendPolicyCommand } from "./send-policy.js";
 import { stripHeartbeatToken } from "./heartbeat.js";
 import { extractModelDirective } from "./model.js";
 import { buildStatusMessage } from "./status.js";
@@ -986,6 +988,7 @@ export async function getReplyFromConfig(
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
+    sendPolicy: baseEntry?.sendPolicy,
     queueMode: baseEntry?.queueMode,
     queueDebounceMs: baseEntry?.queueDebounceMs,
     queueCap: baseEntry?.queueCap,
@@ -1587,6 +1590,7 @@ export async function getReplyFromConfig(
     ? stripMentions(rawBodyNormalized, ctx, cfg)
     : rawBodyNormalized;
   const activationCommand = parseActivationCommand(commandBodyNormalized);
+  const sendPolicyCommand = parseSendPolicyCommand(commandBodyNormalized);
   const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
   const ownerCandidates = isWhatsAppSurface
     ? (allowFrom ?? []).filter((entry) => entry && entry !== "*")
@@ -1631,6 +1635,38 @@ export async function getReplyFromConfig(
     return {
       text: `⚙️ Group activation set to ${activationCommand.mode}.`,
     };
+  }
+
+  if (sendPolicyCommand.hasCommand) {
+    if (!isOwnerSender) {
+      logVerbose(
+        `Ignoring /send from non-owner: ${senderE164 || "<unknown>"}`,
+      );
+      cleanupTyping();
+      return undefined;
+    }
+    if (!sendPolicyCommand.mode) {
+      cleanupTyping();
+      return { text: "⚙️ Usage: /send on|off|inherit" };
+    }
+    if (sessionEntry && sessionStore && sessionKey) {
+      if (sendPolicyCommand.mode === "inherit") {
+        delete sessionEntry.sendPolicy;
+      } else {
+        sessionEntry.sendPolicy = sendPolicyCommand.mode;
+      }
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    }
+    cleanupTyping();
+    const label =
+      sendPolicyCommand.mode === "inherit"
+        ? "inherit"
+        : sendPolicyCommand.mode === "allow"
+          ? "on"
+          : "off";
+    return { text: `⚙️ Send policy set to ${label}.` };
   }
 
   if (
@@ -1708,6 +1744,21 @@ export async function getReplyFromConfig(
     }
     cleanupTyping();
     return { text: "⚙️ Agent was aborted." };
+  }
+
+  const sendPolicy = resolveSendPolicy({
+    cfg,
+    entry: sessionEntry,
+    sessionKey,
+    surface: sessionEntry?.surface ?? surface,
+    chatType: sessionEntry?.chatType,
+  });
+  if (sendPolicy === "deny") {
+    logVerbose(
+      `Send blocked by policy for session ${sessionKey ?? "unknown"}`,
+    );
+    cleanupTyping();
+    return undefined;
   }
 
   const isFirstTurnInSession = isNewSession || !systemSent;

@@ -19,6 +19,20 @@ export const isNixMode = process.env.CLAWDIS_NIX_MODE === "1";
 export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
 export type ReplyToMode = "off" | "first" | "all";
+export type SessionSendPolicyAction = "allow" | "deny";
+export type SessionSendPolicyMatch = {
+  surface?: string;
+  chatType?: "direct" | "group" | "room";
+  keyPrefix?: string;
+};
+export type SessionSendPolicyRule = {
+  action: SessionSendPolicyAction;
+  match?: SessionSendPolicyMatch;
+};
+export type SessionSendPolicyConfig = {
+  default?: SessionSendPolicyAction;
+  rules?: SessionSendPolicyRule[];
+};
 
 export type SessionConfig = {
   scope?: SessionScope;
@@ -28,6 +42,7 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   mainKey?: string;
+  sendPolicy?: SessionSendPolicyConfig;
 };
 
 export type LoggingConfig = {
@@ -853,6 +868,31 @@ const SessionSchema = z
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     mainKey: z.string().optional(),
+    sendPolicy: z
+      .object({
+        default: z.union([z.literal("allow"), z.literal("deny")]).optional(),
+        rules: z
+          .array(
+            z.object({
+              action: z.union([z.literal("allow"), z.literal("deny")]),
+              match: z
+                .object({
+                  surface: z.string().optional(),
+                  chatType: z
+                    .union([
+                      z.literal("direct"),
+                      z.literal("group"),
+                      z.literal("room"),
+                    ])
+                    .optional(),
+                  keyPrefix: z.string().optional(),
+                })
+                .optional(),
+            }),
+          )
+          .optional(),
+      })
+      .optional(),
   })
   .optional();
 

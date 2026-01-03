@@ -42,6 +42,7 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 
@@ -210,6 +211,19 @@ export async function agentCommand(
 
   if (sessionKey) {
     registerAgentRunContext(sessionId, { sessionKey });
+  }
+
+  if (opts.deliver === true) {
+    const sendPolicy = resolveSendPolicy({
+      cfg,
+      entry: sessionEntry,
+      sessionKey,
+      surface: sessionEntry?.surface,
+      chatType: sessionEntry?.chatType,
+    });
+    if (sendPolicy === "deny") {
+      throw new Error("send blocked by session policy");
+    }
   }
 
   let resolvedThinkLevel =

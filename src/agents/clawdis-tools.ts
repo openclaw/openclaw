@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
 
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
@@ -40,7 +41,11 @@ import {
   writeScreenRecordToFile,
 } from "../cli/nodes-screen.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { type DiscordActionConfig, loadConfig } from "../config/config.js";
+import {
+  type ClawdisConfig,
+  type DiscordActionConfig,
+  loadConfig,
+} from "../config/config.js";
 import {
   addRoleDiscord,
   banMemberDiscord,
@@ -206,6 +211,126 @@ function jsonResult(payload: unknown): AgentToolResult<unknown> {
     ],
     details: payload,
   };
+}
+
+type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+type SessionListRow = {
+  key: string;
+  kind: SessionKind;
+  provider: string;
+  displayName?: string;
+  updatedAt?: number | null;
+  sessionId?: string;
+  model?: string;
+  contextTokens?: number | null;
+  totalTokens?: number | null;
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  systemSent?: boolean;
+  abortedLastRun?: boolean;
+  sendPolicy?: string;
+  lastChannel?: string;
+  lastTo?: string;
+  transcriptPath?: string;
+  messages?: unknown[];
+};
+
+function normalizeKey(value?: string) {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function resolveMainSessionAlias(cfg: ClawdisConfig) {
+  const mainKey = normalizeKey(cfg.session?.mainKey) ?? "main";
+  const scope = cfg.session?.scope ?? "per-sender";
+  const alias = scope === "global" ? "global" : mainKey;
+  return { mainKey, alias, scope };
+}
+
+function resolveDisplaySessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+}) {
+  if (params.key === params.alias) return "main";
+  if (params.key === params.mainKey) return "main";
+  return params.key;
+}
+
+function resolveInternalSessionKey(params: {
+  key: string;
+  alias: string;
+  mainKey: string;
+}) {
+  if (params.key === "main") return params.alias;
+  return params.key;
+}
+
+function classifySessionKind(params: {
+  key: string;
+  gatewayKind?: string | null;
+  alias: string;
+  mainKey: string;
+}): SessionKind {
+  const key = params.key;
+  if (key === params.alias || key === params.mainKey) return "main";
+  if (key.startsWith("cron:")) return "cron";
+  if (key.startsWith("hook:")) return "hook";
+  if (key.startsWith("node-") || key.startsWith("node:")) return "node";
+  if (params.gatewayKind === "group") return "group";
+  if (
+    key.startsWith("group:") ||
+    key.includes(":group:") ||
+    key.includes(":channel:")
+  ) {
+    return "group";
+  }
+  return "other";
+}
+
+function deriveProvider(params: {
+  key: string;
+  kind: SessionKind;
+  surface?: string | null;
+  lastChannel?: string | null;
+}): string {
+  if (params.kind === "cron" || params.kind === "hook" || params.kind === "node")
+    return "internal";
+  const surface = normalizeKey(params.surface ?? undefined);
+  if (surface) return surface;
+  const lastChannel = normalizeKey(params.lastChannel ?? undefined);
+  if (lastChannel) return lastChannel;
+  const parts = params.key.split(":").filter(Boolean);
+  if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
+    return parts[0];
+  }
+  return "unknown";
+}
+
+function stripToolMessages(messages: unknown[]): unknown[] {
+  return messages.filter((msg) => {
+    if (!msg || typeof msg !== "object") return true;
+    const role = (msg as { role?: unknown }).role;
+    return role !== "toolResult";
+  });
+}
+
+function extractAssistantText(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") return undefined;
+  if ((message as { role?: unknown }).role !== "assistant") return undefined;
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  const chunks: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    if ((block as { type?: unknown }).type !== "text") continue;
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === "string" && text.trim()) {
+      chunks.push(text);
+    }
+  }
+  const joined = chunks.join("").trim();
+  return joined ? joined : undefined;
 }
 
 async function imageResult(params: {
@@ -2308,6 +2433,328 @@ function createGatewayTool(): AnyAgentTool {
   };
 }
 
+const SessionsListToolSchema = Type.Object({
+  kinds: Type.Optional(Type.Array(Type.String())),
+  limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
+  messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
+const SessionsHistoryToolSchema = Type.Object({
+  sessionKey: Type.String(),
+  limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  includeTools: Type.Optional(Type.Boolean()),
+});
+
+const SessionsSendToolSchema = Type.Object({
+  sessionKey: Type.String(),
+  message: Type.String(),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
+function createSessionsListTool(): AnyAgentTool {
+  return {
+    label: "Sessions",
+    name: "sessions_list",
+    description: "List sessions with optional filters and last messages.",
+    parameters: SessionsListToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const cfg = loadConfig();
+      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+
+      const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
+        value.trim().toLowerCase(),
+      );
+      const allowedKindsList = (kindsRaw ?? []).filter((value) =>
+        ["main", "group", "cron", "hook", "node", "other"].includes(value),
+      );
+      const allowedKinds = allowedKindsList.length
+        ? new Set(allowedKindsList)
+        : undefined;
+
+      const limit =
+        typeof params.limit === "number" && Number.isFinite(params.limit)
+          ? Math.max(1, Math.floor(params.limit))
+          : undefined;
+      const activeMinutes =
+        typeof params.activeMinutes === "number" &&
+        Number.isFinite(params.activeMinutes)
+          ? Math.max(1, Math.floor(params.activeMinutes))
+          : undefined;
+      const messageLimitRaw =
+        typeof params.messageLimit === "number" &&
+        Number.isFinite(params.messageLimit)
+          ? Math.max(0, Math.floor(params.messageLimit))
+          : 0;
+      const messageLimit = Math.min(messageLimitRaw, 20);
+
+      const list = (await callGateway({
+        method: "sessions.list",
+        params: {
+          limit,
+          activeMinutes,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+      })) as {
+        path?: string;
+        sessions?: Array<Record<string, unknown>>;
+      };
+
+      const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+      const storePath =
+        typeof list?.path === "string" ? list.path : undefined;
+      const rows: SessionListRow[] = [];
+
+      for (const entry of sessions) {
+        if (!entry || typeof entry !== "object") continue;
+        const key = typeof entry.key === "string" ? entry.key : "";
+        if (!key) continue;
+        if (key === "unknown") continue;
+        if (key === "global" && alias !== "global") continue;
+
+        const gatewayKind =
+          typeof entry.kind === "string" ? entry.kind : undefined;
+        const kind = classifySessionKind({ key, gatewayKind, alias, mainKey });
+        if (allowedKinds && !allowedKinds.has(kind)) continue;
+
+        const displayKey = resolveDisplaySessionKey({
+          key,
+          alias,
+          mainKey,
+        });
+
+        const surface =
+          typeof entry.surface === "string" ? entry.surface : undefined;
+        const lastChannel =
+          typeof entry.lastChannel === "string" ? entry.lastChannel : undefined;
+        const provider = deriveProvider({
+          key,
+          kind,
+          surface,
+          lastChannel,
+        });
+
+        const sessionId =
+          typeof entry.sessionId === "string" ? entry.sessionId : undefined;
+        const transcriptPath =
+          sessionId && storePath
+            ? path.join(path.dirname(storePath), `${sessionId}.jsonl`)
+            : undefined;
+
+        const row: SessionListRow = {
+          key: displayKey,
+          kind,
+          provider,
+          displayName:
+            typeof entry.displayName === "string"
+              ? entry.displayName
+              : undefined,
+          updatedAt:
+            typeof entry.updatedAt === "number" ? entry.updatedAt : undefined,
+          sessionId,
+          model: typeof entry.model === "string" ? entry.model : undefined,
+          contextTokens:
+            typeof entry.contextTokens === "number"
+              ? entry.contextTokens
+              : undefined,
+          totalTokens:
+            typeof entry.totalTokens === "number"
+              ? entry.totalTokens
+              : undefined,
+          thinkingLevel:
+            typeof entry.thinkingLevel === "string"
+              ? entry.thinkingLevel
+              : undefined,
+          verboseLevel:
+            typeof entry.verboseLevel === "string"
+              ? entry.verboseLevel
+              : undefined,
+          systemSent:
+            typeof entry.systemSent === "boolean" ? entry.systemSent : undefined,
+          abortedLastRun:
+            typeof entry.abortedLastRun === "boolean"
+              ? entry.abortedLastRun
+              : undefined,
+          sendPolicy:
+            typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
+          lastChannel,
+          lastTo: typeof entry.lastTo === "string" ? entry.lastTo : undefined,
+          transcriptPath,
+        };
+
+        if (messageLimit > 0) {
+          const resolvedKey = resolveInternalSessionKey({
+            key: displayKey,
+            alias,
+            mainKey,
+          });
+          const history = (await callGateway({
+            method: "chat.history",
+            params: { sessionKey: resolvedKey, limit: messageLimit },
+          })) as { messages?: unknown[] };
+          const rawMessages = Array.isArray(history?.messages)
+            ? history.messages
+            : [];
+          const filtered = stripToolMessages(rawMessages);
+          row.messages =
+            filtered.length > messageLimit
+              ? filtered.slice(-messageLimit)
+              : filtered;
+        }
+
+        rows.push(row);
+      }
+
+      return jsonResult({
+        count: rows.length,
+        sessions: rows,
+      });
+    },
+  };
+}
+
+function createSessionsHistoryTool(): AnyAgentTool {
+  return {
+    label: "Session History",
+    name: "sessions_history",
+    description: "Fetch message history for a session.",
+    parameters: SessionsHistoryToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const sessionKey = readStringParam(params, "sessionKey", {
+        required: true,
+      });
+      const cfg = loadConfig();
+      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const resolvedKey = resolveInternalSessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+      const limit =
+        typeof params.limit === "number" && Number.isFinite(params.limit)
+          ? Math.max(1, Math.floor(params.limit))
+          : undefined;
+      const includeTools = Boolean(params.includeTools);
+      const result = (await callGateway({
+        method: "chat.history",
+        params: { sessionKey: resolvedKey, limit },
+      })) as { messages?: unknown[] };
+      const rawMessages = Array.isArray(result?.messages)
+        ? result.messages
+        : [];
+      const messages = includeTools
+        ? rawMessages
+        : stripToolMessages(rawMessages);
+      return jsonResult({
+        sessionKey: resolveDisplaySessionKey({
+          key: sessionKey,
+          alias,
+          mainKey,
+        }),
+        messages,
+      });
+    },
+  };
+}
+
+function createSessionsSendTool(): AnyAgentTool {
+  return {
+    label: "Session Send",
+    name: "sessions_send",
+    description: "Send a message into another session.",
+    parameters: SessionsSendToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const sessionKey = readStringParam(params, "sessionKey", {
+        required: true,
+      });
+      const message = readStringParam(params, "message", { required: true });
+      const cfg = loadConfig();
+      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const resolvedKey = resolveInternalSessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+      const timeoutSeconds =
+        typeof params.timeoutSeconds === "number" &&
+        Number.isFinite(params.timeoutSeconds)
+          ? Math.max(0, Math.floor(params.timeoutSeconds))
+          : 30;
+      const idempotencyKey = crypto.randomUUID();
+      try {
+        const response = (await callGateway({
+          method: "agent",
+          params: {
+            message,
+            sessionKey: resolvedKey,
+            idempotencyKey,
+            deliver: false,
+          },
+          expectFinal: timeoutSeconds > 0,
+          timeoutMs: timeoutSeconds > 0 ? timeoutSeconds * 1000 : undefined,
+        })) as { runId?: string; status?: string };
+
+        const runId =
+          typeof response?.runId === "string" && response.runId
+            ? response.runId
+            : idempotencyKey;
+
+        if (timeoutSeconds === 0) {
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: resolveDisplaySessionKey({
+              key: sessionKey,
+              alias,
+              mainKey,
+            }),
+          });
+        }
+
+        const history = (await callGateway({
+          method: "chat.history",
+          params: { sessionKey: resolvedKey, limit: 50 },
+        })) as { messages?: unknown[] };
+        const filtered = stripToolMessages(
+          Array.isArray(history?.messages) ? history.messages : [],
+        );
+        const last =
+          filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+        const reply = last ? extractAssistantText(last) : undefined;
+
+        return jsonResult({
+          runId,
+          status: "ok",
+          reply,
+          sessionKey: resolveDisplaySessionKey({
+            key: sessionKey,
+            alias,
+            mainKey,
+          }),
+        });
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err ?? "error");
+        const isTimeout = message.toLowerCase().includes("timeout");
+        return jsonResult({
+          runId: idempotencyKey,
+          status: isTimeout ? "timeout" : "error",
+          error: message,
+          sessionKey: resolveDisplaySessionKey({
+            key: sessionKey,
+            alias,
+            mainKey,
+          }),
+        });
+      }
+    },
+  };
+}
+
 export function createClawdisTools(options?: {
   browserControlUrl?: string;
 }): AnyAgentTool[] {
@@ -2318,5 +2765,8 @@ export function createClawdisTools(options?: {
     createCronTool(),
     createDiscordTool(),
     createGatewayTool(),
+    createSessionsListTool(),
+    createSessionsHistoryTool(),
+    createSessionsSendTool(),
   ];
 }
