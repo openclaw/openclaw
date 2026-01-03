@@ -11,7 +11,12 @@ Use **bash background mode** for coding agents. Full programmatic control, no tm
 ## The Pattern: workdir + background
 
 ```bash
+# Create temp space for chats/scratch work
+SCRATCH=$(mktemp -d)
+
 # Start agent in target directory ("little box" - only sees relevant files)
+bash workdir:$SCRATCH background:true command:"<agent command>"
+# Or for project work:
 bash workdir:~/project/folder background:true command:"<agent command>"
 # Returns sessionId for tracking
 
@@ -97,3 +102,4 @@ bash workdir:~/project background:true command:"opencode run \"Your task\""
 4. **--full-auto for building** — auto-approves changes
 5. **vanilla for reviewing** — no special flags needed
 6. **Parallel is OK** — run many Codex processes at once for batch work
+7. **NEVER start Codex in ~/clawd/** — it'll read your soul docs and get weird ideas about the org chart! Use the target project dir or /tmp for blank slate chats
