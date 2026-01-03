@@ -98,8 +98,8 @@ export async function runNonInteractiveOnboarding(
     await setAnthropicApiKey(key);
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
-  } else if (authChoice === "oauth") {
-    runtime.error("OAuth requires interactive mode.");
+  } else if (authChoice === "oauth" || authChoice === "antigravity") {
+    runtime.error(`${authChoice === "oauth" ? "OAuth" : "Antigravity"} requires interactive mode.`);
     runtime.exit(1);
     return;
   }
