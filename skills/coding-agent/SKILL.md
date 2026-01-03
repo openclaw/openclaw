@@ -47,9 +47,28 @@ bash workdir:~/project background:true command:"codex exec --full-auto \"Build a
 ```
 
 ### Reviewing PRs (vanilla, no flags)
+
+**⚠️ CRITICAL: Never review PRs in Clawdis's own project folder!**
+- Either use the project where the PR is submitted (if it's NOT ~/Projects/clawdis)
+- Or clone to a temp folder first
+
 ```bash
-bash workdir:~/project background:true command:"codex exec \"Review PR #115. Use: git diff origin/main...origin/pr/115\""
+# Option 1: Review in the actual project (if NOT clawdis)
+bash workdir:~/Projects/some-other-repo background:true command:"codex review --base main"
+
+# Option 2: Clone to temp folder for safe review (REQUIRED for clawdis PRs!)
+REVIEW_DIR=$(mktemp -d)
+git clone https://github.com/steipete/clawdis.git $REVIEW_DIR
+cd $REVIEW_DIR && gh pr checkout 130
+bash workdir:$REVIEW_DIR background:true command:"codex review --base origin/main"
+# Clean up after: rm -rf $REVIEW_DIR
+
+# Option 3: Use git worktree (keeps main intact)
+git worktree add /tmp/pr-130-review pr-130-branch
+bash workdir:/tmp/pr-130-review background:true command:"codex review --base main"
 ```
+
+**Why?** Checking out branches in the running Clawdis repo can break the live instance!
 
 ### Batch PR Reviews (parallel army!)
 ```bash
@@ -103,3 +122,4 @@ bash workdir:~/project background:true command:"opencode run \"Your task\""
 5. **vanilla for reviewing** — no special flags needed
 6. **Parallel is OK** — run many Codex processes at once for batch work
 7. **NEVER start Codex in ~/clawd/** — it'll read your soul docs and get weird ideas about the org chart! Use the target project dir or /tmp for blank slate chats
+8. **NEVER checkout branches in ~/Projects/clawdis/** — that's the LIVE Clawdis instance! Clone to /tmp or use git worktree for PR reviews
