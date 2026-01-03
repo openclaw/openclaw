@@ -114,11 +114,11 @@ export function resolveHookMappings(
 ): HookMappingResolved[] {
   const presets = hooks?.presets ?? [];
   const mappings: HookMappingConfig[] = [];
+  if (hooks?.mappings) mappings.push(...hooks.mappings);
   for (const preset of presets) {
     const presetMappings = hookPresetMappings[preset];
     if (presetMappings) mappings.push(...presetMappings);
   }
-  if (hooks?.mappings) mappings.push(...hooks.mappings);
   if (mappings.length === 0) return [];
 
   const configDir = path.dirname(CONFIG_PATH_CLAWDIS);
