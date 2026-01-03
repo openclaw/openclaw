@@ -8,7 +8,8 @@ read_when:
 
 The Gateway serves a small **browser Control UI** (Vite + Lit) from the same port as the Gateway WebSocket:
 
-- `http://<host>:18789/ui/`
+- default: `http://<host>:18789/`
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdis`)
 
 The UI talks directly to the Gateway WS and supports:
 - Chat (`chat.history`, `chat.send`, `chat.abort`)
@@ -34,7 +35,7 @@ You can control it via config:
 ```json5
 {
   gateway: {
-    controlUi: { enabled: true } // set false to disable /ui/
+    controlUi: { enabled: true, basePath: "/clawdis" } // basePath optional
   }
 }
 ```
@@ -61,7 +62,7 @@ clawdis gateway
 ```
 
 Open:
-- `https://<magicdns>/ui/`
+- `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 ### Tailnet bind + token (legacy)
 
@@ -82,7 +83,7 @@ clawdis gateway
 ```
 
 Open:
-- `http://<tailscale-ip>:18789/ui/`
+- `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
 ### Public internet (Funnel)
 

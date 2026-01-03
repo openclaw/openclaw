@@ -81,6 +81,7 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
+  "gateway.controlUi.basePath": "Control UI Base Path",
   "agent.workspace": "Workspace",
   "agent.model": "Default Model",
   "ui.seamColor": "Accent Color",
@@ -97,10 +98,13 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.auth.token":
     "Required for multi-machine access or non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
+  "gateway.controlUi.basePath":
+    "Optional URL prefix where the Control UI is served (e.g. /clawdis).",
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
+  "gateway.controlUi.basePath": "/clawdis",
 };
 
 const SENSITIVE_PATTERNS = [/token/i, /password/i, /secret/i, /api.?key/i];

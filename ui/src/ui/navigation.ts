@@ -37,7 +37,7 @@ const PATH_TO_TAB = new Map(
   Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab]),
 );
 
-function normalizeBasePath(basePath: string): string {
+export function normalizeBasePath(basePath: string): string {
   if (!basePath) return "";
   let base = basePath.trim();
   if (!base.startsWith("/")) base = `/${base}`;
@@ -76,6 +76,24 @@ export function tabFromPath(pathname: string, basePath = ""): Tab | null {
   if (normalized.endsWith("/index.html")) normalized = "/";
   if (normalized === "/") return "chat";
   return PATH_TO_TAB.get(normalized) ?? null;
+}
+
+export function inferBasePathFromPathname(pathname: string): string {
+  let normalized = normalizePath(pathname);
+  if (normalized.endsWith("/index.html")) {
+    normalized = normalizePath(normalized.slice(0, -"/index.html".length));
+  }
+  if (normalized === "/") return "";
+  const segments = normalized.split("/").filter(Boolean);
+  if (segments.length === 0) return "";
+  for (let i = 0; i < segments.length; i++) {
+    const candidate = `/${segments.slice(i).join("/")}`.toLowerCase();
+    if (PATH_TO_TAB.has(candidate)) {
+      const prefix = segments.slice(0, i);
+      return prefix.length ? `/${prefix.join("/")}` : "";
+    }
+  }
+  return `/${segments.join("/")}`;
 }
 
 export function titleForTab(tab: Tab) {

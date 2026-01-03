@@ -6,9 +6,10 @@ read_when:
 ---
 # Control UI (browser)
 
-The Control UI is a small **Vite + Lit** single-page app served by the Gateway under:
+The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
-- `http://<host>:18789/`
+- default: `http://<host>:18789/`
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdis`)
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
@@ -40,7 +41,7 @@ clawdis gateway --tailscale serve
 ```
 
 Open:
-- `https://<magicdns>/ui/`
+- `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 By default, the gateway trusts Tailscale identity headers in serve mode. You can still set
 `CLAWDIS_GATEWAY_TOKEN` or `gateway.auth` if you want a shared secret instead.
@@ -52,7 +53,7 @@ clawdis gateway --bind tailnet --token "$(openssl rand -hex 32)"
 ```
 
 Then open:
-- `http://<tailscale-ip>:18789/ui/`
+- `http://<tailscale-ip>:18789/` (or your configured `gateway.controlUi.basePath`)
 
 Paste the token into the UI settings (sent as `connect.params.auth.token`).
 
@@ -63,6 +64,12 @@ The Gateway serves static files from `dist/control-ui`. Build them with:
 ```bash
 pnpm ui:install
 pnpm ui:build
+```
+
+Optional absolute base (when you want fixed asset URLs):
+
+```bash
+CLAWDIS_CONTROL_UI_BASE_PATH=/clawdis/ pnpm ui:build
 ```
 
 For local development (separate dev server):

@@ -645,12 +645,17 @@ Defaults:
     mode: "local", // or "remote"
     port: 18789, // WS + HTTP multiplex
     bind: "loopback",
-    // controlUi: { enabled: true }
+    // controlUi: { enabled: true, basePath: "/clawdis" }
     // auth: { mode: "token", token: "your-token" } // token is for multi-machine CLI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
   }
 }
 ```
+
+Control UI base path:
+- `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
+- Examples: `"/ui"`, `"/clawdis"`, `"/apps/clawdis"`.
+- Default: root (`/`) (unchanged).
 
 Notes:
 - `clawdis gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).

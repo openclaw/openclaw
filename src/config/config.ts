@@ -402,8 +402,10 @@ export type TalkConfig = {
 };
 
 export type GatewayControlUiConfig = {
-  /** If false, the Gateway will not serve the Control UI (/). Default: true. */
+  /** If false, the Gateway will not serve the Control UI (default /). */
   enabled?: boolean;
+  /** Optional base path prefix for the Control UI (e.g. "/clawdis"). */
+  basePath?: string;
 };
 
 export type GatewayAuthMode = "token" | "password";
@@ -1269,6 +1271,7 @@ export const ClawdisSchema = z.object({
       controlUi: z
         .object({
           enabled: z.boolean().optional(),
+          basePath: z.string().optional(),
         })
         .optional(),
       auth: z

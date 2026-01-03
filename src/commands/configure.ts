@@ -618,7 +618,11 @@ export async function runConfigureWizard(
   note(
     (() => {
       const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({ bind, port: gatewayPort });
+      const links = resolveControlUiLinks({
+        bind,
+        port: gatewayPort,
+        basePath: nextConfig.gateway?.controlUi?.basePath,
+      });
       return [`Web UI: ${links.httpUrl}`, `Gateway WS: ${links.wsUrl}`].join(
         "\n",
       );
@@ -635,7 +639,11 @@ export async function runConfigureWizard(
   );
   if (wantsOpen) {
     const bind = nextConfig.gateway?.bind ?? "loopback";
-    const links = resolveControlUiLinks({ bind, port: gatewayPort });
+    const links = resolveControlUiLinks({
+      bind,
+      port: gatewayPort,
+      basePath: nextConfig.gateway?.controlUi?.basePath,
+    });
     await openUrl(links.httpUrl);
   }
 

@@ -9,7 +9,7 @@
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
 - UI: centralize tool display metadata and show action/detail summaries across Web Chat, SwiftUI, Android, and the TUI.
-- Control UI: support configurable base paths (`gateway.controlUi.basePath`) for hosting under URL prefixes.
+- Control UI: support configurable base paths (`gateway.controlUi.basePath`, default unchanged) for hosting under URL prefixes.
 - Onboarding: shared wizard engine powering CLI + macOS via gateway wizard RPC.
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
 
