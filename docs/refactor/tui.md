@@ -23,4 +23,4 @@ Updated: 2026-01-03
 - [x] TUI UI kit: theme + components (editor, message feed, tool cards, selectors).
 - [x] TUI controller: keybindings + Clawdis slash commands + history/stream wiring.
 - [x] Docs + changelog updated for the new TUI behavior.
-- [ ] Gate: lint, build, tests, docs list.
+- [x] Gate: lint, build, tests, docs list.
