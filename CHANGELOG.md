@@ -55,6 +55,7 @@
 ### Fixes
 - Chat UI: keep the chat scrolled to the latest message after switching sessions.
 - Auto-reply: stream completed reply blocks as soon as they finish (configurable default + break); skip empty tool-only blocks unless verbose.
+- Discord: avoid duplicate sends when block streaming is enabled (race with typing hook).
 - Providers: make outbound text chunk limits configurable via `*.textChunkLimit` (defaults remain 4000/Discord 2000).
 - CLI onboarding: persist gateway token in config so local CLI auth works; recommend auth Off unless you need multi-machine access.
 - Control UI: accept a `?token=` URL param to auto-fill Gateway auth; onboarding now opens the dashboard with token auth when configured.

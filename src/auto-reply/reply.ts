@@ -1421,16 +1421,19 @@ export async function getReplyFromConfig(
                 const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
                 if (!cleaned && !hasMedia) return;
                 if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia) return;
-                await startTypingOnText(cleaned);
                 const blockPayload: ReplyPayload = {
                   text: cleaned,
                   mediaUrls: payload.mediaUrls,
                   mediaUrl: payload.mediaUrls?.[0],
                   replyToId: tagResult.replyToId,
                 };
-                const task = Promise.resolve(opts.onBlockReply?.(blockPayload))
+                const payloadKey = buildPayloadKey(blockPayload);
+                const task = (async () => {
+                  await startTypingOnText(cleaned);
+                  await opts.onBlockReply?.(blockPayload);
+                })()
                   .then(() => {
-                    streamedPayloadKeys.add(buildPayloadKey(blockPayload));
+                    streamedPayloadKeys.add(payloadKey);
                   })
                   .catch((err) => {
                     logVerbose(`block reply delivery failed: ${String(err)}`);
