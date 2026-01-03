@@ -336,6 +336,36 @@ If channels work but DMs don't, add `discord.dm.allowFrom` to your config:
 
 Find your user ID: Discord Settings → Advanced → Developer Mode → right-click yourself → Copy User ID.
 
+### Images/media not being understood by the agent?
+
+If you send an image but your Clawd doesn't "see" it, check these:
+
+**1. Is your model vision-capable?**
+
+Not all models support images! Check `agent.model` in your config:
+
+- ✅ Vision: `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5`, `gpt-5.2`, `gpt-4o`, `gemini-pro`
+- ❌ No vision: Most local LLMs (Llama, Mistral), older models, text-only configs
+
+**2. Is media being downloaded?**
+
+```bash
+ls -la ~/.clawdis/media/inbound/
+grep -i "media\|download" /tmp/clawdis/clawdis-*.log | tail -20
+```
+
+**3. Is `agent.mediaMaxMb` too low?**
+
+Default is 5MB. Large images get resized, but if the limit is set very low, media might be skipped.
+
+**4. Does the agent see `[media attached: ...]`?**
+
+If this line isn't in the agent's input, the gateway didn't pass the media. Check logs for errors.
+
+**5. For PDFs, audio, video, and exotic files:**
+
+Use the [summarize](https://summarize.sh) skill to extract and condense content from files that can't be passed directly to vision.
+
 ### Can I use multiple platforms at once?
 
 Yes! One Clawdis gateway can connect to WhatsApp, Telegram, Discord, and more simultaneously. Each platform maintains its own sessions.
