@@ -22,6 +22,7 @@ import {
   normalizeE164,
   toWhatsappJid,
 } from "../utils.js";
+import type { ActiveWebSendOptions } from "./active-listener.js";
 import {
   createWaSocket,
   getStatusCode,
@@ -380,6 +381,7 @@ export async function monitorWebInbox(options: {
       text: string,
       mediaBuffer?: Buffer,
       mediaType?: string,
+      options?: ActiveWebSendOptions,
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
@@ -397,10 +399,12 @@ export async function monitorWebInbox(options: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("video/")) {
+          const gifPlayback = options?.gifPlayback;
           payload = {
             video: mediaBuffer,
             caption: text || undefined,
             mimetype: mediaType,
+            ...(gifPlayback ? { gifPlayback: true } : {}),
           };
         } else {
           payload = {

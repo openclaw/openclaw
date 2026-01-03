@@ -578,6 +578,7 @@ export function registerGatewayCli(program: Command) {
       .requiredOption("--to <jidOrPhone>", "Destination (E.164 or jid)")
       .requiredOption("--message <text>", "Message text")
       .option("--media-url <url>", "Optional media URL")
+      .option("--gif-playback", "Treat video media as GIF playback", false)
       .option("--idempotency-key <key>", "Idempotency key")
       .action(async (opts) => {
         try {
@@ -586,6 +587,7 @@ export function registerGatewayCli(program: Command) {
             to: opts.to,
             message: opts.message,
             mediaUrl: opts.mediaUrl,
+            gifPlayback: opts.gifPlayback,
             idempotencyKey,
           });
           defaultRuntime.log(JSON.stringify(result, null, 2));

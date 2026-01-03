@@ -2,7 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { toWhatsappJid } from "../utils.js";
-import { getActiveWebListener } from "./active-listener.js";
+import {
+  type ActiveWebSendOptions,
+  getActiveWebListener,
+} from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
@@ -12,7 +15,7 @@ const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
 export async function sendMessageWhatsApp(
   to: string,
   body: string,
-  options: { verbose: boolean; mediaUrl?: string },
+  options: { verbose: boolean; mediaUrl?: string; gifPlayback?: boolean },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body;
   const correlationId = randomUUID();
@@ -60,7 +63,18 @@ export async function sendMessageWhatsApp(
     );
     if (!active) throw new Error("Active web listener missing");
     await active.sendComposingTo(to);
-    const result = await active.sendMessage(to, text, mediaBuffer, mediaType);
+    const sendOptions: ActiveWebSendOptions | undefined = options.gifPlayback
+      ? { gifPlayback: true }
+      : undefined;
+    const result = sendOptions
+      ? await active.sendMessage(
+          to,
+          text,
+          mediaBuffer,
+          mediaType,
+          sendOptions,
+        )
+      : await active.sendMessage(to, text, mediaBuffer, mediaType);
     const messageId =
       (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;

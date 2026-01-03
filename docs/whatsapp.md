@@ -92,6 +92,9 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
   - Audio sent as PTT; `audio/ogg` => `audio/ogg; codecs=opus`.
   - Caption only on first media item.
   - Media fetch supports HTTP(S) and local paths.
+  - Animated GIFs: WhatsApp expects MP4 with `gifPlayback: true` for inline looping.
+    - CLI: `clawdis send --media <mp4> --gif-playback`
+    - Gateway: `send` params include `gifPlayback: true`
 
 ## Media limits + optimization
 - Default cap: 5 MB (per media item).
@@ -123,7 +126,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - `agent.heartbeat.model` (optional override)
 - `agent.heartbeat.target`
 - `agent.heartbeat.to`
-- `session.*` (scope, idle, store, mainKey)
+- `session.*` (scope, idle, store; `mainKey` is ignored)
 - `web.enabled` (disable provider startup when false)
 - `web.heartbeatSeconds`
 - `web.reconnect.*`

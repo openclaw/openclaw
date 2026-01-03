@@ -312,6 +312,11 @@ export function buildProgram() {
       "Attach media (image/audio/video/document). Accepts local paths or URLs.",
     )
     .option(
+      "--gif-playback",
+      "Treat video media as GIF playback (WhatsApp only).",
+      false,
+    )
+    .option(
       "--provider <provider>",
       "Delivery provider: whatsapp|telegram|discord|signal|imessage (default: whatsapp)",
     )

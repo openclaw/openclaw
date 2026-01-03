@@ -282,6 +282,26 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("sets gifPlayback on outbound video payloads when requested", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+    const buf = Buffer.from("gifvid");
+
+    await listener.sendMessage("+1555", "gif", buf, "video/mp4", {
+      gifPlayback: true,
+    });
+
+    expect(sock.sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      video: buf,
+      caption: "gif",
+      mimetype: "video/mp4",
+      gifPlayback: true,
+    });
+
+    await listener.close();
+  });
+
   it("resolves onClose when the socket closes", async () => {
     const listener = await monitorWebInbox({
       verbose: false,
