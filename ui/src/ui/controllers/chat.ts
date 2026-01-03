@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../gateway";
+import { generateUUID } from "../uuid";
 
 export type ChatState = {
   client: GatewayBrowserClient | null;
@@ -48,7 +49,7 @@ export async function sendChat(state: ChatState) {
   state.chatSending = true;
   state.chatMessage = "";
   state.lastError = null;
-  const runId = crypto.randomUUID();
+  const runId = generateUUID();
   state.chatRunId = runId;
   state.chatStream = "";
   try {
