@@ -21,7 +21,7 @@
 - Agent: add soft block-stream chunking (800–1200 chars default) with paragraph/newline preference.
 - Agent tools: scope the Discord tool to Discord surface runs.
 - Agent tools: format verbose tool summaries without brackets, with unique emojis and `tool: detail` style.
-- Gateway: split server helpers + tests to improve isolation; add unit coverage for hooks/session utils/ws log.
+- Gateway: split server helpers/tests into hooks/session-utils/ws-log/net modules for better isolation; add unit coverage for hooks/session utils/ws log.
 - macOS Connections: move to sidebar + detail layout with structured sections and header actions.
 - macOS onboarding: increase window height so the permissions page fits without scrolling.
 - Thinking: default to low for reasoning-capable models when no /think or config default is set.
