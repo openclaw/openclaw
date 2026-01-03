@@ -56,7 +56,12 @@ Want a custom endpoint? Use `--push-endpoint <url>` or `--tailscale off`.
 Platform note: on macOS the wizard installs `gcloud`, `gogcli`, and `tailscale`
 via Homebrew; on Linux install them manually first.
 
-Run the daemon (starts `gog gmail watch serve` + auto-renew):
+Gateway auto-start (recommended):
+- When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
+  `gog gmail watch serve` on boot and auto-renews the watch.
+- Set `CLAWDIS_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
+
+Manual daemon (starts `gog gmail watch serve` + auto-renew):
 
 ```bash
 clawdis hooks gmail run
