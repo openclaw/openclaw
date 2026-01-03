@@ -297,6 +297,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     key: NonEmptyString,
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     groupActivation: Type.Optional(
       Type.Union([
         Type.Literal("mention"),

@@ -4074,6 +4074,16 @@ describe("gateway server", () => {
     expect(main2?.thinkingLevel).toBe("medium");
     expect(main2?.verboseLevel).toBeUndefined();
 
+    piSdkMock.enabled = true;
+    piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];
+    const modelPatched = await rpcReq<{
+      ok: true;
+      entry: { modelOverride?: string; providerOverride?: string };
+    }>(ws, "sessions.patch", { key: "main", model: "openai/gpt-test-a" });
+    expect(modelPatched.ok).toBe(true);
+    expect(modelPatched.payload?.entry.modelOverride).toBe("gpt-test-a");
+    expect(modelPatched.payload?.entry.providerOverride).toBe("openai");
+
     const compacted = await rpcReq<{ ok: true; compacted: boolean }>(
       ws,
       "sessions.compact",

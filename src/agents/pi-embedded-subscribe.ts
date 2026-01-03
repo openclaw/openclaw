@@ -16,6 +16,36 @@ import {
 const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
 const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
+const TOOL_RESULT_MAX_CHARS = 8000;
+
+function truncateToolText(text: string): string {
+  if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
+  return `${text.slice(0, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+}
+
+function sanitizeToolResult(result: unknown): unknown {
+  if (!result || typeof result !== "object") return result;
+  const record = result as Record<string, unknown>;
+  const content = Array.isArray(record.content) ? record.content : null;
+  if (!content) return record;
+  const sanitized = content.map((item) => {
+    if (!item || typeof item !== "object") return item;
+    const entry = item as Record<string, unknown>;
+    const type = typeof entry.type === "string" ? entry.type : undefined;
+    if (type === "text" && typeof entry.text === "string") {
+      return { ...entry, text: truncateToolText(entry.text) };
+    }
+    if (type === "image") {
+      const data = typeof entry.data === "string" ? entry.data : undefined;
+      const bytes = data ? data.length : undefined;
+      const cleaned = { ...entry };
+      delete cleaned.data;
+      return { ...cleaned, bytes, omitted: true };
+    }
+    return entry;
+  });
+  return { ...record, content: sanitized };
+}
 
 function stripThinkingSegments(text: string): string {
   if (!text || !THINKING_TAG_RE.test(text)) return text;
@@ -187,6 +217,36 @@ export function subscribeEmbeddedPiSession(params: {
         });
       }
 
+      if (evt.type === "tool_execution_update") {
+        const toolName = String(
+          (evt as AgentEvent & { toolName: string }).toolName,
+        );
+        const toolCallId = String(
+          (evt as AgentEvent & { toolCallId: string }).toolCallId,
+        );
+        const partial = (evt as AgentEvent & { partialResult?: unknown })
+          .partialResult;
+        const sanitized = sanitizeToolResult(partial);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "tool",
+          data: {
+            phase: "update",
+            name: toolName,
+            toolCallId,
+            partialResult: sanitized,
+          },
+        });
+        params.onAgentEvent?.({
+          stream: "tool",
+          data: {
+            phase: "update",
+            name: toolName,
+            toolCallId,
+          },
+        });
+      }
+
       if (evt.type === "tool_execution_end") {
         const toolName = String(
           (evt as AgentEvent & { toolName: string }).toolName,
@@ -197,6 +257,8 @@ export function subscribeEmbeddedPiSession(params: {
         const isError = Boolean(
           (evt as AgentEvent & { isError: boolean }).isError,
         );
+        const result = (evt as AgentEvent & { result?: unknown }).result;
+        const sanitizedResult = sanitizeToolResult(result);
         const meta = toolMetaById.get(toolCallId);
         toolMetas.push({ toolName, meta });
         toolDebouncer.push(toolName, meta);
@@ -210,6 +272,7 @@ export function subscribeEmbeddedPiSession(params: {
             toolCallId,
             meta,
             isError,
+            result: sanitizedResult,
           },
         });
         params.onAgentEvent?.({
