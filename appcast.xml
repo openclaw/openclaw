@@ -3,17 +3,8 @@
     <channel>
         <title>Clawdis</title>
         <item>
-            <title>2.0.0-beta4</title>
-            <pubDate>Sat, 03 Jan 2026 06:04:02 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
-            <sparkle:version>2.0.0-beta4</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta4</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta5/Clawdis-2.0.0-beta4.zip" length="70407894" type="application/octet-stream" sparkle:edSignature="HmuiC7TnUn80ZApnKfb6w+JGSrjc3uUOndMrtbTp42bkBSVifbttNVazqvJueGBo4MgoJV8CP+zQNzVmtVihAQ=="/>
-        </item>
-        <item>
             <title>2.0.0-beta5</title>
-            <pubDate>Sat, 03 Jan 2026 06:04:02 +0100</pubDate>
+            <pubDate>Sat, 03 Jan 2026 06:11:43 +0100</pubDate>
             <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
             <sparkle:version>2.0.0-beta5</sparkle:version>
             <sparkle:shortVersionString>2.0.0-beta5</sparkle:shortVersionString>
