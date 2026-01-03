@@ -46,6 +46,7 @@
 - Logging: decouple file log levels from console verbosity; verbose-only details are captured when `logging.level` is debug/trace.
 - Build: fix regex literal in tool-meta path detection (watch build error).
 - Build: require AVX2 Bun for x86_64 relay packaging (reject baseline builds).
+- Build: drop stale ClawdisCLI product from macOS build-and-run script.
 - Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
 - WhatsApp: honor per-group mention gating overrides when group ids are stored as session keys.
 - Dependencies: bump pi-mono packages to 0.32.3.
