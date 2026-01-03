@@ -198,28 +198,64 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         // Mark as in-flight
         webSearchInFlight.add(chatId);
         
+        let statusChatId: number | undefined;
+        let statusMessageId: number | undefined;
+        
         try {
-          // Send acknowledgment
-          await ctx.reply(webSearchMessages.acknowledgment());
+          // Send acknowledgment and store message ID for editing
+          const statusMessage = await ctx.reply(webSearchMessages.acknowledgment());
+          const statusChatId = ctx.chat?.id;
+          const statusMessageId = statusMessage.message_id;
+          
+          if (!statusChatId || !statusMessageId) {
+            throw new Error("Failed to get message ID for status update");
+          }
           
           // Execute search
           const result = await executeWebSearch(query);
           
           if (result.success && result.result) {
-            // Deliver result
-            await ctx.reply(webSearchMessages.resultDelivery(result.result));
+            // Edit the original message with result
+            await ctx.api.editMessageText(
+              statusChatId,
+              statusMessageId,
+              webSearchMessages.resultDelivery(result.result)
+            );
           } else {
-            // Deliver error
-            await ctx.reply(webSearchMessages.error(
-              result.error || "Unknown error",
-              result.runId
-            ));
+            // Edit with error
+            await ctx.api.editMessageText(
+              statusChatId,
+              statusMessageId,
+              webSearchMessages.error(
+                result.error || "Unknown error",
+                result.runId
+              )
+            );
           }
         } catch (error) {
           logger.error({ chatId, error }, "Web search execution failed");
-          await ctx.reply(webSearchMessages.error(
-            error instanceof Error ? error.message : String(error)
-          ));
+          // If we have a status message, try to edit it
+          if (statusChatId && statusMessageId) {
+            try {
+              await ctx.api.editMessageText(
+                statusChatId,
+                statusMessageId,
+                webSearchMessages.error(
+                  error instanceof Error ? error.message : String(error)
+                )
+              );
+            } catch (editError) {
+              // If edit fails, send new message
+              await ctx.reply(webSearchMessages.error(
+                error instanceof Error ? error.message : String(error)
+              ));
+            }
+          } else {
+            // No status message to edit, send new message
+            await ctx.reply(webSearchMessages.error(
+              error instanceof Error ? error.message : String(error)
+            ));
+          }
         } finally {
           // Always remove from in-flight set
           webSearchInFlight.delete(chatId);
