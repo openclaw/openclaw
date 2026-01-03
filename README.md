@@ -18,7 +18,7 @@
 **Clawdis** is a *personal AI assistant* you run on your own devices.
 It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, iMessage, WebChat), can speak and listen on macOS/iOS, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
-If you want a private, single-user assistant that feels local, fast, and always-on, this is it.
+If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
 Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · FAQ: [`docs/faq.md`](docs/faq.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Docker (optional): [`docs/docker.md`](docs/docker.md) · Discord: https://discord.gg/clawd
 
