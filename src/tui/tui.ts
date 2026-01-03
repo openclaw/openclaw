@@ -110,6 +110,7 @@ export async function runTui(opts: TuiOptions) {
   let currentSessionKey = defaultSession;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
+  const finalizedRuns = new Map<string, number>();
   let historyLoaded = false;
   let isConnected = false;
   let toolsExpanded = false;
@@ -296,10 +297,30 @@ export async function runTui(opts: TuiOptions) {
     tui.requestRender();
   };
 
+  const noteFinalizedRun = (runId: string) => {
+    finalizedRuns.set(runId, Date.now());
+    if (finalizedRuns.size <= 200) return;
+    const keepUntil = Date.now() - 10 * 60 * 1000;
+    for (const [key, ts] of finalizedRuns) {
+      if (finalizedRuns.size <= 150) break;
+      if (ts < keepUntil) finalizedRuns.delete(key);
+    }
+    if (finalizedRuns.size > 200) {
+      for (const key of finalizedRuns.keys()) {
+        finalizedRuns.delete(key);
+        if (finalizedRuns.size <= 150) break;
+      }
+    }
+  };
+
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
     const evt = payload as ChatEvent;
     if (evt.sessionKey !== currentSessionKey) return;
+    if (finalizedRuns.has(evt.runId)) {
+      if (evt.state === "delta") return;
+      if (evt.state === "final") return;
+    }
     if (evt.state === "delta") {
       const text = extractTextFromMessage(evt.message, {
         includeThinking: showThinking,
@@ -313,6 +334,7 @@ export async function runTui(opts: TuiOptions) {
         includeThinking: showThinking,
       });
       chatLog.finalizeAssistant(text || "(no output)", evt.runId);
+      noteFinalizedRun(evt.runId);
       activeChatRunId = null;
       setStatus("idle");
     }
