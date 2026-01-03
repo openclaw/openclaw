@@ -40,7 +40,7 @@ import {
   writeScreenRecordToFile,
 } from "../cli/nodes-screen.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, type DiscordActionConfig } from "../config/config.js";
 import {
   addRoleDiscord,
   banMemberDiscord,
@@ -1745,7 +1745,7 @@ function createDiscordTool(): AnyAgentTool {
       const action = readStringParam(params, "action", { required: true });
       const cfg = loadConfig();
       const isActionEnabled = (
-        key: keyof NonNullable<typeof cfg.discord>["actions"],
+        key: keyof DiscordActionConfig,
         defaultValue = true,
       ) => {
         const value = cfg.discord?.actions?.[key];

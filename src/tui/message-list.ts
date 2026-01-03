@@ -3,6 +3,8 @@ import type { DefaultTextStyle, MarkdownTheme } from "@mariozechner/pi-tui";
 import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
 import { theme } from "./theme.js";
 
+type MessageRole = "user" | "system" | "tool";
+
 export class MessageList extends Container {
   private assistantById = new Map<string, Markdown>();
 
@@ -62,7 +64,7 @@ export class MessageList extends Container {
   }
 
   private addMessage(
-    role: MessageEntry["role"],
+    role: MessageRole,
     text: string,
     style: DefaultTextStyle,
   ) {
