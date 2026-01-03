@@ -156,13 +156,16 @@ Controls how inbound messages behave when an agent run is already active.
 {
   routing: {
     queue: {
-      mode: "interrupt", // global default: queue | interrupt
+      mode: "collect", // steer | followup | collect | steer-backlog (steer+backlog ok) | interrupt (queue=steer legacy)
+      debounceMs: 1000,
+      cap: 20,
+      drop: "summarize", // old | new | summarize
       bySurface: {
-        whatsapp: "interrupt",
-        telegram: "interrupt",
-        discord: "queue",
-        imessage: "interrupt",
-        webchat: "queue"
+        whatsapp: "collect",
+        telegram: "collect",
+        discord: "steer-backlog",
+        imessage: "collect",
+        webchat: "collect"
       }
     }
   }

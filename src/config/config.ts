@@ -309,7 +309,15 @@ export type IMessageConfig = {
   >;
 };
 
-export type QueueMode = "queue" | "interrupt";
+export type QueueMode =
+  | "steer"
+  | "followup"
+  | "collect"
+  | "steer-backlog"
+  | "steer+backlog"
+  | "queue"
+  | "interrupt";
+export type QueueDropPolicy = "old" | "new" | "summarize";
 
 export type QueueModeBySurface = {
   whatsapp?: QueueMode;
@@ -335,6 +343,9 @@ export type RoutingConfig = {
   queue?: {
     mode?: QueueMode;
     bySurface?: QueueModeBySurface;
+    debounceMs?: number;
+    cap?: number;
+    drop?: QueueDropPolicy;
   };
 };
 
@@ -690,7 +701,20 @@ const GroupChatSchema = z
   })
   .optional();
 
-const QueueModeSchema = z.union([z.literal("queue"), z.literal("interrupt")]);
+const QueueModeSchema = z.union([
+  z.literal("steer"),
+  z.literal("followup"),
+  z.literal("collect"),
+  z.literal("steer-backlog"),
+  z.literal("steer+backlog"),
+  z.literal("queue"),
+  z.literal("interrupt"),
+]);
+const QueueDropSchema = z.union([
+  z.literal("old"),
+  z.literal("new"),
+  z.literal("summarize"),
+]);
 const ReplyToModeSchema = z.union([
   z.literal("off"),
   z.literal("first"),
@@ -779,6 +803,9 @@ const RoutingSchema = z
       .object({
         mode: QueueModeSchema.optional(),
         bySurface: QueueModeBySurfaceSchema,
+        debounceMs: z.number().int().nonnegative().optional(),
+        cap: z.number().int().positive().optional(),
+        drop: QueueDropSchema.optional(),
       })
       .optional(),
   })

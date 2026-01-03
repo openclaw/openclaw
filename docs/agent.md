@@ -70,7 +70,16 @@ Legacy Pi/Tau session folders are **not** read.
 
 ## Steering while streaming
 
-Incoming user messages are queued while the agent is streaming. The queue is checked **after each tool call**. If a queued message is present, remaining tool calls from the current assistant message are skipped (error tool results with "Skipped due to queued user message."), then the queued user message is injected before the next assistant response.
+When queue mode is `steer`, inbound messages are injected into the current run.
+The queue is checked **after each tool call**; if a queued message is present,
+remaining tool calls from the current assistant message are skipped (error tool
+results with "Skipped due to queued user message."), then the queued user
+message is injected before the next assistant response.
+
+When queue mode is `followup` or `collect`, inbound messages are held until the
+current turn ends, then a new agent turn starts with the queued payloads. See
+`docs/queue.md` for mode + debounce/cap behavior.
+
 Block streaming sends completed assistant blocks as soon as they finish; disable
 via `agent.blockStreamingDefault: "off"` if you only want the final response.
 Tune the boundary via `agent.blockStreamingBreak` (`text_end` vs `message_end`).

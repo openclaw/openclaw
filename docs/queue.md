@@ -3,7 +3,7 @@ summary: "Command queue design that serializes auto-reply command execution"
 read_when:
   - Changing auto-reply execution or concurrency
 ---
-# Command Queue (2025-11-25)
+# Command Queue (2026-01-03)
 
 We now serialize command-based auto-replies (WhatsApp Web listener) through a tiny in-process queue to prevent multiple commands from running at once, while allowing safe parallelism across sessions.
 
@@ -19,13 +19,16 @@ We now serialize command-based auto-replies (WhatsApp Web listener) through a ti
 - Typing indicators (`onReplyStart`) still fire immediately on enqueue so user experience is unchanged while we wait our turn.
 
 ## Queue modes (per surface)
-Inbound messages can either queue or interrupt when a run is already active:
-- `queue`: serialize per session; if the agent is streaming, the new message is appended to the current run.
-- `interrupt`: abort the active run for that session, then run the newest message.
+Inbound messages can steer the current run, wait for a followup turn, or do both:
+- `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
+- `followup`: enqueue for the next agent turn after the current run ends.
+- `collect`: coalesce all queued messages into a **single** followup turn (default).
+- `steer-backlog` (aka `steer+backlog`): steer now **and** preserve the message for a followup turn.
+- `interrupt` (legacy): abort the active run for that session, then run the newest message.
+- `queue` (legacy alias): same as `steer`.
 
 Defaults (when unset in config):
-- WhatsApp + Telegram → `interrupt`
-- Discord + WebChat → `queue`
+- All surfaces → `collect`
 
 Configure globally or per surface via `routing.queue`:
 
@@ -33,16 +36,29 @@ Configure globally or per surface via `routing.queue`:
 {
   routing: {
     queue: {
-      mode: "interrupt",
-      bySurface: { discord: "queue", telegram: "interrupt" }
+      mode: "collect",
+      debounceMs: 1000,
+      cap: 20,
+      drop: "summarize",
+      bySurface: { discord: "steer-backlog" }
     }
   }
 }
 ```
 
+## Queue options
+Options apply to `followup`, `collect`, and `steer-backlog` (and to `steer` when it falls back to followup):
+- `debounceMs`: wait for quiet before starting a followup turn (prevents “continue, continue”).
+- `cap`: max queued messages per session.
+- `drop`: overflow policy (`old`, `new`, `summarize`).
+
+Summarize keeps a short bullet list of dropped messages and injects it as a synthetic followup prompt.
+Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
+
 ## Per-session overrides
 - `/queue <mode>` as a standalone command stores the mode for the current session.
 - `/queue <mode>` embedded in a message applies **once** (no persistence).
+- Options can be combined: `/queue collect debounce:2s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
 
 ## Scope and guarantees

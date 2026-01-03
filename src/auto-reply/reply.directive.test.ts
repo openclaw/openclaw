@@ -97,6 +97,18 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("parses queue options and modes", () => {
+    const res = extractQueueDirective(
+      "please /queue steer+backlog debounce:2s cap:5 drop:summarize now",
+    );
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("steer-backlog");
+    expect(res.debounceMs).toBe(2000);
+    expect(res.cap).toBe(5);
+    expect(res.dropPolicy).toBe("summarize");
+    expect(res.cleaned).toBe("please now");
+  });
+
   it("extracts reply_to_current tag", () => {
     const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
     expect(res.replyToId).toBe("msg-1");
@@ -276,6 +288,43 @@ describe("directive parsing", () => {
     });
   });
 
+  it("persists queue options when directive is standalone", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/queue collect debounce:2s cap:5 drop:old",
+          From: "+1222",
+          To: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toMatch(/^⚙️ Queue mode set to collect\./);
+      expect(text).toMatch(/Queue debounce set to 2000ms/);
+      expect(text).toMatch(/Queue cap set to 5/);
+      expect(text).toMatch(/Queue drop set to old/);
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.queueMode).toBe("collect");
+      expect(entry?.queueDebounceMs).toBe(2000);
+      expect(entry?.queueCap).toBe(5);
+      expect(entry?.queueDrop).toBe("old");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("resets queue mode to default", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -312,6 +361,9 @@ describe("directive parsing", () => {
       const store = loadSessionStore(storePath);
       const entry = Object.values(store)[0];
       expect(entry?.queueMode).toBeUndefined();
+      expect(entry?.queueDebounceMs).toBeUndefined();
+      expect(entry?.queueCap).toBeUndefined();
+      expect(entry?.queueDrop).toBeUndefined();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
