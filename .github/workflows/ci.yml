@@ -10,28 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runtime: node
-            task: lint
-            command: pnpm lint
-          - runtime: node
-            task: test
-            command: pnpm test
-          - runtime: node
-            task: build
-            command: pnpm build
-          - runtime: node
-            task: protocol
-            command: pnpm protocol:check
-          - runtime: bun
-            task: lint
-            command: bunx biome check src
-          - runtime: bun
-            task: test
-            command: bunx vitest run
-          - runtime: bun
-            task: build
-            command: bunx tsc -p tsconfig.json
+        runtime: [node, bun]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -98,42 +77,37 @@ jobs:
           pnpm -v
           pnpm install --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
-      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
-        run: ${{ matrix.command }}
+      - name: Lint (node)
+        if: matrix.runtime == 'node'
+        run: pnpm lint
+
+      - name: Test (node)
+        if: matrix.runtime == 'node'
+        run: pnpm test
+
+      - name: Build (node)
+        if: matrix.runtime == 'node'
+        run: pnpm build
+
+      - name: Protocol check (node)
+        if: matrix.runtime == 'node'
+        run: pnpm protocol:check
+
+      - name: Lint (bun)
+        if: matrix.runtime == 'bun'
+        run: bunx biome check src
+
+      - name: Test (bun)
+        if: matrix.runtime == 'bun'
+        run: bunx vitest run
+
+      - name: Build (bun)
+        if: matrix.runtime == 'bun'
+        run: bunx tsc -p tsconfig.json
 
   macos-app:
     if: github.event_name == 'pull_request'
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - task: lint
-            command: |
-              swiftlint --config .swiftlint.yml
-              swiftformat --lint apps/macos/Sources --config .swiftformat
-          - task: build
-            command: |
-              set -euo pipefail
-              for attempt in 1 2 3; do
-                if swift build --package-path apps/macos --configuration release; then
-                  exit 0
-                fi
-                echo "swift build failed (attempt $attempt/3). Retrying…"
-                sleep $((attempt * 20))
-              done
-              exit 1
-          - task: test
-            command: |
-              set -euo pipefail
-              for attempt in 1 2 3; do
-                if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
-                  exit 0
-                fi
-                echo "swift test failed (attempt $attempt/3). Retrying…"
-                sleep $((attempt * 20))
-              done
-              exit 1
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -168,8 +142,35 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Run ${{ matrix.task }}
-        run: ${{ matrix.command }}
+      - name: SwiftLint
+        run: swiftlint --config .swiftlint.yml
+
+      - name: SwiftFormat (lint mode)
+        run: swiftformat --lint apps/macos/Sources --config .swiftformat
+
+      - name: Swift build (release)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift build --package-path apps/macos --configuration release; then
+              exit 0
+            fi
+            echo "swift build failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
+
+      - name: Swift tests (coverage)
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if swift test --package-path apps/macos --parallel --enable-code-coverage --show-codecov-path; then
+              exit 0
+            fi
+            echo "swift test failed (attempt $attempt/3). Retrying…"
+            sleep $((attempt * 20))
+          done
+          exit 1
   ios:
     if: false # ignore iOS in CI for now
     runs-on: macos-latest
@@ -345,14 +346,6 @@ jobs:
 
   android:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - task: test
-            command: ./gradlew --no-daemon :app:testDebugUnitTest
-          - task: build
-            command: ./gradlew --no-daemon :app:assembleDebug
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -392,6 +385,6 @@ jobs:
             "platforms;android-36" \
             "build-tools;36.0.0"
 
-      - name: Run Android ${{ matrix.task }}
+      - name: Android unit tests + debug build
         working-directory: apps/android
-        run: ${{ matrix.command }}
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:assembleDebug
