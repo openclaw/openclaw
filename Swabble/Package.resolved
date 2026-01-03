@@ -1,6 +1,15 @@
 {
-  "originHash" : "2012d083159d375d07febbc184c592c569d7ab48247045e35a762e3269d4cadc",
+  "originHash" : "5d29ee82825e0764775562242cfa1ff4dc79584797dd638f76c9876545454748",
   "pins" : [
+    {
+      "identity" : "elevenlabskit",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/steipete/ElevenLabsKit",
+      "state" : {
+        "revision" : "c8679fbd37416a8780fe43be88a497ff16209e2d",
+        "version" : "0.1.0"
+      }
+    },
     {
       "identity" : "swift-syntax",
       "kind" : "remoteSourceControl",
