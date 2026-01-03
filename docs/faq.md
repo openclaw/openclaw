@@ -551,9 +551,9 @@ You can also configure `routing.queue.mode` to control how new messages interact
 
 **Both are supported!** Codex CLI can auth via:
 
-1. **Browser OAuth** → Uses your ChatGPT Pro/Plus subscription (no per-token cost)
+1. **Browser/Device OAuth** → Uses your ChatGPT Pro/Plus subscription (no per-token cost)
    ```bash
-   codex auth
+   codex login --device-auth
    # Opens browser, log in with your ChatGPT account
    ```
 
