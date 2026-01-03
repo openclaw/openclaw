@@ -209,6 +209,72 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
   };
 }
 
+function sanitizeSchemaValue(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(sanitizeSchemaValue);
+
+  const record = schema as Record<string, unknown>;
+  const next: Record<string, unknown> = {};
+
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "const" || key === "patternProperties") continue;
+    if (key === "properties" && value && typeof value === "object") {
+      const props: Record<string, unknown> = {};
+      for (const [propKey, propValue] of Object.entries(
+        value as Record<string, unknown>,
+      )) {
+        props[propKey] = sanitizeSchemaValue(propValue);
+      }
+      next.properties = props;
+      continue;
+    }
+    if (value && typeof value === "object") {
+      next[key] = sanitizeSchemaValue(value);
+      continue;
+    }
+    next[key] = value;
+  }
+
+  if ("const" in record) {
+    const existing = Array.isArray(next.enum) ? next.enum : [];
+    const merged = existing.concat(record.const);
+    next.enum = Array.from(new Set(merged));
+    if (!("type" in next) && record.const !== undefined) {
+      next.type = typeof record.const;
+    }
+  }
+
+  if (
+    "patternProperties" in record &&
+    !("additionalProperties" in next) &&
+    record.patternProperties &&
+    typeof record.patternProperties === "object"
+  ) {
+    const patterns = Object.values(
+      record.patternProperties as Record<string, unknown>,
+    );
+    if (patterns.length === 1) {
+      next.additionalProperties = sanitizeSchemaValue(patterns[0]);
+    } else if (patterns.length > 1) {
+      next.additionalProperties = sanitizeSchemaValue({ anyOf: patterns });
+    }
+  }
+
+  return next;
+}
+
+function sanitizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object"
+      ? (tool.parameters as Record<string, unknown>)
+      : undefined;
+  if (!schema) return tool;
+  return {
+    ...tool,
+    parameters: sanitizeSchemaValue(schema),
+  };
+}
+
 function createWhatsAppLoginTool(): AnyAgentTool {
   return {
     label: "WhatsApp Login",
@@ -314,5 +380,5 @@ export function createClawdisCodingTools(options?: {
     createWhatsAppLoginTool(),
     ...createClawdisTools(),
   ];
-  return tools.map(normalizeToolParameters);
+  return tools.map(normalizeToolParameters).map(sanitizeToolParameters);
 }
