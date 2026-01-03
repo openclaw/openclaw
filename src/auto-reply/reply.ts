@@ -802,7 +802,7 @@ export async function getReplyFromConfig(
     }
     typingTtlTimer = setTimeout(() => {
       if (!typingTimer) return;
-      defaultRuntime.warn?.(
+      defaultRuntime.log(
         `typing TTL reached (${typingTtlMs}ms); stopping typing indicator`,
       );
       cleanupTyping();

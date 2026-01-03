@@ -512,14 +512,14 @@ export async function runEmbeddedPiAgent(params: {
         let abortWarnTimer: NodeJS.Timeout | undefined;
         const abortTimer = setTimeout(
           () => {
-            defaultRuntime.warn?.(
+            defaultRuntime.log(
               `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
             );
             abortRun();
             if (!abortWarnTimer) {
               abortWarnTimer = setTimeout(() => {
                 if (!session.isStreaming) return;
-                defaultRuntime.warn?.(
+                defaultRuntime.log(
                   `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
                 );
               }, 10_000);
