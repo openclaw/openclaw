@@ -6,7 +6,7 @@ import {
   createToolDebouncer,
   formatToolAggregate,
 } from "../auto-reply/tool-meta.js";
-import { logVerbose } from "../globals.js";
+import { defaultRuntime } from "../runtime.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import {
@@ -201,7 +201,7 @@ export function subscribeEmbeddedPiSession(params: {
         const args = (evt as AgentEvent & { args: unknown }).args;
         const meta = inferToolMetaFromArgs(toolName, args);
         toolMetaById.set(toolCallId, meta);
-        logVerbose(
+        defaultRuntime.log?.(
           `embedded run tool start: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
         );
 
@@ -451,19 +451,19 @@ export function subscribeEmbeddedPiSession(params: {
         const toolCallId = String(
           (evt as AgentEvent & { toolCallId: string }).toolCallId,
         );
-        logVerbose(
+        defaultRuntime.log?.(
           `embedded run tool end: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
         );
       }
 
       if (evt.type === "agent_start") {
-        logVerbose(`embedded run agent start: runId=${params.runId}`);
+        defaultRuntime.log?.(`embedded run agent start: runId=${params.runId}`);
       }
 
       if (evt.type === "auto_compaction_start") {
         compactionInFlight = true;
         ensureCompactionPromise();
-        logVerbose(`embedded run compaction start: runId=${params.runId}`);
+        defaultRuntime.log?.(`embedded run compaction start: runId=${params.runId}`);
       }
 
       if (evt.type === "auto_compaction_end") {
@@ -472,14 +472,14 @@ export function subscribeEmbeddedPiSession(params: {
         if (willRetry) {
           noteCompactionRetry();
           resetForCompactionRetry();
-          logVerbose(`embedded run compaction retry: runId=${params.runId}`);
+          defaultRuntime.log?.(`embedded run compaction retry: runId=${params.runId}`);
         } else {
           maybeResolveCompactionWait();
         }
       }
 
       if (evt.type === "agent_end") {
-        logVerbose(`embedded run agent end: runId=${params.runId}`);
+        defaultRuntime.log?.(`embedded run agent end: runId=${params.runId}`);
         toolDebouncer.flush();
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
