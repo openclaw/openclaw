@@ -613,23 +613,27 @@ public struct SessionsPatchParams: Codable {
     public let key: String
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
+    public let model: AnyCodable?
     public let groupactivation: AnyCodable?
 
     public init(
         key: String,
         thinkinglevel: AnyCodable?,
         verboselevel: AnyCodable?,
+        model: AnyCodable?,
         groupactivation: AnyCodable?
     ) {
         self.key = key
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
+        self.model = model
         self.groupactivation = groupactivation
     }
     private enum CodingKeys: String, CodingKey {
         case key
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
+        case model
         case groupactivation = "groupActivation"
     }
 }
