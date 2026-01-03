@@ -12,10 +12,13 @@ Use `discord` to manage messages, reactions, threads, polls, and moderation. You
 ## Inputs to collect
 
 - For reactions: `channelId`, `messageId`, and an `emoji`.
-- For stickers/polls: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text.
+- For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text.
 - Polls also need a `question` plus 2–10 `answers`.
+- For media: `mediaUrl` with `file:///path` for local files or `https://...` for remote.
 
 Message context lines include `discord message id` and `channel` fields you can reuse directly.
+
+**Note:** `sendMessage` uses `to: "channel:<id>"` format, not `channelId`. Other actions like `react`, `readMessages`, `editMessage` use `channelId` directly.
 
 ## Actions
 
@@ -115,6 +118,21 @@ Use `discord.actions.*` to disable action groups:
   "content": "Hello from Clawdis"
 }
 ```
+
+**With media attachment:**
+
+```json
+{
+  "action": "sendMessage",
+  "to": "channel:123",
+  "content": "Check out this audio!",
+  "mediaUrl": "file:///tmp/audio.mp3"
+}
+```
+
+- `to` uses format `channel:<id>` or `user:<id>` for DMs (not `channelId`!)
+- `mediaUrl` supports local files (`file:///path/to/file`) and remote URLs (`https://...`)
+- Optional `replyTo` with a message ID to reply to a specific message
 
 ```json
 {
