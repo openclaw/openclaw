@@ -105,6 +105,9 @@ const makeSessionStore = async (
 };
 
 describe("partial reply gating", () => {
+  beforeEach(() => {
+    vi.mocked(runEmbeddedPiAgent).mockClear();
+  });
   it("does not send partial replies for WhatsApp surface", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn().mockResolvedValue(undefined);
@@ -207,7 +210,7 @@ describe("partial reply gating", () => {
     await store.cleanup();
   });
 
-  it("defaults to self-only when no config is present", async () => {
+  it("does not pass onPartialReply to agent runner for WhatsApp surface", async () => {
     vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
       payloads: [{ text: "ok" }],
       meta: {
@@ -216,31 +219,51 @@ describe("partial reply gating", () => {
       },
     });
 
-    // Not self: should be blocked
-    const blocked = await getReplyFromConfig(
-      {
-        Body: "hi",
-        From: "whatsapp:+999",
-        To: "whatsapp:+123",
-      },
-      undefined,
-      {},
-    );
-    expect(blocked).toBeUndefined();
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-
-    // Self: should be allowed
-    const allowed = await getReplyFromConfig(
+    // This test ensures onPartialReply is NOT passed to runEmbeddedPiAgent
+    // for WhatsApp surface, preventing duplicate partial replies to be sent
+    // to the user during agent streaming (dupe message bug).
+    await getReplyFromConfig(
       {
         Body: "hi",
         From: "whatsapp:+123",
         To: "whatsapp:+123",
+        Surface: "whatsapp",
       },
       undefined,
       {},
     );
-    expect(allowed).toEqual({ text: "ok" });
+
     expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+    expect(callArgs?.onPartialReply).toBeUndefined();
+  });
+
+  it("does not pass onPartialReply to agent runner for Telegram surface", async () => {
+    vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        durationMs: 1,
+        agentMeta: { sessionId: "s", provider: "p", model: "m" },
+      },
+    });
+
+    // This test ensures onPartialReply is NOT passed to runEmbeddedPiAgent
+    // for Telegram surface, preventing duplicate partial replies to be sent
+    // to the user during agent streaming (dupe message bug).
+    await getReplyFromConfig(
+      {
+        Body: "hi",
+        From: "999",
+        To: "123",
+        Surface: "telegram",
+      },
+      undefined,
+      {},
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+    expect(callArgs?.onPartialReply).toBeUndefined();
   });
 });
 
