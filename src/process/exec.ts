@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 
-import { danger, isVerbose } from "../globals.js";
+import { danger, shouldLogVerbose } from "../globals.js";
 import { logDebug, logError } from "../logger.js";
 
 const execFileAsync = promisify(execFile);
@@ -22,13 +22,13 @@ export async function runExec(
         };
   try {
     const { stdout, stderr } = await execFileAsync(command, args, options);
-    if (isVerbose()) {
+    if (shouldLogVerbose()) {
       if (stdout.trim()) logDebug(stdout.trim());
       if (stderr.trim()) logError(stderr.trim());
     }
     return { stdout, stderr };
   } catch (err) {
-    if (isVerbose()) {
+    if (shouldLogVerbose()) {
       logError(danger(`Command failed: ${command} ${args.join(" ")}`));
     }
     throw err;

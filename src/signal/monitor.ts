@@ -4,7 +4,7 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose } from "../globals.js";
+import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -369,7 +369,7 @@ export async function monitorSignalProvider(
         });
       }
 
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         const preview = body.slice(0, 200).replace(/\n/g, "\\n");
         logVerbose(
           `signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`,

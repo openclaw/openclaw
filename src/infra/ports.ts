@@ -1,5 +1,11 @@
 import net from "node:net";
-import { danger, info, isVerbose, logVerbose, warn } from "../globals.js";
+import {
+  danger,
+  info,
+  logVerbose,
+  shouldLogVerbose,
+  warn,
+} from "../globals.js";
 import { logDebug } from "../logger.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
@@ -95,7 +101,7 @@ export async function handlePortError(
     runtime.exit(1);
   }
   runtime.error(danger(`${context} failed: ${String(err)}`));
-  if (isVerbose()) {
+  if (shouldLogVerbose()) {
     const stdout = (err as { stdout?: string })?.stdout;
     const stderr = (err as { stderr?: string })?.stderr;
     if (stdout?.trim()) logDebug(`stdout: ${stdout.trim()}`);

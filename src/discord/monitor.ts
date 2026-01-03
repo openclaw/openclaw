@@ -20,7 +20,7 @@ import type {
 } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose, warn } from "../globals.js";
+import { danger, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -139,7 +139,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
 
-  if (isVerbose()) {
+  if (shouldLogVerbose()) {
     logVerbose(
       `discord: config dm=${dmEnabled ? "on" : "off"} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
     );
@@ -191,7 +191,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const wasMentioned =
         !isDirectMessage && Boolean(botId && message.mentions.has(botId));
       const baseText = resolveDiscordMessageText(message);
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logVerbose(
           `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${baseText ? "yes" : "no"}`,
         );
@@ -414,7 +414,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         });
       }
 
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         const preview = combinedBody.slice(0, 200).replace(/\n/g, "\\n");
         logVerbose(
           `discord inbound: channel=${message.channelId} from=${ctxPayload.From} preview="${preview}"`,
@@ -485,7 +485,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         textLimit,
       });
       didSendReply = true;
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logVerbose(
           `discord: delivered ${replies.length} reply${replies.length === 1 ? "" : "ies"} to ${replyTarget}`,
         );
@@ -524,7 +524,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         logVerbose("discord: drop slash (dms disabled)");
         return;
       }
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logVerbose(
           `discord: slash inbound guild=${interaction.guildId ?? "dm"} channel=${interaction.channelId} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"}`,
         );

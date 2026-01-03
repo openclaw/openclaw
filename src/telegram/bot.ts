@@ -12,7 +12,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, isVerbose, logVerbose } from "../globals.js";
+import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -173,7 +173,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         MediaUrl: media?.path,
       };
 
-      if (replyTarget && isVerbose()) {
+      if (replyTarget && shouldLogVerbose()) {
         const preview = replyTarget.body.replace(/\s+/g, " ").slice(0, 120);
         logVerbose(
           `telegram reply-context: replyToId=${replyTarget.id} replyToSender=${replyTarget.sender} replyToBody="${preview}"`,
@@ -192,7 +192,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         });
       }
 
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         const preview = body.slice(0, 200).replace(/\n/g, "\\n");
         logVerbose(
           `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
