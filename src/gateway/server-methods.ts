@@ -4,6 +4,12 @@ import fs from "node:fs";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  resolveEmbeddedSessionLane,
+  waitForEmbeddedPiRunEnd,
+} from "../agents/pi-embedded.js";
+import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -35,6 +41,7 @@ import {
 import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
+  resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -75,6 +82,7 @@ import {
 } from "../infra/voicewake.js";
 import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
+import { clearCommandLane } from "../process/command-queue.js";
 import {
   normalizeSendPolicy,
   resolveSendPolicy,
@@ -1823,12 +1831,41 @@ export async function handleGatewayRequest(
         break;
       }
 
+      const mainKey = resolveMainSessionKey(loadConfig());
+      if (key === mainKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `Cannot delete the main session (${mainKey}).`,
+          ),
+        );
+        break;
+      }
+
       const deleteTranscript =
         typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
       const { storePath, store, entry } = loadSessionEntry(key);
       const sessionId = entry?.sessionId;
       const existed = Boolean(store[key]);
+      clearCommandLane(resolveEmbeddedSessionLane(key));
+      if (sessionId && isEmbeddedPiRunActive(sessionId)) {
+        abortEmbeddedPiRun(sessionId);
+        const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+        if (!ended) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              `Session ${key} is still active; try again in a moment.`,
+            ),
+          );
+          break;
+        }
+      }
       if (existed) delete store[key];
       await saveSessionStore(storePath, store);
 
@@ -2602,6 +2639,7 @@ export async function handleGatewayRequest(
         to: string;
         message: string;
         mediaUrl?: string;
+        gifPlayback?: boolean;
         provider?: string;
         idempotencyKey: string;
       };
@@ -2702,6 +2740,7 @@ export async function handleGatewayRequest(
           const result = await sendMessageWhatsApp(to, message, {
             mediaUrl: params.mediaUrl,
             verbose: shouldLogVerbose(),
+            gifPlayback: params.gifPlayback,
           });
           const payload = {
             runId: idem,

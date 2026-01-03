@@ -78,6 +78,27 @@ describe("web outbound", () => {
     );
   });
 
+  it("marks gif playback for video when requested", async () => {
+    const buf = Buffer.from("gifvid");
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: buf,
+      contentType: "video/mp4",
+      kind: "video",
+    });
+    await sendMessageWhatsApp("+1555", "gif", {
+      verbose: false,
+      mediaUrl: "/tmp/anim.mp4",
+      gifPlayback: true,
+    });
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "gif",
+      buf,
+      "video/mp4",
+      { gifPlayback: true },
+    );
+  });
+
   it("maps image with caption", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({

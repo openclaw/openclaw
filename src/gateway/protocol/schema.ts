@@ -191,6 +191,7 @@ export const SendParamsSchema = Type.Object(
     to: NonEmptyString,
     message: NonEmptyString,
     mediaUrl: Type.Optional(Type.String()),
+    gifPlayback: Type.Optional(Type.Boolean()),
     provider: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
