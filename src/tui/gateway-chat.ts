@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
-import { PROTOCOL_VERSION } from "../gateway/protocol/index.js";
+import {
+  type HelloOk,
+  PROTOCOL_VERSION,
+  type SessionsListParams,
+  type SessionsPatchParams,
+} from "../gateway/protocol/index.js";
 import { VERSION } from "../version.js";
 
 export type GatewayConnectionOptions = {
@@ -21,6 +26,24 @@ export type ChatSendOptions = {
 export type GatewayEvent = {
   event: string;
   payload?: unknown;
+  seq?: number;
+};
+
+export type GatewaySessionList = {
+  ts: number;
+  path: string;
+  count: number;
+  defaults?: { model?: string | null; contextTokens?: number | null };
+  sessions: Array<{
+    key: string;
+    sessionId?: string;
+    updatedAt?: number | null;
+    thinkingLevel?: string;
+    verboseLevel?: string;
+    model?: string;
+    contextTokens?: number | null;
+    displayName?: string;
+  }>;
 };
 
 export class GatewayChatClient {
@@ -28,6 +51,7 @@ export class GatewayChatClient {
   private readyPromise: Promise<void>;
   private resolveReady?: () => void;
   readonly connection: { url: string; token?: string; password?: string };
+  hello?: HelloOk;
 
   onEvent?: (evt: GatewayEvent) => void;
   onConnected?: () => void;
@@ -53,12 +77,17 @@ export class GatewayChatClient {
       instanceId: randomUUID(),
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
-      onHelloOk: () => {
+      onHelloOk: (hello) => {
+        this.hello = hello;
         this.resolveReady?.();
         this.onConnected?.();
       },
       onEvent: (evt) => {
-        this.onEvent?.({ event: evt.event, payload: evt.payload });
+        this.onEvent?.({
+          event: evt.event,
+          payload: evt.payload,
+          seq: evt.seq,
+        });
       },
       onClose: (_code, reason) => {
         this.onDisconnected?.(reason);
@@ -111,11 +140,33 @@ export class GatewayChatClient {
     });
   }
 
-  async listSessions(opts?: { limit?: number; activeMinutes?: number }) {
-    return await this.client.request("sessions.list", {
+  async listSessions(opts?: SessionsListParams) {
+    return await this.client.request<GatewaySessionList>("sessions.list", {
       limit: opts?.limit,
       activeMinutes: opts?.activeMinutes,
+      includeGlobal: opts?.includeGlobal,
+      includeUnknown: opts?.includeUnknown,
     });
+  }
+
+  async patchSession(opts: SessionsPatchParams) {
+    return await this.client.request("sessions.patch", opts);
+  }
+
+  async resetSession(key: string) {
+    return await this.client.request("sessions.reset", { key });
+  }
+
+  async listModels(): Promise<
+    Array<{
+      id: string;
+      name: string;
+      provider: string;
+      contextWindow?: number;
+    }>
+  > {
+    const res = await this.client.request<{ models?: unknown }>("models.list");
+    return Array.isArray(res?.models) ? (res.models as Array<any>) : [];
   }
 }
 

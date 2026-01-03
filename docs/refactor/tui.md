@@ -19,7 +19,7 @@ Updated: 2026-01-03
 
 ## Checklist
 - [x] Protocol + server: sessions.patch supports model overrides; agent events include tool results (text-only payloads).
-- [ ] Gateway TUI client: add session/model helpers + stricter typing.
+- [x] Gateway TUI client: add session/model helpers + stricter typing.
 - [ ] TUI UI kit: theme + components (editor, message feed, tool cards, selectors).
 - [ ] TUI controller: keybindings + Clawdis slash commands + history/stream wiring.
 - [ ] Docs + changelog updated for the new TUI behavior.
