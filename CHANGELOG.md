@@ -44,7 +44,7 @@
 - Skills: add tmux skill + interactive coding guidance in coding-agent.
 - Gateway: document port configuration + multi-instance isolation.
 - Onboarding/Config: add protocol notes for wizard + schema RPC.
-- Queue: clarify steer-backlog behavior and update examples for streaming surfaces.
+- Queue: clarify steer-backlog behavior with inline commands and update examples for streaming surfaces.
 
 ## 2.0.0-beta5 — 2026-01-03
 
