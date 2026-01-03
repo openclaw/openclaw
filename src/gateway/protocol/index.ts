@@ -121,6 +121,9 @@ export const validateConnectParams =
   ajv.compile<ConnectParams>(ConnectParamsSchema);
 export const validateRequestFrame =
   ajv.compile<RequestFrame>(RequestFrameSchema);
+export const validateResponseFrame =
+  ajv.compile<ResponseFrame>(ResponseFrameSchema);
+export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);

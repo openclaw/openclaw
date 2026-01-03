@@ -8,7 +8,9 @@ import {
   type HelloOk,
   PROTOCOL_VERSION,
   type RequestFrame,
+  validateEventFrame,
   validateRequestFrame,
+  validateResponseFrame,
 } from "./protocol/index.js";
 
 type Pending = {
@@ -125,7 +127,7 @@ export class GatewayClient {
   private handleMessage(raw: string) {
     try {
       const parsed = JSON.parse(raw);
-      if (parsed?.type === "event") {
+      if (validateEventFrame(parsed)) {
         const evt = parsed as EventFrame;
         const seq = typeof evt.seq === "number" ? evt.seq : null;
         if (seq !== null) {
@@ -140,7 +142,7 @@ export class GatewayClient {
         this.opts.onEvent?.(evt);
         return;
       }
-      if (parsed?.type === "res") {
+      if (validateResponseFrame(parsed)) {
         const pending = this.pending.get(parsed.id);
         if (!pending) return;
         // If the payload is an ack with status accepted, keep waiting for final.
