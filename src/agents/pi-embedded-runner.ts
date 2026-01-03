@@ -310,6 +310,7 @@ function resolvePromptSkills(
 export async function runEmbeddedPiAgent(params: {
   sessionId: string;
   sessionKey?: string;
+  surface?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: ClawdisConfig;
@@ -414,6 +415,7 @@ export async function runEmbeddedPiAgent(params: {
         const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
         const tools = createClawdisCodingTools({
           bash: params.config?.agent?.bash,
+          surface: params.surface,
         });
         const machineName = await getMachineDisplayName();
         const runtimeInfo = {

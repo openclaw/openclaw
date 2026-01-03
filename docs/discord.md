@@ -28,6 +28,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 9. Optional slash commands: enable `discord.slashCommand` to accept user-installed app commands (ephemeral replies). Slash invocations respect the same DM/guild allowlists.
 10. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
 11. Reactions: the agent can trigger reactions via the `discord` tool (gated by `discord.actions.*`).
+    - The `discord` tool is only exposed when the current surface is Discord.
 12. Slash commands use isolated session keys (`${sessionPrefix}:${userId}`) rather than the shared `main` session.
 
 Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.

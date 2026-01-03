@@ -329,9 +329,17 @@ export async function agentCommand(
 
   let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   try {
+    const surface =
+      opts.surface?.trim().toLowerCase() ||
+      (() => {
+        const raw = opts.provider?.trim().toLowerCase();
+        if (!raw) return undefined;
+        return raw === "imsg" ? "imessage" : raw;
+      })();
     result = await runEmbeddedPiAgent({
       sessionId,
       sessionKey,
+      surface,
       sessionFile,
       workspaceDir,
       config: cfg,

@@ -1,6 +1,28 @@
 export const TOOL_RESULT_DEBOUNCE_MS = 500;
 export const TOOL_RESULT_FLUSH_COUNT = 5;
 
+const TOOL_EMOJI_BY_NAME: Record<string, string> = {
+  bash: "💻",
+  process: "🧰",
+  read: "📖",
+  write: "✍️",
+  edit: "📝",
+  attach: "📎",
+  clawdis_browser: "🌐",
+  clawdis_canvas: "🖼️",
+  clawdis_nodes: "📱",
+  clawdis_cron: "⏰",
+  clawdis_gateway: "🔌",
+  whatsapp_login: "🟢",
+  discord: "💬",
+};
+
+function resolveToolEmoji(toolName?: string): string {
+  const key = toolName?.trim().toLowerCase();
+  if (key && TOOL_EMOJI_BY_NAME[key]) return TOOL_EMOJI_BY_NAME[key];
+  return "🛠️";
+}
+
 export function shortenPath(p: string): string {
   const home = process.env.HOME;
   if (home && (p === home || p.startsWith(`${home}/`)))
@@ -23,7 +45,7 @@ export function formatToolAggregate(
 ): string {
   const filtered = (metas ?? []).filter(Boolean).map(shortenMeta);
   const label = toolName?.trim() || "tool";
-  const prefix = `[🛠️ ${label}]`;
+  const prefix = `${resolveToolEmoji(label)} ${label}`;
   if (!filtered.length) return prefix;
 
   const rawSegments: string[] = [];
@@ -53,13 +75,14 @@ export function formatToolAggregate(
   });
 
   const allSegments = [...rawSegments, ...segments];
-  return `${prefix} ${allSegments.join("; ")}`;
+  return `${prefix}: ${allSegments.join("; ")}`;
 }
 
 export function formatToolPrefix(toolName?: string, meta?: string) {
   const label = toolName?.trim() || "tool";
+  const emoji = resolveToolEmoji(label);
   const extra = meta?.trim() ? shortenMeta(meta) : undefined;
-  return extra ? `[🛠️ ${label} ${extra}]` : `[🛠️ ${label}]`;
+  return extra ? `${emoji} ${label}: ${extra}` : `${emoji} ${label}`;
 }
 
 export function createToolDebouncer(

@@ -294,8 +294,20 @@ function createClawdisReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
+function normalizeSurface(surface?: string): string | undefined {
+  const trimmed = surface?.trim().toLowerCase();
+  return trimmed ? trimmed : undefined;
+}
+
+function shouldIncludeDiscordTool(surface?: string): boolean {
+  const normalized = normalizeSurface(surface);
+  if (!normalized) return false;
+  return normalized === "discord" || normalized.startsWith("discord:");
+}
+
 export function createClawdisCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
+  surface?: string;
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
@@ -314,5 +326,9 @@ export function createClawdisCodingTools(options?: {
     createWhatsAppLoginTool(),
     ...createClawdisTools(),
   ];
-  return tools.map(normalizeToolParameters);
+  const allowDiscord = shouldIncludeDiscordTool(options?.surface);
+  const filtered = allowDiscord
+    ? tools
+    : tools.filter((tool) => tool.name !== "discord");
+  return filtered.map(normalizeToolParameters);
 }

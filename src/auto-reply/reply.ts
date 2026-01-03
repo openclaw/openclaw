@@ -105,6 +105,7 @@ type FollowupRun = {
   run: {
     sessionId: string;
     sessionKey?: string;
+    surface?: string;
     sessionFile: string;
     workspaceDir: string;
     config: ClawdisConfig;
@@ -1871,6 +1872,7 @@ export async function getReplyFromConfig(
     run: {
       sessionId: sessionIdFinal,
       sessionKey,
+      surface: sessionCtx.Surface?.trim().toLowerCase() || undefined,
       sessionFile,
       workspaceDir,
       config: cfg,
@@ -1942,6 +1944,7 @@ export async function getReplyFromConfig(
       runResult = await runEmbeddedPiAgent({
         sessionId: queued.run.sessionId,
         sessionKey: queued.run.sessionKey,
+        surface: queued.run.surface,
         sessionFile: queued.run.sessionFile,
         workspaceDir: queued.run.workspaceDir,
         config: queued.run.config,
@@ -2061,6 +2064,7 @@ export async function getReplyFromConfig(
       runResult = await runEmbeddedPiAgent({
         sessionId: sessionIdFinal,
         sessionKey,
+        surface: sessionCtx.Surface?.trim().toLowerCase() || undefined,
         sessionFile,
         workspaceDir,
         config: cfg,
