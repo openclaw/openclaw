@@ -1,3 +1,5 @@
+import { generateUUID } from "./uuid";
+
 export type GatewayEventFrame = {
   type: "event";
   event: string;
@@ -167,7 +169,7 @@ export class GatewayBrowserClient {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error("gateway not connected"));
     }
-    const id = crypto.randomUUID();
+    const id = generateUUID();
     const frame = { type: "req", id, method, params };
     const p = new Promise<T>((resolve, reject) => {
       this.pending.set(id, { resolve: (v) => resolve(v as T), reject });
