@@ -6,9 +6,9 @@ import {
   createToolDebouncer,
   formatToolAggregate,
 } from "../auto-reply/tool-meta.js";
-import { defaultRuntime } from "../runtime.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { defaultRuntime } from "../runtime.js";
 import {
   extractAssistantText,
   inferToolMetaFromArgs,
@@ -463,7 +463,9 @@ export function subscribeEmbeddedPiSession(params: {
       if (evt.type === "auto_compaction_start") {
         compactionInFlight = true;
         ensureCompactionPromise();
-        defaultRuntime.log?.(`embedded run compaction start: runId=${params.runId}`);
+        defaultRuntime.log?.(
+          `embedded run compaction start: runId=${params.runId}`,
+        );
       }
 
       if (evt.type === "auto_compaction_end") {
@@ -472,7 +474,9 @@ export function subscribeEmbeddedPiSession(params: {
         if (willRetry) {
           noteCompactionRetry();
           resetForCompactionRetry();
-          defaultRuntime.log?.(`embedded run compaction retry: runId=${params.runId}`);
+          defaultRuntime.log?.(
+            `embedded run compaction retry: runId=${params.runId}`,
+          );
         } else {
           maybeResolveCompactionWait();
         }

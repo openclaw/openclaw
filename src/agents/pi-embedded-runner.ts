@@ -25,7 +25,6 @@ import {
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdisConfig } from "../config/config.js";
-import { logVerbose } from "../globals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import {
@@ -380,9 +379,9 @@ export async function runEmbeddedPiAgent(params: {
 
       const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
-        defaultRuntime.log?.(
-          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
-        );
+      defaultRuntime.log?.(
+        `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
+      );
 
       await fs.mkdir(resolvedWorkspace, { recursive: true });
       await ensureSessionHeader({
