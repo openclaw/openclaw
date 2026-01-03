@@ -72,7 +72,7 @@ actor GatewayEndpointStore {
     }
 
     private let deps: Deps
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway-endpoint")
+    private let logger = Logger(subsystem: "com.clawdis", category: "gateway-endpoint")
 
     private var state: GatewayEndpointState
     private var subscribers: [UUID: AsyncStream<GatewayEndpointState>.Continuation] = [:]

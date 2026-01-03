@@ -1,6 +1,6 @@
 name: Clawdis
 options:
-  bundleIdPrefix: com.steipete.clawdis
+  bundleIdPrefix: com.clawdis
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
@@ -65,8 +65,8 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: Y5PE65HELJ
-        PRODUCT_BUNDLE_IDENTIFIER: com.steipete.clawdis.ios
-        PROVISIONING_PROFILE_SPECIFIER: "com.steipete.clawdis.ios Development"
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdis.ios
+        PROVISIONING_PROFILE_SPECIFIER: "com.clawdis.ios Development"
         SWIFT_VERSION: "6.0"
     info:
       path: Sources/Info.plist
@@ -98,7 +98,7 @@ targets:
         product: SwabbleKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.steipete.clawdis.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdis.ios.tests
         SWIFT_VERSION: "6.0"
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdis.app/Clawdis"
         BUNDLE_LOADER: "$(TEST_HOST)"

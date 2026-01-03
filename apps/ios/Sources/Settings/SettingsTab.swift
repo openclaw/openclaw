@@ -353,7 +353,7 @@ struct SettingsTab: View {
         do {
             let statusStore = self.connectStatus
             let existing = KeychainStore.loadString(
-                service: "com.steipete.clawdis.bridge",
+                service: "com.clawdis.bridge",
                 account: self.keychainAccount())
             let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
                 existing :
@@ -381,7 +381,7 @@ struct SettingsTab: View {
             if !token.isEmpty, token != existingToken {
                 _ = KeychainStore.saveString(
                     token,
-                    service: "com.steipete.clawdis.bridge",
+                    service: "com.clawdis.bridge",
                     account: self.keychainAccount())
             }
 
@@ -427,7 +427,7 @@ struct SettingsTab: View {
         do {
             let statusStore = self.connectStatus
             let existing = KeychainStore.loadString(
-                service: "com.steipete.clawdis.bridge",
+                service: "com.clawdis.bridge",
                 account: self.keychainAccount())
             let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
                 existing :
@@ -455,7 +455,7 @@ struct SettingsTab: View {
             if !token.isEmpty, token != existingToken {
                 _ = KeychainStore.saveString(
                     token,
-                    service: "com.steipete.clawdis.bridge",
+                    service: "com.clawdis.bridge",
                     account: self.keychainAccount())
             }
 

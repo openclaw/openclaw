@@ -8,8 +8,8 @@ import Speech
 actor TalkModeRuntime {
     static let shared = TalkModeRuntime()
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "talk.runtime")
-    private let ttsLogger = Logger(subsystem: "com.steipete.clawdis", category: "talk.tts")
+    private let logger = Logger(subsystem: "com.clawdis", category: "talk.runtime")
+    private let ttsLogger = Logger(subsystem: "com.clawdis", category: "talk.tts")
     private static let defaultModelIdFallback = "eleven_v3"
 
     private final class RMSMeter: @unchecked Sendable {

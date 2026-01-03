@@ -7,7 +7,7 @@ read_when:
 
 This app is usually built from `scripts/package-mac-app.sh`, which now:
 
-- sets a stable debug bundle identifier: `com.steipete.clawdis.debug`
+- sets a stable debug bundle identifier: `com.clawdis.mac.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
 - calls `scripts/codesign-mac-app.sh` to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). Requires a valid signing identity.
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).

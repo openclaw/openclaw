@@ -13,7 +13,7 @@ The macOS menu bar app shows the WebChat UI as a native SwiftUI view and reuses 
 ## Launch & debugging
 - Manual: Lobster menu → “Open Chat”.
 - Auto-open for testing: run `dist/Clawdis.app/Contents/MacOS/Clawdis --webchat` (or pass `--webchat` to the binary launched by launchd). The window opens on startup.
-- Logs: see `./scripts/clawlog.sh` (subsystem `com.steipete.clawdis`, category `WebChatSwiftUI`).
+- Logs: see `./scripts/clawlog.sh` (subsystem `com.clawdis`, category `WebChatSwiftUI`).
 
 ## How it’s wired
 - Implementation: `apps/macos/Sources/Clawdis/WebChatSwiftUI.swift` hosts `ClawdisChatUI` and speaks to the Gateway over `GatewayConnection`.

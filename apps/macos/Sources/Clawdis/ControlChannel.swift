@@ -73,7 +73,7 @@ final class ControlChannel {
     }
     private(set) var lastPingMs: Double?
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "control")
+    private let logger = Logger(subsystem: "com.clawdis", category: "control")
 
     private var eventTask: Task<Void, Never>?
     private var recoveryTask: Task<Void, Never>?

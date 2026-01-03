@@ -53,7 +53,7 @@ private actor SessionPreviewCache {
 }
 
 struct SessionMenuPreviewView: View {
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "SessionPreview")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "SessionPreview")
     private static let previewTimeoutSeconds: Double = 4
 
     let sessionKey: String

@@ -40,7 +40,7 @@ final class InstancesStore {
     var statusMessage: String?
     var isLoading = false
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "instances")
+    private let logger = Logger(subsystem: "com.clawdis", category: "instances")
     private var task: Task<Void, Never>?
     private let interval: TimeInterval = 30
     private var eventTask: Task<Void, Never>?

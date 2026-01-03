@@ -102,7 +102,7 @@ final class BridgeDiscoveryModel {
             }
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "com.steipete.clawdis.ios.bridge-discovery.\(domain)"))
+            browser.start(queue: DispatchQueue(label: "com.clawdis.ios.bridge-discovery.\(domain)"))
         }
     }
 

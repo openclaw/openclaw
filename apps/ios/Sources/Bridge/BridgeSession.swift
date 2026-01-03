@@ -78,7 +78,7 @@ actor BridgeSession {
         let params = NWParameters.tcp
         params.includePeerToPeer = true
         let connection = NWConnection(to: endpoint, using: params)
-        let queue = DispatchQueue(label: "com.steipete.clawdis.ios.bridge-session")
+        let queue = DispatchQueue(label: "com.clawdis.ios.bridge-session")
         self.connection = connection
         self.queue = queue
 

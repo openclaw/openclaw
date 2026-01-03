@@ -58,7 +58,7 @@ struct WebSocketSessionBox: @unchecked Sendable {
 private typealias ProtoAnyCodable = ClawdisProtocol.AnyCodable
 
 actor GatewayChannelActor {
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway")
+    private let logger = Logger(subsystem: "com.clawdis", category: "gateway")
     private var task: WebSocketTaskBox?
     private var pending: [String: CheckedContinuation<GatewayFrame, Error>] = [:]
     private var connected = false

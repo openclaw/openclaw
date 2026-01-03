@@ -6,7 +6,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
     static let shared = DockIconManager()
 
     private var windowsObservation: NSKeyValueObservation?
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "DockIconManager")
+    private let logger = Logger(subsystem: "com.clawdis", category: "DockIconManager")
 
     override private init() {
         super.init()

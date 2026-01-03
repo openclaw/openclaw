@@ -1,7 +1,7 @@
 import Foundation
 
 enum ClawdisConfigFile {
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "config")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "config")
 
     static func url() -> URL {
         ClawdisPaths.configURL

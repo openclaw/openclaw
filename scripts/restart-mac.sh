@@ -9,7 +9,7 @@ APP_PROCESS_PATTERN="Clawdis.app/Contents/MacOS/Clawdis"
 DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Clawdis"
 LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Clawdis"
 RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Clawdis"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.steipete.clawdis.plist"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.clawdis.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
 LOCK_DIR="${TMPDIR:-/tmp}/clawdis-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
@@ -103,7 +103,7 @@ kill_all_clawdis() {
 }
 
 stop_launch_agent() {
-  launchctl bootout gui/"$UID"/com.steipete.clawdis 2>/dev/null || true
+  launchctl bootout gui/"$UID"/com.clawdis.mac 2>/dev/null || true
 }
 
 # 1) Kill all running instances first.

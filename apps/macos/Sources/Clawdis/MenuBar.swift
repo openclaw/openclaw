@@ -231,7 +231,7 @@ private final class StatusItemMouseHandlerView: NSView {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var state: AppState?
-    private let webChatAutoLogger = Logger(subsystem: "com.steipete.clawdis", category: "Chat")
+    private let webChatAutoLogger = Logger(subsystem: "com.clawdis", category: "Chat")
     let updaterController: UpdaterProviding = makeUpdaterController()
 
     func application(_: NSApplication, open urls: [URL]) {

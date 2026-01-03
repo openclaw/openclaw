@@ -1,7 +1,7 @@
 import Foundation
 
-let launchdLabel = "com.steipete.clawdis"
-let gatewayLaunchdLabel = "com.steipete.clawdis.gateway"
+let launchdLabel = "com.clawdis.mac"
+let gatewayLaunchdLabel = "com.clawdis.gateway"
 let onboardingVersionKey = "clawdis.onboardingVersion"
 let currentOnboardingVersion = 7
 let pauseDefaultsKey = "clawdis.pauseEnabled"

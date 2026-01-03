@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Breaking
+- Identifiers: rename bundle IDs and internal domains to `com.clawdis.*` (macOS: `com.clawdis.mac`, iOS: `com.clawdis.ios`, Android: `com.clawdis.android`) and update the gateway LaunchAgent label to `com.clawdis.gateway`.
+
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
 

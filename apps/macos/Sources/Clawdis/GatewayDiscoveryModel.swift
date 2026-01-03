@@ -34,7 +34,7 @@ final class GatewayDiscoveryModel {
     private var localIdentity: LocalIdentity
     private var resolvedTXTByID: [String: [String: String]] = [:]
     private var pendingTXTResolvers: [String: GatewayTXTResolver] = [:]
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "gateway-discovery")
+    private let logger = Logger(subsystem: "com.clawdis", category: "gateway-discovery")
 
     init() {
         self.localIdentity = Self.buildLocalIdentityFast()
@@ -69,7 +69,7 @@ final class GatewayDiscoveryModel {
             }
 
             self.browsers[domain] = browser
-            browser.start(queue: DispatchQueue(label: "com.steipete.clawdis.macos.gateway-discovery.\(domain)"))
+            browser.start(queue: DispatchQueue(label: "com.clawdis.macos.gateway-discovery.\(domain)"))
         }
     }
 

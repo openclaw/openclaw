@@ -74,7 +74,7 @@ enum ClawdisLogging {
 
     static func parseLabel(_ label: String) -> (String, String) {
         guard let range = label.range(of: Self.labelSeparator) else {
-            return ("com.steipete.clawdis", label)
+            return ("com.clawdis", label)
         }
         let subsystem = String(label[..<range.lowerBound])
         let category = String(label[range.upperBound...])

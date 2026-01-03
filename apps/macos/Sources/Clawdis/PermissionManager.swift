@@ -228,7 +228,7 @@ enum CameraPermissionHelper {
 }
 
 enum AppleScriptPermission {
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "AppleScriptPermission")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "AppleScriptPermission")
 
     /// Sends a benign AppleScript to Terminal to verify Automation permission.
     @MainActor

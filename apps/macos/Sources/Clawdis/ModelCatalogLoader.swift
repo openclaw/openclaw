@@ -4,7 +4,7 @@ import JavaScriptCore
 enum ModelCatalogLoader {
     static let defaultPath: String = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Projects/pi-mono/packages/ai/src/models.generated.ts").path
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "models")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "models")
 
     static func load(from path: String) async throws -> [ModelChoice] {
         let expanded = (path as NSString).expandingTildeInPath

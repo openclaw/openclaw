@@ -15,7 +15,7 @@ final class TailscaleService {
     /// API request timeout in seconds.
     private static let apiTimeoutInterval: TimeInterval = 5.0
 
-    private let logger = Logger(subsystem: "com.steipete.clawdis", category: "tailscale")
+    private let logger = Logger(subsystem: "com.clawdis", category: "tailscale")
 
     /// Indicates if the Tailscale app is installed on the system.
     private(set) var isInstalled = false

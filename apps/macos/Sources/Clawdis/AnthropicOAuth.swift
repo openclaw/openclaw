@@ -58,7 +58,7 @@ enum AnthropicAuthResolver {
 }
 
 enum AnthropicOAuth {
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "anthropic-oauth")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "anthropic-oauth")
 
     private static let clientId = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
     private static let authorizeURL = URL(string: "https://claude.ai/oauth/authorize")!

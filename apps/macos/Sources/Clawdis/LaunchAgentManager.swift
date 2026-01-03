@@ -1,9 +1,14 @@
 import Foundation
 
 enum LaunchAgentManager {
+    private static let legacyLaunchdLabel = "com.steipete.clawdis"
     private static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/LaunchAgents/com.steipete.clawdis.plist")
+            .appendingPathComponent("Library/LaunchAgents/com.clawdis.mac.plist")
+    }
+    private static var legacyPlistURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/LaunchAgents/\(legacyLaunchdLabel).plist")
     }
 
     static func status() async -> Bool {
@@ -14,6 +19,8 @@ enum LaunchAgentManager {
 
     static func set(enabled: Bool, bundlePath: String) async {
         if enabled {
+            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(legacyLaunchdLabel)"])
+            try? FileManager.default.removeItem(at: self.legacyPlistURL)
             self.writePlist(bundlePath: bundlePath)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])
             _ = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
@@ -32,7 +39,7 @@ enum LaunchAgentManager {
         <plist version="1.0">
         <dict>
           <key>Label</key>
-          <string>com.steipete.clawdis</string>
+          <string>com.clawdis.mac</string>
           <key>ProgramArguments</key>
           <array>
             <string>\(bundlePath)/Contents/MacOS/Clawdis</string>

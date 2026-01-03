@@ -2,7 +2,7 @@ import Foundation
 import OSLog
 
 enum VoiceWakeForwarder {
-    private static let logger = Logger(subsystem: "com.steipete.clawdis", category: "voicewake.forward")
+    private static let logger = Logger(subsystem: "com.clawdis", category: "voicewake.forward")
 
     static func prefixedTranscript(_ transcript: String, machineName: String? = nil) -> String {
         let resolvedMachine = machineName

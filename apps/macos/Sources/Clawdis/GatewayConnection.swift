@@ -3,7 +3,7 @@ import ClawdisProtocol
 import Foundation
 import OSLog
 
-private let gatewayConnectionLogger = Logger(subsystem: "com.steipete.clawdis", category: "gateway.connection")
+private let gatewayConnectionLogger = Logger(subsystem: "com.clawdis", category: "gateway.connection")
 
 enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
     case last
