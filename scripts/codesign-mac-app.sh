@@ -57,8 +57,8 @@ select_identity() {
 
 if [ -z "$IDENTITY" ]; then
   if ! IDENTITY="$(select_identity)"; then
-    echo "ERROR: No signing identity found. Set SIGN_IDENTITY to a valid codesigning certificate." >&2
-    exit 1
+    echo "WARN: No signing identity found. Falling back to ad-hoc signing (-)." >&2
+    IDENTITY="-"
   fi
 fi
 
