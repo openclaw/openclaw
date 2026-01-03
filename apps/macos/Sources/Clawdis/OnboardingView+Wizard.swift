@@ -1,3 +1,4 @@
+import Observation
 import SwiftUI
 
 extension OnboardingView {
@@ -13,43 +14,10 @@ extension OnboardingView {
                     .frame(maxWidth: 520)
 
                 self.onboardingCard(spacing: 14, padding: 16) {
-                    if let error = self.onboardingWizard.errorMessage {
-                        Text("Wizard error")
-                            .font(.headline)
-                        Text(error)
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Retry") {
-                            self.onboardingWizard.reset()
-                            Task {
-                                await self.onboardingWizard.startIfNeeded(
-                                    mode: self.state.connectionMode,
-                                    workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
-                            }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    } else if self.onboardingWizard.isStarting {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                            Text("Starting wizard…")
-                                .foregroundStyle(.secondary)
-                        }
-                    } else if let step = self.onboardingWizard.currentStep {
-                        OnboardingWizardStepView(
-                            step: step,
-                            isSubmitting: self.onboardingWizard.isSubmitting)
-                        { value in
-                            Task { await self.onboardingWizard.submit(step: step, value: value) }
-                        }
-                        .id(step.id)
-                    } else if self.onboardingWizard.isComplete {
-                        Text("Wizard complete. Continue to the next step.")
-                            .font(.headline)
-                    } else {
-                        Text("Waiting for wizard…")
-                            .foregroundStyle(.secondary)
-                    }
+                    OnboardingWizardCardContent(
+                        wizard: self.onboardingWizard,
+                        mode: self.state.connectionMode,
+                        workspacePath: self.workspacePath)
                 }
             }
             .task {
@@ -57,6 +25,69 @@ extension OnboardingView {
                     mode: self.state.connectionMode,
                     workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
             }
+        }
+    }
+}
+
+private struct OnboardingWizardCardContent: View {
+    @Bindable var wizard: OnboardingWizardModel
+    let mode: AppState.ConnectionMode
+    let workspacePath: String
+
+    private enum CardState {
+        case error(String)
+        case starting
+        case step(WizardStep)
+        case complete
+        case waiting
+    }
+
+    private var state: CardState {
+        if let error = wizard.errorMessage { return .error(error) }
+        if wizard.isStarting { return .starting }
+        if let step = wizard.currentStep { return .step(step) }
+        if wizard.isComplete { return .complete }
+        return .waiting
+    }
+
+    var body: some View {
+        switch state {
+        case .error(let error):
+            Text("Wizard error")
+                .font(.headline)
+            Text(error)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Retry") {
+                wizard.reset()
+                Task {
+                    await wizard.startIfNeeded(
+                        mode: mode,
+                        workspace: workspacePath.isEmpty ? nil : workspacePath)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        case .starting:
+            HStack(spacing: 8) {
+                ProgressView()
+                Text("Starting wizard…")
+                    .foregroundStyle(.secondary)
+            }
+        case .step(let step):
+            OnboardingWizardStepView(
+                step: step,
+                isSubmitting: wizard.isSubmitting)
+            { value in
+                Task { await wizard.submit(step: step, value: value) }
+            }
+            .id(step.id)
+        case .complete:
+            Text("Wizard complete. Continue to the next step.")
+                .font(.headline)
+        case .waiting:
+            Text("Waiting for wizard…")
+                .foregroundStyle(.secondary)
         }
     }
 }
