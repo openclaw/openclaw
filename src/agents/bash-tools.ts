@@ -1,5 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import type { IPty } from "node-pty";
@@ -31,6 +33,9 @@ const DEFAULT_MAX_OUTPUT = clampNumber(
   1_000,
   150_000,
 );
+const DEFAULT_SHELL_PATH = "/bin/sh";
+const DEFAULT_PATH =
+  "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 const DEFAULT_PTY_NAME = "xterm-256color";
 
 type PtyModule = typeof import("node-pty");
@@ -173,12 +178,13 @@ export function createBashTool(
             "falling back to pipe mode.";
           stdinMode = "pipe";
         } else {
-          const ptyEnv = {
+          const ptyEnv = ensurePath({
             ...env,
             TERM: env.TERM ?? DEFAULT_PTY_NAME,
-          } as Record<string, string>;
+          } as Record<string, string>);
+          const ptyShell = resolveShellPath(shell, ptyEnv);
           try {
-            pty = ptyModule.spawn(shell, [...shellArgs, params.command], {
+            pty = ptyModule.spawn(ptyShell, [...shellArgs, params.command], {
               cwd: workdir,
               env: ptyEnv,
               name: ptyEnv.TERM || DEFAULT_PTY_NAME,
@@ -186,10 +192,31 @@ export function createBashTool(
               rows: 30,
             });
           } catch (error) {
-            warning =
-              `Warning: node-pty failed to start${formatPtyError(error)}; ` +
-              "falling back to pipe mode.";
-            stdinMode = "pipe";
+            if (ptyShell !== DEFAULT_SHELL_PATH && existsSync(DEFAULT_SHELL_PATH)) {
+              try {
+                pty = ptyModule.spawn(
+                  DEFAULT_SHELL_PATH,
+                  [...shellArgs, params.command],
+                  {
+                    cwd: workdir,
+                    env: ptyEnv,
+                    name: ptyEnv.TERM || DEFAULT_PTY_NAME,
+                    cols: 120,
+                    rows: 30,
+                  },
+                );
+              } catch (fallbackError) {
+                warning =
+                  `Warning: node-pty failed to start${formatPtyError(fallbackError)}; ` +
+                  "falling back to pipe mode.";
+                stdinMode = "pipe";
+              }
+            } else {
+              warning =
+                `Warning: node-pty failed to start${formatPtyError(error)}; ` +
+                "falling back to pipe mode.";
+              stdinMode = "pipe";
+            }
           }
         }
       }
@@ -886,6 +913,30 @@ function killSession(session: {
       // ignore kill failures
     }
   }
+}
+
+function ensurePath(env: Record<string, string>) {
+  if (!env.PATH?.trim()) {
+    env.PATH = DEFAULT_PATH;
+  }
+  return env;
+}
+
+function resolveShellPath(shell: string, env: Record<string, string>) {
+  if (process.platform === "win32") return shell;
+  if (shell.includes("/") && existsSync(shell)) {
+    return shell;
+  }
+  const searchPath = env.PATH ?? "";
+  for (const segment of searchPath.split(path.delimiter)) {
+    if (!segment) continue;
+    const candidate = path.join(segment, shell);
+    if (existsSync(candidate)) return candidate;
+  }
+  if (existsSync(DEFAULT_SHELL_PATH)) {
+    return DEFAULT_SHELL_PATH;
+  }
+  return shell;
 }
 
 function formatPtyError(error: unknown) {
