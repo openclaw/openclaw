@@ -48,18 +48,58 @@ merge_framework_machos() {
   local dest="$2"
   shift 2
   local others=("$@")
+
+  archs_for() {
+    /usr/bin/lipo -info "$1" | /usr/bin/sed -E 's/.*are: //; s/.*architecture: //'
+  }
+
+  arch_in_list() {
+    local needle="$1"
+    shift
+    for item in "$@"; do
+      if [[ "$item" == "$needle" ]]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+
   while IFS= read -r -d '' file; do
     if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
       local rel="${file#$primary/}"
-      local inputs=("$file")
+      local primary_archs
+      primary_archs=$(archs_for "$file")
+      IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
+
+      local missing_files=()
+      local tmp_dir
+      tmp_dir=$(mktemp -d)
       for fw in "${others[@]}"; do
-        if [[ ! -f "$fw/$rel" ]]; then
+        local other_file="$fw/$rel"
+        if [[ ! -f "$other_file" ]]; then
           echo "ERROR: Missing $rel in $fw" >&2
+          rm -rf "$tmp_dir"
           exit 1
         fi
-        inputs+=("$fw/$rel")
+        if /usr/bin/file "$other_file" | /usr/bin/grep -q "Mach-O"; then
+          local other_archs
+          other_archs=$(archs_for "$other_file")
+          IFS=' ' read -r -a other_arch_array <<< "$other_archs"
+          for arch in "${other_arch_array[@]}"; do
+            if ! arch_in_list "$arch" "${primary_arch_array[@]}"; then
+              local thin_file="$tmp_dir/$(echo "$rel" | tr '/' '_')-$arch"
+              /usr/bin/lipo -thin "$arch" "$other_file" -output "$thin_file"
+              missing_files+=("$thin_file")
+              primary_arch_array+=("$arch")
+            fi
+          done
+        fi
       done
-      /usr/bin/lipo -create "${inputs[@]}" -output "$dest/$rel"
+
+      if [[ "${#missing_files[@]}" -gt 0 ]]; then
+        /usr/bin/lipo -create "$file" "${missing_files[@]}" -output "$dest/$rel"
+      fi
+      rm -rf "$tmp_dir"
     fi
   done < <(find "$primary" -type f -print0)
 }
