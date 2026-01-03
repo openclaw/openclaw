@@ -107,6 +107,7 @@
 - Cron: prevent `every` schedules without an anchor from firing in a tight loop (thanks @jamesgroat).
 - Docs: add manual OAuth setup for remote/headless deployments (#67) — thanks @wstock
 - Docs/agent tools: clarify that browser `wait` should be avoided by default and used only in exceptional cases.
+- Docs: clarify self-chat mode and group mention gating config (#111) — thanks @rafaelreis-r.
 - Browser tools: `upload` supports auto-click refs, direct `inputRef`/`element` file inputs, and emits input/change after `setFiles` so JS-heavy sites pick up attachments.
 - Browser tools: harden CDP readiness (HTTP + WS), retry CDP connects, and auto-restart the clawd browser when the socket handshake stalls.
 - Browser CLI: add `clawdis browser reset-profile` to move the clawd profile to Trash when it gets wedged.
