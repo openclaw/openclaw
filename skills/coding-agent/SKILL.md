@@ -6,7 +6,7 @@ metadata: {"clawdis":{"emoji":"🧩","requires":{"anyBins":["claude","codex","op
 
 # Coding Agent (background-first)
 
-Use **bash background mode** for coding agents. Full programmatic control, no tmux needed.
+Use **bash background mode** for non-interactive coding work. For interactive coding sessions, use the **tmux** skill (always, except very simple one-shot prompts).
 
 ## The Pattern: workdir + background
 
@@ -138,9 +138,9 @@ bash workdir:~/project background:true command:"pi --provider openai --model gpt
 
 ---
 
-## tmux (optional)
+## tmux (interactive sessions)
 
-Only use tmux if you need persistence/interaction; otherwise prefer background mode.
+Use the tmux skill for interactive coding sessions (always, except very simple one-shot prompts). Prefer bash background mode for non-interactive runs.
 
 ---
 
