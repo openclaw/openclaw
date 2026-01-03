@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { CONFIG_PATH_CLAWDIS, STATE_DIR_CLAWDIS } from "../config/config.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   connectReq,
@@ -33,6 +32,9 @@ describe("gateway server auth/connect", () => {
   );
 
   test("connect (req) handshake returns hello-ok payload", async () => {
+    const { CONFIG_PATH_CLAWDIS, STATE_DIR_CLAWDIS } = await import(
+      "../config/config.js"
+    );
     const port = await getFreePort();
     const server = await startGatewayServer(port);
     const ws = new WebSocket(`ws://127.0.0.1:${port}`);
