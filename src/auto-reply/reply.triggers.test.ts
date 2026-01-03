@@ -450,6 +450,8 @@ describe("trigger handling", () => {
 });
 
 describe("group intro prompts", () => {
+  const groupParticipationNote =
+    "Be a good group participant: lurk and follow the conversation, but only chime in when you have something genuinely helpful or relevant to add. Don't feel obligated to respond to every message — quality over quantity. Even when lurking silently, you can use emoji reactions to acknowledge messages, show support, or react to humor — reactions are always appreciated and don't clutter the chat.";
   it("labels Discord groups using the surface metadata", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
@@ -479,7 +481,7 @@ describe("group intro prompts", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
           ?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        'You are replying inside the Discord group "Release Squad". Group members: Alice, Bob. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.',
+        `You are replying inside the Discord group "Release Squad". Group members: Alice, Bob. Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
@@ -512,7 +514,7 @@ describe("group intro prompts", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
           ?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        'You are replying inside the WhatsApp group "Ops". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.',
+        `You are replying inside the WhatsApp group "Ops". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
@@ -545,7 +547,7 @@ describe("group intro prompts", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0]
           ?.extraSystemPrompt ?? "";
       expect(extraSystemPrompt).toBe(
-        'You are replying inside the Telegram group "Dev Chat". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.',
+        `You are replying inside the Telegram group "Dev Chat". Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). ${groupParticipationNote} Address the specific sender noted in the message context.`,
       );
     });
   });
