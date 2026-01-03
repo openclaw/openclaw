@@ -9,12 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
-import { lookupContextTokens } from "../agents/context.js";
-import {
-  DEFAULT_CONTEXT_TOKENS,
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../agents/defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   loadModelCatalog,
   type ModelCatalogEntry,
@@ -64,7 +59,6 @@ import {
 } from "../config/config.js";
 import { buildConfigSchema } from "../config/schema.js";
 import {
-  buildGroupDisplayName,
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
@@ -84,7 +78,7 @@ import {
   sendMessageDiscord,
 } from "../discord/index.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
-import { isVerbose, shouldLogVerbose } from "../globals.js";
+import { shouldLogVerbose } from "../globals.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import {
   monitorIMessageProvider,
@@ -181,109 +175,32 @@ import {
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
-  applyHookMappings,
-  type HookMappingResolved,
-  resolveHookMappings,
-} from "./hooks-mapping.js";
+  extractHookToken,
+  normalizeAgentPayload,
+  normalizeHookHeaders,
+  normalizeWakePayload,
+  readJsonBody,
+  resolveHooksConfig,
+} from "./hooks.js";
+import { applyHookMappings } from "./hooks-mapping.js";
+import {
+  isLoopbackAddress,
+  isLoopbackHost,
+  resolveGatewayBindHost,
+} from "./net.js";
+import {
+  archiveFileOnDisk,
+  capArrayByJsonBytes,
+  listSessionsFromStore,
+  loadSessionEntry,
+  readSessionMessages,
+  resolveSessionModelRef,
+  resolveSessionTranscriptCandidates,
+  type SessionsPatchResult,
+} from "./session-utils.js";
+import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 ensureClawdisCliOnPath();
-
-const DEFAULT_HOOKS_PATH = "/hooks";
-const DEFAULT_HOOKS_MAX_BODY_BYTES = 256 * 1024;
-
-type HooksConfigResolved = {
-  basePath: string;
-  token: string;
-  maxBodyBytes: number;
-  mappings: HookMappingResolved[];
-};
-
-function resolveHooksConfig(cfg: ClawdisConfig): HooksConfigResolved | null {
-  if (cfg.hooks?.enabled !== true) return null;
-  const token = cfg.hooks?.token?.trim();
-  if (!token) {
-    throw new Error("hooks.enabled requires hooks.token");
-  }
-  const rawPath = cfg.hooks?.path?.trim() || DEFAULT_HOOKS_PATH;
-  const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
-  const trimmed =
-    withSlash.length > 1 ? withSlash.replace(/\/+$/, "") : withSlash;
-  if (trimmed === "/") {
-    throw new Error("hooks.path may not be '/'");
-  }
-  const maxBodyBytes =
-    cfg.hooks?.maxBodyBytes && cfg.hooks.maxBodyBytes > 0
-      ? cfg.hooks.maxBodyBytes
-      : DEFAULT_HOOKS_MAX_BODY_BYTES;
-  const mappings = resolveHookMappings(cfg.hooks);
-  return {
-    basePath: trimmed,
-    token,
-    maxBodyBytes,
-    mappings,
-  };
-}
-
-function extractHookToken(req: IncomingMessage, url: URL): string | undefined {
-  const auth =
-    typeof req.headers.authorization === "string"
-      ? req.headers.authorization.trim()
-      : "";
-  if (auth.toLowerCase().startsWith("bearer ")) {
-    const token = auth.slice(7).trim();
-    if (token) return token;
-  }
-  const headerToken =
-    typeof req.headers["x-clawdis-token"] === "string"
-      ? req.headers["x-clawdis-token"].trim()
-      : "";
-  if (headerToken) return headerToken;
-  const queryToken = url.searchParams.get("token");
-  if (queryToken) return queryToken.trim();
-  return undefined;
-}
-
-async function readJsonBody(
-  req: IncomingMessage,
-  maxBytes: number,
-): Promise<{ ok: true; value: unknown } | { ok: false; error: string }> {
-  return await new Promise((resolve) => {
-    let done = false;
-    let total = 0;
-    const chunks: Buffer[] = [];
-    req.on("data", (chunk: Buffer) => {
-      if (done) return;
-      total += chunk.length;
-      if (total > maxBytes) {
-        done = true;
-        resolve({ ok: false, error: "payload too large" });
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      if (done) return;
-      done = true;
-      const raw = Buffer.concat(chunks).toString("utf-8").trim();
-      if (!raw) {
-        resolve({ ok: true, value: {} });
-        return;
-      }
-      try {
-        const parsed = JSON.parse(raw) as unknown;
-        resolve({ ok: true, value: parsed });
-      } catch (err) {
-        resolve({ ok: false, error: String(err) });
-      }
-    });
-    req.on("error", (err) => {
-      if (done) return;
-      done = true;
-      resolve({ ok: false, error: String(err) });
-    });
-  });
-}
 
 function sendJson(
   res: import("node:http").ServerResponse,
@@ -435,7 +352,6 @@ import {
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "./protocol/index.js";
-import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 type Client = {
   socket: WebSocket;
@@ -464,47 +380,6 @@ async function resolveTailnetDnsHint(): Promise<string | undefined> {
     return undefined;
   }
 }
-
-type GatewaySessionsDefaults = {
-  model: string | null;
-  contextTokens: number | null;
-};
-
-type GatewaySessionRow = {
-  key: string;
-  kind: "direct" | "group" | "global" | "unknown";
-  displayName?: string;
-  surface?: string;
-  subject?: string;
-  room?: string;
-  space?: string;
-  updatedAt: number | null;
-  sessionId?: string;
-  systemSent?: boolean;
-  abortedLastRun?: boolean;
-  thinkingLevel?: string;
-  verboseLevel?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  totalTokens?: number;
-  model?: string;
-  contextTokens?: number;
-};
-
-type SessionsListResult = {
-  ts: number;
-  path: string;
-  count: number;
-  defaults: GatewaySessionsDefaults;
-  sessions: GatewaySessionRow[];
-};
-
-type SessionsPatchResult = {
-  ok: true;
-  path: string;
-  key: string;
-  entry: SessionEntry;
-};
 
 const METHODS = [
   "health",
@@ -625,30 +500,6 @@ export type GatewayServerOptions = {
   ) => Promise<void>;
 };
 
-function isLoopbackAddress(ip: string | undefined): boolean {
-  if (!ip) return false;
-  if (ip === "127.0.0.1") return true;
-  if (ip.startsWith("127.")) return true;
-  if (ip === "::1") return true;
-  if (ip.startsWith("::ffff:127.")) return true;
-  return false;
-}
-
-function resolveGatewayBindHost(
-  bind: import("../config/config.js").BridgeBindMode | undefined,
-): string | null {
-  const mode = bind ?? "loopback";
-  if (mode === "loopback") return "127.0.0.1";
-  if (mode === "lan") return "0.0.0.0";
-  if (mode === "tailnet") return pickPrimaryTailnetIPv4() ?? null;
-  if (mode === "auto") return pickPrimaryTailnetIPv4() ?? "0.0.0.0";
-  return "127.0.0.1";
-}
-
-function isLoopbackHost(host: string): boolean {
-  return isLoopbackAddress(host);
-}
-
 let presenceVersion = 1;
 let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
@@ -680,129 +531,12 @@ const TICK_INTERVAL_MS = 30_000;
 const HEALTH_REFRESH_INTERVAL_MS = 60_000;
 const DEDUPE_TTL_MS = 5 * 60_000;
 const DEDUPE_MAX = 1000;
-const LOG_VALUE_LIMIT = 240;
-
 type DedupeEntry = {
   ts: number;
   ok: boolean;
   payload?: unknown;
   error?: ErrorShape;
 };
-
-function formatForLog(value: unknown): string {
-  try {
-    if (value instanceof Error) {
-      const parts: string[] = [];
-      if (value.name) parts.push(value.name);
-      if (value.message) parts.push(value.message);
-      const code =
-        "code" in value &&
-        (typeof value.code === "string" || typeof value.code === "number")
-          ? String(value.code)
-          : "";
-      if (code) parts.push(`code=${code}`);
-      const combined = parts.filter(Boolean).join(": ").trim();
-      if (combined) {
-        return combined.length > LOG_VALUE_LIMIT
-          ? `${combined.slice(0, LOG_VALUE_LIMIT)}...`
-          : combined;
-      }
-    }
-    if (value && typeof value === "object") {
-      const rec = value as Record<string, unknown>;
-      if (typeof rec.message === "string" && rec.message.trim()) {
-        const name = typeof rec.name === "string" ? rec.name.trim() : "";
-        const code =
-          typeof rec.code === "string" || typeof rec.code === "number"
-            ? String(rec.code)
-            : "";
-        const parts = [name, rec.message.trim()].filter(Boolean);
-        if (code) parts.push(`code=${code}`);
-        const combined = parts.join(": ").trim();
-        return combined.length > LOG_VALUE_LIMIT
-          ? `${combined.slice(0, LOG_VALUE_LIMIT)}...`
-          : combined;
-      }
-    }
-    const str =
-      typeof value === "string" || typeof value === "number"
-        ? String(value)
-        : JSON.stringify(value);
-    if (!str) return "";
-    return str.length > LOG_VALUE_LIMIT
-      ? `${str.slice(0, LOG_VALUE_LIMIT)}...`
-      : str;
-  } catch {
-    return String(value);
-  }
-}
-
-function compactPreview(input: string, maxLen = 160): string {
-  const oneLine = input.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= maxLen) return oneLine;
-  return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
-}
-
-function summarizeAgentEventForWsLog(
-  payload: unknown,
-): Record<string, unknown> {
-  if (!payload || typeof payload !== "object") return {};
-  const rec = payload as Record<string, unknown>;
-  const runId = typeof rec.runId === "string" ? rec.runId : undefined;
-  const stream = typeof rec.stream === "string" ? rec.stream : undefined;
-  const seq = typeof rec.seq === "number" ? rec.seq : undefined;
-  const data =
-    rec.data && typeof rec.data === "object"
-      ? (rec.data as Record<string, unknown>)
-      : undefined;
-
-  const extra: Record<string, unknown> = {};
-  if (runId) extra.run = shortId(runId);
-  if (stream) extra.stream = stream;
-  if (seq !== undefined) extra.aseq = seq;
-
-  if (!data) return extra;
-
-  if (stream === "assistant") {
-    const text = typeof data.text === "string" ? data.text : undefined;
-    if (text?.trim()) extra.text = compactPreview(text);
-    const mediaUrls = Array.isArray(data.mediaUrls)
-      ? data.mediaUrls
-      : undefined;
-    if (mediaUrls && mediaUrls.length > 0) extra.media = mediaUrls.length;
-    return extra;
-  }
-
-  if (stream === "tool") {
-    const phase = typeof data.phase === "string" ? data.phase : undefined;
-    const name = typeof data.name === "string" ? data.name : undefined;
-    if (phase || name) extra.tool = `${phase ?? "?"}:${name ?? "?"}`;
-    const toolCallId =
-      typeof data.toolCallId === "string" ? data.toolCallId : undefined;
-    if (toolCallId) extra.call = shortId(toolCallId);
-    const meta = typeof data.meta === "string" ? data.meta : undefined;
-    if (meta?.trim()) extra.meta = meta;
-    if (typeof data.isError === "boolean") extra.err = data.isError;
-    return extra;
-  }
-
-  if (stream === "job") {
-    const state = typeof data.state === "string" ? data.state : undefined;
-    if (state) extra.state = state;
-    if (data.to === null) extra.to = null;
-    else if (typeof data.to === "string") extra.to = data.to;
-    if (typeof data.durationMs === "number")
-      extra.ms = Math.round(data.durationMs);
-    if (typeof data.aborted === "boolean") extra.aborted = data.aborted;
-    const error = typeof data.error === "string" ? data.error : undefined;
-    if (error?.trim()) extra.error = compactPreview(error, 120);
-    return extra;
-  }
-
-  const reason = typeof data.reason === "string" ? data.reason : undefined;
-  if (reason?.trim()) extra.reason = reason;
-  return extra;
-}
 
 function normalizeVoiceWakeTriggers(input: unknown): string[] {
   const raw = Array.isArray(input) ? input : [];
@@ -813,522 +547,6 @@ function normalizeVoiceWakeTriggers(input: unknown): string[] {
     .map((v) => v.slice(0, 64));
   return cleaned.length > 0 ? cleaned : defaultVoiceWakeTriggers();
 }
-
-function readSessionMessages(
-  sessionId: string,
-  storePath: string | undefined,
-): unknown[] {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath);
-
-  const filePath = candidates.find((p) => fs.existsSync(p));
-  if (!filePath) return [];
-
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const messages: unknown[] = [];
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    try {
-      const parsed = JSON.parse(line);
-      if (parsed?.message) {
-        messages.push(parsed.message);
-      }
-    } catch {
-      // ignore bad lines
-    }
-  }
-  return messages;
-}
-
-function resolveSessionTranscriptCandidates(
-  sessionId: string,
-  storePath: string | undefined,
-): string[] {
-  const candidates: string[] = [];
-  if (storePath) {
-    const dir = path.dirname(storePath);
-    candidates.push(path.join(dir, `${sessionId}.jsonl`));
-  }
-  candidates.push(
-    path.join(os.homedir(), ".clawdis", "sessions", `${sessionId}.jsonl`),
-  );
-  return candidates;
-}
-
-function archiveFileOnDisk(filePath: string, reason: string): string {
-  const ts = new Date().toISOString().replaceAll(":", "-");
-  const archived = `${filePath}.${reason}.${ts}`;
-  fs.renameSync(filePath, archived);
-  return archived;
-}
-
-function jsonUtf8Bytes(value: unknown): number {
-  try {
-    return Buffer.byteLength(JSON.stringify(value), "utf8");
-  } catch {
-    return Buffer.byteLength(String(value), "utf8");
-  }
-}
-
-function capArrayByJsonBytes<T>(
-  items: T[],
-  maxBytes: number,
-): { items: T[]; bytes: number } {
-  if (items.length === 0) return { items, bytes: 2 };
-  const parts = items.map((item) => jsonUtf8Bytes(item));
-  let bytes = 2 + parts.reduce((a, b) => a + b, 0) + (items.length - 1); // [] + commas
-  let start = 0;
-  while (bytes > maxBytes && start < items.length - 1) {
-    bytes -= parts[start] + 1; // item + comma
-    start += 1;
-  }
-  const next = start > 0 ? items.slice(start) : items;
-  return { items: next, bytes };
-}
-
-function loadSessionEntry(sessionKey: string) {
-  const cfg = loadConfig();
-  const sessionCfg = cfg.session;
-  const storePath = sessionCfg?.store
-    ? resolveStorePath(sessionCfg.store)
-    : resolveStorePath(undefined);
-  const store = loadSessionStore(storePath);
-  const entry = store[sessionKey];
-  return { cfg, storePath, store, entry };
-}
-
-function classifySessionKey(
-  key: string,
-  entry?: SessionEntry,
-): GatewaySessionRow["kind"] {
-  if (key === "global") return "global";
-  if (key === "unknown") return "unknown";
-  if (entry?.chatType === "group" || entry?.chatType === "room") return "group";
-  if (
-    key.startsWith("group:") ||
-    key.includes(":group:") ||
-    key.includes(":channel:")
-  ) {
-    return "group";
-  }
-  return "direct";
-}
-
-function parseGroupKey(
-  key: string,
-): { surface?: string; kind?: "group" | "channel"; id?: string } | null {
-  if (key.startsWith("group:")) {
-    const raw = key.slice("group:".length);
-    return raw ? { id: raw } : null;
-  }
-  const parts = key.split(":").filter(Boolean);
-  if (parts.length >= 3) {
-    const [surface, kind, ...rest] = parts;
-    if (kind === "group" || kind === "channel") {
-      const id = rest.join(":");
-      return { surface, kind, id };
-    }
-  }
-  return null;
-}
-
-function getSessionDefaults(cfg: ClawdisConfig): GatewaySessionsDefaults {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const contextTokens =
-    cfg.agent?.contextTokens ??
-    lookupContextTokens(resolved.model) ??
-    DEFAULT_CONTEXT_TOKENS;
-  return {
-    model: resolved.model ?? null,
-    contextTokens: contextTokens ?? null,
-  };
-}
-
-function resolveSessionModelRef(
-  cfg: ClawdisConfig,
-  entry?: SessionEntry,
-): { provider: string; model: string } {
-  const resolved = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  let provider = resolved.provider;
-  let model = resolved.model;
-  const storedModelOverride = entry?.modelOverride?.trim();
-  if (storedModelOverride) {
-    provider = entry?.providerOverride?.trim() || provider;
-    model = storedModelOverride;
-  }
-  return { provider, model };
-}
-
-function listSessionsFromStore(params: {
-  cfg: ClawdisConfig;
-  storePath: string;
-  store: Record<string, SessionEntry>;
-  opts: SessionsListParams;
-}): SessionsListResult {
-  const { cfg, storePath, store, opts } = params;
-  const now = Date.now();
-
-  const includeGlobal = opts.includeGlobal === true;
-  const includeUnknown = opts.includeUnknown === true;
-  const activeMinutes =
-    typeof opts.activeMinutes === "number" &&
-    Number.isFinite(opts.activeMinutes)
-      ? Math.max(1, Math.floor(opts.activeMinutes))
-      : undefined;
-
-  let sessions = Object.entries(store)
-    .filter(([key]) => {
-      if (!includeGlobal && key === "global") return false;
-      if (!includeUnknown && key === "unknown") return false;
-      return true;
-    })
-    .map(([key, entry]) => {
-      const updatedAt = entry?.updatedAt ?? null;
-      const input = entry?.inputTokens ?? 0;
-      const output = entry?.outputTokens ?? 0;
-      const total = entry?.totalTokens ?? input + output;
-      const parsed = parseGroupKey(key);
-      const surface = entry?.surface ?? parsed?.surface;
-      const subject = entry?.subject;
-      const room = entry?.room;
-      const space = entry?.space;
-      const id = parsed?.id;
-      const displayName =
-        entry?.displayName ??
-        (surface
-          ? buildGroupDisplayName({
-              surface,
-              subject,
-              room,
-              space,
-              id,
-              key,
-            })
-          : undefined);
-      return {
-        key,
-        kind: classifySessionKey(key, entry),
-        displayName,
-        surface,
-        subject,
-        room,
-        space,
-        updatedAt,
-        sessionId: entry?.sessionId,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: total,
-        model: entry?.model,
-        contextTokens: entry?.contextTokens,
-      } satisfies GatewaySessionRow;
-    })
-    .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-
-  if (activeMinutes !== undefined) {
-    const cutoff = now - activeMinutes * 60_000;
-    sessions = sessions.filter((s) => (s.updatedAt ?? 0) >= cutoff);
-  }
-
-  if (typeof opts.limit === "number" && Number.isFinite(opts.limit)) {
-    const limit = Math.max(1, Math.floor(opts.limit));
-    sessions = sessions.slice(0, limit);
-  }
-
-  return {
-    ts: now,
-    path: storePath,
-    count: sessions.length,
-    defaults: getSessionDefaults(cfg),
-    sessions,
-  };
-}
-
-function logWs(
-  direction: "in" | "out",
-  kind: string,
-  meta?: Record<string, unknown>,
-) {
-  const style = getGatewayWsLogStyle();
-  if (!isVerbose()) {
-    logWsOptimized(direction, kind, meta);
-    return;
-  }
-
-  if (style === "compact" || style === "auto") {
-    logWsCompact(direction, kind, meta);
-    return;
-  }
-
-  const now = Date.now();
-  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
-  const id = typeof meta?.id === "string" ? meta.id : undefined;
-  const method = typeof meta?.method === "string" ? meta.method : undefined;
-  const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  const event = typeof meta?.event === "string" ? meta.event : undefined;
-
-  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
-  if (direction === "in" && kind === "req" && inflightKey) {
-    wsInflightSince.set(inflightKey, now);
-  }
-  const durationMs =
-    direction === "out" && kind === "res" && inflightKey
-      ? (() => {
-          const startedAt = wsInflightSince.get(inflightKey);
-          if (startedAt === undefined) return undefined;
-          wsInflightSince.delete(inflightKey);
-          return now - startedAt;
-        })()
-      : undefined;
-
-  const dirArrow = direction === "in" ? "←" : "→";
-  const dirColor = direction === "in" ? chalk.greenBright : chalk.cyanBright;
-  const prefix = `${chalk.gray("[gws]")} ${dirColor(dirArrow)} ${chalk.bold(kind)}`;
-
-  const headline =
-    (kind === "req" || kind === "res") && method
-      ? chalk.bold(method)
-      : kind === "event" && event
-        ? chalk.bold(event)
-        : undefined;
-
-  const statusToken =
-    kind === "res" && ok !== undefined
-      ? ok
-        ? chalk.greenBright("✓")
-        : chalk.redBright("✗")
-      : undefined;
-
-  const durationToken =
-    typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
-
-  const restMeta: string[] = [];
-  if (meta) {
-    for (const [key, value] of Object.entries(meta)) {
-      if (value === undefined) continue;
-      if (key === "connId" || key === "id") continue;
-      if (key === "method" || key === "ok") continue;
-      if (key === "event") continue;
-      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
-    }
-  }
-
-  const trailing: string[] = [];
-  if (connId) {
-    trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
-  }
-  if (id) trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
-
-  const tokens = [
-    prefix,
-    statusToken,
-    headline,
-    durationToken,
-    ...restMeta,
-    ...trailing,
-  ].filter((t): t is string => Boolean(t));
-
-  console.log(tokens.join(" "));
-}
-
-type WsInflightEntry = {
-  ts: number;
-  method?: string;
-  meta?: Record<string, unknown>;
-};
-
-const wsInflightCompact = new Map<string, WsInflightEntry>();
-let wsLastCompactConnId: string | undefined;
-const wsInflightOptimized = new Map<string, number>();
-
-function logWsOptimized(
-  direction: "in" | "out",
-  kind: string,
-  meta?: Record<string, unknown>,
-) {
-  // Keep "normal" mode quiet: only surface errors, slow calls, and parser issues.
-  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
-  const id = typeof meta?.id === "string" ? meta.id : undefined;
-  const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  const method = typeof meta?.method === "string" ? meta.method : undefined;
-
-  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
-
-  if (direction === "in" && kind === "req" && inflightKey) {
-    wsInflightOptimized.set(inflightKey, Date.now());
-    if (wsInflightOptimized.size > 2000) wsInflightOptimized.clear();
-    return;
-  }
-
-  if (kind === "parse-error") {
-    const errorMsg =
-      typeof meta?.error === "string" ? formatForLog(meta.error) : undefined;
-    console.log(
-      [
-        `${chalk.gray("[gws]")} ${chalk.redBright("✗")} ${chalk.bold("parse-error")}`,
-        errorMsg ? `${chalk.dim("error")}=${errorMsg}` : undefined,
-        `${chalk.dim("conn")}=${chalk.gray(shortId(connId ?? "?"))}`,
-      ]
-        .filter((t): t is string => Boolean(t))
-        .join(" "),
-    );
-    return;
-  }
-
-  if (direction !== "out" || kind !== "res") return;
-
-  const startedAt = inflightKey
-    ? wsInflightOptimized.get(inflightKey)
-    : undefined;
-  if (inflightKey) wsInflightOptimized.delete(inflightKey);
-  const durationMs =
-    typeof startedAt === "number" ? Date.now() - startedAt : undefined;
-
-  const shouldLog =
-    ok === false ||
-    (typeof durationMs === "number" && durationMs >= DEFAULT_WS_SLOW_MS);
-  if (!shouldLog) return;
-
-  const statusToken =
-    ok === undefined
-      ? undefined
-      : ok
-        ? chalk.greenBright("✓")
-        : chalk.redBright("✗");
-  const durationToken =
-    typeof durationMs === "number" ? chalk.dim(`${durationMs}ms`) : undefined;
-
-  const restMeta: string[] = [];
-  if (meta) {
-    for (const [key, value] of Object.entries(meta)) {
-      if (value === undefined) continue;
-      if (key === "connId" || key === "id") continue;
-      if (key === "method" || key === "ok") continue;
-      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
-    }
-  }
-
-  const tokens = [
-    `${chalk.gray("[gws]")} ${chalk.yellowBright("⇄")} ${chalk.bold("res")}`,
-    statusToken,
-    method ? chalk.bold(method) : undefined,
-    durationToken,
-    ...restMeta,
-    connId ? `${chalk.dim("conn")}=${chalk.gray(shortId(connId))}` : undefined,
-    id ? `${chalk.dim("id")}=${chalk.gray(shortId(id))}` : undefined,
-  ].filter((t): t is string => Boolean(t));
-
-  console.log(tokens.join(" "));
-}
-
-function logWsCompact(
-  direction: "in" | "out",
-  kind: string,
-  meta?: Record<string, unknown>,
-) {
-  const now = Date.now();
-  const connId = typeof meta?.connId === "string" ? meta.connId : undefined;
-  const id = typeof meta?.id === "string" ? meta.id : undefined;
-  const method = typeof meta?.method === "string" ? meta.method : undefined;
-  const ok = typeof meta?.ok === "boolean" ? meta.ok : undefined;
-  const inflightKey = connId && id ? `${connId}:${id}` : undefined;
-
-  // Pair req/res into a single line (printed on response).
-  if (kind === "req" && direction === "in" && inflightKey) {
-    wsInflightCompact.set(inflightKey, { ts: now, method, meta });
-    return;
-  }
-
-  const compactArrow = (() => {
-    if (kind === "req" || kind === "res") return "⇄";
-    return direction === "in" ? "←" : "→";
-  })();
-  const arrowColor =
-    kind === "req" || kind === "res"
-      ? chalk.yellowBright
-      : direction === "in"
-        ? chalk.greenBright
-        : chalk.cyanBright;
-
-  const prefix = `${chalk.gray("[gws]")} ${arrowColor(compactArrow)} ${chalk.bold(kind)}`;
-
-  const statusToken =
-    kind === "res" && ok !== undefined
-      ? ok
-        ? chalk.greenBright("✓")
-        : chalk.redBright("✗")
-      : undefined;
-
-  const startedAt =
-    kind === "res" && direction === "out" && inflightKey
-      ? wsInflightCompact.get(inflightKey)?.ts
-      : undefined;
-  if (kind === "res" && direction === "out" && inflightKey) {
-    wsInflightCompact.delete(inflightKey);
-  }
-  const durationToken =
-    typeof startedAt === "number"
-      ? chalk.dim(`${now - startedAt}ms`)
-      : undefined;
-
-  const headline =
-    (kind === "req" || kind === "res") && method
-      ? chalk.bold(method)
-      : kind === "event" && typeof meta?.event === "string"
-        ? chalk.bold(meta.event)
-        : undefined;
-
-  const restMeta: string[] = [];
-  if (meta) {
-    for (const [key, value] of Object.entries(meta)) {
-      if (value === undefined) continue;
-      if (key === "connId" || key === "id") continue;
-      if (key === "method" || key === "ok") continue;
-      if (key === "event") continue;
-      restMeta.push(`${chalk.dim(key)}=${formatForLog(value)}`);
-    }
-  }
-
-  const trailing: string[] = [];
-  if (connId && connId !== wsLastCompactConnId) {
-    trailing.push(`${chalk.dim("conn")}=${chalk.gray(shortId(connId))}`);
-    wsLastCompactConnId = connId;
-  }
-  if (id) trailing.push(`${chalk.dim("id")}=${chalk.gray(shortId(id))}`);
-
-  const tokens = [
-    prefix,
-    statusToken,
-    headline,
-    durationToken,
-    ...restMeta,
-    ...trailing,
-  ].filter((t): t is string => Boolean(t));
-
-  console.log(tokens.join(" "));
-}
-
-const UUID_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function shortId(value: string): string {
-  const s = value.trim();
-  if (UUID_RE.test(s)) return `${s.slice(0, 8)}…${s.slice(-4)}`;
-  if (s.length <= 24) return s;
-  return `${s.slice(0, 12)}…${s.slice(-4)}`;
-}
-
-const wsInflightSince = new Map<string, number>();
 
 function formatError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -1468,118 +686,6 @@ export async function startGatewayServer(
     if (!session) return;
     if (session.getStatus() === "running") return;
     wizardSessions.delete(id);
-  };
-
-  const normalizeHookHeaders = (req: IncomingMessage) => {
-    const headers: Record<string, string> = {};
-    for (const [key, value] of Object.entries(req.headers)) {
-      if (typeof value === "string") {
-        headers[key.toLowerCase()] = value;
-      } else if (Array.isArray(value) && value.length > 0) {
-        headers[key.toLowerCase()] = value.join(", ");
-      }
-    }
-    return headers;
-  };
-
-  const normalizeWakePayload = (
-    payload: Record<string, unknown>,
-  ):
-    | { ok: true; value: { text: string; mode: "now" | "next-heartbeat" } }
-    | { ok: false; error: string } => {
-    const text = typeof payload.text === "string" ? payload.text.trim() : "";
-    if (!text) return { ok: false, error: "text required" };
-    const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-    return { ok: true, value: { text, mode } };
-  };
-
-  const normalizeAgentPayload = (
-    payload: Record<string, unknown>,
-  ):
-    | {
-        ok: true;
-        value: {
-          message: string;
-          name: string;
-          wakeMode: "now" | "next-heartbeat";
-          sessionKey: string;
-          deliver: boolean;
-          channel:
-            | "last"
-            | "whatsapp"
-            | "telegram"
-            | "discord"
-            | "signal"
-            | "imessage";
-          to?: string;
-          thinking?: string;
-          timeoutSeconds?: number;
-        };
-      }
-    | { ok: false; error: string } => {
-    const message =
-      typeof payload.message === "string" ? payload.message.trim() : "";
-    if (!message) return { ok: false, error: "message required" };
-    const nameRaw = payload.name;
-    const name =
-      typeof nameRaw === "string" && nameRaw.trim() ? nameRaw.trim() : "Hook";
-    const wakeMode =
-      payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
-    const sessionKeyRaw = payload.sessionKey;
-    const sessionKey =
-      typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()
-        ? sessionKeyRaw.trim()
-        : `hook:${randomUUID()}`;
-    const channelRaw = payload.channel;
-    const channel =
-      channelRaw === "whatsapp" ||
-      channelRaw === "telegram" ||
-      channelRaw === "discord" ||
-      channelRaw === "signal" ||
-      channelRaw === "imessage" ||
-      channelRaw === "last"
-        ? channelRaw
-        : channelRaw === "imsg"
-          ? "imessage"
-          : channelRaw === undefined
-            ? "last"
-            : null;
-    if (channel === null) {
-      return {
-        ok: false,
-        error: "channel must be last|whatsapp|telegram|discord|signal|imessage",
-      };
-    }
-    const toRaw = payload.to;
-    const to =
-      typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
-    const deliver = payload.deliver === true;
-    const thinkingRaw = payload.thinking;
-    const thinking =
-      typeof thinkingRaw === "string" && thinkingRaw.trim()
-        ? thinkingRaw.trim()
-        : undefined;
-    const timeoutRaw = payload.timeoutSeconds;
-    const timeoutSeconds =
-      typeof timeoutRaw === "number" &&
-      Number.isFinite(timeoutRaw) &&
-      timeoutRaw > 0
-        ? Math.floor(timeoutRaw)
-        : undefined;
-    return {
-      ok: true,
-      value: {
-        message,
-        name,
-        wakeMode,
-        sessionKey,
-        deliver,
-        channel,
-        to,
-        thinking,
-        timeoutSeconds,
-      },
-    };
   };
 
   const dispatchWakeHook = (value: {
