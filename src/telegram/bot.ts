@@ -217,6 +217,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               runtime,
               bot,
               replyToMode,
+              textLimit,
             });
           })
           .catch((err) => {
