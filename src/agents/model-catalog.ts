@@ -62,8 +62,14 @@ export async function loadModelCatalog(params?: {
           typeof entry?.reasoning === "boolean" ? entry.reasoning : undefined;
         models.push({ id, name, provider, contextWindow, reasoning });
       }
+
+      if (models.length === 0) {
+        // If we found nothing, don't cache this result so we can try again.
+        modelCatalogPromise = null;
+      }
     } catch {
-      // Leave models empty on discovery errors.
+      // Leave models empty on discovery errors and don't cache.
+      modelCatalogPromise = null;
     }
 
     return models.sort((a, b) => {
