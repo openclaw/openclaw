@@ -1,4 +1,6 @@
 import { html, nothing } from "lit";
+import type { ConfigUiHints } from "../types";
+import { renderConfigForm } from "./config-form";
 
 export type ConfigProps = {
   raw: string;
@@ -7,7 +9,14 @@ export type ConfigProps = {
   loading: boolean;
   saving: boolean;
   connected: boolean;
+  schema: unknown | null;
+  schemaLoading: boolean;
+  uiHints: ConfigUiHints;
+  formMode: "form" | "raw";
+  formValue: Record<string, unknown> | null;
   onRawChange: (next: string) => void;
+  onFormModeChange: (mode: "form" | "raw") => void;
+  onFormPatch: (path: Array<string | number>, value: unknown) => void;
   onReload: () => void;
   onSave: () => void;
 };
@@ -23,6 +32,21 @@ export function renderConfig(props: ConfigProps) {
           <span class="pill">${validity}</span>
         </div>
         <div class="row">
+          <div class="toggle-group">
+            <button
+              class="btn ${props.formMode === "form" ? "primary" : ""}"
+              ?disabled=${props.schemaLoading || !props.schema}
+              @click=${() => props.onFormModeChange("form")}
+            >
+              Form
+            </button>
+            <button
+              class="btn ${props.formMode === "raw" ? "primary" : ""}"
+              @click=${() => props.onFormModeChange("raw")}
+            >
+              Raw
+            </button>
+          </div>
           <button class="btn" ?disabled=${props.loading} @click=${props.onReload}>
             ${props.loading ? "Loading…" : "Reload"}
           </button>
@@ -41,14 +65,25 @@ export function renderConfig(props: ConfigProps) {
         require a gateway restart.
       </div>
 
-      <label class="field" style="margin-top: 12px;">
-        <span>Raw JSON5</span>
-        <textarea
-          .value=${props.raw}
-          @input=${(e: Event) =>
-            props.onRawChange((e.target as HTMLTextAreaElement).value)}
-        ></textarea>
-      </label>
+      ${props.formMode === "form"
+        ? html`<div style="margin-top: 12px;">
+            ${props.schemaLoading
+              ? html`<div class="muted">Loading schema…</div>`
+              : renderConfigForm({
+                  schema: props.schema,
+                  uiHints: props.uiHints,
+                  value: props.formValue,
+                  onPatch: props.onFormPatch,
+                })}
+          </div>`
+        : html`<label class="field" style="margin-top: 12px;">
+            <span>Raw JSON5</span>
+            <textarea
+              .value=${props.raw}
+              @input=${(e: Event) =>
+                props.onRawChange((e.target as HTMLTextAreaElement).value)}
+            ></textarea>
+          </label>`}
 
       ${props.issues.length > 0
         ? html`<div class="callout danger" style="margin-top: 12px;">
@@ -58,4 +93,3 @@ export function renderConfig(props: ConfigProps) {
     </section>
   `;
 }
-

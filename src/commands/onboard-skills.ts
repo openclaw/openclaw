@@ -1,17 +1,9 @@
-import {
-  confirm,
-  multiselect,
-  note,
-  select,
-  spinner,
-  text,
-} from "@clack/prompts";
-
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdisConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { guardCancel, resolveNodeManagerOptions } from "./onboard-helpers.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message
@@ -58,6 +50,7 @@ export async function setupSkills(
   cfg: ClawdisConfig,
   workspaceDir: string,
   runtime: RuntimeEnv,
+  prompter: WizardPrompter,
 ): Promise<ClawdisConfig> {
   const report = buildWorkspaceSkillStatus(workspaceDir, { config: cfg });
   const eligible = report.skills.filter((s) => s.eligible);
@@ -66,7 +59,7 @@ export async function setupSkills(
   );
   const blocked = report.skills.filter((s) => s.blockedByAllowlist);
 
-  note(
+  await prompter.note(
     [
       `Eligible: ${eligible.length}`,
       `Missing requirements: ${missing.length}`,
@@ -75,22 +68,16 @@ export async function setupSkills(
     "Skills status",
   );
 
-  const shouldConfigure = guardCancel(
-    await confirm({
-      message: "Configure skills now? (recommended)",
-      initialValue: true,
-    }),
-    runtime,
-  );
+  const shouldConfigure = await prompter.confirm({
+    message: "Configure skills now? (recommended)",
+    initialValue: true,
+  });
   if (!shouldConfigure) return cfg;
 
-  const nodeManager = guardCancel(
-    await select({
-      message: "Preferred node manager for skill installs",
-      options: resolveNodeManagerOptions(),
-    }),
-    runtime,
-  ) as "npm" | "pnpm" | "bun";
+  const nodeManager = (await prompter.select({
+    message: "Preferred node manager for skill installs",
+    options: resolveNodeManagerOptions(),
+  })) as "npm" | "pnpm" | "bun";
 
   let next: ClawdisConfig = {
     ...cfg,
@@ -107,24 +94,21 @@ export async function setupSkills(
     (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
   );
   if (installable.length > 0) {
-    const toInstall = guardCancel(
-      await multiselect({
-        message: "Install missing skill dependencies",
-        options: [
-          {
-            value: "__skip__",
-            label: "Skip for now",
-            hint: "Continue without installing dependencies",
-          },
-          ...installable.map((skill) => ({
-            value: skill.name,
-            label: `${skill.emoji ?? "🧩"} ${skill.name}`,
-            hint: formatSkillHint(skill),
-          })),
-        ],
-      }),
-      runtime,
-    );
+    const toInstall = await prompter.multiselect({
+      message: "Install missing skill dependencies",
+      options: [
+        {
+          value: "__skip__",
+          label: "Skip for now",
+          hint: "Continue without installing dependencies",
+        },
+        ...installable.map((skill) => ({
+          value: skill.name,
+          label: `${skill.emoji ?? "🧩"} ${skill.name}`,
+          hint: formatSkillHint(skill),
+        })),
+      ],
+    });
 
     const selected = (toInstall as string[]).filter(
       (name) => name !== "__skip__",
@@ -134,8 +118,7 @@ export async function setupSkills(
       if (!target || target.install.length === 0) continue;
       const installId = target.install[0]?.id;
       if (!installId) continue;
-      const spin = spinner();
-      spin.start(`Installing ${name}…`);
+      const spin = prompter.progress(`Installing ${name}…`);
       const result = await installSkill({
         workspaceDir,
         skillName: target.name,
@@ -161,22 +144,16 @@ export async function setupSkills(
 
   for (const skill of missing) {
     if (!skill.primaryEnv || skill.missing.env.length === 0) continue;
-    const wantsKey = guardCancel(
-      await confirm({
-        message: `Set ${skill.primaryEnv} for ${skill.name}?`,
-        initialValue: false,
-      }),
-      runtime,
-    );
+    const wantsKey = await prompter.confirm({
+      message: `Set ${skill.primaryEnv} for ${skill.name}?`,
+      initialValue: false,
+    });
     if (!wantsKey) continue;
     const apiKey = String(
-      guardCancel(
-        await text({
-          message: `Enter ${skill.primaryEnv}`,
-          validate: (value) => (value?.trim() ? undefined : "Required"),
-        }),
-        runtime,
-      ),
+      await prompter.text({
+        message: `Enter ${skill.primaryEnv}`,
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
     );
     next = upsertSkillEntry(next, skill.skillKey, { apiKey: apiKey.trim() });
   }

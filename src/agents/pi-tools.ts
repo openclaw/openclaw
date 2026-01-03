@@ -180,13 +180,13 @@ function cleanSchemaForGemini(schema: unknown): unknown {
       cleaned[key] = cleanSchemaForGemini(value);
     } else if (key === "anyOf" && Array.isArray(value)) {
       // Clean each anyOf variant
-      cleaned[key] = value.map((v) => cleanSchemaForGemini(v));
+      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
     } else if (key === "oneOf" && Array.isArray(value)) {
       // Clean each oneOf variant
-      cleaned[key] = value.map((v) => cleanSchemaForGemini(v));
+      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
     } else if (key === "allOf" && Array.isArray(value)) {
       // Clean each allOf variant
-      cleaned[key] = value.map((v) => cleanSchemaForGemini(v));
+      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
     } else if (
       key === "additionalProperties" &&
       value &&
@@ -265,12 +265,12 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
             .map(([key]) => key)
         : undefined;
 
-  const { anyOf: _unusedAnyOf, ...restSchema } = schema;
+  const nextSchema: Record<string, unknown> = { ...schema };
   return {
     ...tool,
     parameters: cleanSchemaForGemini({
-      ...restSchema,
-      type: "object",
+      ...nextSchema,
+      type: nextSchema.type ?? "object",
       properties:
         Object.keys(mergedProperties).length > 0
           ? mergedProperties

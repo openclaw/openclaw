@@ -86,6 +86,7 @@ struct OnboardingView: View {
     @State var gatewayDiscovery: GatewayDiscoveryModel
     @State var onboardingChatModel: ClawdisChatViewModel
     @State var onboardingSkillsModel = SkillsSettingsModel()
+    @State var onboardingWizard = OnboardingWizardModel()
     @State var didLoadOnboardingSkills = false
     @State var localGatewayProbe: LocalGatewayProbe?
     @Bindable var state: AppState
@@ -95,6 +96,7 @@ struct OnboardingView: View {
     let contentHeight: CGFloat = 460
     let connectionPageIndex = 1
     let anthropicAuthPageIndex = 2
+    let wizardPageIndex = 3
     let onboardingChatPageIndex = 8
 
     static let clipboardPoll: AnyPublisher<Date, Never> = {
@@ -119,7 +121,7 @@ struct OnboardingView: View {
         case .unconfigured:
             needsBootstrap ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            needsBootstrap ? [0, 1, 2, 5, 6, 8, 9] : [0, 1, 2, 5, 6, 9]
+            needsBootstrap ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
         }
     }
 
@@ -133,6 +135,11 @@ struct OnboardingView: View {
     }
 
     var buttonTitle: String { self.currentPage == self.pageCount - 1 ? "Finish" : "Next" }
+    var wizardPageOrderIndex: Int? { self.pageOrder.firstIndex(of: self.wizardPageIndex) }
+    var isWizardBlocking: Bool {
+        self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
+    }
+    var canAdvance: Bool { !self.isWizardBlocking }
     var devLinkCommand: String {
         let bundlePath = Bundle.main.bundlePath
         return "ln -sf '\(bundlePath)/Contents/Resources/Relay/clawdis' /usr/local/bin/clawdis"

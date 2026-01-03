@@ -26,6 +26,7 @@ The dashboard settings panel lets you store a token; passwords are not persisted
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
 - Config: view/edit `~/.clawdis/clawdis.json` (`config.get`, `config.set`)
+- Config schema + form rendering (`config.schema`); Raw JSON editor remains available
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 
 ## Tailnet access (recommended)

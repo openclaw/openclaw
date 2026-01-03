@@ -16,6 +16,7 @@ import {
 } from "./theme-transition";
 import type {
   ConfigSnapshot,
+  ConfigUiHints,
   CronJob,
   CronRunLogEntry,
   CronStatus,
@@ -41,7 +42,11 @@ import {
   type ChatEventPayload,
 } from "./controllers/chat";
 import { loadNodes } from "./controllers/nodes";
-import { loadConfig } from "./controllers/config";
+import {
+  loadConfig,
+  loadConfigSchema,
+  updateConfigFormValue,
+} from "./controllers/config";
 import {
   loadProviders,
   logoutWhatsApp,
@@ -120,6 +125,13 @@ export class ClawdisApp extends LitElement {
   @state() configIssues: unknown[] = [];
   @state() configSaving = false;
   @state() configSnapshot: ConfigSnapshot | null = null;
+  @state() configSchema: unknown | null = null;
+  @state() configSchemaVersion: string | null = null;
+  @state() configSchemaLoading = false;
+  @state() configUiHints: ConfigUiHints = {};
+  @state() configForm: Record<string, unknown> | null = null;
+  @state() configFormDirty = false;
+  @state() configFormMode: "form" | "raw" = "form";
 
   @state() providersLoading = false;
   @state() providersSnapshot: ProvidersStatusSnapshot | null = null;
@@ -447,7 +459,10 @@ export class ClawdisApp extends LitElement {
       await Promise.all([loadChatHistory(this), loadSessions(this)]);
       this.scheduleChatScroll();
     }
-    if (this.tab === "config") await loadConfig(this);
+    if (this.tab === "config") {
+      await loadConfigSchema(this);
+      await loadConfig(this);
+    }
     if (this.tab === "debug") await loadDebug(this);
   }
 

@@ -62,6 +62,7 @@ import {
   validateConfigObject,
   writeConfigFile,
 } from "../config/config.js";
+import { buildConfigSchema } from "../config/schema.js";
 import {
   buildGroupDisplayName,
   loadSessionStore,
@@ -170,6 +171,8 @@ import type { WebProviderStatus } from "../web/auto-reply.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../web/session.js";
+import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { WizardSession } from "../wizard/session.js";
 import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
@@ -392,6 +395,7 @@ import {
   validateChatHistoryParams,
   validateChatSendParams,
   validateConfigGetParams,
+  validateConfigSchemaParams,
   validateConfigSetParams,
   validateConnectParams,
   validateCronAddParams,
@@ -426,6 +430,10 @@ import {
   validateWakeParams,
   validateWebLoginStartParams,
   validateWebLoginWaitParams,
+  validateWizardCancelParams,
+  validateWizardNextParams,
+  validateWizardStartParams,
+  validateWizardStatusParams,
 } from "./protocol/index.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
@@ -504,6 +512,11 @@ const METHODS = [
   "status",
   "config.get",
   "config.set",
+  "config.schema",
+  "wizard.start",
+  "wizard.next",
+  "wizard.cancel",
+  "wizard.status",
   "talk.mode",
   "models.list",
   "skills.status",
@@ -602,6 +615,14 @@ export type GatewayServerOptions = {
    * Test-only: allow canvas host startup even when NODE_ENV/VITEST would disable it.
    */
   allowCanvasHostInTests?: boolean;
+  /**
+   * Test-only: override the onboarding wizard runner.
+   */
+  wizardRunner?: (
+    opts: import("../commands/onboard-types.js").OnboardOptions,
+    runtime: import("../runtime.js").RuntimeEnv,
+    prompter: import("../wizard/prompts.js").WizardPrompter,
+  ) => Promise<void>;
 };
 
 function isLoopbackAddress(ip: string | undefined): boolean {
@@ -1431,6 +1452,23 @@ export async function startGatewayServer(
       `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth or CLAWDIS_GATEWAY_TOKEN)`,
     );
   }
+
+  const wizardRunner = opts.wizardRunner ?? runOnboardingWizard;
+  const wizardSessions = new Map<string, WizardSession>();
+
+  const findRunningWizard = (): string | null => {
+    for (const [id, session] of wizardSessions) {
+      if (session.getStatus() === "running") return id;
+    }
+    return null;
+  };
+
+  const purgeWizardSession = (id: string) => {
+    const session = wizardSessions.get(id);
+    if (!session) return;
+    if (session.getStatus() === "running") return;
+    wizardSessions.delete(id);
+  };
 
   const normalizeHookHeaders = (req: IncomingMessage) => {
     const headers: Record<string, string> = {};
@@ -2800,6 +2838,20 @@ export async function startGatewayServer(
           }
           const snapshot = await readConfigFileSnapshot();
           return { ok: true, payloadJSON: JSON.stringify(snapshot) };
+        }
+        case "config.schema": {
+          const params = parseParams();
+          if (!validateConfigSchemaParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid config.schema params: ${formatValidationErrors(validateConfigSchemaParams.errors)}`,
+              },
+            };
+          }
+          const schema = buildConfigSchema();
+          return { ok: true, payloadJSON: JSON.stringify(schema) };
         }
         case "config.set": {
           const params = parseParams();
@@ -5306,6 +5358,23 @@ export async function startGatewayServer(
               respond(true, snapshot, undefined);
               break;
             }
+            case "config.schema": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateConfigSchemaParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid config.schema params: ${formatValidationErrors(validateConfigSchemaParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const schema = buildConfigSchema();
+              respond(true, schema, undefined);
+              break;
+            }
             case "config.set": {
               const params = (req.params ?? {}) as Record<string, unknown>;
               if (!validateConfigSetParams(params)) {
@@ -5361,6 +5430,171 @@ export async function startGatewayServer(
                 },
                 undefined,
               );
+              break;
+            }
+            case "wizard.start": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateWizardStartParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid wizard.start params: ${formatValidationErrors(validateWizardStartParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const running = findRunningWizard();
+              if (running) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.UNAVAILABLE, "wizard already running"),
+                );
+                break;
+              }
+              const sessionId = randomUUID();
+              const opts = {
+                mode: params.mode as "local" | "remote" | undefined,
+                workspace:
+                  typeof params.workspace === "string"
+                    ? params.workspace
+                    : undefined,
+              };
+              const session = new WizardSession((prompter) =>
+                wizardRunner(opts, defaultRuntime, prompter),
+              );
+              wizardSessions.set(sessionId, session);
+              const result = await session.next();
+              if (result.done) {
+                purgeWizardSession(sessionId);
+              }
+              respond(true, { sessionId, ...result }, undefined);
+              break;
+            }
+            case "wizard.next": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateWizardNextParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid wizard.next params: ${formatValidationErrors(validateWizardNextParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const sessionId = params.sessionId as string;
+              const session = wizardSessions.get(sessionId);
+              if (!session) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
+                );
+                break;
+              }
+              const answer = params.answer as
+                | { stepId?: string; value?: unknown }
+                | undefined;
+              if (answer) {
+                if (session.getStatus() !== "running") {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(
+                      ErrorCodes.INVALID_REQUEST,
+                      "wizard not running",
+                    ),
+                  );
+                  break;
+                }
+                try {
+                  await session.answer(
+                    String(answer.stepId ?? ""),
+                    answer.value,
+                  );
+                } catch (err) {
+                  respond(
+                    false,
+                    undefined,
+                    errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)),
+                  );
+                  break;
+                }
+              }
+              const result = await session.next();
+              if (result.done) {
+                purgeWizardSession(sessionId);
+              }
+              respond(true, result, undefined);
+              break;
+            }
+            case "wizard.cancel": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateWizardCancelParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid wizard.cancel params: ${formatValidationErrors(validateWizardCancelParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const sessionId = params.sessionId as string;
+              const session = wizardSessions.get(sessionId);
+              if (!session) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
+                );
+                break;
+              }
+              session.cancel();
+              const status = {
+                status: session.getStatus(),
+                error: session.getError(),
+              };
+              wizardSessions.delete(sessionId);
+              respond(true, status, undefined);
+              break;
+            }
+            case "wizard.status": {
+              const params = (req.params ?? {}) as Record<string, unknown>;
+              if (!validateWizardStatusParams(params)) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(
+                    ErrorCodes.INVALID_REQUEST,
+                    `invalid wizard.status params: ${formatValidationErrors(validateWizardStatusParams.errors)}`,
+                  ),
+                );
+                break;
+              }
+              const sessionId = params.sessionId as string;
+              const session = wizardSessions.get(sessionId);
+              if (!session) {
+                respond(
+                  false,
+                  undefined,
+                  errorShape(ErrorCodes.INVALID_REQUEST, "wizard not found"),
+                );
+                break;
+              }
+              const status = {
+                status: session.getStatus(),
+                error: session.getError(),
+              };
+              if (status.status !== "running") {
+                wizardSessions.delete(sessionId);
+              }
+              respond(true, status, undefined);
               break;
             }
             case "talk.mode": {

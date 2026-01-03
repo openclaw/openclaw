@@ -152,7 +152,10 @@ vi.mock("../config/sessions.js", async () => {
     }),
   };
 });
-vi.mock("../config/config.js", () => {
+vi.mock("../config/config.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/config.js")>(
+    "../config/config.js",
+  );
   const resolveConfigPath = () =>
     path.join(os.homedir(), ".clawdis", "clawdis.json");
 
@@ -222,6 +225,7 @@ vi.mock("../config/config.js", () => {
   });
 
   return {
+    ...actual,
     CONFIG_PATH_CLAWDIS: resolveConfigPath(),
     STATE_DIR_CLAWDIS: path.dirname(resolveConfigPath()),
     get isNixMode() {
@@ -381,7 +385,10 @@ function onceMessage<T = unknown>(
   });
 }
 
-async function startServerWithClient(token?: string) {
+async function startServerWithClient(
+  token?: string,
+  opts?: Parameters<typeof startGatewayServer>[1],
+) {
   const port = await getFreePort();
   const prev = process.env.CLAWDIS_GATEWAY_TOKEN;
   if (token === undefined) {
@@ -389,7 +396,7 @@ async function startServerWithClient(token?: string) {
   } else {
     process.env.CLAWDIS_GATEWAY_TOKEN = token;
   }
-  const server = await startGatewayServer(port);
+  const server = await startGatewayServer(port, opts);
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise<void>((resolve) => ws.once("open", resolve));
   return { server, ws, port, prevToken: prev };
@@ -2298,6 +2305,110 @@ describe("gateway server", () => {
       await server.close();
     },
   );
+
+  test("config.schema returns schema + hints", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{
+      schema?: { properties?: { gateway?: unknown } };
+      uiHints?: { gateway?: { label?: string } };
+    }>(ws, "config.schema", {});
+    expect(res.ok).toBe(true);
+    expect(res.payload?.schema?.properties?.gateway).toBeTruthy();
+    expect(res.payload?.uiHints?.gateway?.label).toBe("Gateway");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("wizard.start and wizard.next drive steps", async () => {
+    const { server, ws } = await startServerWithClient(undefined, {
+      wizardRunner: async (_opts, _runtime, prompter) => {
+        await prompter.note("Welcome");
+        const name = await prompter.text({ message: "Name" });
+        await prompter.note(`Hello ${name}`);
+      },
+    });
+    await connectOk(ws);
+
+    const startRes = await rpcReq<{
+      sessionId?: string;
+      step?: { id?: string; type?: string };
+    }>(ws, "wizard.start", {});
+    expect(startRes.ok).toBe(true);
+    const sessionId = startRes.payload?.sessionId ?? "";
+    const firstStep = startRes.payload?.step;
+    expect(sessionId).not.toBe("");
+    expect(firstStep?.type).toBe("note");
+
+    const runningRes = await rpcReq(ws, "wizard.start", {});
+    expect(runningRes.ok).toBe(false);
+    expect(runningRes.error?.message).toMatch(/wizard already running/i);
+
+    const nextOne = await rpcReq<{
+      step?: { id?: string; type?: string };
+      done?: boolean;
+    }>(ws, "wizard.next", {
+      sessionId,
+      answer: { stepId: firstStep?.id, value: null },
+    });
+    expect(nextOne.ok).toBe(true);
+    const textStep = nextOne.payload?.step;
+    expect(textStep?.type).toBe("text");
+
+    const nextTwo = await rpcReq<{
+      step?: { id?: string; type?: string };
+      done?: boolean;
+    }>(ws, "wizard.next", {
+      sessionId,
+      answer: { stepId: textStep?.id, value: "Peter" },
+    });
+    expect(nextTwo.ok).toBe(true);
+    const finalStep = nextTwo.payload?.step;
+    expect(finalStep?.type).toBe("note");
+
+    const done = await rpcReq<{
+      done?: boolean;
+      status?: string;
+    }>(ws, "wizard.next", {
+      sessionId,
+      answer: { stepId: finalStep?.id, value: null },
+    });
+    expect(done.ok).toBe(true);
+    expect(done.payload?.done).toBe(true);
+    expect(done.payload?.status).toBe("done");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("wizard.cancel ends the session", async () => {
+    const { server, ws } = await startServerWithClient(undefined, {
+      wizardRunner: async (_opts, _runtime, prompter) => {
+        await prompter.note("Welcome");
+        await prompter.text({ message: "Name" });
+      },
+    });
+    await connectOk(ws);
+
+    const startRes = await rpcReq<{
+      sessionId?: string;
+      step?: { id?: string; type?: string };
+    }>(ws, "wizard.start", {});
+    expect(startRes.ok).toBe(true);
+    const sessionId = startRes.payload?.sessionId ?? "";
+    expect(sessionId).not.toBe("");
+
+    const cancelRes = await rpcReq<{ status?: string }>(ws, "wizard.cancel", {
+      sessionId,
+    });
+    expect(cancelRes.ok).toBe(true);
+    expect(cancelRes.payload?.status).toBe("cancelled");
+
+    ws.close();
+    await server.close();
+  });
 
   test("providers.status returns snapshot without probe", async () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;

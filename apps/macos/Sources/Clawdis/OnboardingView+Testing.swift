@@ -47,6 +47,7 @@ extension OnboardingView {
         _ = view.welcomePage()
         _ = view.connectionPage()
         _ = view.anthropicAuthPage()
+        _ = view.wizardPage()
         _ = view.permissionsPage()
         _ = view.cliPage()
         _ = view.workspacePage()

@@ -58,7 +58,7 @@ import {
 } from "./controllers/skills";
 import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
-import { loadConfig, saveConfig } from "./controllers/config";
+import { loadConfig, saveConfig, updateConfigFormValue } from "./controllers/config";
 import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
 
@@ -95,6 +95,11 @@ export type AppViewState = {
   configIssues: unknown[];
   configSaving: boolean;
   configSnapshot: ConfigSnapshot | null;
+  configSchema: unknown | null;
+  configSchemaLoading: boolean;
+  configUiHints: Record<string, unknown>;
+  configForm: Record<string, unknown> | null;
+  configFormMode: "form" | "raw";
   providersLoading: boolean;
   providersSnapshot: ProvidersStatusSnapshot | null;
   providersError: string | null;
@@ -392,7 +397,14 @@ export function renderApp(state: AppViewState) {
               loading: state.configLoading,
               saving: state.configSaving,
               connected: state.connected,
+              schema: state.configSchema,
+              schemaLoading: state.configSchemaLoading,
+              uiHints: state.configUiHints,
+              formMode: state.configFormMode,
+              formValue: state.configForm,
               onRawChange: (next) => (state.configRaw = next),
+              onFormModeChange: (mode) => (state.configFormMode = mode),
+              onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
               onReload: () => loadConfig(state),
               onSave: () => saveConfig(state),
             })

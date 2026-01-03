@@ -24,6 +24,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import { createClackPrompter } from "../wizard/clack-prompter.js";
 import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
@@ -419,6 +420,7 @@ export async function runConfigureWizard(
   intro(
     opts.command === "update" ? "Clawdis update wizard" : "Clawdis configure",
   );
+  const prompter = createClackPrompter();
 
   const snapshot = await readConfigFileSnapshot();
   let baseConfig: ClawdisConfig = snapshot.valid ? snapshot.config : {};
@@ -490,7 +492,7 @@ export async function runConfigureWizard(
   ) as "local" | "remote";
 
   if (mode === "remote") {
-    let remoteConfig = await promptRemoteGatewayConfig(baseConfig, runtime);
+    let remoteConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
     remoteConfig = applyWizardMetadata(remoteConfig, {
       command: opts.command,
       mode,
@@ -565,7 +567,7 @@ export async function runConfigureWizard(
   }
 
   if (selected.includes("providers")) {
-    nextConfig = await setupProviders(nextConfig, runtime, {
+    nextConfig = await setupProviders(nextConfig, runtime, prompter, {
       allowDisable: true,
       allowSignalInstall: true,
     });
@@ -573,7 +575,7 @@ export async function runConfigureWizard(
 
   if (selected.includes("skills")) {
     const wsDir = resolveUserPath(workspaceDir);
-    nextConfig = await setupSkills(nextConfig, wsDir, runtime);
+    nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
   }
 
   nextConfig = applyWizardMetadata(nextConfig, {

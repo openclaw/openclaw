@@ -46,6 +46,10 @@ extension OnboardingView {
                 self.currentPage = max(0, self.pageOrder.count - 1)
             }
         }
+        .onChange(of: self.onboardingWizard.isComplete) { _, newValue in
+            guard newValue, self.activePageIndex == self.wizardPageIndex else { return }
+            self.handleNext()
+        }
         .onDisappear {
             self.stopPermissionMonitoring()
             self.stopDiscovery()
@@ -81,6 +85,7 @@ extension OnboardingView {
     }
 
     var navigationBar: some View {
+        let wizardLockIndex = self.wizardPageOrderIndex
         HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -107,6 +112,7 @@ extension OnboardingView {
 
             HStack(spacing: 8) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
+                    let isLocked = wizardLockIndex != nil && !self.onboardingWizard.isComplete && index > (wizardLockIndex ?? 0)
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {
@@ -115,6 +121,8 @@ extension OnboardingView {
                             .frame(width: 8, height: 8)
                     }
                     .buttonStyle(.plain)
+                    .disabled(isLocked)
+                    .opacity(isLocked ? 0.3 : 1)
                 }
             }
 
@@ -126,6 +134,7 @@ extension OnboardingView {
             }
             .keyboardShortcut(.return)
             .buttonStyle(.borderedProminent)
+            .disabled(!self.canAdvance)
         }
         .padding(.horizontal, 28)
         .padding(.bottom, 13)

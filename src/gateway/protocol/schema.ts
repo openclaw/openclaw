@@ -342,6 +342,157 @@ export const ConfigSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const ConfigSchemaParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
+
+export const ConfigUiHintSchema = Type.Object(
+  {
+    label: Type.Optional(Type.String()),
+    help: Type.Optional(Type.String()),
+    group: Type.Optional(Type.String()),
+    order: Type.Optional(Type.Integer()),
+    advanced: Type.Optional(Type.Boolean()),
+    sensitive: Type.Optional(Type.Boolean()),
+    placeholder: Type.Optional(Type.String()),
+    itemTemplate: Type.Optional(Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const ConfigSchemaResponseSchema = Type.Object(
+  {
+    schema: Type.Unknown(),
+    uiHints: Type.Record(Type.String(), ConfigUiHintSchema),
+    version: NonEmptyString,
+    generatedAt: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const WizardStartParamsSchema = Type.Object(
+  {
+    mode: Type.Optional(
+      Type.Union([Type.Literal("local"), Type.Literal("remote")]),
+    ),
+    workspace: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardAnswerSchema = Type.Object(
+  {
+    stepId: NonEmptyString,
+    value: Type.Optional(Type.Unknown()),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardNextParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    answer: Type.Optional(WizardAnswerSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardCancelParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const WizardStatusParamsSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const WizardStepOptionSchema = Type.Object(
+  {
+    value: Type.Unknown(),
+    label: NonEmptyString,
+    hint: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardStepSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    type: Type.Union([
+      Type.Literal("note"),
+      Type.Literal("select"),
+      Type.Literal("text"),
+      Type.Literal("confirm"),
+      Type.Literal("multiselect"),
+      Type.Literal("progress"),
+      Type.Literal("action"),
+    ]),
+    title: Type.Optional(Type.String()),
+    message: Type.Optional(Type.String()),
+    options: Type.Optional(Type.Array(WizardStepOptionSchema)),
+    initialValue: Type.Optional(Type.Unknown()),
+    placeholder: Type.Optional(Type.String()),
+    sensitive: Type.Optional(Type.Boolean()),
+    executor: Type.Optional(
+      Type.Union([Type.Literal("gateway"), Type.Literal("client")]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardNextResultSchema = Type.Object(
+  {
+    done: Type.Boolean(),
+    step: Type.Optional(WizardStepSchema),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("running"),
+        Type.Literal("done"),
+        Type.Literal("cancelled"),
+        Type.Literal("error"),
+      ]),
+    ),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardStartResultSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    done: Type.Boolean(),
+    step: Type.Optional(WizardStepSchema),
+    status: Type.Optional(
+      Type.Union([
+        Type.Literal("running"),
+        Type.Literal("done"),
+        Type.Literal("cancelled"),
+        Type.Literal("error"),
+      ]),
+    ),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
+export const WizardStatusResultSchema = Type.Object(
+  {
+    status: Type.Union([
+      Type.Literal("running"),
+      Type.Literal("done"),
+      Type.Literal("cancelled"),
+      Type.Literal("error"),
+    ]),
+    error: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const TalkModeParamsSchema = Type.Object(
   {
     enabled: Type.Boolean(),
@@ -680,6 +831,16 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   SessionsCompactParams: SessionsCompactParamsSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
+  ConfigSchemaParams: ConfigSchemaParamsSchema,
+  ConfigSchemaResponse: ConfigSchemaResponseSchema,
+  WizardStartParams: WizardStartParamsSchema,
+  WizardNextParams: WizardNextParamsSchema,
+  WizardCancelParams: WizardCancelParamsSchema,
+  WizardStatusParams: WizardStatusParamsSchema,
+  WizardStep: WizardStepSchema,
+  WizardNextResult: WizardNextResultSchema,
+  WizardStartResult: WizardStartResultSchema,
+  WizardStatusResult: WizardStatusResultSchema,
   TalkModeParams: TalkModeParamsSchema,
   ProvidersStatusParams: ProvidersStatusParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
@@ -737,6 +898,16 @@ export type SessionsDeleteParams = Static<typeof SessionsDeleteParamsSchema>;
 export type SessionsCompactParams = Static<typeof SessionsCompactParamsSchema>;
 export type ConfigGetParams = Static<typeof ConfigGetParamsSchema>;
 export type ConfigSetParams = Static<typeof ConfigSetParamsSchema>;
+export type ConfigSchemaParams = Static<typeof ConfigSchemaParamsSchema>;
+export type ConfigSchemaResponse = Static<typeof ConfigSchemaResponseSchema>;
+export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
+export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
+export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;
+export type WizardStatusParams = Static<typeof WizardStatusParamsSchema>;
+export type WizardStep = Static<typeof WizardStepSchema>;
+export type WizardNextResult = Static<typeof WizardNextResultSchema>;
+export type WizardStartResult = Static<typeof WizardStartResultSchema>;
+export type WizardStatusResult = Static<typeof WizardStatusResultSchema>;
 export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
 export type ProvidersStatusParams = Static<typeof ProvidersStatusParamsSchema>;
 export type WebLoginStartParams = Static<typeof WebLoginStartParamsSchema>;
