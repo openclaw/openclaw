@@ -529,6 +529,41 @@ Use `/model` to switch without restarting:
 
 **Tip:** `/model` is processed at the gateway level — it works even if you're rate-limited (429) on the current model!
 
+### How do I stop/cancel a running task?
+
+Send `/stop` to immediately abort the current agent run. Other stop words also work:
+- `/stop`
+- `/abort`
+- `/esc`
+- `/exit`
+
+For background processes (like Codex), use:
+```
+process action:kill sessionId:XXX
+```
+
+You can also configure `routing.queue.mode` to control how new messages interact with running tasks:
+- `steer` — New messages redirect the current task
+- `interrupt` — Kills current run, starts fresh
+- `collect` — Queues messages for after
+
+### Does Codex CLI use my ChatGPT Pro subscription or API credits?
+
+**Both are supported!** Codex CLI can auth via:
+
+1. **Browser OAuth** → Uses your ChatGPT Pro/Plus subscription (no per-token cost)
+   ```bash
+   codex auth
+   # Opens browser, log in with your ChatGPT account
+   ```
+
+2. **API key** → Pay-per-token via OpenAI API billing
+   ```bash
+   export OPENAI_API_KEY="sk-..."
+   ```
+
+If you have a ChatGPT subscription, use browser auth to avoid API charges!
+
 ### How do rapid-fire messages work?
 
 Use `/queue` to control how messages sent in quick succession are handled:
