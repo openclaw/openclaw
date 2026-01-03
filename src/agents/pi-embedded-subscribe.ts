@@ -12,6 +12,7 @@ import {
   extractAssistantText,
   inferToolMetaFromArgs,
 } from "./pi-embedded-utils.js";
+import { logVerbose } from "../globals.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
 const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
@@ -200,6 +201,9 @@ export function subscribeEmbeddedPiSession(params: {
         const args = (evt as AgentEvent & { args: unknown }).args;
         const meta = inferToolMetaFromArgs(toolName, args);
         toolMetaById.set(toolCallId, meta);
+        logVerbose(
+          `embedded run tool start: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+        );
 
         emitAgentEvent({
           runId: params.runId,
@@ -440,9 +444,26 @@ export function subscribeEmbeddedPiSession(params: {
         }
       }
 
+      if (evt.type === "tool_execution_end") {
+        const toolName = String(
+          (evt as AgentEvent & { toolName: string }).toolName,
+        );
+        const toolCallId = String(
+          (evt as AgentEvent & { toolCallId: string }).toolCallId,
+        );
+        logVerbose(
+          `embedded run tool end: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+        );
+      }
+
+      if (evt.type === "agent_start") {
+        logVerbose(`embedded run agent start: runId=${params.runId}`);
+      }
+
       if (evt.type === "auto_compaction_start") {
         compactionInFlight = true;
         ensureCompactionPromise();
+        logVerbose(`embedded run compaction start: runId=${params.runId}`);
       }
 
       if (evt.type === "auto_compaction_end") {
@@ -451,12 +472,14 @@ export function subscribeEmbeddedPiSession(params: {
         if (willRetry) {
           noteCompactionRetry();
           resetForCompactionRetry();
+          logVerbose(`embedded run compaction retry: runId=${params.runId}`);
         } else {
           maybeResolveCompactionWait();
         }
       }
 
       if (evt.type === "agent_end") {
+        logVerbose(`embedded run agent end: runId=${params.runId}`);
         toolDebouncer.flush();
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();

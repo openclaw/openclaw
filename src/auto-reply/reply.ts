@@ -782,17 +782,41 @@ export async function getReplyFromConfig(
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const typingIntervalMs = typingIntervalSeconds * 1000;
+  const typingTtlMs = Math.min(
+    Math.max(15_000, typingIntervalMs * 5),
+    60_000,
+  );
   const cleanupTyping = () => {
+    if (typingTtlTimer) {
+      clearTimeout(typingTtlTimer);
+      typingTtlTimer = undefined;
+    }
     if (typingTimer) {
       clearInterval(typingTimer);
       typingTimer = undefined;
     }
+  };
+  let typingTtlTimer: NodeJS.Timeout | undefined;
+  const refreshTypingTtl = () => {
+    if (!typingIntervalMs || typingIntervalMs <= 0) return;
+    if (typingTtlMs <= 0) return;
+    if (typingTtlTimer) {
+      clearTimeout(typingTtlTimer);
+    }
+    typingTtlTimer = setTimeout(() => {
+      if (!typingTimer) return;
+      defaultRuntime.warn?.(
+        `typing TTL reached (${typingTtlMs}ms); stopping typing indicator`,
+      );
+      cleanupTyping();
+    }, typingTtlMs);
   };
   const startTypingLoop = async () => {
     if (!opts?.onReplyStart) return;
     if (typingIntervalMs <= 0) return;
     if (typingTimer) return;
     await onReplyStart();
+    refreshTypingTtl();
     typingTimer = setInterval(() => {
       void triggerTyping();
     }, typingIntervalMs);
@@ -801,6 +825,7 @@ export async function getReplyFromConfig(
     const trimmed = text?.trim();
     if (!trimmed) return;
     if (trimmed === SILENT_REPLY_TOKEN) return;
+    refreshTypingTtl();
     await startTypingLoop();
   };
   let transcribedText: string | undefined;

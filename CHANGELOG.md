@@ -19,6 +19,7 @@
 - Thinking: default to low for reasoning-capable models when no /think or config default is set.
 - Logging: decouple file log levels from console verbosity; verbose-only details are captured when `logging.level` is debug/trace.
 - Build: fix regex literal in tool-meta path detection (watch build error).
+- Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
 
 ### Docs
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.

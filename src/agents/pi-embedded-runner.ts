@@ -25,12 +25,14 @@ import {
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdisConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
+import { defaultRuntime } from "../runtime.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveClawdisAgentDir } from "./agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -376,12 +378,16 @@ export async function runEmbeddedPiAgent(params: {
       const apiKey = await getApiKeyForModel(model, authStorage);
       authStorage.setRuntimeApiKey(model.provider, apiKey);
 
-      const thinkingLevel = mapThinkingLevel(params.thinkLevel);
+        const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
-      await fs.mkdir(resolvedWorkspace, { recursive: true });
-      await ensureSessionHeader({
-        sessionFile: params.sessionFile,
-        sessionId: params.sessionId,
+        logVerbose(
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
+        );
+
+        await fs.mkdir(resolvedWorkspace, { recursive: true });
+        await ensureSessionHeader({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
         cwd: resolvedWorkspace,
       });
 
@@ -503,12 +509,21 @@ export async function runEmbeddedPiAgent(params: {
           enforceFinalTag: params.enforceFinalTag,
         });
 
-        const abortTimer = setTimeout(
-          () => {
-            abortRun();
-          },
-          Math.max(1, params.timeoutMs),
-        );
+        let abortWarnTimer: NodeJS.Timeout | undefined;
+        const abortTimer = setTimeout(() => {
+          defaultRuntime.warn?.(
+            `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
+          );
+          abortRun();
+          if (!abortWarnTimer) {
+            abortWarnTimer = setTimeout(() => {
+              if (!session.isStreaming) return;
+              defaultRuntime.warn?.(
+                `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
+              );
+            }, 10_000);
+          }
+        }, Math.max(1, params.timeoutMs));
 
         let messagesSnapshot: AgentMessage[] = [];
         let sessionIdUsed = session.sessionId;
@@ -526,16 +541,28 @@ export async function runEmbeddedPiAgent(params: {
         }
         let promptError: unknown = null;
         try {
+          const promptStartedAt = Date.now();
+          logVerbose(
+            `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
+          );
           try {
             await session.prompt(params.prompt);
           } catch (err) {
             promptError = err;
+          } finally {
+            logVerbose(
+              `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+            );
           }
           await waitForCompactionRetry();
           messagesSnapshot = session.messages.slice();
           sessionIdUsed = session.sessionId;
         } finally {
           clearTimeout(abortTimer);
+          if (abortWarnTimer) {
+            clearTimeout(abortWarnTimer);
+            abortWarnTimer = undefined;
+          }
           unsubscribe();
           flushToolDebouncer();
           if (ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === queueHandle) {
@@ -613,6 +640,9 @@ export async function runEmbeddedPiAgent(params: {
               p.text || p.mediaUrl || (p.mediaUrls && p.mediaUrls.length > 0),
           );
 
+        logVerbose(
+          `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
+        );
         return {
           payloads: payloads.length ? payloads : undefined,
           meta: {
