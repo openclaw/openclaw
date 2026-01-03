@@ -1,21 +1,31 @@
 import {
   createServer as createHttpServer,
-  type IncomingMessage,
   type Server as HttpServer,
+  type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { type WebSocketServer } from "ws";
+import type { WebSocketServer } from "ws";
 import { handleA2uiHttpRequest } from "../canvas-host/a2ui.js";
 import type { CanvasHostHandler } from "../canvas-host/server.js";
-import { type HooksConfigResolved, extractHookToken, normalizeAgentPayload, normalizeHookHeaders, normalizeWakePayload, readJsonBody } from "./hooks.js";
-import { applyHookMappings } from "./hooks-mapping.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
 import type { createSubsystemLogger } from "../logging.js";
+import { handleControlUiHttpRequest } from "./control-ui.js";
+import {
+  extractHookToken,
+  type HooksConfigResolved,
+  normalizeAgentPayload,
+  normalizeHookHeaders,
+  normalizeWakePayload,
+  readJsonBody,
+} from "./hooks.js";
+import { applyHookMappings } from "./hooks-mapping.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type HookDispatchers = {
-  dispatchWakeHook: (value: { text: string; mode: "now" | "next-heartbeat" }) => void;
+  dispatchWakeHook: (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+  }) => void;
   dispatchAgentHook: (value: {
     message: string;
     name: string;
@@ -46,13 +56,22 @@ export type HooksRequestHandler = (
   res: ServerResponse,
 ) => Promise<boolean>;
 
-export function createHooksRequestHandler(opts: {
-  hooksConfig: HooksConfigResolved | null;
-  bindHost: string;
-  port: number;
-  logHooks: SubsystemLogger;
-} & HookDispatchers): HooksRequestHandler {
-  const { hooksConfig, bindHost, port, logHooks, dispatchAgentHook, dispatchWakeHook } = opts;
+export function createHooksRequestHandler(
+  opts: {
+    hooksConfig: HooksConfigResolved | null;
+    bindHost: string;
+    port: number;
+    logHooks: SubsystemLogger;
+  } & HookDispatchers,
+): HooksRequestHandler {
+  const {
+    hooksConfig,
+    bindHost,
+    port,
+    logHooks,
+    dispatchAgentHook,
+    dispatchWakeHook,
+  } = opts;
   return async (req, res) => {
     if (!hooksConfig) return false;
     const url = new URL(req.url ?? "/", `http://${bindHost}:${port}`);
@@ -97,7 +116,9 @@ export function createHooksRequestHandler(opts: {
     const headers = normalizeHookHeaders(req);
 
     if (subPath === "wake") {
-      const normalized = normalizeWakePayload(payload as Record<string, unknown>);
+      const normalized = normalizeWakePayload(
+        payload as Record<string, unknown>,
+      );
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -108,7 +129,9 @@ export function createHooksRequestHandler(opts: {
     }
 
     if (subPath === "agent") {
-      const normalized = normalizeAgentPayload(payload as Record<string, unknown>);
+      const normalized = normalizeAgentPayload(
+        payload as Record<string, unknown>,
+      );
       if (!normalized.ok) {
         sendJson(res, 400, { ok: false, error: normalized.error });
         return true;
@@ -178,8 +201,12 @@ export function createGatewayHttpServer(opts: {
   controlUiBasePath: string;
   handleHooksRequest: HooksRequestHandler;
 }): HttpServer {
-  const { canvasHost, controlUiEnabled, controlUiBasePath, handleHooksRequest } =
-    opts;
+  const {
+    canvasHost,
+    controlUiEnabled,
+    controlUiBasePath,
+    handleHooksRequest,
+  } = opts;
   const httpServer: HttpServer = createHttpServer((req, res) => {
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
     if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;

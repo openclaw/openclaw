@@ -1,17 +1,17 @@
 import type { ClawdisConfig } from "../config/config.js";
-import { shouldLogVerbose } from "../globals.js";
-import type { createSubsystemLogger } from "../logging.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { monitorDiscordProvider } from "../discord/index.js";
 import { probeDiscord } from "../discord/probe.js";
+import { shouldLogVerbose } from "../globals.js";
 import { monitorIMessageProvider } from "../imessage/index.js";
+import type { createSubsystemLogger } from "../logging.js";
+import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { monitorSignalProvider } from "../signal/index.js";
-import { resolveTelegramToken } from "../telegram/token.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { probeTelegram } from "../telegram/probe.js";
-import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
-import { readWebSelfId } from "../web/session.js";
+import { resolveTelegramToken } from "../telegram/token.js";
 import type { WebProviderStatus } from "../web/auto-reply.js";
+import { readWebSelfId } from "../web/session.js";
 import { formatError } from "./server-utils.js";
 
 export type TelegramRuntimeStatus = {
@@ -245,7 +245,9 @@ export function createProviderManager(
         lastError: "disabled",
       };
       if (shouldLogVerbose()) {
-        logTelegram.debug("telegram provider disabled (telegram.enabled=false)");
+        logTelegram.debug(
+          "telegram provider disabled (telegram.enabled=false)",
+        );
       }
       return;
     }

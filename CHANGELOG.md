@@ -24,6 +24,8 @@
 - Agent tools: scope the Discord tool to Discord surface runs.
 - Agent tools: format verbose tool summaries without brackets, with unique emojis and `tool: detail` style.
 - Gateway: split server helpers/tests into hooks/session-utils/ws-log/net modules for better isolation; add unit coverage for hooks/session utils/ws log.
+- Gateway: extract WS method handling + HTTP/provider/constant helpers to shrink server wiring and improve testability.
+- Onboarding: fix Control UI basePath usage when showing/opening gateway URLs.
 - macOS Connections: move to sidebar + detail layout with structured sections and header actions.
 - macOS onboarding: increase window height so the permissions page fits without scrolling.
 - Thinking: default to low for reasoning-capable models when no /think or config default is set.

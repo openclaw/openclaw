@@ -504,7 +504,7 @@ export async function runOnboardingWizard(
       const links = resolveControlUiLinks({
         bind,
         port,
-        basePath: config.gateway?.controlUi?.basePath,
+        basePath: baseConfig.gateway?.controlUi?.basePath,
       });
       const tokenParam =
         authMode === "token" && gatewayToken
@@ -530,7 +530,7 @@ export async function runOnboardingWizard(
     const links = resolveControlUiLinks({
       bind,
       port,
-      basePath: config.gateway?.controlUi?.basePath,
+      basePath: baseConfig.gateway?.controlUi?.basePath,
     });
     const tokenParam =
       authMode === "token" && gatewayToken
