@@ -380,9 +380,9 @@ export async function runEmbeddedPiAgent(params: {
 
       const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
-      logVerbose(
-        `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
-      );
+        defaultRuntime.log?.(
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
+        );
 
       await fs.mkdir(resolvedWorkspace, { recursive: true });
       await ensureSessionHeader({
@@ -545,7 +545,7 @@ export async function runEmbeddedPiAgent(params: {
         let promptError: unknown = null;
         try {
           const promptStartedAt = Date.now();
-          logVerbose(
+          defaultRuntime.log?.(
             `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
           );
           try {
@@ -553,7 +553,7 @@ export async function runEmbeddedPiAgent(params: {
           } catch (err) {
             promptError = err;
           } finally {
-            logVerbose(
+            defaultRuntime.log?.(
               `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
             );
           }
@@ -643,7 +643,7 @@ export async function runEmbeddedPiAgent(params: {
               p.text || p.mediaUrl || (p.mediaUrls && p.mediaUrls.length > 0),
           );
 
-        logVerbose(
+        defaultRuntime.log?.(
           `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
         );
         return {
