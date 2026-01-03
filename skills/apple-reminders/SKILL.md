@@ -11,8 +11,8 @@ Use `memo rem` to manage Apple Reminders directly from the terminal. Create, com
 
 Setup
 - Install (Homebrew): `brew tap antoniorodr/memo && brew install antoniorodr/memo/memo`
-- Alternative (pip): `pip install memo` (after cloning the repo)
-- macOS-only; requires Automation/Accessibility permissions for Reminders.app.
+- Manual (pip): `pip install .` (after cloning the repo)
+- macOS-only; if prompted, grant Automation access to Reminders.app.
 
 View Reminders
 - List all reminders: `memo rem`
@@ -39,5 +39,5 @@ Examples
 Notes
 - macOS-only.
 - Requires Apple Reminders.app to be accessible.
-- For automation, grant appropriate permissions in System Settings > Privacy & Security.
+- For automation, grant permissions in System Settings > Privacy & Security > Automation.
 - The `memo` CLI shares the same installation for both Notes and Reminders functionality.
