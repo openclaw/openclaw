@@ -1,19 +1,28 @@
 ---
 name: spotify-player
-description: Terminal Spotify client (TUI + CLI commands) for playback and search.
+description: Terminal Spotify playback/search via spogo (preferred) or spotify_player.
 homepage: https://www.spotify.com
-metadata: {"clawdis":{"emoji":"🎵","requires":{"bins":["spotify_player"]},"install":[{"id":"brew","kind":"brew","formula":"spotify_player","bins":["spotify_player"],"label":"Install spotify-player (brew)"}]}}
+metadata: {"clawdis":{"emoji":"🎵","requires":{"anyBins":["spogo","spotify_player"]},"install":[{"id":"brew","kind":"brew","formula":"spogo","tap":"steipete/tap","bins":["spogo"],"label":"Install spogo (brew)"},{"id":"brew","kind":"brew","formula":"spotify_player","bins":["spotify_player"],"label":"Install spotify_player (brew)"}]}}
 ---
 
-# spotify_player
+# spogo / spotify_player
 
-Use `spotify_player` for Spotify playback/search in the terminal.
+Use `spogo` **(preferred)** for Spotify playback/search. Fall back to `spotify_player` if needed.
 
 Requirements
 - Spotify Premium account.
-- First-time auth: `spotify_player authenticate`.
+- Either `spogo` or `spotify_player` installed.
+
+spogo setup
+- Import cookies: `spogo auth import --browser chrome`
 
 Common CLI commands
+- Search: `spogo search track "query"`
+- Playback: `spogo play|pause|next|prev`
+- Devices: `spogo device list`, `spogo device set "<name|id>"`
+- Status: `spogo status`
+
+spotify_player commands (fallback)
 - Search: `spotify_player search "query"`
 - Playback: `spotify_player playback play|pause|next|previous`
 - Connect device: `spotify_player connect`
