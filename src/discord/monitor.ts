@@ -10,6 +10,7 @@ import {
   type Guild,
   type Message,
   type MessageReaction,
+  MessageType,
   type PartialMessage,
   type PartialMessageReaction,
   Partials,
@@ -214,6 +215,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         );
       }
 
+      if (
+        isGuildMessage &&
+        (message.type === MessageType.ChatInputCommand ||
+          message.type === MessageType.ContextMenuCommand)
+      ) {
+        logVerbose("discord: drop channel command message");
+        return;
+      }
+
       const guildInfo = isGuildMessage
         ? resolveDiscordGuildEntry({
             guild: message.guild,
@@ -337,6 +347,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           );
           return;
         }
+      }
+
+      const systemText = resolveDiscordSystemEvent(message);
+      if (systemText) {
+        enqueueSystemEvent(systemText, {
+          contextKey: `discord:system:${message.channelId}:${message.id}`,
+        });
+        return;
       }
 
       const media = await resolveMedia(message, mediaMaxBytes);
@@ -876,6 +894,76 @@ function buildGuildLabel(message: Message) {
   const channelName =
     "name" in message.channel ? message.channel.name : message.channelId;
   return `${message.guild?.name ?? "Guild"} #${channelName} id:${message.channelId}`;
+}
+
+function resolveDiscordSystemEvent(message: Message): string | null {
+  switch (message.type) {
+    case MessageType.ChannelPinnedMessage:
+      return buildDiscordSystemEvent(message, "pinned a message");
+    case MessageType.RecipientAdd:
+      return buildDiscordSystemEvent(message, "added a recipient");
+    case MessageType.RecipientRemove:
+      return buildDiscordSystemEvent(message, "removed a recipient");
+    case MessageType.UserJoin:
+      return buildDiscordSystemEvent(message, "user joined");
+    case MessageType.GuildBoost:
+      return buildDiscordSystemEvent(message, "boosted the server");
+    case MessageType.GuildBoostTier1:
+      return buildDiscordSystemEvent(
+        message,
+        "boosted the server (Tier 1 reached)",
+      );
+    case MessageType.GuildBoostTier2:
+      return buildDiscordSystemEvent(
+        message,
+        "boosted the server (Tier 2 reached)",
+      );
+    case MessageType.GuildBoostTier3:
+      return buildDiscordSystemEvent(
+        message,
+        "boosted the server (Tier 3 reached)",
+      );
+    case MessageType.ThreadCreated:
+      return buildDiscordSystemEvent(message, "created a thread");
+    case MessageType.AutoModerationAction:
+      return buildDiscordSystemEvent(message, "auto moderation action");
+    case MessageType.GuildIncidentAlertModeEnabled:
+      return buildDiscordSystemEvent(message, "raid protection enabled");
+    case MessageType.GuildIncidentAlertModeDisabled:
+      return buildDiscordSystemEvent(message, "raid protection disabled");
+    case MessageType.GuildIncidentReportRaid:
+      return buildDiscordSystemEvent(message, "raid reported");
+    case MessageType.GuildIncidentReportFalseAlarm:
+      return buildDiscordSystemEvent(message, "raid report marked false alarm");
+    case MessageType.StageStart:
+      return buildDiscordSystemEvent(message, "stage started");
+    case MessageType.StageEnd:
+      return buildDiscordSystemEvent(message, "stage ended");
+    case MessageType.StageSpeaker:
+      return buildDiscordSystemEvent(message, "stage speaker updated");
+    case MessageType.StageTopic:
+      return buildDiscordSystemEvent(message, "stage topic updated");
+    case MessageType.PollResult:
+      return buildDiscordSystemEvent(message, "poll results posted");
+    case MessageType.PurchaseNotification:
+      return buildDiscordSystemEvent(message, "purchase notification");
+    default:
+      return null;
+  }
+}
+
+function buildDiscordSystemEvent(message: Message, action: string) {
+  const channelName =
+    "name" in message.channel ? message.channel.name : message.channelId;
+  const channelType = message.channel.type as ChannelType;
+  const location = message.guild?.name
+    ? `${message.guild.name} #${channelName}`
+    : channelType === ChannelType.GroupDM
+      ? `Group DM #${channelName}`
+      : "DM";
+  const authorLabel = message.author?.tag ?? message.author?.username;
+  const actor = authorLabel ? `${authorLabel} ` : "";
+  return `Discord system: ${actor}${action} in ${location}`;
 }
 
 function formatDiscordReactionEmoji(
