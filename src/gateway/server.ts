@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
-import {
-  createServer as createHttpServer,
-  type Server as HttpServer,
-  type IncomingMessage,
-} from "node:http";
+import { type Server as HttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import chalk from "chalk";
@@ -31,10 +27,7 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
-import {
-  CANVAS_HOST_PATH,
-  handleA2uiHttpRequest,
-} from "../canvas-host/a2ui.js";
+import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import {
   type CanvasHostHandler,
   type CanvasHostServer,
@@ -73,17 +66,11 @@ import {
 import { CronService } from "../cron/service.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
-import {
-  monitorDiscordProvider,
-  sendMessageDiscord,
-} from "../discord/index.js";
+import { sendMessageDiscord } from "../discord/index.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
-import {
-  monitorIMessageProvider,
-  sendMessageIMessage,
-} from "../imessage/index.js";
+import { sendMessageIMessage } from "../imessage/index.js";
 import { type IMessageProbe, probeIMessage } from "../imessage/probe.js";
 import {
   clearAgentRunContext,
@@ -134,11 +121,7 @@ import {
   enableTailscaleServe,
   getTailnetHostname,
 } from "../infra/tailscale.js";
-import {
-  defaultVoiceWakeTriggers,
-  loadVoiceWakeConfig,
-  setVoiceWakeTriggers,
-} from "../infra/voicewake.js";
+import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../infra/voicewake.js";
 import {
   WIDE_AREA_DISCOVERY_DOMAIN,
   writeWideAreaBridgeZone,
@@ -152,16 +135,14 @@ import {
 } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import { runExec } from "../process/exec.js";
-import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
+import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
-import { monitorSignalProvider, sendMessageSignal } from "../signal/index.js";
+import { sendMessageSignal } from "../signal/index.js";
 import { probeSignal, type SignalProbe } from "../signal/probe.js";
-import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
 import { sendMessageTelegram } from "../telegram/send.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164, resolveUserPath } from "../utils.js";
-import type { WebProviderStatus } from "../web/auto-reply.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import { sendMessageWhatsApp } from "../web/outbound.js";
 import { getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../web/session.js";
@@ -173,16 +154,8 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
-import {
-  extractHookToken,
-  normalizeAgentPayload,
-  normalizeHookHeaders,
-  normalizeWakePayload,
-  readJsonBody,
-  resolveHooksConfig,
-} from "./hooks.js";
-import { applyHookMappings } from "./hooks-mapping.js";
+import { normalizeControlUiBasePath } from "./control-ui.js";
+import { resolveHooksConfig } from "./hooks.js";
 import {
   isLoopbackAddress,
   isLoopbackHost,
@@ -199,18 +172,15 @@ import {
   type SessionsPatchResult,
 } from "./session-utils.js";
 import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
+import {
+  attachGatewayUpgradeHandler,
+  createGatewayHttpServer,
+  createHooksRequestHandler,
+} from "./server-http.js";
+import { createProviderManager } from "./server-providers.js";
+import { formatError, normalizeVoiceWakeTriggers } from "./server-utils.js";
 
 ensureClawdisCliOnPath();
-
-function sendJson(
-  res: import("node:http").ServerResponse,
-  status: number,
-  body: unknown,
-) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
 
 const log = createSubsystemLogger("gateway");
 const logCanvas = log.child("canvas");
@@ -474,7 +444,7 @@ export type GatewayServerOptions = {
    */
   host?: string;
   /**
-   * If false, do not serve the browser Control UI under /ui/.
+   * If false, do not serve the browser Control UI.
    * Default: config `gateway.controlUi.enabled` (or true when absent).
    */
   controlUiEnabled?: boolean;
@@ -538,34 +508,6 @@ type DedupeEntry = {
   error?: ErrorShape;
 };
 
-function normalizeVoiceWakeTriggers(input: unknown): string[] {
-  const raw = Array.isArray(input) ? input : [];
-  const cleaned = raw
-    .map((v) => (typeof v === "string" ? v.trim() : ""))
-    .filter((v) => v.length > 0)
-    .slice(0, 32)
-    .map((v) => v.slice(0, 64));
-  return cleaned.length > 0 ? cleaned : defaultVoiceWakeTriggers();
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  const statusValue = (err as { status?: unknown })?.status;
-  const codeValue = (err as { code?: unknown })?.code;
-  const statusText =
-    typeof statusValue === "string" || typeof statusValue === "number"
-      ? String(statusValue)
-      : undefined;
-  const codeText =
-    typeof codeValue === "string" || typeof codeValue === "number"
-      ? String(codeValue)
-      : undefined;
-  if (statusText || codeText)
-    return `status=${statusText ?? "unknown"} code=${codeText ?? "unknown"}`;
-  return JSON.stringify(err, null, 2);
-}
-
 async function refreshHealthSnapshot(_opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
@@ -622,6 +564,9 @@ export async function startGatewayServer(
   }
   const controlUiEnabled =
     opts.controlUiEnabled ?? cfgAtStart.gateway?.controlUi?.enabled ?? true;
+  const controlUiBasePath = normalizeControlUiBasePath(
+    cfgAtStart.gateway?.controlUi?.basePath,
+  );
   const authBase = cfgAtStart.gateway?.auth ?? {};
   const authOverrides = opts.auth ?? {};
   const authConfig = {
@@ -715,6 +660,9 @@ export async function startGatewayServer(
     thinking?: string;
     timeoutSeconds?: number;
   }) => {
+    const sessionKey = value.sessionKey.trim()
+      ? value.sessionKey.trim()
+      : `hook:${randomUUID()}`;
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -747,7 +695,7 @@ export async function startGatewayServer(
           deps,
           job,
           message: value.message,
-          sessionKey: value.sessionKey,
+          sessionKey,
           lane: "cron",
         });
         const summary =
@@ -792,153 +740,20 @@ export async function startGatewayServer(
     }
   }
 
-  const handleHooksRequest = async (
-    req: IncomingMessage,
-    res: import("node:http").ServerResponse,
-  ): Promise<boolean> => {
-    if (!hooksConfig) return false;
-    const url = new URL(req.url ?? "/", `http://${bindHost}:${port}`);
-    const basePath = hooksConfig.basePath;
-    if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
-      return false;
-    }
+  const handleHooksRequest = createHooksRequestHandler({
+    hooksConfig,
+    bindHost,
+    port,
+    logHooks,
+    dispatchAgentHook,
+    dispatchWakeHook,
+  });
 
-    const token = extractHookToken(req, url);
-    if (!token || token !== hooksConfig.token) {
-      res.statusCode = 401;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Unauthorized");
-      return true;
-    }
-
-    if (req.method !== "POST") {
-      res.statusCode = 405;
-      res.setHeader("Allow", "POST");
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Method Not Allowed");
-      return true;
-    }
-
-    const subPath = url.pathname.slice(basePath.length).replace(/^\/+/, "");
-    if (!subPath) {
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not Found");
-      return true;
-    }
-
-    const body = await readJsonBody(req, hooksConfig.maxBodyBytes);
-    if (!body.ok) {
-      const status = body.error === "payload too large" ? 413 : 400;
-      sendJson(res, status, { ok: false, error: body.error });
-      return true;
-    }
-
-    const payload =
-      typeof body.value === "object" && body.value !== null ? body.value : {};
-    const headers = normalizeHookHeaders(req);
-
-    if (subPath === "wake") {
-      const normalized = normalizeWakePayload(
-        payload as Record<string, unknown>,
-      );
-      if (!normalized.ok) {
-        sendJson(res, 400, { ok: false, error: normalized.error });
-        return true;
-      }
-      dispatchWakeHook(normalized.value);
-      sendJson(res, 200, { ok: true, mode: normalized.value.mode });
-      return true;
-    }
-
-    if (subPath === "agent") {
-      const normalized = normalizeAgentPayload(
-        payload as Record<string, unknown>,
-      );
-      if (!normalized.ok) {
-        sendJson(res, 400, { ok: false, error: normalized.error });
-        return true;
-      }
-      const runId = dispatchAgentHook(normalized.value);
-      sendJson(res, 202, { ok: true, runId });
-      return true;
-    }
-
-    if (hooksConfig.mappings.length > 0) {
-      try {
-        const mapped = await applyHookMappings(hooksConfig.mappings, {
-          payload: payload as Record<string, unknown>,
-          headers,
-          url,
-          path: subPath,
-        });
-        if (mapped) {
-          if (!mapped.ok) {
-            sendJson(res, 400, { ok: false, error: mapped.error });
-            return true;
-          }
-          if (mapped.action === null) {
-            res.statusCode = 204;
-            res.end();
-            return true;
-          }
-          if (mapped.action.kind === "wake") {
-            dispatchWakeHook({
-              text: mapped.action.text,
-              mode: mapped.action.mode,
-            });
-            sendJson(res, 200, { ok: true, mode: mapped.action.mode });
-            return true;
-          }
-          const runId = dispatchAgentHook({
-            message: mapped.action.message,
-            name: mapped.action.name ?? "Hook",
-            wakeMode: mapped.action.wakeMode,
-            sessionKey: mapped.action.sessionKey ?? `hook:${randomUUID()}`,
-            deliver: mapped.action.deliver === true,
-            channel: mapped.action.channel ?? "last",
-            to: mapped.action.to,
-            thinking: mapped.action.thinking,
-            timeoutSeconds: mapped.action.timeoutSeconds,
-          });
-          sendJson(res, 202, { ok: true, runId });
-          return true;
-        }
-      } catch (err) {
-        logHooks.warn(`hook mapping failed: ${String(err)}`);
-        sendJson(res, 500, { ok: false, error: "hook mapping failed" });
-        return true;
-      }
-    }
-
-    res.statusCode = 404;
-    res.setHeader("Content-Type", "text/plain; charset=utf-8");
-    res.end("Not Found");
-    return true;
-  };
-
-  const httpServer: HttpServer = createHttpServer((req, res) => {
-    // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
-    if (String(req.headers.upgrade ?? "").toLowerCase() === "websocket") return;
-
-    void (async () => {
-      if (await handleHooksRequest(req, res)) return;
-      if (canvasHost) {
-        if (await handleA2uiHttpRequest(req, res)) return;
-        if (await canvasHost.handleHttpRequest(req, res)) return;
-      }
-      if (controlUiEnabled) {
-        if (handleControlUiHttpRequest(req, res)) return;
-      }
-
-      res.statusCode = 404;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end("Not Found");
-    })().catch((err) => {
-      res.statusCode = 500;
-      res.setHeader("Content-Type", "text/plain; charset=utf-8");
-      res.end(String(err));
-    });
+  const httpServer: HttpServer = createGatewayHttpServer({
+    canvasHost,
+    controlUiEnabled,
+    controlUiBasePath,
+    handleHooksRequest,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: Awaited<ReturnType<typeof startNodeBridgeServer>> | null = null;
@@ -989,12 +804,7 @@ export async function startGatewayServer(
     noServer: true,
     maxPayload: MAX_PAYLOAD_BYTES,
   });
-  httpServer.on("upgrade", (req, socket, head) => {
-    if (canvasHost?.handleUpgrade(req, socket, head)) return;
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  });
+  attachGatewayUpgradeHandler({ httpServer, wss, canvasHost });
   let whatsappAbort: AbortController | null = null;
   let telegramAbort: AbortController | null = null;
   let discordAbort: AbortController | null = null;
@@ -1005,68 +815,6 @@ export async function startGatewayServer(
   let discordTask: Promise<unknown> | null = null;
   let signalTask: Promise<unknown> | null = null;
   let imessageTask: Promise<unknown> | null = null;
-  let whatsappRuntime: WebProviderStatus = {
-    running: false,
-    connected: false,
-    reconnectAttempts: 0,
-    lastConnectedAt: null,
-    lastDisconnect: null,
-    lastMessageAt: null,
-    lastEventAt: null,
-    lastError: null,
-  };
-  let telegramRuntime: {
-    running: boolean;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
-    mode?: "webhook" | "polling" | null;
-  } = {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    mode: null,
-  };
-  let discordRuntime: {
-    running: boolean;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
-  } = {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-  };
-  let signalRuntime: {
-    running: boolean;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
-    baseUrl?: string | null;
-  } = {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    baseUrl: null,
-  };
-  let imessageRuntime: {
-    running: boolean;
-    lastStartAt?: number | null;
-    lastStopAt?: number | null;
-    lastError?: string | null;
-    cliPath?: string | null;
-    dbPath?: string | null;
-  } = {
-    running: false,
-    lastStartAt: null,
-    lastStopAt: null,
-    lastError: null,
-    cliPath: null,
-    dbPath: null,
-  };
   const clients = new Set<Client>();
   let seq = 0;
   // Track per-run sequence to detect out-of-order/lost agent events.
@@ -1190,494 +938,34 @@ export async function startGatewayServer(
     },
   });
 
-  const updateWhatsAppStatus = (next: WebProviderStatus) => {
-    whatsappRuntime = next;
-  };
-
-  const startWhatsAppProvider = async () => {
-    if (whatsappTask) return;
-    const cfg = loadConfig();
-    if (cfg.web?.enabled === false) {
-      whatsappRuntime = {
-        ...whatsappRuntime,
-        running: false,
-        connected: false,
-        lastError: "disabled",
-      };
-      logWhatsApp.info("skipping provider start (web.enabled=false)");
-      return;
-    }
-    if (!(await webAuthExists())) {
-      whatsappRuntime = {
-        ...whatsappRuntime,
-        running: false,
-        connected: false,
-        lastError: "not linked",
-      };
-      logWhatsApp.info("skipping provider start (no linked session)");
-      return;
-    }
-    const { e164, jid } = readWebSelfId();
-    const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
-    logWhatsApp.info(`starting provider (${identity})`);
-    whatsappAbort = new AbortController();
-    whatsappRuntime = {
-      ...whatsappRuntime,
-      running: true,
-      connected: false,
-      lastError: null,
-    };
-    const task = monitorWebProvider(
-      shouldLogVerbose(),
-      undefined,
-      true,
-      undefined,
-      whatsappRuntimeEnv,
-      whatsappAbort.signal,
-      { statusSink: updateWhatsAppStatus },
-    )
-      .catch((err) => {
-        whatsappRuntime = {
-          ...whatsappRuntime,
-          lastError: formatError(err),
-        };
-        logWhatsApp.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        whatsappAbort = null;
-        whatsappTask = null;
-        whatsappRuntime = {
-          ...whatsappRuntime,
-          running: false,
-          connected: false,
-        };
-      });
-    whatsappTask = task;
-  };
-
-  const stopWhatsAppProvider = async () => {
-    if (!whatsappAbort && !whatsappTask) return;
-    whatsappAbort?.abort();
-    try {
-      await whatsappTask;
-    } catch {
-      // ignore
-    }
-    whatsappAbort = null;
-    whatsappTask = null;
-    whatsappRuntime = {
-      ...whatsappRuntime,
-      running: false,
-      connected: false,
-    };
-  };
-
-  const startTelegramProvider = async () => {
-    if (telegramTask) return;
-    const cfg = loadConfig();
-    if (cfg.telegram?.enabled === false) {
-      telegramRuntime = {
-        ...telegramRuntime,
-        running: false,
-        lastError: "disabled",
-      };
-      if (shouldLogVerbose()) {
-        logTelegram.debug(
-          "telegram provider disabled (telegram.enabled=false)",
-        );
-      }
-      return;
-    }
-    const { token: telegramToken } = resolveTelegramToken(cfg, {
-      logMissingFile: (message) => logTelegram.warn(message),
-    });
-    if (!telegramToken.trim()) {
-      telegramRuntime = {
-        ...telegramRuntime,
-        running: false,
-        lastError: "not configured",
-      };
-      // keep quiet by default; this is a normal state
-      if (shouldLogVerbose()) {
-        logTelegram.debug(
-          "telegram provider not configured (no TELEGRAM_BOT_TOKEN)",
-        );
-      }
-      return;
-    }
-    let telegramBotLabel = "";
-    try {
-      const probe = await probeTelegram(
-        telegramToken.trim(),
-        2500,
-        cfg.telegram?.proxy,
-      );
-      const username = probe.ok ? probe.bot?.username?.trim() : null;
-      if (username) telegramBotLabel = ` (@${username})`;
-    } catch (err) {
-      if (shouldLogVerbose()) {
-        logTelegram.debug(`bot probe failed: ${String(err)}`);
-      }
-    }
-    logTelegram.info(
-      `starting provider${telegramBotLabel}${cfg.telegram ? "" : " (no telegram config; token via env)"}`,
-    );
-    telegramAbort = new AbortController();
-    telegramRuntime = {
-      ...telegramRuntime,
-      running: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-      mode: cfg.telegram?.webhookUrl ? "webhook" : "polling",
-    };
-    const task = monitorTelegramProvider({
-      token: telegramToken.trim(),
-      runtime: telegramRuntimeEnv,
-      abortSignal: telegramAbort.signal,
-      useWebhook: Boolean(cfg.telegram?.webhookUrl),
-      webhookUrl: cfg.telegram?.webhookUrl,
-      webhookSecret: cfg.telegram?.webhookSecret,
-      webhookPath: cfg.telegram?.webhookPath,
-    })
-      .catch((err) => {
-        telegramRuntime = {
-          ...telegramRuntime,
-          lastError: formatError(err),
-        };
-        logTelegram.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        telegramAbort = null;
-        telegramTask = null;
-        telegramRuntime = {
-          ...telegramRuntime,
-          running: false,
-          lastStopAt: Date.now(),
-        };
-      });
-    telegramTask = task;
-  };
-
-  const stopTelegramProvider = async () => {
-    if (!telegramAbort && !telegramTask) return;
-    telegramAbort?.abort();
-    try {
-      await telegramTask;
-    } catch {
-      // ignore
-    }
-    telegramAbort = null;
-    telegramTask = null;
-    telegramRuntime = {
-      ...telegramRuntime,
-      running: false,
-      lastStopAt: Date.now(),
-    };
-  };
-
-  const startDiscordProvider = async () => {
-    if (discordTask) return;
-    const cfg = loadConfig();
-    if (cfg.discord?.enabled === false) {
-      discordRuntime = {
-        ...discordRuntime,
-        running: false,
-        lastError: "disabled",
-      };
-      if (shouldLogVerbose()) {
-        logDiscord.debug("discord provider disabled (discord.enabled=false)");
-      }
-      return;
-    }
-    const discordToken =
-      process.env.DISCORD_BOT_TOKEN ?? cfg.discord?.token ?? "";
-    if (!discordToken.trim()) {
-      discordRuntime = {
-        ...discordRuntime,
-        running: false,
-        lastError: "not configured",
-      };
-      // keep quiet by default; this is a normal state
-      if (shouldLogVerbose()) {
-        logDiscord.debug(
-          "discord provider not configured (no DISCORD_BOT_TOKEN)",
-        );
-      }
-      return;
-    }
-    let discordBotLabel = "";
-    try {
-      const probe = await probeDiscord(discordToken.trim(), 2500);
-      const username = probe.ok ? probe.bot?.username?.trim() : null;
-      if (username) discordBotLabel = ` (@${username})`;
-    } catch (err) {
-      if (shouldLogVerbose()) {
-        logDiscord.debug(`bot probe failed: ${String(err)}`);
-      }
-    }
-    logDiscord.info(
-      `starting provider${discordBotLabel}${cfg.discord ? "" : " (no discord config; token via env)"}`,
-    );
-    discordAbort = new AbortController();
-    discordRuntime = {
-      ...discordRuntime,
-      running: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-    };
-    const task = monitorDiscordProvider({
-      token: discordToken.trim(),
-      runtime: discordRuntimeEnv,
-      abortSignal: discordAbort.signal,
-      slashCommand: cfg.discord?.slashCommand,
-      mediaMaxMb: cfg.discord?.mediaMaxMb,
-      historyLimit: cfg.discord?.historyLimit,
-    })
-      .catch((err) => {
-        discordRuntime = {
-          ...discordRuntime,
-          lastError: formatError(err),
-        };
-        logDiscord.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        discordAbort = null;
-        discordTask = null;
-        discordRuntime = {
-          ...discordRuntime,
-          running: false,
-          lastStopAt: Date.now(),
-        };
-      });
-    discordTask = task;
-  };
-
-  const stopDiscordProvider = async () => {
-    if (!discordAbort && !discordTask) return;
-    discordAbort?.abort();
-    try {
-      await discordTask;
-    } catch {
-      // ignore
-    }
-    discordAbort = null;
-    discordTask = null;
-    discordRuntime = {
-      ...discordRuntime,
-      running: false,
-      lastStopAt: Date.now(),
-    };
-  };
-
-  const startSignalProvider = async () => {
-    if (signalTask) return;
-    const cfg = loadConfig();
-    if (!cfg.signal) {
-      signalRuntime = {
-        ...signalRuntime,
-        running: false,
-        lastError: "not configured",
-      };
-      // keep quiet by default; this is a normal state
-      if (shouldLogVerbose()) {
-        logSignal.debug("signal provider not configured (no signal config)");
-      }
-      return;
-    }
-    if (cfg.signal?.enabled === false) {
-      signalRuntime = {
-        ...signalRuntime,
-        running: false,
-        lastError: "disabled",
-      };
-      if (shouldLogVerbose()) {
-        logSignal.debug("signal provider disabled (signal.enabled=false)");
-      }
-      return;
-    }
-    const signalCfg = cfg.signal;
-    const signalMeaningfullyConfigured = Boolean(
-      signalCfg.account?.trim() ||
-        signalCfg.httpUrl?.trim() ||
-        signalCfg.cliPath?.trim() ||
-        signalCfg.httpHost?.trim() ||
-        typeof signalCfg.httpPort === "number" ||
-        typeof signalCfg.autoStart === "boolean",
-    );
-    if (!signalMeaningfullyConfigured) {
-      signalRuntime = {
-        ...signalRuntime,
-        running: false,
-        lastError: "not configured",
-      };
-      // keep quiet by default; this is a normal state
-      if (shouldLogVerbose()) {
-        logSignal.debug(
-          "signal provider not configured (signal config present but missing required fields)",
-        );
-      }
-      return;
-    }
-    const host = cfg.signal?.httpHost?.trim() || "127.0.0.1";
-    const port = cfg.signal?.httpPort ?? 8080;
-    const baseUrl = cfg.signal?.httpUrl?.trim() || `http://${host}:${port}`;
-    logSignal.info(`starting provider (${baseUrl})`);
-    signalAbort = new AbortController();
-    signalRuntime = {
-      ...signalRuntime,
-      running: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-      baseUrl,
-    };
-    const task = monitorSignalProvider({
-      baseUrl,
-      account: cfg.signal?.account,
-      cliPath: cfg.signal?.cliPath,
-      httpHost: cfg.signal?.httpHost,
-      httpPort: cfg.signal?.httpPort,
-      autoStart: cfg.signal?.autoStart,
-      receiveMode: cfg.signal?.receiveMode,
-      ignoreAttachments: cfg.signal?.ignoreAttachments,
-      ignoreStories: cfg.signal?.ignoreStories,
-      sendReadReceipts: cfg.signal?.sendReadReceipts,
-      allowFrom: cfg.signal?.allowFrom,
-      mediaMaxMb: cfg.signal?.mediaMaxMb,
-      runtime: signalRuntimeEnv,
-      abortSignal: signalAbort.signal,
-    })
-      .catch((err) => {
-        signalRuntime = {
-          ...signalRuntime,
-          lastError: formatError(err),
-        };
-        logSignal.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        signalAbort = null;
-        signalTask = null;
-        signalRuntime = {
-          ...signalRuntime,
-          running: false,
-          lastStopAt: Date.now(),
-        };
-      });
-    signalTask = task;
-  };
-
-  const stopSignalProvider = async () => {
-    if (!signalAbort && !signalTask) return;
-    signalAbort?.abort();
-    try {
-      await signalTask;
-    } catch {
-      // ignore
-    }
-    signalAbort = null;
-    signalTask = null;
-    signalRuntime = {
-      ...signalRuntime,
-      running: false,
-      lastStopAt: Date.now(),
-    };
-  };
-
-  const startIMessageProvider = async () => {
-    if (imessageTask) return;
-    const cfg = loadConfig();
-    if (!cfg.imessage) {
-      imessageRuntime = {
-        ...imessageRuntime,
-        running: false,
-        lastError: "not configured",
-      };
-      // keep quiet by default; this is a normal state
-      if (shouldLogVerbose()) {
-        logIMessage.debug(
-          "imessage provider not configured (no imessage config)",
-        );
-      }
-      return;
-    }
-    if (cfg.imessage?.enabled === false) {
-      imessageRuntime = {
-        ...imessageRuntime,
-        running: false,
-        lastError: "disabled",
-      };
-      if (shouldLogVerbose()) {
-        logIMessage.debug(
-          "imessage provider disabled (imessage.enabled=false)",
-        );
-      }
-      return;
-    }
-    const cliPath = cfg.imessage?.cliPath?.trim() || "imsg";
-    const dbPath = cfg.imessage?.dbPath?.trim();
-    logIMessage.info(
-      `starting provider (${cliPath}${dbPath ? ` db=${dbPath}` : ""})`,
-    );
-    imessageAbort = new AbortController();
-    imessageRuntime = {
-      ...imessageRuntime,
-      running: true,
-      lastStartAt: Date.now(),
-      lastError: null,
-      cliPath,
-      dbPath: dbPath ?? null,
-    };
-    const task = monitorIMessageProvider({
-      cliPath,
-      dbPath,
-      allowFrom: cfg.imessage?.allowFrom,
-      includeAttachments: cfg.imessage?.includeAttachments,
-      mediaMaxMb: cfg.imessage?.mediaMaxMb,
-      runtime: imessageRuntimeEnv,
-      abortSignal: imessageAbort.signal,
-    })
-      .catch((err) => {
-        imessageRuntime = {
-          ...imessageRuntime,
-          lastError: formatError(err),
-        };
-        logIMessage.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        imessageAbort = null;
-        imessageTask = null;
-        imessageRuntime = {
-          ...imessageRuntime,
-          running: false,
-          lastStopAt: Date.now(),
-        };
-      });
-    imessageTask = task;
-  };
-
-  const stopIMessageProvider = async () => {
-    if (!imessageAbort && !imessageTask) return;
-    imessageAbort?.abort();
-    try {
-      await imessageTask;
-    } catch {
-      // ignore
-    }
-    imessageAbort = null;
-    imessageTask = null;
-    imessageRuntime = {
-      ...imessageRuntime,
-      running: false,
-      lastStopAt: Date.now(),
-    };
-  };
-
-  const startProviders = async () => {
-    await startWhatsAppProvider();
-    await startDiscordProvider();
-    await startTelegramProvider();
-    await startSignalProvider();
-    await startIMessageProvider();
-  };
+  const providerManager = createProviderManager({
+    loadConfig,
+    logWhatsApp,
+    logTelegram,
+    logDiscord,
+    logSignal,
+    logIMessage,
+    whatsappRuntimeEnv,
+    telegramRuntimeEnv,
+    discordRuntimeEnv,
+    signalRuntimeEnv,
+    imessageRuntimeEnv,
+  });
+  const {
+    getRuntimeSnapshot,
+    startProviders,
+    startWhatsAppProvider,
+    stopWhatsAppProvider,
+    startTelegramProvider,
+    stopTelegramProvider,
+    startDiscordProvider,
+    stopDiscordProvider,
+    startSignalProvider,
+    stopSignalProvider,
+    startIMessageProvider,
+    stopIMessageProvider,
+    markWhatsAppLoggedOut,
+  } = providerManager;
 
   const broadcast = (
     event: string,
@@ -3775,6 +3063,7 @@ export async function startGatewayServer(
               const linked = await webAuthExists();
               const authAgeMs = getWebAuthAgeMs();
               const self = readWebSelfId();
+              const runtime = getRuntimeSnapshot();
 
               respond(
                 true,
@@ -3785,54 +3074,54 @@ export async function startGatewayServer(
                     linked,
                     authAgeMs,
                     self,
-                    running: whatsappRuntime.running,
-                    connected: whatsappRuntime.connected,
-                    lastConnectedAt: whatsappRuntime.lastConnectedAt ?? null,
-                    lastDisconnect: whatsappRuntime.lastDisconnect ?? null,
-                    reconnectAttempts: whatsappRuntime.reconnectAttempts,
-                    lastMessageAt: whatsappRuntime.lastMessageAt ?? null,
-                    lastEventAt: whatsappRuntime.lastEventAt ?? null,
-                    lastError: whatsappRuntime.lastError ?? null,
+                    running: runtime.whatsapp.running,
+                    connected: runtime.whatsapp.connected,
+                    lastConnectedAt: runtime.whatsapp.lastConnectedAt ?? null,
+                    lastDisconnect: runtime.whatsapp.lastDisconnect ?? null,
+                    reconnectAttempts: runtime.whatsapp.reconnectAttempts,
+                    lastMessageAt: runtime.whatsapp.lastMessageAt ?? null,
+                    lastEventAt: runtime.whatsapp.lastEventAt ?? null,
+                    lastError: runtime.whatsapp.lastError ?? null,
                   },
                   telegram: {
                     configured: telegramEnabled && Boolean(telegramToken),
                     tokenSource,
-                    running: telegramRuntime.running,
-                    mode: telegramRuntime.mode ?? null,
-                    lastStartAt: telegramRuntime.lastStartAt ?? null,
-                    lastStopAt: telegramRuntime.lastStopAt ?? null,
-                    lastError: telegramRuntime.lastError ?? null,
+                    running: runtime.telegram.running,
+                    mode: runtime.telegram.mode ?? null,
+                    lastStartAt: runtime.telegram.lastStartAt ?? null,
+                    lastStopAt: runtime.telegram.lastStopAt ?? null,
+                    lastError: runtime.telegram.lastError ?? null,
                     probe: telegramProbe,
                     lastProbeAt,
                   },
                   discord: {
                     configured: discordEnabled && Boolean(discordToken),
                     tokenSource: discordTokenSource,
-                    running: discordRuntime.running,
-                    lastStartAt: discordRuntime.lastStartAt ?? null,
-                    lastStopAt: discordRuntime.lastStopAt ?? null,
-                    lastError: discordRuntime.lastError ?? null,
+                    running: runtime.discord.running,
+                    lastStartAt: runtime.discord.lastStartAt ?? null,
+                    lastStopAt: runtime.discord.lastStopAt ?? null,
+                    lastError: runtime.discord.lastError ?? null,
                     probe: discordProbe,
                     lastProbeAt: discordLastProbeAt,
                   },
                   signal: {
                     configured: signalConfigured,
                     baseUrl: signalBaseUrl,
-                    running: signalRuntime.running,
-                    lastStartAt: signalRuntime.lastStartAt ?? null,
-                    lastStopAt: signalRuntime.lastStopAt ?? null,
-                    lastError: signalRuntime.lastError ?? null,
+                    running: runtime.signal.running,
+                    lastStartAt: runtime.signal.lastStartAt ?? null,
+                    lastStopAt: runtime.signal.lastStopAt ?? null,
+                    lastError: runtime.signal.lastError ?? null,
                     probe: signalProbe,
                     lastProbeAt: signalLastProbeAt,
                   },
                   imessage: {
                     configured: imessageConfigured,
-                    running: imessageRuntime.running,
-                    lastStartAt: imessageRuntime.lastStartAt ?? null,
-                    lastStopAt: imessageRuntime.lastStopAt ?? null,
-                    lastError: imessageRuntime.lastError ?? null,
-                    cliPath: imessageRuntime.cliPath ?? null,
-                    dbPath: imessageRuntime.dbPath ?? null,
+                    running: runtime.imessage.running,
+                    lastStartAt: runtime.imessage.lastStartAt ?? null,
+                    lastStopAt: runtime.imessage.lastStopAt ?? null,
+                    lastError: runtime.imessage.lastError ?? null,
+                    cliPath: runtime.imessage.cliPath ?? null,
+                    dbPath: runtime.imessage.dbPath ?? null,
                     probe: imessageProbe,
                     lastProbeAt: imessageLastProbeAt,
                   },
@@ -4361,12 +3650,7 @@ export async function startGatewayServer(
               try {
                 await stopWhatsAppProvider();
                 const cleared = await logoutWeb(defaultRuntime);
-                whatsappRuntime = {
-                  ...whatsappRuntime,
-                  running: false,
-                  connected: false,
-                  lastError: cleared ? "logged out" : whatsappRuntime.lastError,
-                };
+                markWhatsAppLoggedOut(cleared);
                 respond(true, { cleared }, undefined);
               } catch (err) {
                 respond(
@@ -6363,8 +5647,9 @@ export async function startGatewayServer(
       }
       const host = await getTailnetHostname().catch(() => null);
       if (host) {
+        const uiPath = controlUiBasePath ? `${controlUiBasePath}/` : "/";
         logTailscale.info(
-          `${tailscaleMode} enabled: https://${host}/ui/ (WS via wss://${host})`,
+          `${tailscaleMode} enabled: https://${host}${uiPath} (WS via wss://${host})`,
         );
       } else {
         logTailscale.info(`${tailscaleMode} enabled`);

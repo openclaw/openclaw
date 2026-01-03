@@ -4,16 +4,28 @@ import { defineConfig } from "vite";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
-export default defineConfig({
-  base: "/",
-  build: {
-    outDir: path.resolve(here, "../dist/control-ui"),
-    emptyOutDir: true,
-    sourcemap: true,
-  },
-  server: {
-    host: true,
-    port: 5173,
-    strictPort: true,
-  },
+function normalizeBase(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "/";
+  if (trimmed === "./") return "./";
+  if (trimmed.endsWith("/")) return trimmed;
+  return `${trimmed}/`;
+}
+
+export default defineConfig(({ command }) => {
+  const envBase = process.env.CLAWDIS_CONTROL_UI_BASE_PATH?.trim();
+  const base = envBase ? normalizeBase(envBase) : "/";
+  return {
+    base,
+    build: {
+      outDir: path.resolve(here, "../dist/control-ui"),
+      emptyOutDir: true,
+      sourcemap: true,
+    },
+    server: {
+      host: true,
+      port: 5173,
+      strictPort: true,
+    },
+  };
 });

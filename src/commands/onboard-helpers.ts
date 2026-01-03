@@ -13,6 +13,7 @@ import type { ClawdisConfig } from "../config/config.js";
 import { CONFIG_PATH_CLAWDIS } from "../config/config.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -221,6 +222,7 @@ export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 export function resolveControlUiLinks(params: {
   port: number;
   bind?: "auto" | "lan" | "tailnet" | "loopback";
+  basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
   const port = params.port;
   const bind = params.bind ?? "loopback";
@@ -229,8 +231,11 @@ export function resolveControlUiLinks(params: {
     bind === "tailnet" || (bind === "auto" && tailnetIPv4)
       ? (tailnetIPv4 ?? "127.0.0.1")
       : "127.0.0.1";
+  const basePath = normalizeControlUiBasePath(params.basePath);
+  const uiPath = basePath ? `${basePath}/` : "/";
+  const wsPath = basePath ? basePath : "";
   return {
-    httpUrl: `http://${host}:${port}/`,
-    wsUrl: `ws://${host}:${port}`,
+    httpUrl: `http://${host}:${port}${uiPath}`,
+    wsUrl: `ws://${host}:${port}${wsPath}`,
   };
 }

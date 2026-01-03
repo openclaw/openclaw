@@ -501,7 +501,11 @@ export async function runOnboardingWizard(
 
   await prompter.note(
     (() => {
-      const links = resolveControlUiLinks({ bind, port });
+      const links = resolveControlUiLinks({
+        bind,
+        port,
+        basePath: config.gateway?.controlUi?.basePath,
+      });
       const tokenParam =
         authMode === "token" && gatewayToken
           ? `?token=${encodeURIComponent(gatewayToken)}`
@@ -523,7 +527,11 @@ export async function runOnboardingWizard(
     initialValue: true,
   });
   if (wantsOpen) {
-    const links = resolveControlUiLinks({ bind, port });
+    const links = resolveControlUiLinks({
+      bind,
+      port,
+      basePath: config.gateway?.controlUi?.basePath,
+    });
     const tokenParam =
       authMode === "token" && gatewayToken
         ? `?token=${encodeURIComponent(gatewayToken)}`

@@ -5,7 +5,8 @@ read_when:
 ---
 # Dashboard (Control UI)
 
-The Gateway dashboard is the browser Control UI served at `/ui/`.
+The Gateway dashboard is the browser Control UI served at `/` by default
+(override with `gateway.controlUi.basePath`).
 
 Key references:
 - `docs/control-ui.md` for usage and UI capabilities.

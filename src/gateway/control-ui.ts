@@ -3,8 +3,21 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const _UI_PREFIX = "/ui/";
 const ROOT_PREFIX = "/";
+
+export type ControlUiRequestOptions = {
+  basePath?: string;
+};
+
+export function normalizeControlUiBasePath(basePath?: string): string {
+  if (!basePath) return "";
+  let normalized = basePath.trim();
+  if (!normalized) return "";
+  if (!normalized.startsWith("/")) normalized = `/${normalized}`;
+  if (normalized === "/") return "";
+  if (normalized.endsWith("/")) normalized = normalized.slice(0, -1);
+  return normalized;
+}
 
 function resolveControlUiRoot(): string | null {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -73,6 +86,29 @@ function serveFile(res: ServerResponse, filePath: string) {
   res.end(fs.readFileSync(filePath));
 }
 
+function injectControlUiBasePath(html: string, basePath: string): string {
+  const script = `<script>window.__CLAWDIS_CONTROL_UI_BASE_PATH__=${JSON.stringify(
+    basePath,
+  )};</script>`;
+  if (html.includes("__CLAWDIS_CONTROL_UI_BASE_PATH__")) return html;
+  const headClose = html.indexOf("</head>");
+  if (headClose !== -1) {
+    return `${html.slice(0, headClose)}${script}${html.slice(headClose)}`;
+  }
+  return `${script}${html}`;
+}
+
+function serveIndexHtml(
+  res: ServerResponse,
+  indexPath: string,
+  basePath: string,
+) {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-cache");
+  const raw = fs.readFileSync(indexPath, "utf8");
+  res.end(injectControlUiBasePath(raw, basePath));
+}
+
 function isSafeRelativePath(relPath: string) {
   if (!relPath) return false;
   const normalized = path.posix.normalize(relPath);
@@ -84,6 +120,7 @@ function isSafeRelativePath(relPath: string) {
 export function handleControlUiHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
+  opts?: ControlUiRequestOptions,
 ): boolean {
   const urlRaw = req.url;
   if (!urlRaw) return false;
@@ -95,10 +132,24 @@ export function handleControlUiHttpRequest(
   }
 
   const url = new URL(urlRaw, "http://localhost");
+  const basePath = normalizeControlUiBasePath(opts?.basePath);
+  const pathname = url.pathname;
 
-  if (url.pathname === "/ui" || url.pathname.startsWith("/ui/")) {
-    respondNotFound(res);
-    return true;
+  if (!basePath) {
+    if (pathname === "/ui" || pathname.startsWith("/ui/")) {
+      respondNotFound(res);
+      return true;
+    }
+  }
+
+  if (basePath) {
+    if (pathname === basePath) {
+      res.statusCode = 302;
+      res.setHeader("Location", `${basePath}/${url.search}`);
+      res.end();
+      return true;
+    }
+    if (!pathname.startsWith(`${basePath}/`)) return false;
   }
 
   const root = resolveControlUiRoot();
@@ -111,10 +162,15 @@ export function handleControlUiHttpRequest(
     return true;
   }
 
+  const uiPath =
+    basePath && pathname.startsWith(`${basePath}/`)
+      ? pathname.slice(basePath.length)
+      : pathname;
   const rel = (() => {
-    if (url.pathname === ROOT_PREFIX) return "";
-    if (url.pathname.startsWith("/assets/")) return url.pathname.slice(1);
-    return url.pathname.slice(1);
+    if (uiPath === ROOT_PREFIX) return "";
+    const assetsIndex = uiPath.indexOf("/assets/");
+    if (assetsIndex >= 0) return uiPath.slice(assetsIndex + 1);
+    return uiPath.slice(1);
   })();
   const requested = rel && !rel.endsWith("/") ? rel : `${rel}index.html`;
   const fileRel = requested || "index.html";
@@ -130,6 +186,10 @@ export function handleControlUiHttpRequest(
   }
 
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    if (path.basename(filePath) === "index.html") {
+      serveIndexHtml(res, filePath, basePath);
+      return true;
+    }
     serveFile(res, filePath);
     return true;
   }
@@ -137,7 +197,7 @@ export function handleControlUiHttpRequest(
   // SPA fallback (client-side router): serve index.html for unknown paths.
   const indexPath = path.join(root, "index.html");
   if (fs.existsSync(indexPath)) {
-    serveFile(res, indexPath);
+    serveIndexHtml(res, indexPath, basePath);
     return true;
   }
 

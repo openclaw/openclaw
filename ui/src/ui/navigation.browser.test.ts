@@ -21,11 +21,13 @@ beforeEach(() => {
   ClawdisApp.prototype.connect = () => {
     // no-op: avoid real gateway WS connections in browser tests
   };
+  window.__CLAWDIS_CONTROL_UI_BASE_PATH__ = undefined;
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
   ClawdisApp.prototype.connect = originalConnect;
+  window.__CLAWDIS_CONTROL_UI_BASE_PATH__ = undefined;
   document.body.innerHTML = "";
 });
 
@@ -45,6 +47,25 @@ describe("control UI routing", () => {
     expect(app.basePath).toBe("/ui");
     expect(app.tab).toBe("cron");
     expect(window.location.pathname).toBe("/ui/cron");
+  });
+
+  it("infers nested base paths", async () => {
+    const app = mountApp("/apps/clawdis/cron");
+    await app.updateComplete;
+
+    expect(app.basePath).toBe("/apps/clawdis");
+    expect(app.tab).toBe("cron");
+    expect(window.location.pathname).toBe("/apps/clawdis/cron");
+  });
+
+  it("honors explicit base path overrides", async () => {
+    window.__CLAWDIS_CONTROL_UI_BASE_PATH__ = "/clawdis";
+    const app = mountApp("/clawdis/sessions");
+    await app.updateComplete;
+
+    expect(app.basePath).toBe("/clawdis");
+    expect(app.tab).toBe("sessions");
+    expect(window.location.pathname).toBe("/clawdis/sessions");
   });
 
   it("updates the URL when clicking nav items", async () => {

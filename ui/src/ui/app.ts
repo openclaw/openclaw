@@ -4,7 +4,14 @@ import { customElement, state } from "lit/decorators.js";
 import { GatewayBrowserClient, type GatewayEventFrame, type GatewayHelloOk } from "./gateway";
 import { loadSettings, saveSettings, type UiSettings } from "./storage";
 import { renderApp } from "./app-render";
-import { normalizePath, pathForTab, tabFromPath, type Tab } from "./navigation";
+import {
+  inferBasePathFromPathname,
+  normalizeBasePath,
+  normalizePath,
+  pathForTab,
+  tabFromPath,
+  type Tab,
+} from "./navigation";
 import {
   resolveTheme,
   type ResolvedTheme,
@@ -73,6 +80,12 @@ type EventLogEntry = {
   event: string;
   payload?: unknown;
 };
+
+declare global {
+  interface Window {
+    __CLAWDIS_CONTROL_UI_BASE_PATH__?: string;
+  }
+}
 
 const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
@@ -468,9 +481,11 @@ export class ClawdisApp extends LitElement {
 
   private inferBasePath() {
     if (typeof window === "undefined") return "";
-    const path = window.location.pathname;
-    if (path === "/ui" || path.startsWith("/ui/")) return "/ui";
-    return "";
+    const configured = window.__CLAWDIS_CONTROL_UI_BASE_PATH__;
+    if (typeof configured === "string" && configured.trim()) {
+      return normalizeBasePath(configured);
+    }
+    return inferBasePathFromPathname(window.location.pathname);
   }
 
   private syncThemeWithSettings() {

@@ -40,7 +40,7 @@ default unless you force `gateway.auth.mode` to `password` or set
 }
 ```
 
-Open: `https://<magicdns>/ui/`
+Open: `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 ### Public internet (Funnel + shared password)
 
