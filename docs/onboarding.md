@@ -13,7 +13,8 @@ This doc describes the intended **first-run onboarding** for Clawdis. The goal i
 
 1) **Local vs Remote**
 2) **(Local only)** Connect Claude (Anthropic OAuth) — optional, but recommended
-3) **Onboarding chat** — dedicated session where the agent introduces itself and guides setup
+3) **Connect Gmail (optional)** — run `clawdis hooks gmail setup` to configure Pub/Sub hooks
+4) **Onboarding chat** — dedicated session where the agent introduces itself and guides setup
 
 ## 1) Local vs Remote
 
@@ -63,7 +64,7 @@ clawdis agent --mode rpc --model anthropic/claude-opus-4-5 "<message>"
 
 If the user skips auth, onboarding should be clear: the agent likely won’t respond until auth is configured.
 
-## 3) Onboarding chat (dedicated session)
+## 4) Onboarding chat (dedicated session)
 
 The onboarding flow now embeds the SwiftUI chat view directly. It uses a **special session key**
 (`onboarding`) so the “newborn agent” ritual stays separate from the main chat.
@@ -76,9 +77,21 @@ This onboarding chat is where the agent:
 
 If the workspace bootstrap is already complete (BOOTSTRAP.md removed), the onboarding chat step is skipped.
 
+## 2.5) Optional: Connect Gmail
+
+The macOS onboarding includes an optional Gmail step. It runs:
+
+```bash
+clawdis hooks gmail setup --account you@gmail.com
+```
+
+This writes the full `hooks.gmail` config, installs `gcloud` / `gog` / `tailscale`
+via Homebrew if needed, and configures the Pub/Sub push endpoint. After setup,
+restart the gateway so the internal Gmail watcher starts.
+
 Once setup is complete, the user can switch to the normal chat (`main`) via the menu bar panel.
 
-## 4) Agent bootstrap ritual (outside onboarding)
+## 5) Agent bootstrap ritual (outside onboarding)
 
 We no longer collect identity in the onboarding wizard. Instead, the **first agent run** performs a playful bootstrap ritual using files in the workspace:
 
@@ -104,7 +117,7 @@ Identity data still feeds the same defaults as before:
 - default session intro (“You are Samantha…”)
 - macOS UI labels
 
-## 5) Workspace notes (no explicit onboarding step)
+## 6) Workspace notes (no explicit onboarding step)
 
 The workspace is created automatically as part of agent bootstrap (no dedicated onboarding screen).
 
