@@ -76,6 +76,27 @@ describe("sendCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("g1"));
   });
 
+  it("passes gifPlayback to gateway send", async () => {
+    callGatewayMock.mockClear();
+    callGatewayMock.mockResolvedValueOnce({ messageId: "g1" });
+    const deps = makeDeps();
+    await sendCommand(
+      {
+        to: "+1",
+        message: "hi",
+        gifPlayback: true,
+      },
+      deps,
+      runtime,
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({ gifPlayback: true }),
+      }),
+    );
+  });
+
   it("routes to telegram provider", async () => {
     const deps = makeDeps({
       sendMessageTelegram: vi

@@ -129,6 +129,30 @@ describe("gateway-cli coverage", () => {
     );
   });
 
+  it("passes gifPlayback for gateway send when flag set", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+    randomIdempotencyKey.mockClear();
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await program.parseAsync(
+      ["gateway", "send", "--to", "+1555", "--message", "hi", "--gif-playback"],
+      { from: "user" },
+    );
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "send",
+        params: expect.objectContaining({ gifPlayback: true }),
+      }),
+    );
+  });
+
   it("validates gateway ports and handles force/start errors", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
