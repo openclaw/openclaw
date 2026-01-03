@@ -50,6 +50,7 @@ index ff9cbcfebfac6b4370d85dc838f5cacf2a60ed64..42096c82aec925b412258348a36ba4a7
 +        '$comment',
 +        'additionalProperties',
 +    ];
++    // TODO(steipete): lossy schema scrub; revisit when Google supports these keywords.
 +    for (const [key, value] of Object.entries(schema)) {
 +        // Skip unsupported keywords
 +        if (unsupportedKeywords.includes(key)) {
