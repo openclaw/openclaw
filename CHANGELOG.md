@@ -49,7 +49,8 @@
 - CLI: add `configure`, `doctor`, and `update` wizards for ongoing setup, health checks, and modernization.
 - CLI: add Signal CLI auto-install from GitHub releases in the wizard and persist wizard run metadata in config.
 - CLI: add remote gateway client config (gateway.remote.*) with Bonjour-assisted discovery.
-- CLI: add `clawdis tui` gateway-connected terminal UI (local or remote).
+- CLI: enhance `clawdis tui` with model/session pickers, tool cards, and slash commands (local or remote).
+- Gateway: allow `sessions.patch` to set per-session model overrides (used by the TUI `/model` flow).
 - Skills: allow `bun` as a node manager for skill installs.
 - Skills: add `things-mac` (Things 3 CLI) for read/search plus add/update via URL scheme.
 - Skills: add Apple Notes + Reminders skills via memo CLI (thanks @tylerwince).

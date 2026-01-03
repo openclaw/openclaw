@@ -22,5 +22,5 @@ Updated: 2026-01-03
 - [x] Gateway TUI client: add session/model helpers + stricter typing.
 - [x] TUI UI kit: theme + components (editor, message feed, tool cards, selectors).
 - [x] TUI controller: keybindings + Clawdis slash commands + history/stream wiring.
-- [ ] Docs + changelog updated for the new TUI behavior.
+- [x] Docs + changelog updated for the new TUI behavior.
 - [ ] Gate: lint, build, tests, docs list.
