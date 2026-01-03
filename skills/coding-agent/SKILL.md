@@ -1,7 +1,7 @@
 ---
 name: coding-agent
-description: Run Codex CLI, Claude Code, or OpenCode via background process for programmatic control.
-metadata: {"clawdis":{"emoji":"🧩","requires":{"anyBins":["claude","codex","opencode"]}}}
+description: Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.
+metadata: {"clawdis":{"emoji":"🧩","requires":{"anyBins":["claude","codex","opencode","pi"]}}}
 ---
 
 # Coding Agent (background-first)
@@ -110,6 +110,37 @@ bash workdir:~/project background:true command:"claude \"Your task\""
 ```bash
 bash workdir:~/project background:true command:"opencode run \"Your task\""
 ```
+
+---
+
+## Pi Coding Agent
+
+```bash
+# Install: npm install -g @mariozechner/pi-coding-agent
+bash workdir:~/project background:true command:"pi \"Your task\""
+```
+
+---
+
+## Pi flags (common)
+
+- `--print` / `-p`: non-interactive; runs prompt and exits.
+- `--provider <name>`: pick provider (default: google).
+- `--model <id>`: pick model (default: gemini-2.5-flash).
+- `--api-key <key>`: override API key (defaults to env vars).
+
+Examples:
+
+```bash
+# Set provider + model, non-interactive
+bash workdir:~/project background:true command:"pi --provider openai --model gpt-4o-mini -p \"Summarize src/\""
+```
+
+---
+
+## tmux (optional)
+
+Only use tmux if you need persistence/interaction; otherwise prefer background mode.
 
 ---
 
