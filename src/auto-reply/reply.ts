@@ -58,6 +58,7 @@ import { defaultRuntime } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
+import { resolveTextChunkLimit, type TextChunkSurface } from "./chunk.js";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -74,7 +75,6 @@ import {
 } from "./thinking.js";
 import { SILENT_REPLY_TOKEN } from "./tokens.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
-import { resolveTextChunkLimit, type TextChunkSurface } from "./chunk.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export type { GetReplyOptions, ReplyPayload } from "./types.js";
@@ -1125,7 +1125,9 @@ export async function getReplyFromConfig(
   const resolvedBlockStreaming =
     agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
   const resolvedBlockStreamingBreak =
-    agentCfg?.blockStreamingBreak === "message_end" ? "message_end" : "text_end";
+    agentCfg?.blockStreamingBreak === "message_end"
+      ? "message_end"
+      : "text_end";
   const blockStreamingEnabled = resolvedBlockStreaming === "on";
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Surface)

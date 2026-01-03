@@ -43,8 +43,8 @@ import {
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
 import {
-  subscribeEmbeddedPiSession,
   type BlockReplyChunking,
+  subscribeEmbeddedPiSession,
 } from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
 import { createClawdisCodingTools } from "./pi-tools.js";

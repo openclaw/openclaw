@@ -266,7 +266,10 @@ export function subscribeEmbeddedPiSession(params: {
       return;
     }
     if (blockBuffer.length < minChars && !force) return;
-    while (blockBuffer.length >= minChars || (force && blockBuffer.length > 0)) {
+    while (
+      blockBuffer.length >= minChars ||
+      (force && blockBuffer.length > 0)
+    ) {
       const breakIdx = pickBreakIndex(blockBuffer);
       if (breakIdx <= 0) {
         if (force) {

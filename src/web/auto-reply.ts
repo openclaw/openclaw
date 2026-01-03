@@ -822,7 +822,8 @@ export async function monitorWebProvider(
     });
 
   const resolveGroupRequireMentionFor = (conversationId: string) => {
-    const groupId = resolveGroupResolution(conversationId)?.id ?? conversationId;
+    const groupId =
+      resolveGroupResolution(conversationId)?.id ?? conversationId;
     const groupConfig = cfg.whatsapp?.groups?.[groupId];
     if (typeof groupConfig?.requireMention === "boolean") {
       return groupConfig.requireMention;
