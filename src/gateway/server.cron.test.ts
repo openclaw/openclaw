@@ -10,6 +10,19 @@ import {
   testState,
 } from "./test-helpers.js";
 
+const decodeWsData = (data: unknown): string => {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString("utf-8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
+      "utf-8",
+    );
+  }
+  return "";
+};
+
 installGatewayTestHooks();
 
 describe("gateway server cron", () => {
@@ -253,7 +266,7 @@ describe("gateway server cron", () => {
       }>((resolve) => {
         const timeout = setTimeout(() => resolve(null as never), 8000);
         ws.on("message", (data) => {
-          const obj = JSON.parse(String(data));
+          const obj = JSON.parse(decodeWsData(data));
           if (
             obj.type === "event" &&
             obj.event === "cron" &&

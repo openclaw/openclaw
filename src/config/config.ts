@@ -634,6 +634,50 @@ export type ClawdisConfig = {
       /** How long to keep finished sessions in memory (ms). */
       cleanupMs?: number;
     };
+    /** Optional sandbox settings for non-main sessions. */
+    sandbox?: {
+      /** Enable sandboxing for sessions. */
+      mode?: "off" | "non-main" | "all";
+      /** Use one container per session (recommended for hard isolation). */
+      perSession?: boolean;
+      /** Root directory for sandbox workspaces. */
+      workspaceRoot?: string;
+      /** Docker-specific sandbox settings. */
+      docker?: {
+        /** Docker image to use for sandbox containers. */
+        image?: string;
+        /** Prefix for sandbox container names. */
+        containerPrefix?: string;
+        /** Container workdir mount path (default: /workspace). */
+        workdir?: string;
+        /** Run container rootfs read-only. */
+        readOnlyRoot?: boolean;
+        /** Extra tmpfs mounts for read-only containers. */
+        tmpfs?: string[];
+        /** Container network mode (bridge|none|custom). */
+        network?: string;
+        /** Container user (uid:gid). */
+        user?: string;
+        /** Drop Linux capabilities. */
+        capDrop?: string[];
+        /** Extra environment variables for sandbox exec. */
+        env?: Record<string, string>;
+        /** Optional setup command run once after container creation. */
+        setupCommand?: string;
+      };
+      /** Tool allow/deny policy (deny wins). */
+      tools?: {
+        allow?: string[];
+        deny?: string[];
+      };
+      /** Auto-prune sandbox containers. */
+      prune?: {
+        /** Prune if idle for more than N hours (0 disables). */
+        idleHours?: number;
+        /** Prune if older than N days (0 disables). */
+        maxAgeDays?: number;
+      };
+    };
   };
   routing?: RoutingConfig;
   messages?: MessagesConfig;
@@ -1039,6 +1083,41 @@ export const ClawdisSchema = z.object({
           backgroundMs: z.number().int().positive().optional(),
           timeoutSec: z.number().int().positive().optional(),
           cleanupMs: z.number().int().positive().optional(),
+        })
+        .optional(),
+      sandbox: z
+        .object({
+          mode: z
+            .union([z.literal("off"), z.literal("non-main"), z.literal("all")])
+            .optional(),
+          perSession: z.boolean().optional(),
+          workspaceRoot: z.string().optional(),
+          docker: z
+            .object({
+              image: z.string().optional(),
+              containerPrefix: z.string().optional(),
+              workdir: z.string().optional(),
+              readOnlyRoot: z.boolean().optional(),
+              tmpfs: z.array(z.string()).optional(),
+              network: z.string().optional(),
+              user: z.string().optional(),
+              capDrop: z.array(z.string()).optional(),
+              env: z.record(z.string(), z.string()).optional(),
+              setupCommand: z.string().optional(),
+            })
+            .optional(),
+          tools: z
+            .object({
+              allow: z.array(z.string()).optional(),
+              deny: z.array(z.string()).optional(),
+            })
+            .optional(),
+          prune: z
+            .object({
+              idleHours: z.number().int().nonnegative().optional(),
+              maxAgeDays: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
         })
         .optional(),
     })

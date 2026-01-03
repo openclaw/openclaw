@@ -210,7 +210,7 @@ export function createAgentEventHandler({
 
     const jobState =
       evt.stream === "job" && typeof evt.data?.state === "string"
-        ? (evt.data.state as "done" | "error" | string)
+        ? evt.data.state
         : null;
 
     if (sessionKey) {

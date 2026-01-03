@@ -129,13 +129,16 @@ function buildBaseHints(): ConfigUiHints {
     };
   }
   for (const [path, label] of Object.entries(FIELD_LABELS)) {
-    hints[path] = { ...(hints[path] ?? {}), label };
+    const current = hints[path];
+    hints[path] = current ? { ...current, label } : { label };
   }
   for (const [path, help] of Object.entries(FIELD_HELP)) {
-    hints[path] = { ...(hints[path] ?? {}), help };
+    const current = hints[path];
+    hints[path] = current ? { ...current, help } : { help };
   }
   for (const [path, placeholder] of Object.entries(FIELD_PLACEHOLDERS)) {
-    hints[path] = { ...(hints[path] ?? {}), placeholder };
+    const current = hints[path];
+    hints[path] = current ? { ...current, placeholder } : { placeholder };
   }
   return hints;
 }

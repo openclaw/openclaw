@@ -20,6 +20,19 @@ import {
   testState,
 } from "./test-helpers.js";
 
+const decodeWsData = (data: unknown): string => {
+  if (typeof data === "string") return data;
+  if (Buffer.isBuffer(data)) return data.toString("utf-8");
+  if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
+  if (data instanceof ArrayBuffer) return Buffer.from(data).toString("utf-8");
+  if (ArrayBuffer.isView(data)) {
+    return Buffer.from(data.buffer, data.byteOffset, data.byteLength).toString(
+      "utf-8",
+    );
+  }
+  return "";
+};
+
 installGatewayTestHooks();
 
 describe("gateway server node/bridge", () => {
@@ -37,7 +50,7 @@ describe("gateway server node/bridge", () => {
       payload?: unknown;
     }>((resolve) => {
       ws.on("message", (data) => {
-        const obj = JSON.parse(String(data)) as {
+        const obj = JSON.parse(decodeWsData(data)) as {
           type?: string;
           event?: string;
           payload?: unknown;
@@ -83,7 +96,7 @@ describe("gateway server node/bridge", () => {
       payload?: unknown;
     }>((resolve) => {
       ws.on("message", (data) => {
-        const obj = JSON.parse(String(data)) as {
+        const obj = JSON.parse(decodeWsData(data)) as {
           type?: string;
           event?: string;
           payload?: unknown;
@@ -805,7 +818,7 @@ describe("gateway server node/bridge", () => {
       payload?: unknown;
     }>((resolve) => {
       ws.on("message", (data) => {
-        const obj = JSON.parse(String(data));
+        const obj = JSON.parse(decodeWsData(data));
         if (isVoiceFinalChatEvent(obj)) {
           resolve(obj as never);
         }

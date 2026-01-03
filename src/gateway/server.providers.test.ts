@@ -6,6 +6,8 @@ import {
   startServerWithClient,
 } from "./test-helpers.js";
 
+const loadConfigHelpers = async () => await import("../config/config.js");
+
 installGatewayTestHooks();
 
 describe("gateway server providers", () => {
@@ -63,9 +65,8 @@ describe("gateway server providers", () => {
   test("telegram.logout clears bot token from config", async () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
-    const { readConfigFileSnapshot, writeConfigFile } = await import(
-      "../config/config.js"
-    );
+    const { readConfigFileSnapshot, writeConfigFile } =
+      await loadConfigHelpers();
     await writeConfigFile({
       telegram: {
         botToken: "123:abc",

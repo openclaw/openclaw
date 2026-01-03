@@ -322,6 +322,7 @@ export function installGatewayTestHooks() {
     testState.allowFrom = undefined;
     testIsNixMode.value = false;
     cronIsolatedRun.mockClear();
+    agentCommand.mockClear();
     drainSystemEvents();
     resetAgentRunContextForTest();
     const mod = await import("./server.js");
