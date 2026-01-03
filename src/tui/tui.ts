@@ -1,17 +1,18 @@
 import {
-  type Component,
-  Input,
-  isCtrlC,
-  isEscape,
+  CombinedAutocompleteProvider,
+  Container,
   ProcessTerminal,
   Text,
   TUI,
+  type Component,
 } from "@mariozechner/pi-tui";
 import { loadConfig } from "../config/config.js";
+import { ChatLog } from "./components/chat-log.js";
+import { CustomEditor } from "./components/custom-editor.js";
+import { createSelectList, createSettingsList } from "./components/selectors.js";
+import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 import { GatewayChatClient } from "./gateway-chat.js";
-import { ChatLayout } from "./layout.js";
-import { MessageList } from "./message-list.js";
-import { markdownTheme, theme } from "./theme.js";
+import { editorTheme, theme } from "./theme/theme.js";
 
 export type TuiOptions = {
   url?: string;
@@ -32,110 +33,79 @@ type ChatEvent = {
   errorMessage?: string;
 };
 
-class InputWrapper implements Component {
-  constructor(
-    private input: Input,
-    private onAbort: () => void,
-    private onExit: () => void,
-  ) {}
+type AgentEvent = {
+  runId: string;
+  stream: string;
+  data?: Record<string, unknown>;
+};
 
-  handleInput(data: string): void {
-    if (isCtrlC(data)) {
-      this.onExit();
-      return;
+type SessionInfo = {
+  thinkingLevel?: string;
+  verboseLevel?: string;
+  model?: string;
+  contextTokens?: number | null;
+  totalTokens?: number | null;
+  updatedAt?: number | null;
+  displayName?: string;
+};
+
+function extractTextBlocks(
+  content: unknown,
+  opts?: { includeThinking?: boolean },
+): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const record = block as Record<string, unknown>;
+    if (record.type === "text" && typeof record.text === "string") {
+      parts.push(record.text);
     }
-    if (isEscape(data)) {
-      this.onAbort();
-      return;
+    if (
+      opts?.includeThinking &&
+      record.type === "thinking" &&
+      typeof record.thinking === "string"
+    ) {
+      parts.push(`[thinking]\n${record.thinking}`);
     }
-    this.input.handleInput(data);
   }
-
-  render(width: number): string[] {
-    return this.input.render(width);
-  }
-
-  invalidate(): void {
-    this.input.invalidate();
-  }
-}
-
-function extractText(message?: unknown): string {
-  if (!message || typeof message !== "object") return "";
-  const record = message as Record<string, unknown>;
-  const content = Array.isArray(record.content) ? record.content : [];
-  const parts = content
-    .map((block) => {
-      if (!block || typeof block !== "object") return "";
-      const b = block as Record<string, unknown>;
-      if (b.type === "text" && typeof b.text === "string") return b.text;
-      return "";
-    })
-    .filter(Boolean);
   return parts.join("\n").trim();
 }
 
-function renderHistoryEntry(
-  entry: unknown,
-): { role: "user" | "assistant"; text: string } | null {
-  if (!entry || typeof entry !== "object") return null;
-  const record = entry as Record<string, unknown>;
-  const role =
-    record.role === "user" || record.role === "assistant" ? record.role : null;
-  if (!role) return null;
-  const text = extractText(record);
-  if (!text) return null;
-  return { role, text };
+function extractTextFromMessage(
+  message: unknown,
+  opts?: { includeThinking?: boolean },
+): string {
+  if (!message || typeof message !== "object") return "";
+  const record = message as Record<string, unknown>;
+  return extractTextBlocks(record.content, opts);
+}
+
+function formatTokens(total?: number | null, context?: number | null) {
+  if (!total && !context) return "tokens ?";
+  if (!context) return `tokens ${total ?? 0}`;
+  const pct =
+    typeof total === "number" && context > 0
+      ? Math.min(999, Math.round((total / context) * 100))
+      : null;
+  return `tokens ${total ?? 0}/${context}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const defaultSession =
     (opts.session ?? config.session?.mainKey ?? "main").trim() || "main";
-  let currentSession = defaultSession;
-  let activeRunId: string | null = null;
-  let streamingMessageId: string | null = null;
+  let currentSessionKey = defaultSession;
+  let currentSessionId: string | null = null;
+  let activeChatRunId: string | null = null;
   let historyLoaded = false;
-
-  const messages = new MessageList(markdownTheme, {
-    user: { color: theme.user },
-    assistant: { color: theme.assistant },
-    system: { color: theme.system, italic: true },
-    tool: { color: theme.dim, italic: true },
-  });
-
-  const header = new Text("", 1, 0);
-  const status = new Text("", 1, 0);
-  const input = new Input();
-
-  const tui = new TUI(new ProcessTerminal());
-  const inputWrapper = new InputWrapper(
-    input,
-    async () => {
-      if (!activeRunId) return;
-      try {
-        await client.abortChat({
-          sessionKey: currentSession,
-          runId: activeRunId,
-        });
-      } catch (err) {
-        messages.addSystem(`Abort failed: ${String(err)}`);
-      }
-      activeRunId = null;
-      streamingMessageId = null;
-      setStatus("aborted");
-      tui.requestRender();
-    },
-    () => {
-      client.stop();
-      tui.stop();
-      process.exit(0);
-    },
-  );
-
-  const layout = new ChatLayout(header, messages, status, inputWrapper);
-  tui.addChild(layout);
-  tui.setFocus(inputWrapper);
+  let isConnected = false;
+  let toolsExpanded = false;
+  let showThinking = false;
+  let deliverDefault = Boolean(opts.deliver);
+  let sessionInfo: SessionInfo = {};
+  let lastCtrlCAt = 0;
 
   const client = new GatewayChatClient({
     url: opts.url,
@@ -143,10 +113,28 @@ export async function runTui(opts: TuiOptions) {
     password: opts.password,
   });
 
+  const header = new Text("", 1, 0);
+  const status = new Text("", 1, 0);
+  const footer = new Text("", 1, 0);
+  const chatLog = new ChatLog();
+  const editor = new CustomEditor(editorTheme);
+  const overlay = new Container();
+  const root = new Container();
+  root.addChild(header);
+  root.addChild(overlay);
+  root.addChild(chatLog);
+  root.addChild(status);
+  root.addChild(footer);
+  root.addChild(editor);
+
+  const tui = new TUI(new ProcessTerminal());
+  tui.addChild(root);
+  tui.setFocus(editor);
+
   const updateHeader = () => {
     header.setText(
       theme.header(
-        `clawdis tui - ${client.connection.url} - session ${currentSession}`,
+        `clawdis tui - ${client.connection.url} - session ${currentSessionKey}`,
       ),
     );
   };
@@ -155,121 +143,462 @@ export async function runTui(opts: TuiOptions) {
     status.setText(theme.dim(text));
   };
 
+  const updateFooter = () => {
+    const connection = isConnected ? "connected" : "disconnected";
+    const sessionLabel = sessionInfo.displayName
+      ? `${currentSessionKey} (${sessionInfo.displayName})`
+      : currentSessionKey;
+    const modelLabel = sessionInfo.model ?? "unknown";
+    const tokens = formatTokens(
+      sessionInfo.totalTokens ?? null,
+      sessionInfo.contextTokens ?? null,
+    );
+    const think = sessionInfo.thinkingLevel ?? "off";
+    const verbose = sessionInfo.verboseLevel ?? "off";
+    const deliver = deliverDefault ? "on" : "off";
+    footer.setText(
+      theme.dim(
+        `${connection} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose} | ${tokens} | deliver ${deliver}`,
+      ),
+    );
+  };
+
+  const closeOverlay = () => {
+    overlay.clear();
+    tui.setFocus(editor);
+  };
+
+  const openOverlay = (component: Component) => {
+    overlay.clear();
+    overlay.addChild(component);
+    tui.setFocus(component);
+  };
+
+  const refreshSessionInfo = async () => {
+    try {
+      const result = await client.listSessions({
+        includeGlobal: false,
+        includeUnknown: false,
+      });
+      const entry = result.sessions.find((row) => row.key === currentSessionKey);
+      sessionInfo = {
+        thinkingLevel: entry?.thinkingLevel,
+        verboseLevel: entry?.verboseLevel,
+        model: entry?.model ?? result.defaults?.model ?? undefined,
+        contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
+        totalTokens: entry?.totalTokens ?? null,
+        updatedAt: entry?.updatedAt ?? null,
+        displayName: entry?.displayName,
+      };
+    } catch (err) {
+      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+    }
+    updateFooter();
+    tui.requestRender();
+  };
+
   const loadHistory = async () => {
     try {
       const history = await client.loadHistory({
-        sessionKey: currentSession,
+        sessionKey: currentSessionKey,
         limit: opts.historyLimit ?? 200,
       });
-      const historyRecord = history as { messages?: unknown[] } | undefined;
-      messages.clearAll();
-      messages.addSystem(`session ${currentSession}`);
-      for (const entry of historyRecord?.messages ?? []) {
-        const parsed = renderHistoryEntry(entry);
-        if (!parsed) continue;
-        if (parsed.role === "user") messages.addUser(parsed.text);
-        if (parsed.role === "assistant") messages.addAssistant(parsed.text);
+      const record = history as {
+        messages?: unknown[];
+        sessionId?: string;
+        thinkingLevel?: string;
+      };
+      currentSessionId =
+        typeof record.sessionId === "string" ? record.sessionId : null;
+      sessionInfo.thinkingLevel = record.thinkingLevel ?? sessionInfo.thinkingLevel;
+      chatLog.clearAll();
+      chatLog.addSystem(`session ${currentSessionKey}`);
+      for (const entry of record.messages ?? []) {
+        if (!entry || typeof entry !== "object") continue;
+        const message = entry as Record<string, unknown>;
+        if (message.role === "user") {
+          const text = extractTextFromMessage(message);
+          if (text) chatLog.addUser(text);
+          continue;
+        }
+        if (message.role === "assistant") {
+          const text = extractTextFromMessage(message, {
+            includeThinking: showThinking,
+          });
+          if (text) chatLog.finalizeAssistant(text);
+          continue;
+        }
+        if (message.role === "toolResult") {
+          const toolCallId = String(message.toolCallId ?? "");
+          const toolName = String(message.toolName ?? "tool");
+          const component = chatLog.startTool(toolCallId, toolName, {});
+          component.setResult(
+            {
+              content: Array.isArray(message.content)
+                ? (message.content as Record<string, unknown>[])
+                : [],
+              details:
+                typeof message.details === "object" && message.details
+                  ? (message.details as Record<string, unknown>)
+                  : undefined,
+            },
+            { isError: Boolean(message.isError) },
+          );
+        }
       }
       historyLoaded = true;
-      tui.requestRender();
     } catch (err) {
-      messages.addSystem(`history failed: ${String(err)}`);
-      tui.requestRender();
+      chatLog.addSystem(`history failed: ${String(err)}`);
     }
+    await refreshSessionInfo();
+    tui.requestRender();
+  };
+
+  const setSession = async (key: string) => {
+    currentSessionKey = key;
+    activeChatRunId = null;
+    currentSessionId = null;
+    historyLoaded = false;
+    updateHeader();
+    await loadHistory();
+  };
+
+  const abortActive = async () => {
+    if (!activeChatRunId) {
+      chatLog.addSystem("no active run");
+      tui.requestRender();
+      return;
+    }
+    try {
+      await client.abortChat({
+        sessionKey: currentSessionKey,
+        runId: activeChatRunId,
+      });
+      setStatus("aborted");
+    } catch (err) {
+      chatLog.addSystem(`abort failed: ${String(err)}`);
+      setStatus("abort failed");
+    }
+    tui.requestRender();
   };
 
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
     const evt = payload as ChatEvent;
-    if (evt.sessionKey !== currentSession) return;
-
+    if (evt.sessionKey !== currentSessionKey) return;
     if (evt.state === "delta") {
-      const text = extractText(evt.message);
+      const text = extractTextFromMessage(evt.message, {
+        includeThinking: showThinking,
+      });
       if (!text) return;
-      if (!streamingMessageId || activeRunId !== evt.runId) {
-        streamingMessageId = messages.addAssistant(text, evt.runId);
-        activeRunId = evt.runId;
-      } else {
-        messages.updateAssistant(streamingMessageId, text);
-      }
+      chatLog.updateAssistant(text, evt.runId);
       setStatus("streaming");
     }
-
     if (evt.state === "final") {
-      const text = extractText(evt.message);
-      if (streamingMessageId && activeRunId === evt.runId) {
-        messages.updateAssistant(streamingMessageId, text || "(no output)");
-      } else if (text) {
-        messages.addAssistant(text, evt.runId);
-      }
-      activeRunId = null;
-      streamingMessageId = null;
+      const text = extractTextFromMessage(evt.message, {
+        includeThinking: showThinking,
+      });
+      chatLog.finalizeAssistant(text || "(no output)", evt.runId);
+      activeChatRunId = null;
       setStatus("idle");
     }
-
     if (evt.state === "aborted") {
-      messages.addSystem("run aborted");
-      activeRunId = null;
-      streamingMessageId = null;
+      chatLog.addSystem("run aborted");
+      activeChatRunId = null;
       setStatus("aborted");
     }
-
     if (evt.state === "error") {
-      messages.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
-      activeRunId = null;
-      streamingMessageId = null;
+      chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
+      activeChatRunId = null;
       setStatus("error");
     }
+    tui.requestRender();
+  };
 
+  const handleAgentEvent = (payload: unknown) => {
+    if (!payload || typeof payload !== "object") return;
+    const evt = payload as AgentEvent;
+    if (!currentSessionId || evt.runId !== currentSessionId) return;
+    if (evt.stream === "tool") {
+      const data = evt.data ?? {};
+      const phase = String(data.phase ?? "");
+      const toolCallId = String(data.toolCallId ?? "");
+      const toolName = String(data.name ?? "tool");
+      if (!toolCallId) return;
+      if (phase === "start") {
+        chatLog.startTool(toolCallId, toolName, data.args);
+      } else if (phase === "update") {
+        chatLog.updateToolResult(toolCallId, data.partialResult, {
+          partial: true,
+        });
+      } else if (phase === "result") {
+        chatLog.updateToolResult(toolCallId, data.result, {
+          isError: Boolean(data.isError),
+        });
+      }
+      tui.requestRender();
+      return;
+    }
+    if (evt.stream === "job") {
+      const state = typeof evt.data?.state === "string" ? evt.data.state : "";
+      if (state === "started") setStatus("running");
+      if (state === "done") setStatus("idle");
+      if (state === "error") setStatus("error");
+      tui.requestRender();
+    }
+  };
+
+  const openModelSelector = async () => {
+    try {
+      const models = await client.listModels();
+      if (models.length === 0) {
+        chatLog.addSystem("no models available");
+        tui.requestRender();
+        return;
+      }
+      const items = models.map((model) => ({
+        value: `${model.provider}/${model.id}`,
+        label: `${model.provider}/${model.id}`,
+        description: model.name && model.name !== model.id ? model.name : "",
+      }));
+      const selector = createSelectList(items, 9);
+      selector.onSelect = (item) => {
+        void (async () => {
+          try {
+            await client.patchSession({
+              key: currentSessionKey,
+              model: item.value,
+            });
+            chatLog.addSystem(`model set to ${item.value}`);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`model set failed: ${String(err)}`);
+          }
+          closeOverlay();
+          tui.requestRender();
+        })();
+      };
+      selector.onCancel = () => {
+        closeOverlay();
+        tui.requestRender();
+      };
+      openOverlay(selector);
+      tui.requestRender();
+    } catch (err) {
+      chatLog.addSystem(`model list failed: ${String(err)}`);
+      tui.requestRender();
+    }
+  };
+
+  const openSessionSelector = async () => {
+    try {
+      const result = await client.listSessions({
+        includeGlobal: false,
+        includeUnknown: false,
+      });
+      const items = result.sessions.map((session) => ({
+        value: session.key,
+        label: session.displayName ?? session.key,
+        description: session.updatedAt
+          ? new Date(session.updatedAt).toLocaleString()
+          : "",
+      }));
+      const selector = createSelectList(items, 9);
+      selector.onSelect = (item) => {
+        void (async () => {
+          closeOverlay();
+          await setSession(item.value);
+          tui.requestRender();
+        })();
+      };
+      selector.onCancel = () => {
+        closeOverlay();
+        tui.requestRender();
+      };
+      openOverlay(selector);
+      tui.requestRender();
+    } catch (err) {
+      chatLog.addSystem(`sessions list failed: ${String(err)}`);
+      tui.requestRender();
+    }
+  };
+
+  const openSettings = () => {
+    const items = [
+      {
+        id: "deliver",
+        label: "Deliver replies",
+        currentValue: deliverDefault ? "on" : "off",
+        values: ["off", "on"],
+      },
+      {
+        id: "tools",
+        label: "Tool output",
+        currentValue: toolsExpanded ? "expanded" : "collapsed",
+        values: ["collapsed", "expanded"],
+      },
+      {
+        id: "thinking",
+        label: "Show thinking",
+        currentValue: showThinking ? "on" : "off",
+        values: ["off", "on"],
+      },
+    ];
+    const settings = createSettingsList(
+      items,
+      (id, value) => {
+        if (id === "deliver") {
+          deliverDefault = value === "on";
+          updateFooter();
+        }
+        if (id === "tools") {
+          toolsExpanded = value === "expanded";
+          chatLog.setToolsExpanded(toolsExpanded);
+        }
+        if (id === "thinking") {
+          showThinking = value === "on";
+          void loadHistory();
+        }
+        tui.requestRender();
+      },
+      () => {
+        closeOverlay();
+        tui.requestRender();
+      },
+    );
+    openOverlay(settings);
     tui.requestRender();
   };
 
   const handleCommand = async (raw: string) => {
-    const [command, ...rest] = raw.slice(1).trim().split(/\s+/);
-    const arg = rest.join(" ").trim();
-    switch (command) {
-      case "help": {
-        messages.addSystem("/help /session <key> /abort /exit");
+    const { name, args } = parseCommand(raw);
+    if (!name) return;
+    switch (name) {
+      case "help":
+        chatLog.addSystem(helpText());
         break;
-      }
-      case "session": {
-        if (!arg) {
-          messages.addSystem("missing session key");
+      case "status":
+        try {
+          const status = await client.getStatus();
+          chatLog.addSystem(
+            typeof status === "string"
+              ? status
+              : JSON.stringify(status, null, 2),
+          );
+        } catch (err) {
+          chatLog.addSystem(`status failed: ${String(err)}`);
+        }
+        break;
+      case "session":
+        if (!args) {
+          await openSessionSelector();
+        } else {
+          await setSession(args);
+        }
+        break;
+      case "sessions":
+        await openSessionSelector();
+        break;
+      case "model":
+        if (!args) {
+          await openModelSelector();
+        } else {
+          try {
+            await client.patchSession({
+              key: currentSessionKey,
+              model: args,
+            });
+            chatLog.addSystem(`model set to ${args}`);
+            await refreshSessionInfo();
+          } catch (err) {
+            chatLog.addSystem(`model set failed: ${String(err)}`);
+          }
+        }
+        break;
+      case "models":
+        await openModelSelector();
+        break;
+      case "think":
+        if (!args) {
+          chatLog.addSystem("usage: /think <off|minimal|low|medium|high>");
           break;
         }
-        currentSession = arg;
-        activeRunId = null;
-        streamingMessageId = null;
-        historyLoaded = false;
-        updateHeader();
-        await loadHistory();
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            thinkingLevel: args,
+          });
+          chatLog.addSystem(`thinking set to ${args}`);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`think failed: ${String(err)}`);
+        }
         break;
-      }
-      case "abort": {
-        if (!activeRunId) {
-          messages.addSystem("no active run");
+      case "verbose":
+        if (!args) {
+          chatLog.addSystem("usage: /verbose <on|off>");
           break;
         }
-        await client.abortChat({
-          sessionKey: currentSession,
-          runId: activeRunId,
-        });
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            verboseLevel: args,
+          });
+          chatLog.addSystem(`verbose set to ${args}`);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`verbose failed: ${String(err)}`);
+        }
         break;
-      }
-      case "exit": {
+      case "activation":
+        if (!args) {
+          chatLog.addSystem("usage: /activation <mention|always>");
+          break;
+        }
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            groupActivation: args === "always" ? "always" : "mention",
+          });
+          chatLog.addSystem(`activation set to ${args}`);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`activation failed: ${String(err)}`);
+        }
+        break;
+      case "deliver":
+        if (!args) {
+          chatLog.addSystem("usage: /deliver <on|off>");
+          break;
+        }
+        deliverDefault = args === "on";
+        updateFooter();
+        chatLog.addSystem(`deliver ${deliverDefault ? "on" : "off"}`);
+        break;
+      case "new":
+      case "reset":
+        try {
+          await client.resetSession(currentSessionKey);
+          chatLog.addSystem(`session ${currentSessionKey} reset`);
+          await loadHistory();
+        } catch (err) {
+          chatLog.addSystem(`reset failed: ${String(err)}`);
+        }
+        break;
+      case "abort":
+        await abortActive();
+        break;
+      case "settings":
+        openSettings();
+        break;
+      case "exit":
+      case "quit":
         client.stop();
         tui.stop();
         process.exit(0);
         break;
-      }
-      case "quit": {
-        client.stop();
-        tui.stop();
-        process.exit(0);
-        break;
-      }
       default:
-        messages.addSystem(`unknown command: /${command}`);
+        chatLog.addSystem(`unknown command: /${name}`);
         break;
     }
     tui.requestRender();
@@ -277,63 +606,112 @@ export async function runTui(opts: TuiOptions) {
 
   const sendMessage = async (text: string) => {
     try {
-      messages.addUser(text);
+      chatLog.addUser(text);
       tui.requestRender();
       setStatus("sending");
       const { runId } = await client.sendChat({
-        sessionKey: currentSession,
+        sessionKey: currentSessionKey,
         message: text,
         thinking: opts.thinking,
-        deliver: opts.deliver,
+        deliver: deliverDefault,
         timeoutMs: opts.timeoutMs,
       });
-      activeRunId = runId;
-      streamingMessageId = null;
+      activeChatRunId = runId;
       setStatus("waiting");
     } catch (err) {
-      messages.addSystem(`send failed: ${String(err)}`);
+      chatLog.addSystem(`send failed: ${String(err)}`);
       setStatus("error");
     }
     tui.requestRender();
   };
 
-  input.onSubmit = (value) => {
-    const text = value.trim();
-    input.setValue("");
-    if (!text) return;
-    if (text.startsWith("/")) {
-      void handleCommand(text);
+  editor.setAutocompleteProvider(
+    new CombinedAutocompleteProvider(getSlashCommands(), process.cwd()),
+  );
+  editor.onSubmit = (text) => {
+    const value = text.trim();
+    editor.setText("");
+    if (!value) return;
+    if (value.startsWith("/")) {
+      void handleCommand(value);
       return;
     }
-    void sendMessage(text);
+    void sendMessage(value);
+  };
+
+  editor.onEscape = () => {
+    void abortActive();
+  };
+  editor.onCtrlC = () => {
+    const now = Date.now();
+    if (editor.getText().trim().length > 0) {
+      editor.setText("");
+      setStatus("cleared input");
+      tui.requestRender();
+      return;
+    }
+    if (now - lastCtrlCAt < 1000) {
+      client.stop();
+      tui.stop();
+      process.exit(0);
+    }
+    lastCtrlCAt = now;
+    setStatus("press ctrl+c again to exit");
+    tui.requestRender();
+  };
+  editor.onCtrlD = () => {
+    client.stop();
+    tui.stop();
+    process.exit(0);
+  };
+  editor.onCtrlO = () => {
+    toolsExpanded = !toolsExpanded;
+    chatLog.setToolsExpanded(toolsExpanded);
+    setStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    tui.requestRender();
+  };
+  editor.onCtrlL = () => {
+    void openModelSelector();
+  };
+  editor.onCtrlP = () => {
+    void openSessionSelector();
+  };
+  editor.onCtrlT = () => {
+    showThinking = !showThinking;
+    void loadHistory();
   };
 
   client.onEvent = (evt) => {
     if (evt.event === "chat") handleChatEvent(evt.payload);
+    if (evt.event === "agent") handleAgentEvent(evt.payload);
   };
 
   client.onConnected = () => {
+    isConnected = true;
     setStatus("connected");
     updateHeader();
     if (!historyLoaded) {
       void loadHistory().then(() => {
-        messages.addSystem("gateway connected");
+        chatLog.addSystem("gateway connected");
         tui.requestRender();
       });
     } else {
-      messages.addSystem("gateway reconnected");
+      chatLog.addSystem("gateway reconnected");
     }
+    updateFooter();
     tui.requestRender();
   };
 
   client.onDisconnected = (reason) => {
-    messages.addSystem(`gateway disconnected: ${reason || "closed"}`);
+    isConnected = false;
+    chatLog.addSystem(`gateway disconnected: ${reason || "closed"}`);
     setStatus("disconnected");
+    updateFooter();
     tui.requestRender();
   };
 
   client.onGap = (info) => {
-    messages.addSystem(
+    chatLog.addSystem(
       `event gap: expected ${info.expected}, got ${info.received}`,
     );
     tui.requestRender();
@@ -341,7 +719,8 @@ export async function runTui(opts: TuiOptions) {
 
   updateHeader();
   setStatus("connecting");
-  messages.addSystem("connecting...");
+  updateFooter();
+  chatLog.addSystem("connecting...");
   tui.start();
   client.start();
 }

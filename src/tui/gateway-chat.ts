@@ -157,6 +157,10 @@ export class GatewayChatClient {
     return await this.client.request("sessions.reset", { key });
   }
 
+  async getStatus() {
+    return await this.client.request("status");
+  }
+
   async listModels(): Promise<
     Array<{
       id: string;
