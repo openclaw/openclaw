@@ -9,6 +9,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) =>
     `session:${key.trim() || "main"}`,
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";

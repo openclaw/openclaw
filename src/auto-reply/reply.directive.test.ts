@@ -26,6 +26,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) =>
     `session:${key.trim() || "main"}`,
+  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
@@ -107,6 +109,31 @@ describe("directive parsing", () => {
     expect(res.cap).toBe(5);
     expect(res.dropPolicy).toBe("summarize");
     expect(res.cleaned).toBe("please now");
+  });
+
+  it("errors on invalid queue options", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/queue collect debounce:bogus cap:zero drop:maybe", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Invalid debounce");
+      expect(text).toContain("Invalid cap");
+      expect(text).toContain("Invalid drop policy");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
   });
 
   it("extracts reply_to_current tag", () => {

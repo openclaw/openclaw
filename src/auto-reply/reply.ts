@@ -218,9 +218,13 @@ function normalizeQueueDropPolicy(raw?: string): QueueDropPolicy | undefined {
 
 function parseQueueDebounce(raw?: string): number | undefined {
   if (!raw) return undefined;
-  const parsed = parseDurationMs(raw.trim(), { defaultUnit: "ms" });
-  if (!parsed || parsed < 0) return undefined;
-  return Math.round(parsed);
+  try {
+    const parsed = parseDurationMs(raw.trim(), { defaultUnit: "ms" });
+    if (!parsed || parsed < 0) return undefined;
+    return Math.round(parsed);
+  } catch {
+    return undefined;
+  }
 }
 
 function parseQueueCap(raw?: string): number | undefined {
