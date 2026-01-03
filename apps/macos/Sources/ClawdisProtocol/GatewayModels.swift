@@ -701,6 +701,210 @@ public struct ConfigSetParams: Codable {
     }
 }
 
+public struct ConfigSchemaParams: Codable {
+}
+
+public struct ConfigSchemaResponse: Codable {
+    public let schema: AnyCodable
+    public let uihints: [String: AnyCodable]
+    public let version: String
+    public let generatedat: String
+
+    public init(
+        schema: AnyCodable,
+        uihints: [String: AnyCodable],
+        version: String,
+        generatedat: String
+    ) {
+        self.schema = schema
+        self.uihints = uihints
+        self.version = version
+        self.generatedat = generatedat
+    }
+    private enum CodingKeys: String, CodingKey {
+        case schema
+        case uihints = "uiHints"
+        case version
+        case generatedat = "generatedAt"
+    }
+}
+
+public struct WizardStartParams: Codable {
+    public let mode: AnyCodable?
+    public let workspace: String?
+
+    public init(
+        mode: AnyCodable?,
+        workspace: String?
+    ) {
+        self.mode = mode
+        self.workspace = workspace
+    }
+    private enum CodingKeys: String, CodingKey {
+        case mode
+        case workspace
+    }
+}
+
+public struct WizardNextParams: Codable {
+    public let sessionid: String
+    public let answer: [String: AnyCodable]?
+
+    public init(
+        sessionid: String,
+        answer: [String: AnyCodable]?
+    ) {
+        self.sessionid = sessionid
+        self.answer = answer
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case answer
+    }
+}
+
+public struct WizardCancelParams: Codable {
+    public let sessionid: String
+
+    public init(
+        sessionid: String
+    ) {
+        self.sessionid = sessionid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+    }
+}
+
+public struct WizardStatusParams: Codable {
+    public let sessionid: String
+
+    public init(
+        sessionid: String
+    ) {
+        self.sessionid = sessionid
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+    }
+}
+
+public struct WizardStep: Codable {
+    public let id: String
+    public let type: AnyCodable
+    public let title: String?
+    public let message: String?
+    public let options: [[String: AnyCodable]]?
+    public let initialvalue: AnyCodable?
+    public let placeholder: String?
+    public let sensitive: Bool?
+    public let executor: AnyCodable?
+
+    public init(
+        id: String,
+        type: AnyCodable,
+        title: String?,
+        message: String?,
+        options: [[String: AnyCodable]]?,
+        initialvalue: AnyCodable?,
+        placeholder: String?,
+        sensitive: Bool?,
+        executor: AnyCodable?
+    ) {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.message = message
+        self.options = options
+        self.initialvalue = initialvalue
+        self.placeholder = placeholder
+        self.sensitive = sensitive
+        self.executor = executor
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case title
+        case message
+        case options
+        case initialvalue = "initialValue"
+        case placeholder
+        case sensitive
+        case executor
+    }
+}
+
+public struct WizardNextResult: Codable {
+    public let done: Bool
+    public let step: [String: AnyCodable]?
+    public let status: AnyCodable?
+    public let error: String?
+
+    public init(
+        done: Bool,
+        step: [String: AnyCodable]?,
+        status: AnyCodable?,
+        error: String?
+    ) {
+        self.done = done
+        self.step = step
+        self.status = status
+        self.error = error
+    }
+    private enum CodingKeys: String, CodingKey {
+        case done
+        case step
+        case status
+        case error
+    }
+}
+
+public struct WizardStartResult: Codable {
+    public let sessionid: String
+    public let done: Bool
+    public let step: [String: AnyCodable]?
+    public let status: AnyCodable?
+    public let error: String?
+
+    public init(
+        sessionid: String,
+        done: Bool,
+        step: [String: AnyCodable]?,
+        status: AnyCodable?,
+        error: String?
+    ) {
+        self.sessionid = sessionid
+        self.done = done
+        self.step = step
+        self.status = status
+        self.error = error
+    }
+    private enum CodingKeys: String, CodingKey {
+        case sessionid = "sessionId"
+        case done
+        case step
+        case status
+        case error
+    }
+}
+
+public struct WizardStatusResult: Codable {
+    public let status: AnyCodable
+    public let error: String?
+
+    public init(
+        status: AnyCodable,
+        error: String?
+    ) {
+        self.status = status
+        self.error = error
+    }
+    private enum CodingKeys: String, CodingKey {
+        case status
+        case error
+    }
+}
+
 public struct TalkModeParams: Codable {
     public let enabled: Bool
     public let phase: String?

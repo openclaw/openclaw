@@ -140,6 +140,26 @@ export type ConfigSnapshot = {
   issues?: ConfigSnapshotIssue[] | null;
 };
 
+export type ConfigUiHint = {
+  label?: string;
+  help?: string;
+  group?: string;
+  order?: number;
+  advanced?: boolean;
+  sensitive?: boolean;
+  placeholder?: string;
+  itemTemplate?: unknown;
+};
+
+export type ConfigUiHints = Record<string, ConfigUiHint>;
+
+export type ConfigSchemaResponse = {
+  schema: unknown;
+  uiHints: ConfigUiHints;
+  version: string;
+  generatedAt: string;
+};
+
 export type PresenceEntry = {
   instanceId?: string | null;
   host?: string | null;

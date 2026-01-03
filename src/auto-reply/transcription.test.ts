@@ -8,6 +8,7 @@ vi.mock("../globals.js", () => ({
   isVerbose: () => false,
   shouldLogVerbose: () => false,
   logVerbose: vi.fn(),
+  shouldLogVerbose: () => false,
 }));
 
 vi.mock("../process/exec.js", () => ({

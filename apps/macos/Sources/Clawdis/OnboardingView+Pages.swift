@@ -13,6 +13,8 @@ extension OnboardingView {
             self.connectionPage()
         case 2:
             self.anthropicAuthPage()
+        case 3:
+            self.wizardPage()
         case 5:
             self.permissionsPage()
         case 6:

@@ -115,6 +115,11 @@ clawdis onboard --non-interactive \
 
 Add `--json` for a machine‑readable summary.
 
+## Gateway wizard RPC
+
+The Gateway exposes the wizard flow over RPC (`wizard.start`, `wizard.next`, `wizard.cancel`, `wizard.status`).
+Clients (macOS app, Control UI) can render steps without re‑implementing onboarding logic.
+
 ## Signal setup (signal-cli)
 
 The wizard can install `signal-cli` from GitHub releases:

@@ -9,6 +9,8 @@
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
 - UI: centralize tool display metadata and show action/detail summaries across Web Chat, SwiftUI, Android, and the TUI.
+- Onboarding: shared wizard engine powering CLI + macOS via gateway wizard RPC.
+- Config: expose schema + UI hints for generic config forms (Web UI + future clients).
 
 ### Fixes
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
@@ -27,6 +29,7 @@
 - Skills: clarify bear-notes token + callback usage (#120) — thanks @tylerwince.
 - Skills: document Discord `sendMessage` media attachments and `to` format clarification.
 - Gateway: document port configuration + multi-instance isolation.
+- Onboarding/Config: add protocol notes for wizard + schema RPC.
 
 ## 2.0.0-beta5 — 2026-01-03
 

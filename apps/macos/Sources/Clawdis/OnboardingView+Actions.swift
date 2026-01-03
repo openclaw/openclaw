@@ -11,6 +11,7 @@ extension OnboardingView {
     }
 
     func selectUnconfiguredGateway() {
+        Task { await self.onboardingWizard.cancelIfRunning() }
         self.state.connectionMode = .unconfigured
         self.preferredGatewayID = nil
         self.showAdvancedConnection = false
@@ -18,6 +19,7 @@ extension OnboardingView {
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
+        Task { await self.onboardingWizard.cancelIfRunning() }
         self.preferredGatewayID = gateway.stableID
         BridgeDiscoveryPreferences.setPreferredStableID(gateway.stableID)
 
@@ -47,6 +49,7 @@ extension OnboardingView {
     }
 
     func handleNext() {
+        if self.isWizardBlocking { return }
         if self.currentPage < self.pageCount - 1 {
             withAnimation { self.currentPage += 1 }
         } else {

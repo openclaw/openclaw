@@ -1,5 +1,9 @@
 import type { GatewayBrowserClient } from "../gateway";
-import type { ConfigSnapshot } from "../types";
+import type {
+  ConfigSchemaResponse,
+  ConfigSnapshot,
+  ConfigUiHints,
+} from "../types";
 import {
   defaultDiscordActions,
   type DiscordActionForm,
@@ -20,6 +24,13 @@ export type ConfigState = {
   configIssues: unknown[];
   configSaving: boolean;
   configSnapshot: ConfigSnapshot | null;
+  configSchema: unknown | null;
+  configSchemaVersion: string | null;
+  configSchemaLoading: boolean;
+  configUiHints: ConfigUiHints;
+  configForm: Record<string, unknown> | null;
+  configFormDirty: boolean;
+  configFormMode: "form" | "raw";
   lastError: string | null;
   telegramForm: TelegramForm;
   discordForm: DiscordForm;
@@ -43,6 +54,32 @@ export async function loadConfig(state: ConfigState) {
   } finally {
     state.configLoading = false;
   }
+}
+
+export async function loadConfigSchema(state: ConfigState) {
+  if (!state.client || !state.connected) return;
+  if (state.configSchemaLoading) return;
+  state.configSchemaLoading = true;
+  try {
+    const res = (await state.client.request(
+      "config.schema",
+      {},
+    )) as ConfigSchemaResponse;
+    applyConfigSchema(state, res);
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.configSchemaLoading = false;
+  }
+}
+
+export function applyConfigSchema(
+  state: ConfigState,
+  res: ConfigSchemaResponse,
+) {
+  state.configSchema = res.schema ?? null;
+  state.configUiHints = res.uiHints ?? {};
+  state.configSchemaVersion = res.version ?? null;
 }
 
 export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot) {
@@ -239,6 +276,10 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.discordConfigStatus = configInvalid;
   state.signalConfigStatus = configInvalid;
   state.imessageConfigStatus = configInvalid;
+
+  if (!state.configFormDirty) {
+    state.configForm = cloneConfigObject(snapshot.config ?? {});
+  }
 }
 
 export async function saveConfig(state: ConfigState) {
@@ -246,11 +287,114 @@ export async function saveConfig(state: ConfigState) {
   state.configSaving = true;
   state.lastError = null;
   try {
-    await state.client.request("config.set", { raw: state.configRaw });
+    const raw =
+      state.configFormMode === "form" && state.configForm
+        ? `${JSON.stringify(state.configForm, null, 2).trimEnd()}\n`
+        : state.configRaw;
+    await state.client.request("config.set", { raw });
+    state.configFormDirty = false;
     await loadConfig(state);
   } catch (err) {
     state.lastError = String(err);
   } finally {
     state.configSaving = false;
+  }
+}
+
+export function updateConfigFormValue(
+  state: ConfigState,
+  path: Array<string | number>,
+  value: unknown,
+) {
+  const base = cloneConfigObject(state.configForm ?? {});
+  setPathValue(base, path, value);
+  state.configForm = base;
+  state.configFormDirty = true;
+}
+
+export function removeConfigFormValue(
+  state: ConfigState,
+  path: Array<string | number>,
+) {
+  const base = cloneConfigObject(state.configForm ?? {});
+  removePathValue(base, path);
+  state.configForm = base;
+  state.configFormDirty = true;
+}
+
+function cloneConfigObject<T>(value: T): T {
+  if (typeof structuredClone === "function") {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function setPathValue(
+  obj: Record<string, unknown> | unknown[],
+  path: Array<string | number>,
+  value: unknown,
+) {
+  if (path.length === 0) return;
+  let current: Record<string, unknown> | unknown[] = obj;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const key = path[i];
+    const nextKey = path[i + 1];
+    if (typeof key === "number") {
+      if (!Array.isArray(current)) return;
+      if (current[key] == null) {
+        current[key] =
+          typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
+      }
+      current = current[key] as Record<string, unknown> | unknown[];
+    } else {
+      if (typeof current !== "object" || current == null) return;
+      const record = current as Record<string, unknown>;
+      if (record[key] == null) {
+        record[key] =
+          typeof nextKey === "number" ? [] : ({} as Record<string, unknown>);
+      }
+      current = record[key] as Record<string, unknown> | unknown[];
+    }
+  }
+  const lastKey = path[path.length - 1];
+  if (typeof lastKey === "number") {
+    if (Array.isArray(current)) {
+      current[lastKey] = value;
+    }
+    return;
+  }
+  if (typeof current === "object" && current != null) {
+    (current as Record<string, unknown>)[lastKey] = value;
+  }
+}
+
+function removePathValue(
+  obj: Record<string, unknown> | unknown[],
+  path: Array<string | number>,
+) {
+  if (path.length === 0) return;
+  let current: Record<string, unknown> | unknown[] = obj;
+  for (let i = 0; i < path.length - 1; i += 1) {
+    const key = path[i];
+    if (typeof key === "number") {
+      if (!Array.isArray(current)) return;
+      current = current[key] as Record<string, unknown> | unknown[];
+    } else {
+      if (typeof current !== "object" || current == null) return;
+      current = (current as Record<string, unknown>)[key] as
+        | Record<string, unknown>
+        | unknown[];
+    }
+    if (current == null) return;
+  }
+  const lastKey = path[path.length - 1];
+  if (typeof lastKey === "number") {
+    if (Array.isArray(current)) {
+      current.splice(lastKey, 1);
+    }
+    return;
+  }
+  if (typeof current === "object" && current != null) {
+    delete (current as Record<string, unknown>)[lastKey];
   }
 }

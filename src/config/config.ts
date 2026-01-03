@@ -573,6 +573,12 @@ export type ClawdisConfig = {
      * - "message_end": end of the whole assistant message (may include tool blocks)
      */
     blockStreamingBreak?: "text_end" | "message_end";
+    /** Soft block chunking for streamed replies (min/max chars, prefer paragraph/newline). */
+    blockStreamingChunk?: {
+      minChars?: number;
+      maxChars?: number;
+      breakPreference?: "paragraph" | "newline" | "sentence";
+    };
     timeoutSeconds?: number;
     /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
     mediaMaxMb?: number;
@@ -900,7 +906,7 @@ const HooksGmailSchema = z
   })
   .optional();
 
-const ClawdisSchema = z.object({
+export const ClawdisSchema = z.object({
   identity: z
     .object({
       name: z.string().optional(),
@@ -989,6 +995,19 @@ const ClawdisSchema = z.object({
         .optional(),
       blockStreamingBreak: z
         .union([z.literal("text_end"), z.literal("message_end")])
+        .optional(),
+      blockStreamingChunk: z
+        .object({
+          minChars: z.number().int().positive().optional(),
+          maxChars: z.number().int().positive().optional(),
+          breakPreference: z
+            .union([
+              z.literal("paragraph"),
+              z.literal("newline"),
+              z.literal("sentence"),
+            ])
+            .optional(),
+        })
         .optional(),
       timeoutSeconds: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),

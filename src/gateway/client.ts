@@ -146,11 +146,8 @@ export class GatewayClient {
         const pending = this.pending.get(parsed.id);
         if (!pending) return;
         // If the payload is an ack with status accepted, keep waiting for final.
-        const payload = parsed.payload;
-        const status =
-          payload && typeof payload === "object" && "status" in payload
-            ? (payload as { status?: unknown }).status
-            : undefined;
+        const payload = parsed.payload as { status?: unknown } | undefined;
+        const status = payload?.status;
         if (pending.expectFinal && status === "accepted") {
           return;
         }

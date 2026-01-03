@@ -11,6 +11,10 @@ import {
   ChatSendParamsSchema,
   type ConfigGetParams,
   ConfigGetParamsSchema,
+  type ConfigSchemaParams,
+  ConfigSchemaParamsSchema,
+  type ConfigSchemaResponse,
+  ConfigSchemaResponseSchema,
   type ConfigSetParams,
   ConfigSetParamsSchema,
   type ConnectParams,
@@ -105,6 +109,22 @@ import {
   WebLoginStartParamsSchema,
   type WebLoginWaitParams,
   WebLoginWaitParamsSchema,
+  type WizardCancelParams,
+  WizardCancelParamsSchema,
+  type WizardNextParams,
+  WizardNextParamsSchema,
+  type WizardNextResult,
+  WizardNextResultSchema,
+  type WizardStartParams,
+  WizardStartParamsSchema,
+  type WizardStartResult,
+  WizardStartResultSchema,
+  type WizardStatusParams,
+  WizardStatusParamsSchema,
+  type WizardStatusResult,
+  WizardStatusResultSchema,
+  type WizardStep,
+  WizardStepSchema,
 } from "./schema.js";
 
 const ajv = new (
@@ -173,6 +193,21 @@ export const validateConfigGetParams = ajv.compile<ConfigGetParams>(
 );
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(
   ConfigSetParamsSchema,
+);
+export const validateConfigSchemaParams = ajv.compile<ConfigSchemaParams>(
+  ConfigSchemaParamsSchema,
+);
+export const validateWizardStartParams = ajv.compile<WizardStartParams>(
+  WizardStartParamsSchema,
+);
+export const validateWizardNextParams = ajv.compile<WizardNextParams>(
+  WizardNextParamsSchema,
+);
+export const validateWizardCancelParams = ajv.compile<WizardCancelParams>(
+  WizardCancelParamsSchema,
+);
+export const validateWizardStatusParams = ajv.compile<WizardStatusParams>(
+  WizardStatusParamsSchema,
 );
 export const validateTalkModeParams =
   ajv.compile<TalkModeParams>(TalkModeParamsSchema);
@@ -258,6 +293,16 @@ export {
   SessionsCompactParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
+  ConfigSchemaParamsSchema,
+  ConfigSchemaResponseSchema,
+  WizardStartParamsSchema,
+  WizardNextParamsSchema,
+  WizardCancelParamsSchema,
+  WizardStatusParamsSchema,
+  WizardStepSchema,
+  WizardNextResultSchema,
+  WizardStartResultSchema,
+  WizardStatusResultSchema,
   ProvidersStatusParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
@@ -304,6 +349,16 @@ export type {
   NodePairApproveParams,
   ConfigGetParams,
   ConfigSetParams,
+  ConfigSchemaParams,
+  ConfigSchemaResponse,
+  WizardStartParams,
+  WizardNextParams,
+  WizardCancelParams,
+  WizardStatusParams,
+  WizardStep,
+  WizardNextResult,
+  WizardStartResult,
+  WizardStatusResult,
   TalkModeParams,
   ProvidersStatusParams,
   WebLoginStartParams,
