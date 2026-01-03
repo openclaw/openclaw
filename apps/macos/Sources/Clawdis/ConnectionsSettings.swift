@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct ConnectionsSettings: View {
-    private enum ConnectionProvider: String, CaseIterable, Identifiable {
+    private enum ConnectionProvider: String, CaseIterable, Identifiable, Hashable {
         case whatsapp
         case telegram
         case discord
@@ -20,9 +20,40 @@ struct ConnectionsSettings: View {
             case .imessage: 4
             }
         }
+
+        var title: String {
+            switch self {
+            case .whatsapp: "WhatsApp"
+            case .telegram: "Telegram"
+            case .discord: "Discord"
+            case .signal: "Signal"
+            case .imessage: "iMessage"
+            }
+        }
+
+        var detailTitle: String {
+            switch self {
+            case .whatsapp: "WhatsApp Web"
+            case .telegram: "Telegram Bot"
+            case .discord: "Discord Bot"
+            case .signal: "Signal REST"
+            case .imessage: "iMessage (imsg)"
+            }
+        }
+
+        var systemImage: String {
+            switch self {
+            case .whatsapp: "message"
+            case .telegram: "paperplane"
+            case .discord: "bubble.left.and.bubble.right"
+            case .signal: "antenna.radiowaves.left.and.right"
+            case .imessage: "message.fill"
+            }
+        }
     }
 
     @Bindable var store: ConnectionsStore
+    @State private var selectedProvider: ConnectionProvider? = nil
     @State private var showTelegramToken = false
     @State private var showDiscordToken = false
 
@@ -31,47 +62,189 @@ struct ConnectionsSettings: View {
     }
 
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
-                self.header
-                ForEach(self.orderedProviders) { provider in
-                    self.providerSection(provider)
+        NavigationSplitView {
+            self.sidebar
+        } detail: {
+            self.detail
+        }
+        .onAppear {
+            self.store.start()
+            self.ensureSelection()
+        }
+        .onChange(of: self.orderedProviders) { _, _ in
+            self.ensureSelection()
+        }
+        .onDisappear { self.store.stop() }
+    }
+
+    private var sidebar: some View {
+        List(selection: self.$selectedProvider) {
+            if !self.enabledProviders.isEmpty {
+                Section("Configured") {
+                    ForEach(self.enabledProviders) { provider in
+                        self.sidebarRow(provider)
+                            .tag(provider)
+                    }
                 }
+            }
+
+            if !self.availableProviders.isEmpty {
+                Section("Available") {
+                    ForEach(self.availableProviders) { provider in
+                        self.sidebarRow(provider)
+                            .tag(provider)
+                    }
+                }
+            }
+        }
+        .listStyle(.sidebar)
+        .frame(minWidth: 210, idealWidth: 230, maxWidth: 260)
+    }
+
+    private var detail: some View {
+        Group {
+            if let provider = self.selectedProvider {
+                self.providerDetail(provider)
+            } else {
+                self.emptyDetail
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var emptyDetail: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Connections")
+                .font(.title3.weight(.semibold))
+            Text("Select a provider to view status and settings.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 24)
+        .padding(.vertical, 18)
+    }
+
+    private func providerDetail(_ provider: ConnectionProvider) -> some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 16) {
+                self.detailHeader(for: provider)
+                Divider()
+                self.providerSection(provider)
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 24)
             .padding(.vertical, 18)
         }
-        .onAppear { self.store.start() }
-        .onDisappear { self.store.stop() }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Connections")
-                .font(.title3.weight(.semibold))
-            Text("Link and monitor messaging providers.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
+    private func sidebarRow(_ provider: ConnectionProvider) -> some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(self.providerTint(provider))
+                .frame(width: 8, height: 8)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(provider.title)
+                Text(self.providerSummary(provider))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func detailHeader(for provider: ConnectionProvider) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label(provider.detailTitle, systemImage: provider.systemImage)
+                    .font(.title3.weight(.semibold))
+                self.statusBadge(
+                    self.providerSummary(provider),
+                    color: self.providerTint(provider))
+                Spacer()
+                self.providerHeaderActions(provider)
+            }
+
+            HStack(spacing: 10) {
+                Text("Last check \(self.providerLastCheckText(provider))")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if self.providerHasError(provider) {
+                    Text("Error")
+                        .font(.caption2.weight(.semibold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.red.opacity(0.15))
+                        .foregroundStyle(.red)
+                        .clipShape(Capsule())
+                }
+            }
+
+            if let details = self.providerDetails(provider) {
+                Text(details)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
-    private var whatsAppSection: some View {
-        GroupBox("WhatsApp") {
+    private func statusBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(color.opacity(0.16))
+            .foregroundStyle(color)
+            .clipShape(Capsule())
+    }
+
+    private func formSection(_ title: String, @ViewBuilder content: () -> some View) -> some View {
+        GroupBox(title) {
             VStack(alignment: .leading, spacing: 10) {
-                self.providerHeader(
-                    title: "WhatsApp Web",
-                    color: self.whatsAppTint,
-                    subtitle: self.whatsAppSummary)
+                content()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
 
-                if let details = self.whatsAppDetails {
-                    Text(details)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder
+    private func providerHeaderActions(_ provider: ConnectionProvider) -> some View {
+        HStack(spacing: 8) {
+            if provider == .whatsapp {
+                Button("Logout") {
+                    Task { await self.store.logoutWhatsApp() }
                 }
+                .buttonStyle(.bordered)
+                .disabled(self.store.whatsappBusy)
+            }
 
+            if provider == .telegram {
+                Button("Logout") {
+                    Task { await self.store.logoutTelegram() }
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.store.telegramBusy)
+            }
+
+            Button {
+                Task { await self.store.refresh(probe: true) }
+            } label: {
+                if self.store.isRefreshing {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Refresh")
+                }
+            }
+            .buttonStyle(.bordered)
+            .disabled(self.store.isRefreshing)
+        }
+        .controlSize(.small)
+    }
+
+    private var whatsAppSection: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Linking") {
                 if let message = self.store.whatsappLoginMessage {
                     Text(message)
                         .font(.caption)
@@ -105,52 +278,16 @@ struct ConnectionsSettings: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(self.store.whatsappBusy)
-
-                    Spacer()
-
-                    Button("Logout") {
-                        Task { await self.store.logoutWhatsApp() }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.whatsappBusy)
-
-                    Button("Refresh") {
-                        Task { await self.store.refresh(probe: true) }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.isRefreshing)
                 }
                 .font(.caption)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var telegramSection: some View {
-        GroupBox("Telegram") {
-            VStack(alignment: .leading, spacing: 10) {
-                self.providerHeader(
-                    title: "Telegram Bot",
-                    color: self.telegramTint,
-                    subtitle: self.telegramSummary)
-
-                if let details = self.telegramDetails {
-                    Text(details)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let status = self.store.configStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Divider().padding(.vertical, 2)
-
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Authentication") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Bot token")
                         if self.showTelegramToken {
@@ -166,6 +303,11 @@ struct ConnectionsSettings: View {
                             .toggleStyle(.switch)
                             .disabled(self.isTelegramTokenLocked)
                     }
+                }
+            }
+
+            self.formSection("Access") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Require mention")
                         Toggle("", isOn: self.$store.telegramRequireMention)
@@ -177,11 +319,11 @@ struct ConnectionsSettings: View {
                         TextField("123456789, @team", text: self.$store.telegramAllowFrom)
                             .textFieldStyle(.roundedBorder)
                     }
-                    GridRow {
-                        self.gridLabel("Proxy")
-                        TextField("socks5://localhost:9050", text: self.$store.telegramProxy)
-                            .textFieldStyle(.roundedBorder)
-                    }
+                }
+            }
+
+            self.formSection("Webhook") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Webhook URL")
                         TextField("https://example.com/telegram-webhook", text: self.$store.telegramWebhookUrl)
@@ -198,71 +340,49 @@ struct ConnectionsSettings: View {
                             .textFieldStyle(.roundedBorder)
                     }
                 }
-
-                if self.isTelegramTokenLocked {
-                    Text("Token set via TELEGRAM_BOT_TOKEN env; config edits won’t override it.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.store.saveTelegramConfig() }
-                    } label: {
-                        if self.store.isSavingConfig {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Save")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.store.isSavingConfig)
-
-                    Spacer()
-
-                    Button("Logout") {
-                        Task { await self.store.logoutTelegram() }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.telegramBusy)
-
-                    Button("Refresh") {
-                        Task { await self.store.refresh(probe: true) }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.isRefreshing)
-                }
-                .font(.caption)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            self.formSection("Network") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
+                        self.gridLabel("Proxy")
+                        TextField("socks5://localhost:9050", text: self.$store.telegramProxy)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+            }
+
+            if self.isTelegramTokenLocked {
+                Text("Token set via TELEGRAM_BOT_TOKEN env; config edits won’t override it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            self.configStatusMessage
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await self.store.saveTelegramConfig() }
+                } label: {
+                    if self.store.isSavingConfig {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.store.isSavingConfig)
+
+                Spacer()
+            }
+            .font(.caption)
         }
     }
 
     private var discordSection: some View {
-        GroupBox("Discord") {
-            VStack(alignment: .leading, spacing: 10) {
-                self.providerHeader(
-                    title: "Discord Bot",
-                    color: self.discordTint,
-                    subtitle: self.discordSummary)
-
-                if let details = self.discordDetails {
-                    Text(details)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let status = self.store.configStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Divider().padding(.vertical, 2)
-
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Authentication") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Enabled")
                         Toggle("", isOn: self.$store.discordEnabled)
@@ -284,6 +404,11 @@ struct ConnectionsSettings: View {
                             .toggleStyle(.switch)
                             .disabled(self.isDiscordTokenLocked)
                     }
+                }
+            }
+
+            self.formSection("Messages") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Allow DMs from")
                         TextField("123456789, username#1234", text: self.$store.discordAllowFrom)
@@ -307,6 +432,20 @@ struct ConnectionsSettings: View {
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
+                        self.gridLabel("Reply to mode")
+                        Picker("", selection: self.$store.discordReplyToMode) {
+                            Text("off").tag("off")
+                            Text("first").tag("first")
+                            Text("all").tag("all")
+                        }
+                        .labelsHidden()
+                    }
+                }
+            }
+
+            self.formSection("Limits") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
+                    GridRow {
                         self.gridLabel("Media max MB")
                         TextField("8", text: self.$store.discordMediaMaxMb)
                             .textFieldStyle(.roundedBorder)
@@ -321,17 +460,13 @@ struct ConnectionsSettings: View {
                         TextField("2000", text: self.$store.discordTextChunkLimit)
                             .textFieldStyle(.roundedBorder)
                     }
+                }
+            }
+
+            self.formSection("Slash command") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
-                        self.gridLabel("Reply to mode")
-                        Picker("", selection: self.$store.discordReplyToMode) {
-                            Text("off").tag("off")
-                            Text("first").tag("first")
-                            Text("all").tag("all")
-                        }
-                        .labelsHidden()
-                    }
-                    GridRow {
-                        self.gridLabel("Slash command")
+                        self.gridLabel("Enabled")
                         Toggle("", isOn: self.$store.discordSlashEnabled)
                             .labelsHidden()
                             .toggleStyle(.checkbox)
@@ -342,24 +477,20 @@ struct ConnectionsSettings: View {
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
-                        self.gridLabel("Slash session prefix")
+                        self.gridLabel("Session prefix")
                         TextField("discord:slash", text: self.$store.discordSlashSessionPrefix)
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
-                        self.gridLabel("Slash ephemeral")
+                        self.gridLabel("Ephemeral")
                         Toggle("", isOn: self.$store.discordSlashEphemeral)
                             .labelsHidden()
                             .toggleStyle(.checkbox)
                     }
                 }
+            }
 
-                Divider().padding(.vertical, 2)
-
-                Text("Guilds")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
+            GroupBox("Guilds") {
                 VStack(alignment: .leading, spacing: 12) {
                     ForEach($store.discordGuilds) { $guild in
                         VStack(alignment: .leading, spacing: 10) {
@@ -372,7 +503,7 @@ struct ConnectionsSettings: View {
                                 .buttonStyle(.bordered)
                             }
 
-                            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                                 GridRow {
                                     self.gridLabel("Slug")
                                     TextField("optional slug", text: $guild.slug)
@@ -426,14 +557,11 @@ struct ConnectionsSettings: View {
                     }
                     .buttonStyle(.bordered)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
 
-                Divider().padding(.vertical, 2)
-
-                Text("Tool actions")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+            GroupBox("Tool actions") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Reactions")
                         Toggle("", isOn: self.$store.discordActionReactions)
@@ -525,65 +653,40 @@ struct ConnectionsSettings: View {
                             .toggleStyle(.checkbox)
                     }
                 }
-
-                if self.isDiscordTokenLocked {
-                    Text("Token set via DISCORD_BOT_TOKEN env; config edits won’t override it.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.store.saveDiscordConfig() }
-                    } label: {
-                        if self.store.isSavingConfig {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Save")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.store.isSavingConfig)
-
-                    Spacer()
-
-                    Button("Refresh") {
-                        Task { await self.store.refresh(probe: true) }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.isRefreshing)
-                }
-                .font(.caption)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if self.isDiscordTokenLocked {
+                Text("Token set via DISCORD_BOT_TOKEN env; config edits won’t override it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            self.configStatusMessage
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await self.store.saveDiscordConfig() }
+                } label: {
+                    if self.store.isSavingConfig {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.store.isSavingConfig)
+
+                Spacer()
+            }
+            .font(.caption)
         }
     }
 
     private var signalSection: some View {
-        GroupBox("Signal") {
-            VStack(alignment: .leading, spacing: 10) {
-                self.providerHeader(
-                    title: "Signal REST",
-                    color: self.signalTint,
-                    subtitle: self.signalSummary)
-
-                if let details = self.signalDetails {
-                    Text(details)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let status = self.store.configStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Divider().padding(.vertical, 2)
-
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Connection") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Enabled")
                         Toggle("", isOn: self.$store.signalEnabled)
@@ -615,6 +718,11 @@ struct ConnectionsSettings: View {
                         TextField("signal-cli", text: self.$store.signalCliPath)
                             .textFieldStyle(.roundedBorder)
                     }
+                }
+            }
+
+            self.formSection("Behavior") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Auto start")
                         Toggle("", isOn: self.$store.signalAutoStart)
@@ -649,6 +757,11 @@ struct ConnectionsSettings: View {
                             .labelsHidden()
                             .toggleStyle(.checkbox)
                     }
+                }
+            }
+
+            self.formSection("Access & limits") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Allow from")
                         TextField("12345, +1555", text: self.$store.signalAllowFrom)
@@ -660,59 +773,33 @@ struct ConnectionsSettings: View {
                             .textFieldStyle(.roundedBorder)
                     }
                 }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.store.saveSignalConfig() }
-                    } label: {
-                        if self.store.isSavingConfig {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Save")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.store.isSavingConfig)
-
-                    Spacer()
-
-                    Button("Refresh") {
-                        Task { await self.store.refresh(probe: true) }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.isRefreshing)
-                }
-                .font(.caption)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            self.configStatusMessage
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await self.store.saveSignalConfig() }
+                } label: {
+                    if self.store.isSavingConfig {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.store.isSavingConfig)
+
+                Spacer()
+            }
+            .font(.caption)
         }
     }
 
     private var imessageSection: some View {
-        GroupBox("iMessage") {
-            VStack(alignment: .leading, spacing: 10) {
-                self.providerHeader(
-                    title: "iMessage (imsg)",
-                    color: self.imessageTint,
-                    subtitle: self.imessageSummary)
-
-                if let details = self.imessageDetails {
-                    Text(details)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if let status = self.store.configStatus {
-                    Text(status)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                Divider().padding(.vertical, 2)
-
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+        VStack(alignment: .leading, spacing: 16) {
+            self.formSection("Connection") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Enabled")
                         Toggle("", isOn: self.$store.imessageEnabled)
@@ -739,6 +826,11 @@ struct ConnectionsSettings: View {
                         .labelsHidden()
                         .pickerStyle(.menu)
                     }
+                }
+            }
+
+            self.formSection("Behavior") {
+                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 8) {
                     GridRow {
                         self.gridLabel("Region")
                         TextField("US", text: self.$store.imessageRegion)
@@ -761,31 +853,26 @@ struct ConnectionsSettings: View {
                             .textFieldStyle(.roundedBorder)
                     }
                 }
-
-                HStack(spacing: 12) {
-                    Button {
-                        Task { await self.store.saveIMessageConfig() }
-                    } label: {
-                        if self.store.isSavingConfig {
-                            ProgressView().controlSize(.small)
-                        } else {
-                            Text("Save")
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(self.store.isSavingConfig)
-
-                    Spacer()
-
-                    Button("Refresh") {
-                        Task { await self.store.refresh(probe: true) }
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(self.store.isRefreshing)
-                }
-                .font(.caption)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            self.configStatusMessage
+
+            HStack(spacing: 12) {
+                Button {
+                    Task { await self.store.saveIMessageConfig() }
+                } label: {
+                    if self.store.isSavingConfig {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save")
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(self.store.isSavingConfig)
+
+                Spacer()
+            }
+            .font(.caption)
         }
     }
 
@@ -1025,6 +1112,24 @@ struct ConnectionsSettings: View {
         }
     }
 
+    private var enabledProviders: [ConnectionProvider] {
+        self.orderedProviders.filter { self.providerEnabled($0) }
+    }
+
+    private var availableProviders: [ConnectionProvider] {
+        self.orderedProviders.filter { !self.providerEnabled($0) }
+    }
+
+    private func ensureSelection() {
+        guard let selected = self.selectedProvider else {
+            self.selectedProvider = self.orderedProviders.first
+            return
+        }
+        if !self.orderedProviders.contains(selected) {
+            self.selectedProvider = self.orderedProviders.first
+        }
+    }
+
     private func providerEnabled(_ provider: ConnectionProvider) -> Bool {
         switch provider {
         case .whatsapp:
@@ -1061,26 +1166,106 @@ struct ConnectionsSettings: View {
         }
     }
 
-    private func providerHeader(title: String, color: Color, subtitle: String) -> some View {
-        HStack(spacing: 10) {
-            Circle()
-                .fill(color)
-                .frame(width: 10, height: 10)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title)
-                    .font(.headline)
-                Text(subtitle)
-                    .font(.caption)
-                    .foregroundStyle(color)
-            }
-            Spacer()
+    @ViewBuilder
+    private var configStatusMessage: some View {
+        if let status = self.store.configStatus {
+            Text(status)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func providerTint(_ provider: ConnectionProvider) -> Color {
+        switch provider {
+        case .whatsapp:
+            self.whatsAppTint
+        case .telegram:
+            self.telegramTint
+        case .discord:
+            self.discordTint
+        case .signal:
+            self.signalTint
+        case .imessage:
+            self.imessageTint
+        }
+    }
+
+    private func providerSummary(_ provider: ConnectionProvider) -> String {
+        switch provider {
+        case .whatsapp:
+            self.whatsAppSummary
+        case .telegram:
+            self.telegramSummary
+        case .discord:
+            self.discordSummary
+        case .signal:
+            self.signalSummary
+        case .imessage:
+            self.imessageSummary
+        }
+    }
+
+    private func providerDetails(_ provider: ConnectionProvider) -> String? {
+        switch provider {
+        case .whatsapp:
+            self.whatsAppDetails
+        case .telegram:
+            self.telegramDetails
+        case .discord:
+            self.discordDetails
+        case .signal:
+            self.signalDetails
+        case .imessage:
+            self.imessageDetails
+        }
+    }
+
+    private func providerLastCheckText(_ provider: ConnectionProvider) -> String {
+        guard let date = self.providerLastCheck(provider) else { return "never" }
+        return relativeAge(from: date)
+    }
+
+    private func providerLastCheck(_ provider: ConnectionProvider) -> Date? {
+        switch provider {
+        case .whatsapp:
+            guard let status = self.store.snapshot?.whatsapp else { return nil }
+            return self.date(fromMs: status.lastEventAt ?? status.lastMessageAt ?? status.lastConnectedAt)
+        case .telegram:
+            return self.date(fromMs: self.store.snapshot?.telegram.lastProbeAt)
+        case .discord:
+            return self.date(fromMs: self.store.snapshot?.discord?.lastProbeAt)
+        case .signal:
+            return self.date(fromMs: self.store.snapshot?.signal?.lastProbeAt)
+        case .imessage:
+            return self.date(fromMs: self.store.snapshot?.imessage?.lastProbeAt)
+        }
+    }
+
+    private func providerHasError(_ provider: ConnectionProvider) -> Bool {
+        switch provider {
+        case .whatsapp:
+            guard let status = self.store.snapshot?.whatsapp else { return false }
+            return status.lastError?.isEmpty == false || status.lastDisconnect?.loggedOut == true
+        case .telegram:
+            guard let status = self.store.snapshot?.telegram else { return false }
+            return status.lastError?.isEmpty == false || status.probe?.ok == false
+        case .discord:
+            guard let status = self.store.snapshot?.discord else { return false }
+            return status.lastError?.isEmpty == false || status.probe?.ok == false
+        case .signal:
+            guard let status = self.store.snapshot?.signal else { return false }
+            return status.lastError?.isEmpty == false || status.probe?.ok == false
+        case .imessage:
+            guard let status = self.store.snapshot?.imessage else { return false }
+            return status.lastError?.isEmpty == false || status.probe?.ok == false
         }
     }
 
     private func gridLabel(_ text: String) -> some View {
         Text(text)
             .font(.callout.weight(.semibold))
-            .frame(width: 120, alignment: .leading)
+            .frame(width: 140, alignment: .leading)
     }
 
     private func date(fromMs ms: Double?) -> Date? {
