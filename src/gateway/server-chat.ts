@@ -186,12 +186,18 @@ export function createAgentEventHandler({
   };
 
   return (evt: AgentEventPayload) => {
+    const chatLink = chatRunState.registry.peek(evt.runId);
+    const sessionKey =
+      chatLink?.sessionKey ?? resolveSessionKeyForRun(evt.runId);
+    // Include sessionKey so Control UI can filter tool streams per session.
+    const agentPayload = sessionKey ? { ...evt, sessionKey } : evt;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     if (evt.seq !== last + 1) {
       broadcast("agent", {
         runId: evt.runId,
         stream: "error",
         ts: Date.now(),
+        sessionKey,
         data: {
           reason: "seq gap",
           expected: last + 1,
@@ -200,18 +206,15 @@ export function createAgentEventHandler({
       });
     }
     agentRunSeq.set(evt.runId, evt.seq);
-    broadcast("agent", evt);
+    broadcast("agent", agentPayload);
 
-    const chatLink = chatRunState.registry.peek(evt.runId);
-    const sessionKey =
-      chatLink?.sessionKey ?? resolveSessionKeyForRun(evt.runId);
     const jobState =
       evt.stream === "job" && typeof evt.data?.state === "string"
         ? (evt.data.state as "done" | "error" | string)
         : null;
 
     if (sessionKey) {
-      bridgeSendToSession(sessionKey, "agent", evt);
+      bridgeSendToSession(sessionKey, "agent", agentPayload);
       if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
         const clientRunId = chatLink?.clientRunId ?? evt.runId;
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);

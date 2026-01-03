@@ -14,6 +14,10 @@ You must set an agent home directory via `agent.workspace`. CLAWDIS uses this as
 
 Recommended: use `clawdis setup` to create `~/.clawdis/clawdis.json` if missing and initialize the workspace files.
 
+If `agent.sandbox` is enabled, non-main sessions can override this with
+per-session workspaces under `agent.sandbox.workspaceRoot` (see
+`docs/configuration.md`).
+
 ## Bootstrap files (injected)
 
 Inside `agent.workspace`, CLAWDIS expects these user-editable files:
@@ -85,6 +89,8 @@ via `agent.blockStreamingDefault: "off"` if you only want the final response.
 Tune the boundary via `agent.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
 Control soft block chunking with `agent.blockStreamingChunk` (defaults to
 800–1200 chars; prefers paragraph breaks, then newlines; sentences last).
+Verbose tool summaries are emitted at tool start (no debounce); Control UI
+streams tool output via agent events when available.
 
 ## Configuration (minimal)
 

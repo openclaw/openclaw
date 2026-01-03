@@ -11,6 +11,7 @@ export type AgentEventPayload = {
   stream: AgentEventStream;
   ts: number;
   data: Record<string, unknown>;
+  sessionKey?: string;
 };
 
 export type AgentRunContext = {

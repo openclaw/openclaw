@@ -2,10 +2,7 @@ import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
-import {
-  createToolDebouncer,
-  formatToolAggregate,
-} from "../auto-reply/tool-meta.js";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { splitMediaFromOutput } from "../media/parse.js";
 import { defaultRuntime } from "../runtime.js";
@@ -113,6 +110,7 @@ export function subscribeEmbeddedPiSession(params: {
   const assistantTexts: string[] = [];
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
+  const toolSummaryById = new Set<string>();
   const blockReplyBreak = params.blockReplyBreak ?? "text_end";
   let deltaBuffer = "";
   let blockBuffer = "";
@@ -176,17 +174,25 @@ export function subscribeEmbeddedPiSession(params: {
     return afterStart.slice(0, endIndex);
   };
 
-  const toolDebouncer = createToolDebouncer((toolName, metas) => {
-    if (!params.onPartialReply) return;
-    const text = formatToolAggregate(toolName, metas);
-    const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
-    void params.onPartialReply({
-      text: cleanedText,
-      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-    });
-  });
-
   const blockChunking = params.blockReplyChunking;
+  const shouldEmitToolResult = () =>
+    typeof params.shouldEmitToolResult === "function"
+      ? params.shouldEmitToolResult()
+      : params.verboseLevel === "on";
+  const emitToolSummary = (toolName?: string, meta?: string) => {
+    if (!params.onToolResult) return;
+    const agg = formatToolAggregate(toolName, meta ? [meta] : undefined);
+    const { text: cleanedText, mediaUrls } = splitMediaFromOutput(agg);
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
+    try {
+      void params.onToolResult({
+        text: cleanedText,
+        mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+      });
+    } catch {
+      // ignore tool result delivery failures
+    }
+  };
 
   const findSentenceBreak = (window: string, minChars: number): number => {
     if (!window) return -1;
@@ -298,12 +304,12 @@ export function subscribeEmbeddedPiSession(params: {
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
+    toolSummaryById.clear();
     deltaBuffer = "";
     blockBuffer = "";
     lastStreamedAssistant = undefined;
     lastBlockReplyText = undefined;
     assistantTextBaseline = 0;
-    toolDebouncer.flush();
   };
 
   const unsubscribe = params.session.subscribe(
@@ -336,6 +342,15 @@ export function subscribeEmbeddedPiSession(params: {
           stream: "tool",
           data: { phase: "start", name: toolName, toolCallId },
         });
+
+        if (
+          params.onToolResult &&
+          shouldEmitToolResult() &&
+          !toolSummaryById.has(toolCallId)
+        ) {
+          toolSummaryById.add(toolCallId);
+          emitToolSummary(toolName, meta);
+        }
       }
 
       if (evt.type === "tool_execution_update") {
@@ -382,7 +397,8 @@ export function subscribeEmbeddedPiSession(params: {
         const sanitizedResult = sanitizeToolResult(result);
         const meta = toolMetaById.get(toolCallId);
         toolMetas.push({ toolName, meta });
-        toolDebouncer.push(toolName, meta);
+        toolMetaById.delete(toolCallId);
+        toolSummaryById.delete(toolCallId);
 
         emitAgentEvent({
           runId: params.runId,
@@ -406,25 +422,6 @@ export function subscribeEmbeddedPiSession(params: {
             isError,
           },
         });
-
-        const emitToolResult =
-          typeof params.shouldEmitToolResult === "function"
-            ? params.shouldEmitToolResult()
-            : params.verboseLevel === "on";
-        if (emitToolResult && params.onToolResult) {
-          const agg = formatToolAggregate(toolName, meta ? [meta] : undefined);
-          const { text: cleanedText, mediaUrls } = splitMediaFromOutput(agg);
-          if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-            try {
-              void params.onToolResult({
-                text: cleanedText,
-                mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-              });
-            } catch {
-              // ignore tool result delivery failures
-            }
-          }
-        }
       }
 
       if (evt.type === "message_update") {
@@ -626,7 +623,6 @@ export function subscribeEmbeddedPiSession(params: {
 
       if (evt.type === "agent_end") {
         defaultRuntime.log?.(`embedded run agent end: runId=${params.runId}`);
-        toolDebouncer.flush();
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {
@@ -640,7 +636,6 @@ export function subscribeEmbeddedPiSession(params: {
     assistantTexts,
     toolMetas,
     unsubscribe,
-    flush: () => toolDebouncer.flush(),
     waitForCompactionRetry: () => {
       if (compactionInFlight || pendingCompactionRetry > 0) {
         ensureCompactionPromise();

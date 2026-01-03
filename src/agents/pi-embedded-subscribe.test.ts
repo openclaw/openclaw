@@ -630,4 +630,107 @@ describe("subscribeEmbeddedPiSession", () => {
     await waitPromise;
     expect(resolved).toBe(true);
   });
+
+  it("emits tool summaries at tool start when verbose is on", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-tool",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-1",
+      args: { path: "/tmp/a.txt" },
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const payload = onToolResult.mock.calls[0][0];
+    expect(payload.text).toContain("/tmp/a.txt");
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "read",
+      toolCallId: "tool-1",
+      isError: false,
+      result: "ok",
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips tool summaries when shouldEmitToolResult is false", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-tool-off",
+      shouldEmitToolResult: () => false,
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-2",
+      args: { path: "/tmp/b.txt" },
+    });
+
+    expect(onToolResult).not.toHaveBeenCalled();
+  });
+
+  it("emits tool summaries when shouldEmitToolResult overrides verbose", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-tool-override",
+      verboseLevel: "off",
+      shouldEmitToolResult: () => true,
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-3",
+      args: { path: "/tmp/c.txt" },
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+  });
 });

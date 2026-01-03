@@ -48,6 +48,7 @@ import {
 } from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
 import { createClawdisCodingTools } from "./pi-tools.js";
+import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -362,7 +363,13 @@ export async function runEmbeddedPiAgent(params: {
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
       const started = Date.now();
-      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+      const sandbox = await resolveSandboxContext({
+        config: params.config,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+      });
+      const workspaceDir = sandbox?.workspaceDir ?? params.workspaceDir;
+      const resolvedWorkspace = resolveUserPath(workspaceDir);
       const prevCwd = process.cwd();
 
       const provider =
@@ -425,6 +432,7 @@ export async function runEmbeddedPiAgent(params: {
         const tools = createClawdisCodingTools({
           bash: params.config?.agent?.bash,
           surface: params.surface,
+          sandbox,
         });
         const machineName = await getMachineDisplayName();
         const runtimeInfo = {
@@ -497,7 +505,6 @@ export async function runEmbeddedPiAgent(params: {
           assistantTexts,
           toolMetas,
           unsubscribe,
-          flush: flushToolDebouncer,
           waitForCompactionRetry,
         } = subscribeEmbeddedPiSession({
           session,
@@ -571,7 +578,6 @@ export async function runEmbeddedPiAgent(params: {
             abortWarnTimer = undefined;
           }
           unsubscribe();
-          flushToolDebouncer();
           if (ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === queueHandle) {
             ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
           }

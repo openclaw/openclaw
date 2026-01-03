@@ -81,6 +81,62 @@ type EventLogEntry = {
   payload?: unknown;
 };
 
+const TOOL_STREAM_LIMIT = 50;
+
+type AgentEventPayload = {
+  runId: string;
+  seq: number;
+  stream: string;
+  ts: number;
+  sessionKey?: string;
+  data: Record<string, unknown>;
+};
+
+type ToolStreamEntry = {
+  toolCallId: string;
+  runId: string;
+  sessionKey?: string;
+  name: string;
+  args?: unknown;
+  output?: string;
+  startedAt: number;
+  updatedAt: number;
+  message: Record<string, unknown>;
+};
+
+function extractToolOutputText(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  const content = record.content;
+  if (!Array.isArray(content)) return null;
+  const parts = content
+    .map((item) => {
+      if (!item || typeof item !== "object") return null;
+      const entry = item as Record<string, unknown>;
+      if (entry.type === "text" && typeof entry.text === "string") return entry.text;
+      return null;
+    })
+    .filter((part): part is string => Boolean(part));
+  if (parts.length === 0) return null;
+  return parts.join("\n");
+}
+
+function formatToolOutput(value: unknown): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  const contentText = extractToolOutputText(value);
+  if (contentText) return contentText;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
 declare global {
   interface Window {
     __CLAWDIS_CONTROL_UI_BASE_PATH__?: string;
@@ -125,6 +181,7 @@ export class ClawdisApp extends LitElement {
   @state() chatSending = false;
   @state() chatMessage = "";
   @state() chatMessages: unknown[] = [];
+  @state() chatToolMessages: unknown[] = [];
   @state() chatStream: string | null = null;
   @state() chatRunId: string | null = null;
   @state() chatThinkingLevel: string | null = null;
@@ -260,6 +317,8 @@ export class ClawdisApp extends LitElement {
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
   private nodesPollInterval: number | null = null;
+  private toolStreamById = new Map<string, ToolStreamEntry>();
+  private toolStreamOrder: string[] = [];
   basePath = "";
   private popStateHandler = () => this.onPopState();
   private themeMedia: MediaQueryList | null = null;
@@ -292,6 +351,7 @@ export class ClawdisApp extends LitElement {
     if (
       this.tab === "chat" &&
       (changed.has("chatMessages") ||
+        changed.has("chatToolMessages") ||
         changed.has("chatStream") ||
         changed.has("chatLoading") ||
         changed.has("chatMessage") ||
@@ -377,11 +437,108 @@ export class ClawdisApp extends LitElement {
     });
   }
 
+  resetToolStream() {
+    this.toolStreamById.clear();
+    this.toolStreamOrder = [];
+    this.chatToolMessages = [];
+  }
+
+  private trimToolStream() {
+    if (this.toolStreamOrder.length <= TOOL_STREAM_LIMIT) return;
+    const overflow = this.toolStreamOrder.length - TOOL_STREAM_LIMIT;
+    const removed = this.toolStreamOrder.splice(0, overflow);
+    for (const id of removed) this.toolStreamById.delete(id);
+  }
+
+  private syncToolStreamMessages() {
+    this.chatToolMessages = this.toolStreamOrder
+      .map((id) => this.toolStreamById.get(id)?.message)
+      .filter((msg): msg is Record<string, unknown> => Boolean(msg));
+  }
+
+  private buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
+    const content: Array<Record<string, unknown>> = [];
+    content.push({
+      type: "toolcall",
+      name: entry.name,
+      arguments: entry.args ?? {},
+    });
+    if (entry.output) {
+      content.push({
+        type: "toolresult",
+        name: entry.name,
+        text: entry.output,
+      });
+    }
+    return {
+      role: "assistant",
+      toolCallId: entry.toolCallId,
+      runId: entry.runId,
+      content,
+      timestamp: entry.startedAt,
+    };
+  }
+
+  private handleAgentEvent(payload?: AgentEventPayload) {
+    if (!payload || payload.stream !== "tool") return;
+    const sessionKey =
+      typeof payload.sessionKey === "string" ? payload.sessionKey : undefined;
+    if (sessionKey && sessionKey !== this.sessionKey) return;
+    // Fallback: only accept session-less events for the active run.
+    if (!sessionKey && this.chatRunId && payload.runId !== this.chatRunId) return;
+
+    const data = payload.data ?? {};
+    const toolCallId =
+      typeof data.toolCallId === "string" ? data.toolCallId : "";
+    if (!toolCallId) return;
+    const name = typeof data.name === "string" ? data.name : "tool";
+    const phase = typeof data.phase === "string" ? data.phase : "";
+    const args = phase === "start" ? data.args : undefined;
+    const output =
+      phase === "update"
+        ? formatToolOutput(data.partialResult)
+        : phase === "result"
+          ? formatToolOutput(data.result)
+          : undefined;
+
+    const now = Date.now();
+    let entry = this.toolStreamById.get(toolCallId);
+    if (!entry) {
+      entry = {
+        toolCallId,
+        runId: payload.runId,
+        sessionKey,
+        name,
+        args,
+        output,
+        startedAt: typeof payload.ts === "number" ? payload.ts : now,
+        updatedAt: now,
+        message: {},
+      };
+      this.toolStreamById.set(toolCallId, entry);
+      this.toolStreamOrder.push(toolCallId);
+    } else {
+      entry.name = name;
+      if (args !== undefined) entry.args = args;
+      if (output !== undefined) entry.output = output;
+      entry.updatedAt = now;
+    }
+
+    entry.message = this.buildToolStreamMessage(entry);
+    this.trimToolStream();
+    this.syncToolStreamMessages();
+  }
+
   private onEvent(evt: GatewayEventFrame) {
     this.eventLog = [
       { ts: Date.now(), event: evt.event, payload: evt.payload },
       ...this.eventLog,
     ].slice(0, 250);
+
+    if (evt.event === "agent") {
+      this.handleAgentEvent(evt.payload as AgentEventPayload | undefined);
+      return;
+    }
 
     if (evt.event === "chat") {
       const payload = evt.payload as ChatEventPayload | undefined;

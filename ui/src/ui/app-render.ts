@@ -84,6 +84,7 @@ export type AppViewState = {
   chatSending: boolean;
   chatMessage: string;
   chatMessages: unknown[];
+  chatToolMessages: unknown[];
   chatStream: string | null;
   chatRunId: string | null;
   chatThinkingLevel: string | null;
@@ -168,6 +169,7 @@ export type AppViewState = {
   handleWhatsAppLogout: () => Promise<void>;
   handleTelegramSave: () => Promise<void>;
   handleSendChat: () => Promise<void>;
+  resetToolStream: () => void;
 };
 
 export function renderApp(state: AppViewState) {
@@ -241,6 +243,7 @@ export function renderApp(state: AppViewState) {
               onSessionKeyChange: (next) => {
                 state.sessionKey = next;
                 state.chatMessage = "";
+                state.resetToolStream();
                 state.applySettings({ ...state.settings, sessionKey: next });
               },
               onRefresh: () => state.loadOverview(),
@@ -370,20 +373,24 @@ export function renderApp(state: AppViewState) {
                 state.chatMessage = "";
                 state.chatStream = null;
                 state.chatRunId = null;
+                state.resetToolStream();
                 state.applySettings({ ...state.settings, sessionKey: next });
                 void loadChatHistory(state);
               },
               thinkingLevel: state.chatThinkingLevel,
               loading: state.chatLoading,
               sending: state.chatSending,
-              messages: state.chatMessages,
+              messages: [...state.chatMessages, ...state.chatToolMessages],
               stream: state.chatStream,
               draft: state.chatMessage,
               connected: state.connected,
               canSend: state.connected && hasConnectedMobileNode,
               disabledReason: chatDisabledReason,
               sessions: state.sessionsResult,
-              onRefresh: () => loadChatHistory(state),
+              onRefresh: () => {
+                state.resetToolStream();
+                return loadChatHistory(state);
+              },
               onDraftChange: (next) => (state.chatMessage = next),
               onSend: () => state.handleSendChat(),
             })

@@ -478,4 +478,43 @@ describe("gateway server agent", () => {
     ws.close();
     await server.close();
   });
+
+  test("agent events include sessionKey in agent payloads", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws, {
+      client: {
+        name: "webchat",
+        version: "1.0.0",
+        platform: "test",
+        mode: "webchat",
+      },
+    });
+
+    registerAgentRunContext("run-tool-1", { sessionKey: "main" });
+
+    const agentEvtP = onceMessage(
+      ws,
+      (o) =>
+        o.type === "event" &&
+        o.event === "agent" &&
+        o.payload?.runId === "run-tool-1",
+      8000,
+    );
+
+    emitAgentEvent({
+      runId: "run-tool-1",
+      stream: "tool",
+      data: { phase: "start", name: "read", toolCallId: "tool-1" },
+    });
+
+    const evt = await agentEvtP;
+    const payload =
+      evt.payload && typeof evt.payload === "object"
+        ? (evt.payload as Record<string, unknown>)
+        : {};
+    expect(payload.sessionKey).toBe("main");
+
+    ws.close();
+    await server.close();
+  });
 });

@@ -4,9 +4,6 @@ import {
 } from "../agents/tool-display.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
-export const TOOL_RESULT_DEBOUNCE_MS = 500;
-export const TOOL_RESULT_FLUSH_COUNT = 5;
-
 export function shortenPath(p: string): string {
   return shortenHomePath(p);
 }
@@ -76,34 +73,4 @@ function isPathLike(value: string): boolean {
   if (value.includes("·")) return false;
   if (value.includes("&&") || value.includes("||")) return false;
   return /^~?(\/[^\s]+)+$/.test(value);
-}
-
-export function createToolDebouncer(
-  onFlush: (toolName: string | undefined, metas: string[]) => void,
-  windowMs = TOOL_RESULT_DEBOUNCE_MS,
-) {
-  let pendingTool: string | undefined;
-  let pendingMetas: string[] = [];
-  let timer: NodeJS.Timeout | null = null;
-
-  const flush = () => {
-    if (!pendingTool && pendingMetas.length === 0) return;
-    onFlush(pendingTool, pendingMetas);
-    pendingTool = undefined;
-    pendingMetas = [];
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-
-  const push = (toolName?: string, meta?: string) => {
-    if (pendingTool && toolName && pendingTool !== toolName) flush();
-    if (!pendingTool) pendingTool = toolName;
-    if (meta) pendingMetas.push(meta);
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(flush, windowMs);
-  };
-
-  return { push, flush };
 }

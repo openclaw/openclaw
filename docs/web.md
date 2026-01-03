@@ -13,6 +13,7 @@ The Gateway serves a small **browser Control UI** (Vite + Lit) from the same por
 
 The UI talks directly to the Gateway WS and supports:
 - Chat (`chat.history`, `chat.send`, `chat.abort`)
+- Chat tool cards (agent tool events)
 - Connections (provider status, WhatsApp QR, Telegram config)
 - Instances (`system-presence`)
 - Sessions (`sessions.list`, `sessions.patch`)

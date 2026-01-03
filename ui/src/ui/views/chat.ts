@@ -170,14 +170,18 @@ function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const toolCards = extractToolCards(message);
+  const hasToolCards = toolCards.length > 0;
   const isToolResult = isToolResultMessage(message);
-  const text =
-    !isToolResult
-      ? extractText(message) ??
-        (typeof m.content === "string"
-          ? m.content
-          : JSON.stringify(message, null, 2))
-      : null;
+  const extractedText = extractText(message);
+  const contentText = typeof m.content === "string" ? m.content : null;
+  const fallback = hasToolCards ? null : JSON.stringify(message, null, 2);
+  const text = !isToolResult
+    ? extractedText?.trim()
+      ? extractedText
+      : contentText?.trim()
+        ? contentText
+        : fallback
+    : null;
 
   const timestamp =
     typeof m.timestamp === "number" ? new Date(m.timestamp).toLocaleTimeString() : "";
