@@ -15,16 +15,18 @@ export function formatError(err: unknown): string {
   if (typeof err === "string") return err;
   const statusValue = (err as { status?: unknown })?.status;
   const codeValue = (err as { code?: unknown })?.code;
-  const statusText =
-    typeof statusValue === "string" || typeof statusValue === "number"
-      ? String(statusValue)
-      : undefined;
-  const codeText =
-    typeof codeValue === "string" || typeof codeValue === "number"
-      ? String(codeValue)
-      : undefined;
-  if (statusText || codeText) {
-    return [statusText, codeText].filter(Boolean).join(" ");
+  const hasStatus = statusValue !== undefined;
+  const hasCode = codeValue !== undefined;
+  if (hasStatus || hasCode) {
+    const statusText =
+      typeof statusValue === "string" || typeof statusValue === "number"
+        ? String(statusValue)
+        : "unknown";
+    const codeText =
+      typeof codeValue === "string" || typeof codeValue === "number"
+        ? String(codeValue)
+        : "unknown";
+    return `status=${statusText} code=${codeText}`;
   }
   try {
     return JSON.stringify(err, null, 2);
