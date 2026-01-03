@@ -113,6 +113,7 @@
 - macOS: prioritize main bundle for device resources to prevent crash (#73) — thanks @petter-b
 - macOS remote: route settings through gateway config and avoid local config reads in remote mode.
 - Telegram: align token resolution for cron/agent/CLI sends (env/config/tokenFile) to prevent isolated delivery failures (#76).
+- Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Telegram: honor per-group mention gating defaults/overrides via `telegram.groups` and `"*"` defaults (thanks @joshp123).
 - Chat UI: clear composer input immediately and allow clear while editing to prevent duplicate sends (#72) — thanks @hrdwdmrbl
 - Restart: use systemd on Linux (and report actual restart method) instead of always launchctl.
