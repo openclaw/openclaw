@@ -38,6 +38,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "docs:list": "tsx scripts/docs-list.ts",
+    "docs:dev": "cd docs && mint dev",
+    "docs:build": "cd docs && mint broken-links",
     "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts",
     "release:check": "tsx scripts/release-check.ts",
     "ui:install": "pnpm -C ui install",

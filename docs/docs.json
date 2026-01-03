@@ -1,0 +1,86 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Clawdis",
+  "theme": "mint",
+  "logo": {
+    "light": "/assets/pixel-lobster.svg",
+    "dark": "/assets/pixel-lobster.svg"
+  },
+  "favicon": "/assets/pixel-lobster.svg",
+  "colors": {
+    "primary": "#FF5A36"
+  },
+  "topbarLinks": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/steipete/clawdis"
+    },
+    {
+      "name": "Releases",
+      "url": "https://github.com/steipete/clawdis/releases"
+    }
+  ],
+  "navigation": {
+    "groups": [
+      {
+        "group": "Getting Started",
+        "pages": [
+          "index",
+          "onboarding",
+          "wizard",
+          "clawd",
+          "faq"
+        ]
+      },
+      {
+        "group": "Core Concepts",
+        "pages": [
+          "architecture",
+          "agent",
+          "session",
+          "rpc",
+          "queue",
+          "tools"
+        ]
+      },
+      {
+        "group": "Gateway & Providers",
+        "pages": [
+          "gateway",
+          "gateway/pairing",
+          "whatsapp",
+          "telegram",
+          "discord",
+          "imessage",
+          "webhook",
+          "gmail-pubsub"
+        ]
+      },
+      {
+        "group": "Platforms",
+        "pages": [
+          "mac/dev-setup",
+          "mac/menu-bar",
+          "mac/voicewake",
+          "ios/connect",
+          "android/connect",
+          "webchat",
+          "web"
+        ]
+      },
+      {
+        "group": "Operations",
+        "pages": [
+          "doctor",
+          "troubleshooting",
+          "logging",
+          "security",
+          "health",
+          "background-process",
+          "gateway-lock",
+          "remote"
+        ]
+      }
+    ]
+  }
+}
