@@ -63,11 +63,7 @@ export class MessageList extends Container {
     component.setText(text);
   }
 
-  private addMessage(
-    role: MessageRole,
-    text: string,
-    style: DefaultTextStyle,
-  ) {
+  private addMessage(role: MessageRole, text: string, style: DefaultTextStyle) {
     const label = new Text(
       role === "user"
         ? theme.user("you")
