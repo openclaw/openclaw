@@ -48,7 +48,6 @@ import {
 } from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
 import { createClawdisCodingTools } from "./pi-tools.js";
-import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -363,13 +362,7 @@ export async function runEmbeddedPiAgent(params: {
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
       const started = Date.now();
-      const sandbox = await resolveSandboxContext({
-        config: params.config,
-        sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-      });
-      const workspaceDir = sandbox?.workspaceDir ?? params.workspaceDir;
-      const resolvedWorkspace = resolveUserPath(workspaceDir);
+      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
       const prevCwd = process.cwd();
 
       const provider =
@@ -432,7 +425,6 @@ export async function runEmbeddedPiAgent(params: {
         const tools = createClawdisCodingTools({
           bash: params.config?.agent?.bash,
           surface: params.surface,
-          sandbox,
         });
         const machineName = await getMachineDisplayName();
         const runtimeInfo = {
