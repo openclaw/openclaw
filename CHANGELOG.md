@@ -1,6 +1,6 @@
 # Changelog
 
-## 2.0.0-beta6 — 2026-01-03
+## Unreleased
 
 ### Fixes
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
