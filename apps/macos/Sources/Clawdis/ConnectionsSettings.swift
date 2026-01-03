@@ -290,6 +290,12 @@ struct ConnectionsSettings: View {
                             .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
+                        self.gridLabel("DMs enabled")
+                        Toggle("", isOn: self.$store.discordDmEnabled)
+                            .labelsHidden()
+                            .toggleStyle(.checkbox)
+                    }
+                    GridRow {
                         self.gridLabel("Group DMs")
                         Toggle("", isOn: self.$store.discordGroupEnabled)
                             .labelsHidden()
@@ -309,6 +315,20 @@ struct ConnectionsSettings: View {
                         self.gridLabel("History limit")
                         TextField("20", text: self.$store.discordHistoryLimit)
                             .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Text chunk limit")
+                        TextField("2000", text: self.$store.discordTextChunkLimit)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                    GridRow {
+                        self.gridLabel("Reply to mode")
+                        Picker("", selection: self.$store.discordReplyToMode) {
+                            Text("off").tag("off")
+                            Text("first").tag("first")
+                            Text("all").tag("all")
+                        }
+                        .labelsHidden()
                     }
                     GridRow {
                         self.gridLabel("Slash command")
@@ -332,6 +352,79 @@ struct ConnectionsSettings: View {
                             .labelsHidden()
                             .toggleStyle(.checkbox)
                     }
+                }
+
+                Divider().padding(.vertical, 2)
+
+                Text("Guilds")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                VStack(alignment: .leading, spacing: 12) {
+                    ForEach($store.discordGuilds) { $guild in
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                TextField("guild id or slug", text: $guild.key)
+                                    .textFieldStyle(.roundedBorder)
+                                Button("Remove") {
+                                    self.store.discordGuilds.removeAll { $0.id == guild.id }
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 14, verticalSpacing: 10) {
+                                GridRow {
+                                    self.gridLabel("Slug")
+                                    TextField("optional slug", text: $guild.slug)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                                GridRow {
+                                    self.gridLabel("Require mention")
+                                    Toggle("", isOn: $guild.requireMention)
+                                        .labelsHidden()
+                                        .toggleStyle(.checkbox)
+                                }
+                                GridRow {
+                                    self.gridLabel("Users allowlist")
+                                    TextField("123456789, username#1234", text: $guild.users)
+                                        .textFieldStyle(.roundedBorder)
+                                }
+                            }
+
+                            Text("Channels")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach($guild.channels) { $channel in
+                                    HStack(spacing: 10) {
+                                        TextField("channel id or slug", text: $channel.key)
+                                            .textFieldStyle(.roundedBorder)
+                                        Toggle("Allow", isOn: $channel.allow)
+                                            .toggleStyle(.checkbox)
+                                        Toggle("Require mention", isOn: $channel.requireMention)
+                                            .toggleStyle(.checkbox)
+                                        Button("Remove") {
+                                            guild.channels.removeAll { $0.id == channel.id }
+                                        }
+                                        .buttonStyle(.bordered)
+                                    }
+                                }
+                                Button("Add channel") {
+                                    guild.channels.append(DiscordGuildChannelForm())
+                                }
+                                .buttonStyle(.bordered)
+                            }
+                        }
+                        .padding(10)
+                        .background(Color.secondary.opacity(0.08))
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    Button("Add guild") {
+                        self.store.discordGuilds.append(DiscordGuildForm())
+                    }
+                    .buttonStyle(.bordered)
                 }
 
                 Divider().padding(.vertical, 2)

@@ -210,6 +210,10 @@
   gap: 6px;
 }
 
+.field.full {
+  grid-column: 1 / -1;
+}
+
 .field span {
   color: var(--muted);
   font-size: 11px;

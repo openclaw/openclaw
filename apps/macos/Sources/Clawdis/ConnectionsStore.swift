@@ -144,6 +144,42 @@ struct ConfigSnapshot: Codable {
     let issues: [Issue]?
 }
 
+struct DiscordGuildChannelForm: Identifiable {
+    let id = UUID()
+    var key: String
+    var allow: Bool
+    var requireMention: Bool
+
+    init(key: String = "", allow: Bool = true, requireMention: Bool = false) {
+        self.key = key
+        self.allow = allow
+        self.requireMention = requireMention
+    }
+}
+
+struct DiscordGuildForm: Identifiable {
+    let id = UUID()
+    var key: String
+    var slug: String
+    var requireMention: Bool
+    var users: String
+    var channels: [DiscordGuildChannelForm]
+
+    init(
+        key: String = "",
+        slug: String = "",
+        requireMention: Bool = false,
+        users: String = "",
+        channels: [DiscordGuildChannelForm] = []
+    ) {
+        self.key = key
+        self.slug = slug
+        self.requireMention = requireMention
+        self.users = users
+        self.channels = channels
+    }
+}
+
 @MainActor
 @Observable
 final class ConnectionsStore {
@@ -169,11 +205,15 @@ final class ConnectionsStore {
     var telegramBusy = false
     var discordEnabled = true
     var discordToken: String = ""
+    var discordDmEnabled = true
     var discordAllowFrom: String = ""
     var discordGroupEnabled = false
     var discordGroupChannels: String = ""
     var discordMediaMaxMb: String = ""
     var discordHistoryLimit: String = ""
+    var discordTextChunkLimit: String = ""
+    var discordReplyToMode: String = "off"
+    var discordGuilds: [DiscordGuildForm] = []
     var discordActionReactions = true
     var discordActionStickers = true
     var discordActionPolls = true
@@ -401,6 +441,7 @@ final class ConnectionsStore {
             self.discordEnabled = discord?["enabled"]?.boolValue ?? true
             self.discordToken = discord?["token"]?.stringValue ?? ""
             let discordDm = discord?["dm"]?.dictionaryValue
+            self.discordDmEnabled = discordDm?["enabled"]?.boolValue ?? true
             if let allow = discordDm?["allowFrom"]?.arrayValue {
                 let strings = allow.compactMap { entry -> String? in
                     if let str = entry.stringValue { return str }
@@ -433,6 +474,56 @@ final class ConnectionsStore {
                 self.discordHistoryLimit = String(Int(history))
             } else {
                 self.discordHistoryLimit = ""
+            }
+            if let limit = discord?["textChunkLimit"]?.doubleValue ?? discord?["textChunkLimit"]?.intValue.map(Double.init) {
+                self.discordTextChunkLimit = String(Int(limit))
+            } else {
+                self.discordTextChunkLimit = ""
+            }
+            if let mode = discord?["replyToMode"]?.stringValue, ["off", "first", "all"].contains(mode) {
+                self.discordReplyToMode = mode
+            } else {
+                self.discordReplyToMode = "off"
+            }
+            if let guilds = discord?["guilds"]?.dictionaryValue {
+                self.discordGuilds = guilds
+                    .map { key, value in
+                        let entry = value.dictionaryValue ?? [:]
+                        let slug = entry["slug"]?.stringValue ?? ""
+                        let requireMention = entry["requireMention"]?.boolValue ?? false
+                        let users = entry["users"]?.arrayValue?
+                            .compactMap { item -> String? in
+                                if let str = item.stringValue { return str }
+                                if let intVal = item.intValue { return String(intVal) }
+                                if let doubleVal = item.doubleValue { return String(Int(doubleVal)) }
+                                return nil
+                            }
+                            .joined(separator: ", ") ?? ""
+                        let channels: [DiscordGuildChannelForm]
+                        if let channelMap = entry["channels"]?.dictionaryValue {
+                            channels = channelMap.map { channelKey, channelValue in
+                                let channelEntry = channelValue.dictionaryValue ?? [:]
+                                let allow = channelEntry["allow"]?.boolValue ?? true
+                                let channelRequireMention =
+                                    channelEntry["requireMention"]?.boolValue ?? false
+                                return DiscordGuildChannelForm(
+                                    key: channelKey,
+                                    allow: allow,
+                                    requireMention: channelRequireMention)
+                            }
+                        } else {
+                            channels = []
+                        }
+                        return DiscordGuildForm(
+                            key: key,
+                            slug: slug,
+                            requireMention: requireMention,
+                            users: users,
+                            channels: channels)
+                    }
+                    .sorted { $0.key < $1.key }
+            } else {
+                self.discordGuilds = []
             }
             let discordActions = discord?["actions"]?.dictionaryValue
             self.discordActionReactions = discordActions?["reactions"]?.boolValue ?? true
@@ -625,6 +716,11 @@ final class ConnectionsStore {
         }
 
         var dm: [String: Any] = (discord["dm"] as? [String: Any]) ?? [:]
+        if self.discordDmEnabled {
+            dm.removeValue(forKey: "enabled")
+        } else {
+            dm["enabled"] = false
+        }
         let allow = self.discordAllowFrom
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -671,6 +767,53 @@ final class ConnectionsStore {
             discord["historyLimit"] = value
         } else {
             discord.removeValue(forKey: "historyLimit")
+        }
+
+        let chunkLimit = self.discordTextChunkLimit.trimmingCharacters(in: .whitespacesAndNewlines)
+        if chunkLimit.isEmpty {
+            discord.removeValue(forKey: "textChunkLimit")
+        } else if let value = Int(chunkLimit), value > 0 {
+            discord["textChunkLimit"] = value
+        } else {
+            discord.removeValue(forKey: "textChunkLimit")
+        }
+
+        let replyToMode = self.discordReplyToMode.trimmingCharacters(in: .whitespacesAndNewlines)
+        if replyToMode.isEmpty || replyToMode == "off" {
+            discord.removeValue(forKey: "replyToMode")
+        } else if ["first", "all"].contains(replyToMode) {
+            discord["replyToMode"] = replyToMode
+        } else {
+            discord.removeValue(forKey: "replyToMode")
+        }
+
+        let guilds: [String: Any] = self.discordGuilds.reduce(into: [:]) { result, entry in
+            let key = entry.key.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !key.isEmpty else { return }
+            var payload: [String: Any] = [:]
+            let slug = entry.slug.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !slug.isEmpty { payload["slug"] = slug }
+            if entry.requireMention { payload["requireMention"] = true }
+            let users = entry.users
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if !users.isEmpty { payload["users"] = users }
+            let channels: [String: Any] = entry.channels.reduce(into: [:]) { channelsResult, channel in
+                let channelKey = channel.key.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !channelKey.isEmpty else { return }
+                var channelPayload: [String: Any] = [:]
+                if !channel.allow { channelPayload["allow"] = false }
+                if channel.requireMention { channelPayload["requireMention"] = true }
+                channelsResult[channelKey] = channelPayload
+            }
+            if !channels.isEmpty { payload["channels"] = channels }
+            result[key] = payload
+        }
+        if guilds.isEmpty {
+            discord.removeValue(forKey: "guilds")
+        } else {
+            discord["guilds"] = guilds
         }
 
         var actions: [String: Any] = (discord["actions"] as? [String: Any]) ?? [:]

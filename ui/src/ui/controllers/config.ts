@@ -4,6 +4,8 @@ import {
   defaultDiscordActions,
   type DiscordActionForm,
   type DiscordForm,
+  type DiscordGuildChannelForm,
+  type DiscordGuildForm,
   type IMessageForm,
   type SignalForm,
   type TelegramForm,
@@ -96,6 +98,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   const discordDm = (discord.dm ?? {}) as Record<string, unknown>;
   const slash = (discord.slashCommand ?? {}) as Record<string, unknown>;
   const discordActions = (discord.actions ?? {}) as Record<string, unknown>;
+  const discordGuilds = discord.guilds;
   const readAction = (key: keyof DiscordActionForm) =>
     typeof discordActions[key] === "boolean"
       ? (discordActions[key] as boolean)
@@ -103,6 +106,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
   state.discordForm = {
     enabled: typeof discord.enabled === "boolean" ? discord.enabled : true,
     token: typeof discord.token === "string" ? discord.token : "",
+    dmEnabled: typeof discordDm.enabled === "boolean" ? discordDm.enabled : true,
     allowFrom: toList(discordDm.allowFrom),
     groupEnabled:
       typeof discordDm.groupEnabled === "boolean" ? discordDm.groupEnabled : false,
@@ -111,6 +115,57 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       typeof discord.mediaMaxMb === "number" ? String(discord.mediaMaxMb) : "",
     historyLimit:
       typeof discord.historyLimit === "number" ? String(discord.historyLimit) : "",
+    textChunkLimit:
+      typeof discord.textChunkLimit === "number"
+        ? String(discord.textChunkLimit)
+        : "",
+    replyToMode:
+      discord.replyToMode === "first" || discord.replyToMode === "all"
+        ? discord.replyToMode
+        : "off",
+    guilds: Array.isArray(discordGuilds)
+      ? []
+      : typeof discordGuilds === "object" && discordGuilds
+        ? Object.entries(discordGuilds as Record<string, unknown>).map(
+            ([key, value]): DiscordGuildForm => {
+              const entry =
+                value && typeof value === "object"
+                  ? (value as Record<string, unknown>)
+                  : {};
+              const channelsRaw =
+                entry.channels && typeof entry.channels === "object"
+                  ? (entry.channels as Record<string, unknown>)
+                  : {};
+              const channels = Object.entries(channelsRaw).map(
+                ([channelKey, channelValue]): DiscordGuildChannelForm => {
+                  const channel =
+                    channelValue && typeof channelValue === "object"
+                      ? (channelValue as Record<string, unknown>)
+                      : {};
+                  return {
+                    key: channelKey,
+                    allow:
+                      typeof channel.allow === "boolean" ? channel.allow : true,
+                    requireMention:
+                      typeof channel.requireMention === "boolean"
+                        ? channel.requireMention
+                        : false,
+                  };
+                },
+              );
+              return {
+                key,
+                slug: typeof entry.slug === "string" ? entry.slug : "",
+                requireMention:
+                  typeof entry.requireMention === "boolean"
+                    ? entry.requireMention
+                    : false,
+                users: toList(entry.users),
+                channels,
+              };
+            },
+          )
+        : [],
     actions: {
       reactions: readAction("reactions"),
       stickers: readAction("stickers"),
