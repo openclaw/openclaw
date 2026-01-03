@@ -5578,6 +5578,83 @@ export async function startGatewayServer(
                 }
               }
 
+              if ("model" in p) {
+                const raw = p.model;
+                if (raw === null) {
+                  delete next.providerOverride;
+                  delete next.modelOverride;
+                } else if (raw !== undefined) {
+                  const trimmed = String(raw).trim();
+                  if (!trimmed) {
+                    respond(
+                      false,
+                      undefined,
+                      errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        "invalid model: empty",
+                      ),
+                    );
+                    break;
+                  }
+                  const resolvedDefault = resolveConfiguredModelRef({
+                    cfg,
+                    defaultProvider: DEFAULT_PROVIDER,
+                    defaultModel: DEFAULT_MODEL,
+                  });
+                  const aliasIndex = buildModelAliasIndex({
+                    cfg,
+                    defaultProvider: resolvedDefault.provider,
+                  });
+                  const resolved = resolveModelRefFromString({
+                    raw: trimmed,
+                    defaultProvider: resolvedDefault.provider,
+                    aliasIndex,
+                  });
+                  if (!resolved) {
+                    respond(
+                      false,
+                      undefined,
+                      errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        `invalid model: ${trimmed}`,
+                      ),
+                    );
+                    break;
+                  }
+                  const catalog = await loadGatewayModelCatalog();
+                  const allowed = buildAllowedModelSet({
+                    cfg,
+                    catalog,
+                    defaultProvider: resolvedDefault.provider,
+                  });
+                  const key = modelKey(
+                    resolved.ref.provider,
+                    resolved.ref.model,
+                  );
+                  if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
+                    respond(
+                      false,
+                      undefined,
+                      errorShape(
+                        ErrorCodes.INVALID_REQUEST,
+                        `model not allowed: ${key}`,
+                      ),
+                    );
+                    break;
+                  }
+                  if (
+                    resolved.ref.provider === resolvedDefault.provider &&
+                    resolved.ref.model === resolvedDefault.model
+                  ) {
+                    delete next.providerOverride;
+                    delete next.modelOverride;
+                  } else {
+                    next.providerOverride = resolved.ref.provider;
+                    next.modelOverride = resolved.ref.model;
+                  }
+                }
+              }
+
               if ("groupActivation" in p) {
                 const raw = p.groupActivation;
                 if (raw === null) {

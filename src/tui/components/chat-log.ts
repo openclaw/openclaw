@@ -1,8 +1,8 @@
 import { Container, Spacer, Text } from "@mariozechner/pi-tui";
+import { theme } from "../theme/theme.js";
 import { AssistantMessageComponent } from "./assistant-message.js";
 import { ToolExecutionComponent } from "./tool-execution.js";
 import { UserMessageComponent } from "./user-message.js";
-import { theme } from "../theme/theme.js";
 
 export class ChatLog extends Container {
   private toolById = new Map<string, ToolExecutionComponent>();
@@ -46,10 +46,7 @@ export class ChatLog extends Container {
   }
 
   finalizeAssistant(text: string, runId?: string) {
-    if (
-      this.streamingAssistant &&
-      (!runId || runId === this.streamingRunId)
-    ) {
+    if (this.streamingAssistant && (!runId || runId === this.streamingRunId)) {
       this.streamingAssistant.setText(text);
     } else {
       this.startAssistant(text, runId);

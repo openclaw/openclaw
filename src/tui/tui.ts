@@ -1,16 +1,19 @@
 import {
   CombinedAutocompleteProvider,
+  type Component,
   Container,
   ProcessTerminal,
   Text,
   TUI,
-  type Component,
 } from "@mariozechner/pi-tui";
 import { loadConfig } from "../config/config.js";
+import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { createSelectList, createSettingsList } from "./components/selectors.js";
-import { getSlashCommands, helpText, parseCommand } from "./commands.js";
+import {
+  createSelectList,
+  createSettingsList,
+} from "./components/selectors.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 
@@ -180,7 +183,9 @@ export async function runTui(opts: TuiOptions) {
         includeGlobal: false,
         includeUnknown: false,
       });
-      const entry = result.sessions.find((row) => row.key === currentSessionKey);
+      const entry = result.sessions.find(
+        (row) => row.key === currentSessionKey,
+      );
       sessionInfo = {
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
@@ -210,7 +215,8 @@ export async function runTui(opts: TuiOptions) {
       };
       currentSessionId =
         typeof record.sessionId === "string" ? record.sessionId : null;
-      sessionInfo.thinkingLevel = record.thinkingLevel ?? sessionInfo.thinkingLevel;
+      sessionInfo.thinkingLevel =
+        record.thinkingLevel ?? sessionInfo.thinkingLevel;
       chatLog.clearAll();
       chatLog.addSystem(`session ${currentSessionKey}`);
       for (const entry of record.messages ?? []) {

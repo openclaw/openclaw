@@ -42,8 +42,16 @@ export type GatewaySessionList = {
     verboseLevel?: string;
     model?: string;
     contextTokens?: number | null;
+    totalTokens?: number | null;
     displayName?: string;
   }>;
+};
+
+export type GatewayModelChoice = {
+  id: string;
+  name: string;
+  provider: string;
+  contextWindow?: number;
 };
 
 export class GatewayChatClient {
@@ -161,16 +169,11 @@ export class GatewayChatClient {
     return await this.client.request("status");
   }
 
-  async listModels(): Promise<
-    Array<{
-      id: string;
-      name: string;
-      provider: string;
-      contextWindow?: number;
-    }>
-  > {
-    const res = await this.client.request<{ models?: unknown }>("models.list");
-    return Array.isArray(res?.models) ? (res.models as Array<any>) : [];
+  async listModels(): Promise<GatewayModelChoice[]> {
+    const res = await this.client.request<{ models?: GatewayModelChoice[] }>(
+      "models.list",
+    );
+    return Array.isArray(res?.models) ? res.models : [];
   }
 }
 

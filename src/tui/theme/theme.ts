@@ -1,10 +1,10 @@
-import chalk from "chalk";
 import type {
   EditorTheme,
   MarkdownTheme,
   SelectListTheme,
   SettingsListTheme,
 } from "@mariozechner/pi-tui";
+import chalk from "chalk";
 
 const palette = {
   text: "#E8E3D5",

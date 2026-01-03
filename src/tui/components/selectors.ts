@@ -1,8 +1,8 @@
 import {
-  SelectList,
   type SelectItem,
-  SettingsList,
+  SelectList,
   type SettingItem,
+  SettingsList,
 } from "@mariozechner/pi-tui";
 import { selectListTheme, settingsListTheme } from "../theme/theme.js";
 

@@ -48,9 +48,9 @@ export function getSlashCommands(): SlashCommand[] {
       name: "activation",
       description: "Set group activation",
       getArgumentCompletions: (prefix) =>
-        ACTIVATION_LEVELS.filter((v) =>
-          v.startsWith(prefix.toLowerCase()),
-        ).map((value) => ({ value, label: value })),
+        ACTIVATION_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
+          (value) => ({ value, label: value }),
+        ),
     },
     {
       name: "deliver",
