@@ -217,16 +217,26 @@ actor CameraCaptureService {
     }
 
     private nonisolated static func availableCameras() -> [AVCaptureDevice] {
-        let types: [AVCaptureDevice.DeviceType] = [
+        var types: [AVCaptureDevice.DeviceType] = [
             .builtInWideAngleCamera,
-            .externalUnknown,
             .continuityCamera,
         ]
+        if let external = externalDeviceType() {
+            types.append(external)
+        }
         let session = AVCaptureDevice.DiscoverySession(
             deviceTypes: types,
             mediaType: .video,
             position: .unspecified)
         return session.devices
+    }
+
+    private nonisolated static func externalDeviceType() -> AVCaptureDevice.DeviceType? {
+        if #available(macOS 14.0, *) {
+            return .external
+        }
+        // Use raw value to avoid deprecated symbol in the SDK.
+        return AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown")
     }
 
     private nonisolated static func pickCamera(
