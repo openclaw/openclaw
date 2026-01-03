@@ -196,20 +196,18 @@ struct OnboardingWizardStepView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    @ViewBuilder
     private var textField: some View {
         let isSensitive = step.sensitive == true
         if isSensitive {
-            return AnyView(
-                SecureField(step.placeholder ?? "", text: $textValue)
-                    .textFieldStyle(.roundedBorder)
-                    .frame(maxWidth: 360)
-            )
-        }
-        return AnyView(
+            SecureField(step.placeholder ?? "", text: $textValue)
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 360)
+        } else {
             TextField(step.placeholder ?? "", text: $textValue)
                 .textFieldStyle(.roundedBorder)
                 .frame(maxWidth: 360)
-        )
+        }
     }
 
     private var selectOptions: some View {
@@ -240,15 +238,7 @@ struct OnboardingWizardStepView: View {
     private var multiselectOptions: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(optionItems) { item in
-                Toggle(isOn: Binding(get: {
-                    selectedIndices.contains(item.index)
-                }, set: { newValue in
-                    if newValue {
-                        selectedIndices.insert(item.index)
-                    } else {
-                        selectedIndices.remove(item.index)
-                    }
-                })) {
+                Toggle(isOn: bindingForOption(item)) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(item.option.label)
                         if let hint = item.option.hint, !hint.isEmpty {
@@ -260,6 +250,18 @@ struct OnboardingWizardStepView: View {
                 }
             }
         }
+    }
+
+    private func bindingForOption(_ item: WizardOptionItem) -> Binding<Bool> {
+        Binding(get: {
+            selectedIndices.contains(item.index)
+        }, set: { newValue in
+            if newValue {
+                selectedIndices.insert(item.index)
+            } else {
+                selectedIndices.remove(item.index)
+            }
+        })
     }
 
     private var isBlocked: Bool {
