@@ -36,36 +36,40 @@ process action:kill sessionId:XXX
 
 **Model:** `gpt-5.2-codex` is the default (set in ~/.codex/config.toml)
 
-**Reasoning effort:** Choose based on task complexity:
-- `medium` — most tasks (default)
-- `high` — complex/architectural tasks
-
 ### Building/Creating (use --full-auto)
 ```bash
 bash workdir:~/project background:true command:"codex exec --full-auto \"Build a snake game with dark theme\""
 ```
 
-### Reviewing (vanilla, no flags needed)
+### Reviewing PRs (vanilla, no flags)
 ```bash
-bash workdir:~/project background:true command:"codex exec \"Review PR #115. Run git diff origin/main...origin/pr/115 to see changes.\""
+bash workdir:~/project background:true command:"codex exec \"Review PR #115. Use: git diff origin/main...origin/pr/115\""
 ```
 
-### Running Multiple Codex Processes
-You can run many Codex processes in parallel! Each gets its own session:
+### Batch PR Reviews (parallel army!)
 ```bash
-# Start multiple reviews
-bash workdir:~/project background:true command:"codex exec \"Review PR #1\""
-bash workdir:~/project background:true command:"codex exec \"Review PR #2\""
-bash workdir:~/project background:true command:"codex exec \"Review PR #3\""
+# Fetch all PR refs first
+git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'
 
-# Check all running
+# Deploy the army - one Codex per PR!
+bash workdir:~/project background:true command:"codex exec \"Review PR #86. git diff origin/main...origin/pr/86\""
+bash workdir:~/project background:true command:"codex exec \"Review PR #87. git diff origin/main...origin/pr/87\""
+bash workdir:~/project background:true command:"codex exec \"Review PR #95. git diff origin/main...origin/pr/95\""
+# ... repeat for all PRs
+
+# Monitor all
 process action:list
+
+# Get results and post to GitHub
+process action:log sessionId:XXX
+gh pr comment <PR#> --body "<review content>"
 ```
 
-### PR Review Tips
-- Fetch PR refs first: `git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'`
-- Tell Codex to use: `git diff origin/main...origin/pr/XX`
-- Don't let it checkout branches (conflicts with parallel reviews)
+### Tips for PR Reviews
+- **Fetch refs first:** `git fetch origin '+refs/pull/*/head:refs/remotes/origin/pr/*'`
+- **Use git diff:** Tell Codex to use `git diff origin/main...origin/pr/XX`
+- **Don't checkout:** Multiple parallel reviews = don't let them change branches
+- **Post results:** Use `gh pr comment` to post reviews to GitHub
 
 ---
 
@@ -92,3 +96,4 @@ bash workdir:~/project background:true command:"opencode run \"Your task\""
 3. **Monitor with process:log** — check progress without interfering
 4. **--full-auto for building** — auto-approves changes
 5. **vanilla for reviewing** — no special flags needed
+6. **Parallel is OK** — run many Codex processes at once for batch work
