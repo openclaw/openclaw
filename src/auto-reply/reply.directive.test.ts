@@ -116,7 +116,11 @@ describe("directive parsing", () => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
 
       const res = await getReplyFromConfig(
-        { Body: "/queue collect debounce:bogus cap:zero drop:maybe", From: "+1222", To: "+1222" },
+        {
+          Body: "/queue collect debounce:bogus cap:zero drop:maybe",
+          From: "+1222",
+          To: "+1222",
+        },
         {},
         {
           agent: {

@@ -42,9 +42,8 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     process.env.HOME = previousHome;
     try {
       await fs.rm(base, { recursive: true, force: true });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!msg.includes("ENOTEMPTY")) throw err;
+    } catch {
+      // ignore cleanup failures in tests
     }
   }
 }
@@ -105,9 +104,7 @@ describe("queue followups", () => {
         cfg,
       );
 
-      const secondText = Array.isArray(second)
-        ? second[0]?.text
-        : second?.text;
+      const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(secondText).toBe("main");
 
       await vi.runAllTimersAsync();
