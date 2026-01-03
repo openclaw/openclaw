@@ -126,17 +126,26 @@ describe("gateway server sessions", () => {
     expect(patched.payload?.ok).toBe(true);
     expect(patched.payload?.key).toBe("main");
 
+    const sendPolicyPatched = await rpcReq<{
+      ok: true;
+      entry: { sendPolicy?: string };
+    }>(ws, "sessions.patch", { key: "main", sendPolicy: "deny" });
+    expect(sendPolicyPatched.ok).toBe(true);
+    expect(sendPolicyPatched.payload?.entry.sendPolicy).toBe("deny");
+
     const list2 = await rpcReq<{
       sessions: Array<{
         key: string;
         thinkingLevel?: string;
         verboseLevel?: string;
+        sendPolicy?: string;
       }>;
     }>(ws, "sessions.list", {});
     expect(list2.ok).toBe(true);
     const main2 = list2.payload?.sessions.find((s) => s.key === "main");
     expect(main2?.thinkingLevel).toBe("medium");
     expect(main2?.verboseLevel).toBeUndefined();
+    expect(main2?.sendPolicy).toBe("deny");
 
     piSdkMock.enabled = true;
     piSdkMock.models = [{ id: "gpt-test-a", name: "A", provider: "openai" }];

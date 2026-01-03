@@ -26,11 +26,37 @@ All session state is **owned by the gateway** (the “master” Clawdis). UI cli
 - Multiple phone numbers can map to that same key; they act as transports into the same conversation.
 - Group chats isolate state with `surface:group:<id>` keys (rooms/channels use `surface:channel:<id>`); do not reuse the primary key for groups. (Discord display names show `discord:<guildSlug>#<channelSlug>`.)
   - Legacy `group:<surface>:<id>` and `group:<id>` keys are still recognized.
+- Other sources:
+  - Cron jobs: `cron:<job.id>`
+  - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)
+  - Node bridge runs: `node-<nodeId>`
 
 ## Lifecyle
 - Idle expiry: `session.idleMinutes` (default 60). After the timeout a new `sessionId` is minted on the next message.
 - Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. If `/new` or `/reset` is sent alone, Clawdis runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: delete specific keys from the store or remove the JSONL transcript; the next message recreates them.
+
+## Send policy (optional)
+Block delivery for specific session types without listing individual ids.
+
+```json5
+{
+  session: {
+    sendPolicy: {
+      rules: [
+        { action: "deny", match: { surface: "discord", chatType: "group" } },
+        { action: "deny", match: { keyPrefix: "cron:" } }
+      ],
+      default: "allow"
+    }
+  }
+}
+```
+
+Runtime override (owner only):
+- `/send on` → allow for this session
+- `/send off` → deny for this session
+- `/send inherit` → clear override and use config rules
 
 ## Configuration (optional rename example)
 ```json5

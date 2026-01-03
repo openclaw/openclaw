@@ -18,6 +18,96 @@ import {
 installGatewayTestHooks();
 
 describe("gateway server chat", () => {
+  test("chat.send blocked by send policy", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.sessionConfig = {
+      sendPolicy: {
+        default: "allow",
+        rules: [
+          {
+            action: "deny",
+            match: { surface: "discord", chatType: "group" },
+          },
+        ],
+      },
+    };
+
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          "discord:group:dev": {
+            sessionId: "sess-discord",
+            updatedAt: Date.now(),
+            chatType: "group",
+            surface: "discord",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "discord:group:dev",
+      message: "hello",
+      idempotencyKey: "idem-1",
+    });
+    expect(res.ok).toBe(false);
+    expect(
+      (res.error as { message?: string } | undefined)?.message ?? "",
+    ).toMatch(/send blocked/i);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent blocked by send policy for sessionKey", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    testState.sessionConfig = {
+      sendPolicy: {
+        default: "allow",
+        rules: [{ action: "deny", match: { keyPrefix: "cron:" } }],
+      },
+    };
+
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          "cron:job-1": {
+            sessionId: "sess-cron",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      sessionKey: "cron:job-1",
+      message: "hi",
+      idempotencyKey: "idem-2",
+    });
+    expect(res.ok).toBe(false);
+    expect(
+      (res.error as { message?: string } | undefined)?.message ?? "",
+    ).toMatch(/send blocked/i);
+
+    ws.close();
+    await server.close();
+  });
   test("chat.send accepts image attachment", { timeout: 12000 }, async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);

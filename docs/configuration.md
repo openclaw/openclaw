@@ -620,10 +620,20 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     idleMinutes: 60,
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdis/sessions/sessions.json",
-    mainKey: "main"
+    mainKey: "main",
+    sendPolicy: {
+      rules: [
+        { action: "deny", match: { surface: "discord", chatType: "group" } }
+      ],
+      default: "allow"
+    }
   }
 }
 ```
+
+Fields:
+- `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
+- `sendPolicy.rules[]`: match by `surface` (provider), `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
 
 ### `skills` (skills config)
 

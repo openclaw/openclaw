@@ -150,6 +150,21 @@
         "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] }
       }
     },
+    "sessions_list": {
+      "emoji": "🗂️",
+      "title": "Sessions",
+      "detailKeys": ["kinds", "limit", "activeMinutes", "messageLimit"]
+    },
+    "sessions_history": {
+      "emoji": "🧾",
+      "title": "Session History",
+      "detailKeys": ["sessionKey", "limit"]
+    },
+    "sessions_send": {
+      "emoji": "📨",
+      "title": "Session Send",
+      "detailKeys": ["sessionKey", "timeoutSeconds"]
+    },
     "whatsapp_login": {
       "emoji": "🟢",
       "title": "WhatsApp Login",

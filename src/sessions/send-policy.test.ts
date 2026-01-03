@@ -1,0 +1,53 @@
+import { describe, expect, it } from "vitest";
+import type { ClawdisConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { resolveSendPolicy } from "./send-policy.js";
+
+describe("resolveSendPolicy", () => {
+  it("defaults to allow", () => {
+    const cfg = {} as ClawdisConfig;
+    expect(resolveSendPolicy({ cfg })).toBe("allow");
+  });
+
+  it("entry override wins", () => {
+    const cfg = {
+      session: { sendPolicy: { default: "allow" } },
+    } as ClawdisConfig;
+    const entry: SessionEntry = { sessionId: "s", updatedAt: 0, sendPolicy: "deny" };
+    expect(resolveSendPolicy({ cfg, entry })).toBe("deny");
+  });
+
+  it("rule match by surface + chatType", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [
+            { action: "deny", match: { surface: "discord", chatType: "group" } },
+          ],
+        },
+      },
+    } as ClawdisConfig;
+    const entry: SessionEntry = {
+      sessionId: "s",
+      updatedAt: 0,
+      surface: "discord",
+      chatType: "group",
+    };
+    expect(resolveSendPolicy({ cfg, entry, sessionKey: "discord:group:dev" })).toBe(
+      "deny",
+    );
+  });
+
+  it("rule match by keyPrefix", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "allow",
+          rules: [{ action: "deny", match: { keyPrefix: "cron:" } }],
+        },
+      },
+    } as ClawdisConfig;
+    expect(resolveSendPolicy({ cfg, sessionKey: "cron:job-1" })).toBe("deny");
+  });
+});

@@ -79,6 +79,7 @@ export const agentCommand = hoisted.agentCommand;
 
 export const testState = {
   sessionStorePath: undefined as string | undefined,
+  sessionConfig: undefined as Record<string, unknown> | undefined,
   allowFrom: undefined as string[] | undefined,
   cronStorePath: undefined as string | undefined,
   cronEnabled: false as boolean | undefined,
@@ -239,7 +240,11 @@ vi.mock("../config/config.js", async () => {
       whatsapp: {
         allowFrom: testState.allowFrom,
       },
-      session: { mainKey: "main", store: testState.sessionStorePath },
+      session: {
+        mainKey: "main",
+        store: testState.sessionStorePath,
+        ...(testState.sessionConfig ?? {}),
+      },
       gateway: (() => {
         const gateway: Record<string, unknown> = {};
         if (testState.gatewayBind) gateway.bind = testState.gatewayBind;
@@ -318,6 +323,7 @@ export function installGatewayTestHooks() {
     testState.migrationChanges = [];
     testState.cronEnabled = false;
     testState.cronStorePath = undefined;
+    testState.sessionConfig = undefined;
     testState.sessionStorePath = undefined;
     testState.allowFrom = undefined;
     testIsNixMode.value = false;

@@ -105,6 +105,19 @@ Core actions:
 Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
 
+### `sessions_list` / `sessions_history` / `sessions_send`
+List sessions, inspect transcript history, or send to another session.
+
+Core parameters:
+- `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
+- `sessions_history`: `sessionKey`, `limit?`, `includeTools?`
+- `sessions_send`: `sessionKey`, `message`, `timeoutSeconds?` (0 = fire-and-forget)
+
+Notes:
+- `main` is the canonical direct-chat key; global/unknown are hidden.
+- `messageLimit > 0` fetches last N messages per session (tool messages filtered).
+- `sessions_send` waits for final completion when `timeoutSeconds > 0`.
+
 ### `discord`
 Send Discord reactions, stickers, or polls.
 

@@ -29,17 +29,21 @@ export type GatewaySessionRow = {
   subject?: string;
   room?: string;
   space?: string;
+  chatType?: "direct" | "group" | "room";
   updatedAt: number | null;
   sessionId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  sendPolicy?: "allow" | "deny";
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
   model?: string;
   contextTokens?: number;
+  lastChannel?: SessionEntry["lastChannel"];
+  lastTo?: string;
 };
 
 export type SessionsListResult = {
@@ -265,17 +269,21 @@ export function listSessionsFromStore(params: {
         subject,
         room,
         space,
+        chatType: entry?.chatType,
         updatedAt,
         sessionId: entry?.sessionId,
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
+        sendPolicy: entry?.sendPolicy,
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: total,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
+        lastChannel: entry?.lastChannel,
+        lastTo: entry?.lastTo,
       } satisfies GatewaySessionRow;
     })
     .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
