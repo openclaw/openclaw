@@ -1,4 +1,7 @@
-import { resolveToolDisplay, formatToolSummary } from "../agents/tool-display.js";
+import {
+  formatToolSummary,
+  resolveToolDisplay,
+} from "../agents/tool-display.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 
 export const TOOL_RESULT_DEBOUNCE_MS = 500;
@@ -72,7 +75,7 @@ function isPathLike(value: string): boolean {
   if (value.includes("://")) return false;
   if (value.includes("·")) return false;
   if (value.includes("&&") || value.includes("||")) return false;
-  return /^~?(\\/[^\\s]+)+$/.test(value);
+  return /^~?(\/[^\s]+)+$/.test(value);
 }
 
 export function createToolDebouncer(
