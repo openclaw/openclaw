@@ -7,7 +7,7 @@ PRODUCT="Clawdis"
 BIN="$BUILD_PATH/debug/$PRODUCT"
 
 printf "\n▶️  Building $PRODUCT (debug, build path: $BUILD_PATH)\n"
-swift build -c debug --product "$PRODUCT" --product "${PRODUCT}CLI" --build-path "$BUILD_PATH"
+swift build -c debug --product "$PRODUCT" --build-path "$BUILD_PATH"
 
 printf "\n⏹  Stopping existing $PRODUCT...\n"
 killall -q "$PRODUCT" 2>/dev/null || true
