@@ -45,7 +45,6 @@ import {
   type ClawdisConfig,
   type DiscordActionConfig,
   loadConfig,
-  resolveGatewayPort,
 } from "../config/config.js";
 import {
   addRoleDiscord,
@@ -78,7 +77,6 @@ import {
   unpinMessageDiscord,
 } from "../discord/send.js";
 import { callGateway } from "../gateway/call.js";
-import { GatewayClient } from "../gateway/client.js";
 import { detectMime, imageMimeFromFormat } from "../media/mime.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
@@ -337,88 +335,6 @@ function extractAssistantText(message: unknown): string | undefined {
   }
   const joined = chunks.join("").trim();
   return joined ? joined : undefined;
-}
-
-function resolveGatewayConnection(opts: GatewayCallOptions) {
-  const cfg = loadConfig();
-  const isRemoteMode = cfg.gateway?.mode === "remote";
-  const remote = isRemoteMode ? cfg.gateway?.remote : undefined;
-  const localPort = resolveGatewayPort(cfg);
-
-  const url =
-    normalizeKey(opts.gatewayUrl) ??
-    (typeof remote?.url === "string" && remote.url.trim()
-      ? remote.url.trim()
-      : undefined) ??
-    `ws://127.0.0.1:${localPort}`;
-  const token =
-    normalizeKey(opts.gatewayToken) ??
-    (isRemoteMode
-      ? normalizeKey(remote?.token)
-      : (normalizeKey(process.env.CLAWDIS_GATEWAY_TOKEN) ??
-        normalizeKey(cfg.gateway?.auth?.token)));
-  const password =
-    normalizeKey(process.env.CLAWDIS_GATEWAY_PASSWORD) ??
-    normalizeKey(remote?.password);
-  return { url, token, password };
-}
-
-async function waitForAgentCompletion(params: {
-  connection: ReturnType<typeof resolveGatewayConnection>;
-  runId: string;
-  timeoutMs: number;
-}): Promise<{ status: "done" | "error" | "timeout"; error?: string }> {
-  const { connection, runId, timeoutMs } = params;
-  return await new Promise((resolve) => {
-    let settled = false;
-    const done = (status: "done" | "error" | "timeout", error?: string) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      client.stop();
-      resolve({ status, error });
-    };
-
-    const client = new GatewayClient({
-      url: connection.url,
-      token: connection.token,
-      password: connection.password,
-      clientName: "agent",
-      clientVersion: "dev",
-      platform: process.platform,
-      mode: "agent",
-      instanceId: crypto.randomUUID(),
-      onEvent: (evt) => {
-        if (evt.event !== "agent") return;
-        const payload = evt.payload as {
-          runId?: unknown;
-          stream?: unknown;
-          data?: Record<string, unknown>;
-        };
-        if (payload?.runId !== runId) return;
-        if (payload.stream !== "job") return;
-        const state = payload.data?.state;
-        if (state === "done") {
-          done("done");
-          return;
-        }
-        if (state === "error") {
-          done(
-            "error",
-            typeof payload.data?.error === "string"
-              ? payload.data.error
-              : undefined,
-          );
-        }
-      },
-      onClose: (_code, _reason) => {
-        done("timeout");
-      },
-    });
-
-    const timer = setTimeout(() => done("timeout"), timeoutMs);
-    client.start();
-  });
 }
 
 async function imageResult(params: {
@@ -2775,19 +2691,51 @@ function createSessionsSendTool(): AnyAgentTool {
           : 30;
       const idempotencyKey = crypto.randomUUID();
       let runId = idempotencyKey;
+      const displayKey = resolveDisplaySessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+      const sendParams = {
+        message,
+        sessionKey: resolvedKey,
+        idempotencyKey,
+        deliver: false,
+      };
+
+      if (timeoutSeconds === 0) {
+        try {
+          const response = (await callGateway({
+            method: "agent",
+            params: sendParams,
+            timeoutMs: 10_000,
+          })) as { runId?: string };
+          if (typeof response?.runId === "string" && response.runId) {
+            runId = response.runId;
+          }
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: displayKey,
+          });
+        } catch (err) {
+          const message =
+            err instanceof Error ? err.message : String(err ?? "error");
+          return jsonResult({
+            runId,
+            status: "error",
+            error: message,
+            sessionKey: displayKey,
+          });
+        }
+      }
+
       try {
         const response = (await callGateway({
           method: "agent",
-          params: {
-            message,
-            sessionKey: resolvedKey,
-            idempotencyKey,
-            deliver: false,
-          },
-          timeoutMs:
-            timeoutSeconds > 0
-              ? Math.min(timeoutSeconds * 1000, 10_000)
-              : 10_000,
+          params: sendParams,
+          expectFinal: true,
+          timeoutMs: timeoutSeconds * 1000,
         })) as { runId?: string; status?: string };
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;
@@ -2795,46 +2743,31 @@ function createSessionsSendTool(): AnyAgentTool {
       } catch (err) {
         const message =
           err instanceof Error ? err.message : String(err ?? "error");
+        if (message.includes("gateway timeout")) {
+          try {
+            const cached = (await callGateway({
+              method: "agent",
+              params: sendParams,
+              timeoutMs: 5_000,
+            })) as { runId?: string };
+            if (typeof cached?.runId === "string" && cached.runId) {
+              runId = cached.runId;
+            }
+          } catch {
+            /* ignore */
+          }
+          return jsonResult({
+            runId,
+            status: "timeout",
+            error: message,
+            sessionKey: displayKey,
+          });
+        }
         return jsonResult({
           runId,
           status: "error",
           error: message,
-          sessionKey: resolveDisplaySessionKey({
-            key: sessionKey,
-            alias,
-            mainKey,
-          }),
-        });
-      }
-
-      if (timeoutSeconds === 0) {
-        return jsonResult({
-          runId,
-          status: "accepted",
-          sessionKey: resolveDisplaySessionKey({
-            key: sessionKey,
-            alias,
-            mainKey,
-          }),
-        });
-      }
-
-      const connection = resolveGatewayConnection({});
-      const wait = await waitForAgentCompletion({
-        connection,
-        runId,
-        timeoutMs: timeoutSeconds * 1000,
-      });
-
-      if (wait.status === "timeout") {
-        return jsonResult({
-          runId,
-          status: "timeout",
-          sessionKey: resolveDisplaySessionKey({
-            key: sessionKey,
-            alias,
-            mainKey,
-          }),
+          sessionKey: displayKey,
         });
       }
 
@@ -2851,14 +2784,9 @@ function createSessionsSendTool(): AnyAgentTool {
 
       return jsonResult({
         runId,
-        status: wait.status === "error" ? "error" : "ok",
-        error: wait.error,
+        status: "ok",
         reply,
-        sessionKey: resolveDisplaySessionKey({
-          key: sessionKey,
-          alias,
-          mainKey,
-        }),
+        sessionKey: displayKey,
       });
     },
   };

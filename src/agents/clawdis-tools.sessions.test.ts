@@ -1,52 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
-const nextRunId = "run-1";
-const nextRunState: "done" | "error" = "done";
-
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-
-vi.mock("../gateway/client.js", () => ({
-  GatewayClient: class {
-    private opts: {
-      onEvent?: (evt: {
-        event?: string;
-        payload?: {
-          runId?: string;
-          stream?: string;
-          data?: Record<string, unknown>;
-        };
-      }) => void;
-    };
-    constructor(opts: {
-      onEvent?: (evt: {
-        event?: string;
-        payload?: {
-          runId?: string;
-          stream?: string;
-          data?: Record<string, unknown>;
-        };
-      }) => void;
-    }) {
-      this.opts = opts;
-    }
-    start() {
-      setTimeout(() => {
-        this.opts.onEvent?.({
-          event: "agent",
-          payload: {
-            runId: nextRunId,
-            stream: "job",
-            data:
-              nextRunState === "error" ? { state: "error" } : { state: "done" },
-          },
-        });
-      }, 1);
-    }
-    stop() {}
-  },
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -60,6 +16,7 @@ import { createClawdisTools } from "./clawdis-tools.js";
 
 describe("sessions tools", () => {
   it("sessions_list filters kinds and includes messages", async () => {
+    callGatewayMock.mockReset();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -131,6 +88,7 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history filters tool messages by default", async () => {
+    callGatewayMock.mockReset();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
@@ -164,8 +122,11 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send supports fire-and-forget and wait", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; expectFinal?: boolean }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
+      const request = opts as { method?: string; expectFinal?: boolean };
+      calls.push(request);
       if (request.method === "agent") {
         return { runId: "run-1", status: "accepted" };
       }
@@ -203,5 +164,9 @@ describe("sessions tools", () => {
       runId: "run-1",
       reply: "done",
     });
+
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(agentCalls[0]?.expectFinal).toBeUndefined();
+    expect(agentCalls[1]?.expectFinal).toBe(true);
   });
 });
