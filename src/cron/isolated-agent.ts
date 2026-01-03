@@ -268,12 +268,7 @@ export async function runCronIsolatedAgentTurn(params: {
     registerAgentRunContext(cronSession.sessionEntry.sessionId, {
       sessionKey: params.sessionKey,
     });
-    const surface =
-      resolvedDelivery.channel &&
-      resolvedDelivery.channel !== "last" &&
-      resolvedDelivery.channel !== "none"
-        ? resolvedDelivery.channel
-        : undefined;
+    const surface = resolvedDelivery.channel;
     runResult = await runEmbeddedPiAgent({
       sessionId: cronSession.sessionEntry.sessionId,
       sessionKey: params.sessionKey,
