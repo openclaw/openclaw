@@ -169,6 +169,10 @@ Example:
 - **Mario Zechner** ([@badlogicc](https://twitter.com/badlogicgames)) — Pi creator, security pen-tester
 - **Clawd** — The space lobster who demanded a better name
 
+## Core Contributors
+
+- **Maxim Vovshin** (@Hyaxia, 36747317+Hyaxia@users.noreply.github.com) — Blogwatcher skill
+
 ## License
 
 MIT — Free as a lobster in the ocean 🦞
