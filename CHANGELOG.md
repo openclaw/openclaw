@@ -5,6 +5,9 @@
 ### Fixes
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 
+### Docs
+- Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.
+
 ## 2.0.0-beta5 — 2026-01-03
 
 ### Fixed
