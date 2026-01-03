@@ -20,7 +20,13 @@ import {
   type ModelCatalogEntry,
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  buildModelAliasIndex,
+  modelKey,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
+} from "../agents/model-selection.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
@@ -2955,6 +2961,74 @@ export async function startGatewayServer(
                 };
               }
               next.verboseLevel = normalized;
+            }
+          }
+
+          if ("model" in p) {
+            const raw = p.model;
+            if (raw === null) {
+              delete next.providerOverride;
+              delete next.modelOverride;
+            } else if (raw !== undefined) {
+              const trimmed = String(raw).trim();
+              if (!trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "invalid model: empty",
+                  },
+                };
+              }
+              const resolvedDefault = resolveConfiguredModelRef({
+                cfg,
+                defaultProvider: DEFAULT_PROVIDER,
+                defaultModel: DEFAULT_MODEL,
+              });
+              const aliasIndex = buildModelAliasIndex({
+                cfg,
+                defaultProvider: resolvedDefault.provider,
+              });
+              const resolved = resolveModelRefFromString({
+                raw: trimmed,
+                defaultProvider: resolvedDefault.provider,
+                aliasIndex,
+              });
+              if (!resolved) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid model: ${trimmed}`,
+                  },
+                };
+              }
+              const catalog = await loadGatewayModelCatalog();
+              const allowed = buildAllowedModelSet({
+                cfg,
+                catalog,
+                defaultProvider: resolvedDefault.provider,
+              });
+              const key = modelKey(resolved.ref.provider, resolved.ref.model);
+              if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `model not allowed: ${key}`,
+                  },
+                };
+              }
+              if (
+                resolved.ref.provider === resolvedDefault.provider &&
+                resolved.ref.model === resolvedDefault.model
+              ) {
+                delete next.providerOverride;
+                delete next.modelOverride;
+              } else {
+                next.providerOverride = resolved.ref.provider;
+                next.modelOverride = resolved.ref.model;
+              }
             }
           }
 
