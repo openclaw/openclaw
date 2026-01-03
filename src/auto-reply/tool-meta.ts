@@ -1,3 +1,5 @@
+import { shortenHomeInString, shortenHomePath } from "../utils.js";
+
 export const TOOL_RESULT_DEBOUNCE_MS = 500;
 export const TOOL_RESULT_FLUSH_COUNT = 5;
 
@@ -23,17 +25,8 @@ function resolveToolEmoji(toolName?: string): string {
   return "🧩";
 }
 
-function shortenHomeInString(input: string): string {
-  const home = process.env.HOME;
-  if (!home) return input;
-  return input.split(home).join("~");
-}
-
 export function shortenPath(p: string): string {
-  const home = process.env.HOME;
-  if (home && (p === home || p.startsWith(`${home}/`)))
-    return p.replace(home, "~");
-  return p;
+  return shortenHomePath(p);
 }
 
 export function shortenMeta(meta: string): string {

@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 
 import { lookupContextTokens } from "../agents/context.js";
 import {
@@ -19,6 +18,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
+import { shortenHomePath } from "../utils.js";
 import type { ThinkLevel, VerboseLevel } from "./thinking.js";
 
 type AgentConfig = NonNullable<ClawdisConfig["agent"]>;
@@ -52,13 +52,6 @@ const formatAge = (ms?: number | null) => {
 
 const formatKTokens = (value: number) =>
   `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-
-const abbreviatePath = (p?: string) => {
-  if (!p) return undefined;
-  const home = os.homedir();
-  if (p.startsWith(home)) return p.replace(home, "~");
-  return p;
-};
 
 const formatTokens = (
   total: number | null | undefined,
@@ -187,7 +180,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry?.updatedAt
       ? `updated ${formatAge(now - entry.updatedAt)}`
       : "no activity",
-    args.storePath ? `store ${abbreviatePath(args.storePath)}` : undefined,
+    args.storePath ? `store ${shortenHomePath(args.storePath)}` : undefined,
   ]
     .filter(Boolean)
     .join(" • ");
@@ -214,7 +207,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const agentLine = `Agent: embedded pi • ${modelLabel}`;
 
   const workspaceLine = args.workspaceDir
-    ? `Workspace: ${abbreviatePath(args.workspaceDir)}`
+    ? `Workspace: ${shortenHomePath(args.workspaceDir)}`
     : undefined;
 
   const helpersLine = "Shortcuts: /new reset | /restart relink";

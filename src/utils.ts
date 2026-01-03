@@ -104,5 +104,34 @@ export function resolveUserPath(input: string): string {
   return path.resolve(trimmed);
 }
 
+export function resolveHomeDir(): string | undefined {
+  const envHome = process.env.HOME?.trim();
+  if (envHome) return envHome;
+  const envProfile = process.env.USERPROFILE?.trim();
+  if (envProfile) return envProfile;
+  try {
+    const home = os.homedir();
+    return home?.trim() ? home : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function shortenHomePath(input: string): string {
+  if (!input) return input;
+  const home = resolveHomeDir();
+  if (!home) return input;
+  if (input === home) return "~";
+  if (input.startsWith(`${home}/`)) return `~${input.slice(home.length)}`;
+  return input;
+}
+
+export function shortenHomeInString(input: string): string {
+  if (!input) return input;
+  const home = resolveHomeDir();
+  if (!home) return input;
+  return input.split(home).join("~");
+}
+
 // Fixed configuration root; legacy ~/.clawdis is no longer used.
 export const CONFIG_DIR = path.join(os.homedir(), ".clawdis");
