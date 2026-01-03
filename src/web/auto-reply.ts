@@ -16,6 +16,7 @@ import { loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
+  resolveGroupSessionKey,
   resolveSessionKey,
   resolveStorePath,
   saveSessionStore,
@@ -813,8 +814,16 @@ export async function monitorWebProvider(
       .join(", ");
   };
 
+  const resolveGroupResolution = (conversationId: string) =>
+    resolveGroupSessionKey({
+      From: conversationId,
+      ChatType: "group",
+      Surface: "whatsapp",
+    });
+
   const resolveGroupRequireMentionFor = (conversationId: string) => {
-    const groupConfig = cfg.whatsapp?.groups?.[conversationId];
+    const groupId = resolveGroupResolution(conversationId)?.id ?? conversationId;
+    const groupConfig = cfg.whatsapp?.groups?.[groupId];
     if (typeof groupConfig?.requireMention === "boolean") {
       return groupConfig.requireMention;
     }
@@ -824,9 +833,11 @@ export async function monitorWebProvider(
   };
 
   const resolveGroupActivationFor = (conversationId: string) => {
-    const key = conversationId.startsWith("group:")
-      ? conversationId
-      : `whatsapp:group:${conversationId}`;
+    const key =
+      resolveGroupResolution(conversationId)?.key ??
+      (conversationId.startsWith("group:")
+        ? conversationId
+        : `whatsapp:group:${conversationId}`);
     const store = loadSessionStore(sessionStorePath);
     const entry = store[key];
     const requireMention = resolveGroupRequireMentionFor(conversationId);

@@ -9,6 +9,7 @@
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
 - UI: centralize tool display metadata and show action/detail summaries across Web Chat, SwiftUI, Android, and the TUI.
+- Control UI: support configurable base paths (`gateway.controlUi.basePath`) for hosting under URL prefixes.
 - Onboarding: shared wizard engine powering CLI + macOS via gateway wizard RPC.
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
 
@@ -29,6 +30,7 @@
 - Build: fix regex literal in tool-meta path detection (watch build error).
 - Build: require AVX2 Bun for x86_64 relay packaging (reject baseline builds).
 - Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
+- WhatsApp: honor per-group mention gating overrides when group ids are stored as session keys.
 
 ### Docs
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.
