@@ -1,9 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
 
 const callGatewayMock = vi.fn();
+const nextRunId = "run-1";
+const nextRunState: "done" | "error" = "done";
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("../gateway/client.js", () => ({
+  GatewayClient: class {
+    private opts: {
+      onEvent?: (evt: {
+        event?: string;
+        payload?: {
+          runId?: string;
+          stream?: string;
+          data?: Record<string, unknown>;
+        };
+      }) => void;
+    };
+    constructor(opts: {
+      onEvent?: (evt: {
+        event?: string;
+        payload?: {
+          runId?: string;
+          stream?: string;
+          data?: Record<string, unknown>;
+        };
+      }) => void;
+    }) {
+      this.opts = opts;
+    }
+    start() {
+      setTimeout(() => {
+        this.opts.onEvent?.({
+          event: "agent",
+          payload: {
+            runId: nextRunId,
+            stream: "job",
+            data:
+              nextRunState === "error" ? { state: "error" } : { state: "done" },
+          },
+        });
+      }, 1);
+    }
+    stop() {}
+  },
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -122,11 +165,9 @@ describe("sessions tools", () => {
 
   it("sessions_send supports fire-and-forget and wait", async () => {
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; expectFinal?: boolean };
+      const request = opts as { method?: string };
       if (request.method === "agent") {
-        return request.expectFinal
-          ? { runId: "run-1", status: "ok" }
-          : { runId: "run-1", status: "accepted" };
+        return { runId: "run-1", status: "accepted" };
       }
       if (request.method === "chat.history") {
         return {
