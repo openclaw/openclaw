@@ -259,6 +259,7 @@ export function subscribeEmbeddedPiSession(params: {
     if (!blockChunking) return;
     const minChars = Math.max(1, Math.floor(blockChunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
+    // Force flush small remainders as a single chunk to avoid re-splitting.
     if (force && blockBuffer.length > 0 && blockBuffer.length <= maxChars) {
       emitBlockChunk(blockBuffer);
       blockBuffer = "";
@@ -457,6 +458,7 @@ export function subscribeEmbeddedPiSession(params: {
               if (delta) {
                 chunk = delta;
               } else if (content) {
+                // Providers may resend full content on text_end; append only the suffix.
                 if (content.startsWith(deltaBuffer)) {
                   chunk = content.slice(deltaBuffer.length);
                 } else if (deltaBuffer.startsWith(content)) {
