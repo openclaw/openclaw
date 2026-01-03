@@ -433,6 +433,7 @@ Common issues:
 - Port already in use (change with `--port`)
 - Missing API keys in config
 - Invalid config syntax (remember it's JSON5, but still check for errors)
+- **Tailscale serve + bind conflict:** If using `tailscale.mode: "serve"`, you must set `gateway.bind: "loopback"` (not `"lan"`). Tailscale serve proxies traffic itself.
 
 **Debug mode** — use watch for live reload:
 ```bash
@@ -528,6 +529,16 @@ Use `/model` to switch without restarting:
 ```
 
 **Tip:** `/model` is processed at the gateway level — it works even if you're rate-limited (429) on the current model!
+
+### Model + thinking mode issues?
+
+Some models don't support extended thinking well:
+
+- **Gemini Flash + thinking:** Can cause "Corrupted thought signature" errors. Fix: `/think off`
+- **Claude Opus + thinking off:** Opus may "think out loud" anyway. Better to use `/think low` than `off`.
+- **Local LLMs:** Most don't support the thinking/reasoning separation. Set `reasoning: false` in your model config.
+
+If you get weird errors after switching models, try `/think off` and `/new` to reset.
 
 ### How do I stop/cancel a running task?
 
