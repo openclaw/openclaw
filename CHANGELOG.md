@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Features
+- Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
+
 ### Fixes
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 

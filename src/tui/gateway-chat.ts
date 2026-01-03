@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { GatewayClient } from "../gateway/client.js";
 import {
   type HelloOk,
@@ -183,6 +183,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const authToken = config.gateway?.auth?.token;
 
+  const localPort = resolveGatewayPort(config);
   const url =
     (typeof opts.url === "string" && opts.url.trim().length > 0
       ? opts.url.trim()
@@ -190,7 +191,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     (typeof remote?.url === "string" && remote.url.trim().length > 0
       ? remote.url.trim()
       : undefined) ||
-    "ws://127.0.0.1:18789";
+    `ws://127.0.0.1:${localPort}`;
 
   const token =
     (typeof opts.token === "string" && opts.token.trim().length > 0

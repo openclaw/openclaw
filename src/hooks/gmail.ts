@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 
-import type {
-  ClawdisConfig,
+import {
+  type ClawdisConfig,
+  DEFAULT_GATEWAY_PORT,
   HooksGmailTailscaleMode,
+  resolveGatewayPort,
 } from "../config/config.js";
 
 export const DEFAULT_GMAIL_LABEL = "INBOX";
@@ -14,7 +16,6 @@ export const DEFAULT_GMAIL_SERVE_PATH = "/gmail-pubsub";
 export const DEFAULT_GMAIL_MAX_BYTES = 20_000;
 export const DEFAULT_GMAIL_RENEW_MINUTES = 12 * 60;
 export const DEFAULT_HOOKS_PATH = "/hooks";
-export const DEFAULT_HOOKS_BASE_URL = "http://127.0.0.1:18789";
 
 export type GmailHookOverrides = {
   account?: string;
@@ -87,9 +88,13 @@ export function normalizeServePath(raw?: string): string {
   return withSlash.replace(/\/+$/, "");
 }
 
-export function buildDefaultHookUrl(hooksPath?: string): string {
+export function buildDefaultHookUrl(
+  hooksPath?: string,
+  port: number = DEFAULT_GATEWAY_PORT,
+): string {
   const basePath = normalizeHooksPath(hooksPath);
-  return joinUrl(DEFAULT_HOOKS_BASE_URL, `${basePath}/gmail`);
+  const baseUrl = `http://127.0.0.1:${port}`;
+  return joinUrl(baseUrl, `${basePath}/gmail`);
 }
 
 export function resolveGmailHookRuntimeConfig(
@@ -122,7 +127,9 @@ export function resolveGmailHookRuntimeConfig(
   }
 
   const hookUrl =
-    overrides.hookUrl ?? gmail?.hookUrl ?? buildDefaultHookUrl(hooks?.path);
+    overrides.hookUrl ??
+    gmail?.hookUrl ??
+    buildDefaultHookUrl(hooks?.path, resolveGatewayPort(cfg));
 
   const includeBody = overrides.includeBody ?? gmail?.includeBody ?? true;
 

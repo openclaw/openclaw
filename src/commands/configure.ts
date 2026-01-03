@@ -15,6 +15,7 @@ import type { ClawdisConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDIS,
   readConfigFileSnapshot,
+  resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
@@ -74,7 +75,7 @@ async function promptGatewayConfig(
   const portRaw = guardCancel(
     await text({
       message: "Gateway port",
-      initialValue: "18789",
+      initialValue: String(resolveGatewayPort(cfg)),
       validate: (value) =>
         Number.isFinite(Number(value)) ? undefined : "Invalid port",
     }),
@@ -205,6 +206,7 @@ async function promptGatewayConfig(
     gateway: {
       ...next.gateway,
       mode: "local",
+      port,
       bind,
       tailscale: {
         ...next.gateway?.tailscale,
@@ -527,7 +529,7 @@ export async function runConfigureWizard(
     nextConfig.agent?.workspace ??
     baseConfig.agent?.workspace ??
     DEFAULT_WORKSPACE;
-  let gatewayPort = 18789;
+  let gatewayPort = resolveGatewayPort(baseConfig);
   let gatewayToken: string | undefined;
 
   if (selected.includes("workspace")) {

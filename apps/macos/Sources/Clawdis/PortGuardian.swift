@@ -42,7 +42,7 @@ actor PortGuardian {
             self.logger.info("port sweep skipped (mode=unconfigured)")
             return
         }
-        let ports = [18789]
+        let ports = [GatewayEnvironment.gatewayPort()]
         for port in ports {
             let listeners = await self.listeners(on: port)
             guard !listeners.isEmpty else { continue }
@@ -148,7 +148,7 @@ actor PortGuardian {
         if mode == .unconfigured {
             return []
         }
-        let ports = [18789]
+        let ports = [GatewayEnvironment.gatewayPort()]
         var reports: [PortReport] = []
 
         for port in ports {
@@ -279,7 +279,8 @@ actor PortGuardian {
             return .init(port: port, expected: expectedDesc, status: .missing(text), listeners: [])
         }
 
-        let tunnelUnhealthy = mode == .remote && port == 18789 && tunnelHealthy == false
+        let tunnelUnhealthy =
+            mode == .remote && port == GatewayEnvironment.gatewayPort() && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
             var expected = okPredicate(listener)
             if tunnelUnhealthy, expected { expected = false }
@@ -347,7 +348,7 @@ actor PortGuardian {
         switch mode {
         case .remote:
             // Remote mode expects an SSH tunnel for the gateway WebSocket port.
-            if port == 18789 { return cmd.contains("ssh") }
+            if port == GatewayEnvironment.gatewayPort() { return cmd.contains("ssh") }
             return false
         case .local:
             return expectedCommands.contains { cmd.contains($0) }
@@ -361,7 +362,7 @@ actor PortGuardian {
         mode: AppState.ConnectionMode,
         listeners: [Listener]) async -> Bool?
     {
-        guard mode == .remote, port == 18789, !listeners.isEmpty else { return nil }
+        guard mode == .remote, port == GatewayEnvironment.gatewayPort(), !listeners.isEmpty else { return nil }
         let hasSsh = listeners.contains { $0.command.lowercased().contains("ssh") }
         guard hasSsh else { return nil }
         return await self.probeGatewayHealth(port: port)

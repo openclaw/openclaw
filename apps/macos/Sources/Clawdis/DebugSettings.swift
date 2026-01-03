@@ -306,7 +306,7 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text("Check which process owns 18789 and suggest fixes.")
+                    Text("Check which process owns \(GatewayEnvironment.gatewayPort()) and suggest fixes.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
@@ -946,7 +946,7 @@ extension DebugSettings {
         view.portCheckInFlight = true
         view.portReports = [
             DebugActions.PortReport(
-                port: 18789,
+                port: GatewayEnvironment.gatewayPort(),
                 expected: "Gateway websocket (node/tsx)",
                 status: .missing("Missing"),
                 listeners: []),

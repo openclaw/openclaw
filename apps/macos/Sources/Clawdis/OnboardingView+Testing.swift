@@ -24,7 +24,7 @@ extension OnboardingView {
             discoveryModel: discovery)
         view.needsBootstrap = true
         view.localGatewayProbe = LocalGatewayProbe(
-            port: 18789,
+            port: GatewayEnvironment.gatewayPort(),
             pid: 123,
             command: "clawdis-gateway",
             expected: true)

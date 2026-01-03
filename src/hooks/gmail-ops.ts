@@ -5,6 +5,7 @@ import {
   CONFIG_PATH_CLAWDIS,
   loadConfig,
   readConfigFileSnapshot,
+  resolveGatewayPort,
   validateConfigObject,
   writeConfigFile,
 } from "../config/config.js";
@@ -128,7 +129,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   const hookUrl =
     opts.hookUrl ??
     baseConfig.hooks?.gmail?.hookUrl ??
-    buildDefaultHookUrl(hooksPath);
+    buildDefaultHookUrl(hooksPath, resolveGatewayPort(baseConfig));
 
   const serveBind = opts.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePort = opts.port ?? DEFAULT_GMAIL_SERVE_PORT;

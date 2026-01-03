@@ -4,6 +4,7 @@ import {
   type ClawdisConfig,
   CONFIG_PATH_CLAWDIS,
   readConfigFileSnapshot,
+  resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
@@ -106,12 +107,18 @@ export async function runNonInteractiveOnboarding(
     return;
   }
 
-  const port = opts.gatewayPort ?? 18789;
-  if (!Number.isFinite(port) || port <= 0) {
+  const hasGatewayPort = opts.gatewayPort !== undefined;
+  if (
+    hasGatewayPort &&
+    (!Number.isFinite(opts.gatewayPort) || (opts.gatewayPort ?? 0) <= 0)
+  ) {
     runtime.error("Invalid --gateway-port");
     runtime.exit(1);
     return;
   }
+  const port = hasGatewayPort
+    ? (opts.gatewayPort as number)
+    : resolveGatewayPort(baseConfig);
   let bind = opts.gatewayBind ?? "loopback";
   let authMode = opts.gatewayAuth ?? "off";
   const tailscaleMode = opts.tailscale ?? "off";
@@ -162,6 +169,7 @@ export async function runNonInteractiveOnboarding(
     ...nextConfig,
     gateway: {
       ...nextConfig.gateway,
+      port,
       bind,
       tailscale: {
         ...nextConfig.gateway?.tailscale,

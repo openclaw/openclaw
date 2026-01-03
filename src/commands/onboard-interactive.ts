@@ -14,6 +14,7 @@ import type { ClawdisConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDIS,
   readConfigFileSnapshot,
+  resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
@@ -118,7 +119,8 @@ export async function runInteractiveOnboarding(
     }
   }
 
-  const localUrl = "ws://127.0.0.1:18789";
+  const localPort = resolveGatewayPort(baseConfig);
+  const localUrl = `ws://127.0.0.1:${localPort}`;
   const localProbe = await probeGatewayReachable({
     url: localUrl,
     token: process.env.CLAWDIS_GATEWAY_TOKEN,
@@ -315,7 +317,7 @@ export async function runInteractiveOnboarding(
   const portRaw = guardCancel(
     await text({
       message: "Gateway port",
-      initialValue: "18789",
+      initialValue: String(localPort),
       validate: (value) =>
         Number.isFinite(Number(value)) ? undefined : "Invalid port",
     }),
@@ -457,6 +459,7 @@ export async function runInteractiveOnboarding(
     ...nextConfig,
     gateway: {
       ...nextConfig.gateway,
+      port,
       bind,
       tailscale: {
         ...nextConfig.gateway?.tailscale,

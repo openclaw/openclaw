@@ -106,4 +106,20 @@ enum ClawdisConfigFile {
         return remote["password"] as? String
     }
 
+    static func gatewayPort() -> Int? {
+        let root = self.loadDict()
+        guard let gateway = root["gateway"] as? [String: Any] else { return nil }
+        if let port = gateway["port"] as? Int, port > 0 { return port }
+        if let number = gateway["port"] as? NSNumber, number.intValue > 0 {
+            return number.intValue
+        }
+        if let raw = gateway["port"] as? String,
+           let parsed = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)),
+           parsed > 0
+        {
+            return parsed
+        }
+        return nil
+    }
+
 }

@@ -1,7 +1,11 @@
 import fs from "node:fs";
 
 import type { Command } from "commander";
-import { CONFIG_PATH_CLAWDIS, loadConfig } from "../config/config.js";
+import {
+  CONFIG_PATH_CLAWDIS,
+  loadConfig,
+  resolveGatewayPort,
+} from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -26,6 +30,13 @@ type GatewayRpcOpts = {
 const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
+
+function parsePort(raw: unknown): number | null {
+  if (raw === undefined || raw === null) return null;
+  const parsed = Number.parseInt(String(raw), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return parsed;
+}
 
 async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
@@ -186,8 +197,15 @@ export function registerGatewayCli(program: Command) {
       }
       setGatewayWsLogStyle(wsLogStyle);
 
-      const port = Number.parseInt(String(opts.port ?? "18789"), 10);
-      if (Number.isNaN(port) || port <= 0) {
+      const cfg = loadConfig();
+      const portOverride = parsePort(opts.port);
+      if (opts.port !== undefined && portOverride === null) {
+        defaultRuntime.error("Invalid port");
+        defaultRuntime.exit(1);
+        return;
+      }
+      const port = portOverride ?? resolveGatewayPort(cfg);
+      if (!Number.isFinite(port) || port <= 0) {
         defaultRuntime.error("Invalid port");
         defaultRuntime.exit(1);
         return;
@@ -219,7 +237,6 @@ export function registerGatewayCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
-      const cfg = loadConfig();
       const bindRaw = String(opts.bind ?? cfg.gateway?.bind ?? "loopback");
       const bind =
         bindRaw === "loopback" ||
@@ -335,8 +352,14 @@ export function registerGatewayCli(program: Command) {
       }
       setGatewayWsLogStyle(wsLogStyle);
 
-      const port = Number.parseInt(String(opts.port ?? "18789"), 10);
-      if (Number.isNaN(port) || port <= 0) {
+      const cfg = loadConfig();
+      const portOverride = parsePort(opts.port);
+      if (opts.port !== undefined && portOverride === null) {
+        defaultRuntime.error("Invalid port");
+        defaultRuntime.exit(1);
+      }
+      const port = portOverride ?? resolveGatewayPort(cfg);
+      if (!Number.isFinite(port) || port <= 0) {
         defaultRuntime.error("Invalid port");
         defaultRuntime.exit(1);
       }
@@ -400,7 +423,6 @@ export function registerGatewayCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
-      const cfg = loadConfig();
       const configExists = fs.existsSync(CONFIG_PATH_CLAWDIS);
       const mode = cfg.gateway?.mode;
       if (!opts.allowUnconfigured && mode !== "local") {

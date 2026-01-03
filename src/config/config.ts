@@ -438,6 +438,8 @@ export type GatewayRemoteConfig = {
 };
 
 export type GatewayConfig = {
+  /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
+  port?: number;
   /**
    * Explicit gateway mode. When set to "remote", local gateway start is disabled.
    * When set to "local", the CLI may start the gateway locally.
@@ -641,6 +643,24 @@ export const STATE_DIR_CLAWDIS =
 export const CONFIG_PATH_CLAWDIS =
   process.env.CLAWDIS_CONFIG_PATH ??
   path.join(STATE_DIR_CLAWDIS, "clawdis.json");
+
+export const DEFAULT_GATEWAY_PORT = 18789;
+
+export function resolveGatewayPort(
+  cfg?: ClawdisConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): number {
+  const envRaw = env.CLAWDIS_GATEWAY_PORT?.trim();
+  if (envRaw) {
+    const parsed = Number.parseInt(envRaw, 10);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  }
+  const configPort = cfg?.gateway?.port;
+  if (typeof configPort === "number" && Number.isFinite(configPort)) {
+    if (configPort > 0) return configPort;
+  }
+  return DEFAULT_GATEWAY_PORT;
+}
 
 const ModelApiSchema = z.union([
   z.literal("openai-completions"),
@@ -1217,6 +1237,7 @@ const ClawdisSchema = z.object({
     .optional(),
   gateway: z
     .object({
+      port: z.number().int().positive().optional(),
       mode: z.union([z.literal("local"), z.literal("remote")]).optional(),
       bind: z
         .union([

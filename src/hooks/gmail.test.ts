@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ClawdisConfig } from "../config/config.js";
+import { type ClawdisConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
   buildTopicPath,
@@ -20,8 +20,8 @@ const baseConfig = {
 
 describe("gmail hook config", () => {
   it("builds default hook url", () => {
-    expect(buildDefaultHookUrl("/hooks")).toBe(
-      "http://127.0.0.1:18789/hooks/gmail",
+    expect(buildDefaultHookUrl("/hooks", DEFAULT_GATEWAY_PORT)).toBe(
+      `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`,
     );
   });
 
@@ -41,7 +41,9 @@ describe("gmail hook config", () => {
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
-      expect(result.value.hookUrl).toBe("http://127.0.0.1:18789/hooks/gmail");
+      expect(result.value.hookUrl).toBe(
+        `http://127.0.0.1:${DEFAULT_GATEWAY_PORT}/hooks/gmail`,
+      );
     }
   });
 

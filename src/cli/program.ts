@@ -166,7 +166,7 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option("--auth-choice <choice>", "Auth: oauth|apiKey|minimax|skip")
     .option("--anthropic-api-key <key>", "Anthropic API key")
-    .option("--gateway-port <port>", "Gateway port", "18789")
+    .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|lan|tailnet|auto")
     .option("--gateway-auth <mode>", "Gateway auth: off|token|password")
     .option("--gateway-token <token>", "Gateway token (token auth)")
@@ -194,10 +194,10 @@ export function buildProgram() {
               | "skip"
               | undefined,
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
-            gatewayPort: Number.parseInt(
-              String(opts.gatewayPort ?? "18789"),
-              10,
-            ),
+            gatewayPort:
+              typeof opts.gatewayPort === "string"
+                ? Number.parseInt(opts.gatewayPort, 10)
+                : undefined,
             gatewayBind: opts.gatewayBind as
               | "loopback"
               | "lan"

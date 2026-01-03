@@ -61,15 +61,18 @@ async function main() {
     wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
   setGatewayWsLogStyle(wsLogStyle);
 
+  const cfg = loadConfig();
   const portRaw =
-    argValue(args, "--port") ?? process.env.CLAWDIS_GATEWAY_PORT ?? "18789";
+    argValue(args, "--port") ??
+    process.env.CLAWDIS_GATEWAY_PORT ??
+    (typeof cfg.gateway?.port === "number" ? String(cfg.gateway.port) : "") ??
+    "18789";
   const port = Number.parseInt(portRaw, 10);
   if (Number.isNaN(port) || port <= 0) {
     defaultRuntime.error(`Invalid --port (${portRaw})`);
     process.exit(1);
   }
 
-  const cfg = loadConfig();
   const bindRaw =
     argValue(args, "--bind") ??
     process.env.CLAWDIS_GATEWAY_BIND ??

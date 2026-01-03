@@ -34,6 +34,9 @@ export function summarizeExistingConfig(config: ClawdisConfig): string {
     rows.push(`workspace: ${config.agent.workspace}`);
   if (config.agent?.model) rows.push(`model: ${config.agent.model}`);
   if (config.gateway?.mode) rows.push(`gateway.mode: ${config.gateway.mode}`);
+  if (typeof config.gateway?.port === "number") {
+    rows.push(`gateway.port: ${config.gateway.port}`);
+  }
   if (config.gateway?.bind) rows.push(`gateway.bind: ${config.gateway.bind}`);
   if (config.gateway?.remote?.url) {
     rows.push(`gateway.remote.url: ${config.gateway.remote.url}`);

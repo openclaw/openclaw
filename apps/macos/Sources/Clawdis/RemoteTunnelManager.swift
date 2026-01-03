@@ -38,7 +38,7 @@ actor RemoteTunnelManager {
     }
 
     /// Ensure an SSH tunnel is running for the gateway control port.
-    /// Returns the local forwarded port (usually 18789).
+    /// Returns the local forwarded port (usually the configured gateway port).
     func ensureControlTunnel() async throws -> UInt16 {
         let settings = CommandResolver.connectionSettings()
         guard settings.mode == .remote else {

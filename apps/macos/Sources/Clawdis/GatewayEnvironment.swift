@@ -72,6 +72,13 @@ enum GatewayEnvironment {
     }
 
     static func gatewayPort() -> Int {
+        if let raw = ProcessInfo.processInfo.environment["CLAWDIS_GATEWAY_PORT"] {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let parsed = Int(trimmed), parsed > 0 { return parsed }
+        }
+        if let configPort = ClawdisConfigFile.gatewayPort(), configPort > 0 {
+            return configPort
+        }
         let stored = UserDefaults.standard.integer(forKey: "gatewayPort")
         return stored > 0 ? stored : 18789
     }

@@ -185,7 +185,7 @@ final class ControlChannel {
                 "Reason: \(reason)"
         }
 
-        // Common misfire: we connected to localhost:18789 but the port is occupied
+        // Common misfire: we connected to the configured localhost port but it is occupied
         // by some other process (e.g. a local dev gateway or a stuck SSH forward).
         // The gateway handshake returns something we can't parse, which currently
         // surfaces as "hello failed (unexpected response)". Give the user a pointer
