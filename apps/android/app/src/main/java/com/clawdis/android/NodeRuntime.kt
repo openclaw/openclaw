@@ -433,7 +433,8 @@ class NodeRuntime(context: Context) {
         }
 
       if (!resolved.ok || resolved.token.isNullOrBlank()) {
-        _statusText.value = "Failed: pairing required"
+        val errorMessage = resolved.error?.trim().orEmpty().ifEmpty { "pairing required" }
+        _statusText.value = "Failed: $errorMessage"
         return@launch
       }
 
