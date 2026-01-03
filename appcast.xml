@@ -4,9 +4,9 @@
         <title>Clawdis</title>
         <item>
             <title>2.0.0-beta5</title>
-            <pubDate>Sat, 03 Jan 2026 06:11:43 +0100</pubDate>
+            <pubDate>Sat, 03 Jan 2026 07:15:16 +0100</pubDate>
             <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
-            <sparkle:version>2.0.0-beta5</sparkle:version>
+            <sparkle:version>2765</sparkle:version>
             <sparkle:shortVersionString>2.0.0-beta5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
             <description><![CDATA[<h2>Clawdis 2.0.0-beta5</h2>
@@ -62,7 +62,8 @@
 <li>CLI: add <code>configure</code>, <code>doctor</code>, and <code>update</code> wizards for ongoing setup, health checks, and modernization.</li>
 <li>CLI: add Signal CLI auto-install from GitHub releases in the wizard and persist wizard run metadata in config.</li>
 <li>CLI: add remote gateway client config (gateway.remote.*) with Bonjour-assisted discovery.</li>
-<li>CLI: add <code>clawdis tui</code> gateway-connected terminal UI (local or remote).</li>
+<li>CLI: enhance <code>clawdis tui</code> with model/session pickers, tool cards, and slash commands (local or remote).</li>
+<li>Gateway: allow <code>sessions.patch</code> to set per-session model overrides (used by the TUI <code>/model</code> flow).</li>
 <li>Skills: allow <code>bun</code> as a node manager for skill installs.</li>
 <li>Skills: add <code>things-mac</code> (Things 3 CLI) for read/search plus add/update via URL scheme.</li>
 <li>Skills: add Apple Notes + Reminders skills via memo CLI (thanks @tylerwince).</li>
@@ -205,7 +206,7 @@
 </ul>
 <p><a href="https://github.com/steipete/clawdis/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta5/Clawdis-2.0.0-beta5.zip" length="72078343" type="application/octet-stream" sparkle:edSignature="xSfMHcYYEktlE+EC8cnM7GJP0oqjfN4EK+oIIcTHvXtgXG7LcBqo4kMQEVrr1kIzCIqQ+7/R6HMd/rWtfkc3Cg=="/>
+            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta5/Clawdis-2.0.0-beta5.zip" length="145432870" type="application/octet-stream" sparkle:edSignature="qKPcmSx2pAaIYz9NqFp0TY63KrcDlpctUHnNpRs6Q60qQqBWtQycLIhhvhxmGnHupaiEXJfspb/Ad9RgODIzAw=="/>
         </item>
     </channel>
 </rss>
