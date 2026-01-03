@@ -14,6 +14,7 @@
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Agent tools: scope the Discord tool to Discord surface runs.
 - Agent tools: format verbose tool summaries without brackets, with unique emojis and `tool: detail` style.
+- macOS Connections: move to sidebar + detail layout with structured sections and header actions.
 - macOS onboarding: increase window height so the permissions page fits without scrolling.
 - Thinking: default to low for reasoning-capable models when no /think or config default is set.
 - Logging: decouple file log levels from console verbosity; verbose-only details are captured when `logging.level` is debug/trace.
