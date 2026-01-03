@@ -1133,6 +1133,7 @@ export async function getReplyFromConfig(
   const streamedPayloadKeys = new Set<string>();
   const pendingStreamedPayloadKeys = new Set<string>();
   const pendingBlockTasks = new Set<Promise<void>>();
+  let didStreamBlockReply = false;
   const buildPayloadKey = (payload: ReplyPayload) => {
     const text = payload.text?.trim() ?? "";
     const mediaList = payload.mediaUrls?.length
@@ -2239,6 +2240,7 @@ export async function getReplyFromConfig(
                   return;
                 }
                 pendingStreamedPayloadKeys.add(payloadKey);
+                didStreamBlockReply = true;
                 const task = (async () => {
                   await startTypingOnText(cleaned);
                   await opts.onBlockReply?.(blockPayload);
@@ -2345,11 +2347,15 @@ export async function getReplyFromConfig(
           (payload.mediaUrls && payload.mediaUrls.length > 0),
       );
 
-    const filteredPayloads = blockStreamingEnabled
-      ? replyTaggedPayloads.filter(
-          (payload) => !streamedPayloadKeys.has(buildPayloadKey(payload)),
-        )
-      : replyTaggedPayloads;
+    const shouldDropFinalPayloads =
+      blockStreamingEnabled && blockReplyChunking && didStreamBlockReply;
+    const filteredPayloads = shouldDropFinalPayloads
+      ? []
+      : blockStreamingEnabled
+        ? replyTaggedPayloads.filter(
+            (payload) => !streamedPayloadKeys.has(buildPayloadKey(payload)),
+          )
+        : replyTaggedPayloads;
 
     if (filteredPayloads.length === 0) return finalizeWithFollowup(undefined);
 

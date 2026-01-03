@@ -15,6 +15,7 @@
 ### Fixes
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Block streaming: default to text_end and suppress duplicate block sends while in-flight.
+- Block streaming: drop final payloads after soft chunking to keep Discord order intact.
 - Gmail hooks: resolve gcloud Python to a real executable when PATH uses mise shims — thanks @joargp.
 - Control UI: generate UUIDs when `crypto.randomUUID()` is unavailable over HTTP — thanks @ratulsarna.
 - Agent: add soft block-stream chunking (800–1200 chars default) with paragraph/newline preference.
