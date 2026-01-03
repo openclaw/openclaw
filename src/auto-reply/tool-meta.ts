@@ -2,17 +2,17 @@ export const TOOL_RESULT_DEBOUNCE_MS = 500;
 export const TOOL_RESULT_FLUSH_COUNT = 5;
 
 const TOOL_EMOJI_BY_NAME: Record<string, string> = {
-  bash: "💻",
+  bash: "🛠️",
   process: "🧰",
   read: "📖",
   write: "✍️",
   edit: "📝",
   attach: "📎",
-  clawdis_browser: "🌐",
-  clawdis_canvas: "🖼️",
-  clawdis_nodes: "📱",
-  clawdis_cron: "⏰",
-  clawdis_gateway: "🔌",
+  browser: "🌐",
+  canvas: "🖼️",
+  nodes: "📱",
+  cron: "⏰",
+  gateway: "🔌",
   whatsapp_login: "🟢",
   discord: "💬",
 };
@@ -20,7 +20,13 @@ const TOOL_EMOJI_BY_NAME: Record<string, string> = {
 function resolveToolEmoji(toolName?: string): string {
   const key = toolName?.trim().toLowerCase();
   if (key && TOOL_EMOJI_BY_NAME[key]) return TOOL_EMOJI_BY_NAME[key];
-  return "🛠️";
+  return "🧩";
+}
+
+function shortenHomeInString(input: string): string {
+  const home = process.env.HOME;
+  if (!home) return input;
+  return input.split(home).join("~");
 }
 
 export function shortenPath(p: string): string {
@@ -33,10 +39,10 @@ export function shortenPath(p: string): string {
 export function shortenMeta(meta: string): string {
   if (!meta) return meta;
   const colonIdx = meta.indexOf(":");
-  if (colonIdx === -1) return shortenPath(meta);
+  if (colonIdx === -1) return shortenHomeInString(meta);
   const base = meta.slice(0, colonIdx);
   const rest = meta.slice(colonIdx);
-  return `${shortenPath(base)}${rest}`;
+  return `${shortenHomeInString(base)}${rest}`;
 }
 
 export function formatToolAggregate(

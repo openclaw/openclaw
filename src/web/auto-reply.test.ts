@@ -1591,8 +1591,8 @@ describe("web auto-reply", () => {
           _ctx,
           opts?: { onToolResult?: (r: { text: string }) => Promise<void> },
         ) => {
-          await opts?.onToolResult?.({ text: "🛠️ tool1" });
-          await opts?.onToolResult?.({ text: "🛠️ tool2" });
+          await opts?.onToolResult?.({ text: "🧩 tool1" });
+          await opts?.onToolResult?.({ text: "🧩 tool2" });
           return { text: "final" };
         },
       );
@@ -1611,7 +1611,7 @@ describe("web auto-reply", () => {
     });
 
     const replies = reply.mock.calls.map((call) => call[0]);
-    expect(replies).toEqual(["🦞 🛠️ tool1", "🦞 🛠️ tool2", "🦞 final"]);
+    expect(replies).toEqual(["🦞 🧩 tool1", "🦞 🧩 tool2", "🦞 final"]);
     resetLoadConfigMock();
   });
 });

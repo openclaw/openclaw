@@ -9,7 +9,7 @@ import { createClawdisCodingTools } from "./pi-tools.js";
 describe("createClawdisCodingTools", () => {
   it("merges properties for union tool schemas", () => {
     const tools = createClawdisCodingTools();
-    const browser = tools.find((tool) => tool.name === "clawdis_browser");
+    const browser = tools.find((tool) => tool.name === "browser");
     expect(browser).toBeDefined();
     const parameters = browser?.parameters as {
       anyOf?: unknown[];
@@ -26,9 +26,7 @@ describe("createClawdisCodingTools", () => {
 
   it("preserves union action values in merged schema", () => {
     const tools = createClawdisCodingTools();
-    const toolNames = tools
-      .filter((tool) => tool.name.startsWith("clawdis_"))
-      .map((tool) => tool.name);
+    const toolNames = ["browser", "canvas", "nodes", "cron", "gateway"];
 
     for (const name of toolNames) {
       const tool = tools.find((candidate) => candidate.name === name);

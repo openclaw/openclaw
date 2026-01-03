@@ -2,17 +2,17 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createClawdisTools } from "./clawdis-tools.js";
 
-describe("clawdis_gateway tool", () => {
+describe("gateway tool", () => {
   it("schedules SIGUSR1 restart", async () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     try {
       const tool = createClawdisTools().find(
-        (candidate) => candidate.name === "clawdis_gateway",
+        (candidate) => candidate.name === "gateway",
       );
       expect(tool).toBeDefined();
-      if (!tool) throw new Error("missing clawdis_gateway tool");
+      if (!tool) throw new Error("missing gateway tool");
 
       const result = await tool.execute("call1", {
         action: "restart",

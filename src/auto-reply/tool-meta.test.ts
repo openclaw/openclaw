@@ -24,6 +24,7 @@ describe("tool meta formatting", () => {
     vi.stubEnv("HOME", "/Users/test");
     expect(shortenMeta("/Users/test/a.txt")).toBe("~/a.txt");
     expect(shortenMeta("/Users/test/a.txt:12")).toBe("~/a.txt:12");
+    expect(shortenMeta("cd /Users/test/dir && ls")).toBe("cd ~/dir && ls");
     expect(shortenMeta("")).toBe("");
   });
 
@@ -35,7 +36,7 @@ describe("tool meta formatting", () => {
       "note",
       "a→b",
     ]);
-    expect(out).toMatch(/^🛠️ fs/);
+    expect(out).toMatch(/^🧩 fs/);
     expect(out).toContain("~/dir/{a.txt, b.txt}");
     expect(out).toContain("note");
     expect(out).toContain("a→b");
@@ -43,8 +44,8 @@ describe("tool meta formatting", () => {
 
   it("formats prefixes with default labels", () => {
     vi.stubEnv("HOME", "/Users/test");
-    expect(formatToolPrefix(undefined, undefined)).toBe("🛠️ tool");
-    expect(formatToolPrefix("x", "/Users/test/a.txt")).toBe("🛠️ x: ~/a.txt");
+    expect(formatToolPrefix(undefined, undefined)).toBe("🧩 tool");
+    expect(formatToolPrefix("x", "/Users/test/a.txt")).toBe("🧩 x: ~/a.txt");
   });
 });
 

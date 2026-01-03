@@ -12,7 +12,7 @@ vi.mock("../media/image-ops.js", () => ({
 
 import { createClawdisTools } from "./clawdis-tools.js";
 
-describe("clawdis_nodes camera_snap", () => {
+describe("nodes camera_snap", () => {
   beforeEach(() => {
     callGateway.mockReset();
   });
@@ -36,9 +36,9 @@ describe("clawdis_nodes camera_snap", () => {
     });
 
     const tool = createClawdisTools().find(
-      (candidate) => candidate.name === "clawdis_nodes",
+      (candidate) => candidate.name === "nodes",
     );
-    if (!tool) throw new Error("missing clawdis_nodes tool");
+    if (!tool) throw new Error("missing nodes tool");
 
     const result = await tool.execute("call1", {
       action: "camera_snap",
@@ -76,9 +76,9 @@ describe("clawdis_nodes camera_snap", () => {
     });
 
     const tool = createClawdisTools().find(
-      (candidate) => candidate.name === "clawdis_nodes",
+      (candidate) => candidate.name === "nodes",
     );
-    if (!tool) throw new Error("missing clawdis_nodes tool");
+    if (!tool) throw new Error("missing nodes tool");
 
     await tool.execute("call1", {
       action: "camera_snap",

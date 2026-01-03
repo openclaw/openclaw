@@ -37,7 +37,7 @@ Notes:
 - `poll` returns new output and exit status when complete.
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 
-### `clawdis_browser`
+### `browser`
 Control the dedicated clawd browser.
 
 Core actions:
@@ -56,7 +56,7 @@ Notes:
 - `upload` can optionally pass a `ref` to auto-click after arming.
 - `upload` also supports `inputRef` (aria ref) or `element` (CSS selector) to set `<input type="file">` directly.
 
-### `clawdis_canvas`
+### `canvas`
 Drive the node Canvas (present, eval, snapshot, A2UI).
 
 Core actions:
@@ -70,7 +70,7 @@ Notes:
 - A2UI is v0.8 only (no `createSurface`); the CLI rejects v0.9 JSONL with line errors.
 - Quick smoke: `clawdis canvas a2ui push --text "Hello from A2UI"`.
 
-### `clawdis_nodes`
+### `nodes`
 Discover and target paired nodes; send notifications; capture camera/screen.
 
 Core actions:
@@ -84,7 +84,7 @@ Notes:
 - Images return image blocks + `MEDIA:<path>`.
 - Videos return `FILE:<path>` (mp4).
 
-### `clawdis_cron`
+### `cron`
 Manage Gateway cron jobs and wakeups.
 
 Core actions:
@@ -96,7 +96,7 @@ Notes:
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
 - `update` uses `{ jobId, patch }`.
 
-### `clawdis_gateway`
+### `gateway`
 Restart the running Gateway process (in-place).
 
 Core actions:
@@ -147,7 +147,7 @@ Notes:
 
 ## Parameters (common)
 
-Gateway-backed tools (`clawdis_canvas`, `clawdis_nodes`, `clawdis_cron`):
+Gateway-backed tools (`canvas`, `nodes`, `cron`):
 - `gatewayUrl` (default `ws://127.0.0.1:18789`)
 - `gatewayToken` (if auth enabled)
 - `timeoutMs`
@@ -158,18 +158,18 @@ Browser tool:
 ## Recommended agent flows
 
 Browser automation:
-1) `clawdis_browser` → `status` / `start`
+1) `browser` → `status` / `start`
 2) `snapshot` (ai or aria)
 3) `act` (click/type/press)
 4) `screenshot` if you need visual confirmation
 
 Canvas render:
-1) `clawdis_canvas` → `present`
+1) `canvas` → `present`
 2) `a2ui_push` (optional)
 3) `snapshot`
 
 Node targeting:
-1) `clawdis_nodes` → `status`
+1) `nodes` → `status`
 2) `describe` on the chosen node
 3) `notify` / `camera_snap` / `screen_record`
 

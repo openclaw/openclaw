@@ -4,6 +4,7 @@
 
 ### Breaking
 - Identifiers: rename bundle IDs and internal domains to `com.clawdis.*` (macOS: `com.clawdis.mac`, iOS: `com.clawdis.ios`, Android: `com.clawdis.android`) and update the gateway LaunchAgent label to `com.clawdis.gateway`.
+- Agent tools: drop the `clawdis_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
 
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
@@ -230,7 +231,7 @@
 - Hook mappings + Gmail Pub/Sub helper (`clawdis hooks gmail setup/run`) with auto-renew + Tailscale Funnel support.
 - Command queue modes + per-session overrides (`/queue ...`) and new `agent.maxConcurrent` cap for safe parallelism across sessions.
 - Background bash tasks: `bash` auto-yields after 20s (or on demand) with a `process` tool to list/poll/log/write/kill sessions.
-- Gateway in-process restart: `clawdis_gateway` tool action triggers a SIGUSR1 restart without needing a supervisor.
+- Gateway in-process restart: `gateway` tool action triggers a SIGUSR1 restart without needing a supervisor.
 
 ### Breaking
 - Config refactor: `inbound.*` removed; use top-level `routing` (allowlists + group rules + transcription), `messages` (prefixes/timestamps), and `session` (scoping/store/mainKey). No legacy keys read.

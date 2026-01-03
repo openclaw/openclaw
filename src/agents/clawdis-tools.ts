@@ -577,8 +577,8 @@ const BrowserToolSchema = Type.Union([
 
 function createBrowserTool(): AnyAgentTool {
   return {
-    label: "Clawdis Browser",
-    name: "clawdis_browser",
+    label: "Browser",
+    name: "browser",
     description:
       "Control clawd's dedicated browser (status/start/stop/tabs/open/snapshot/screenshot/actions). Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
     parameters: BrowserToolSchema,
@@ -837,8 +837,8 @@ const CanvasToolSchema = Type.Union([
 
 function createCanvasTool(): AnyAgentTool {
   return {
-    label: "Clawdis Canvas",
-    name: "clawdis_canvas",
+    label: "Canvas",
+    name: "canvas",
     description:
       "Control node canvases (present/hide/navigate/eval/snapshot/A2UI). Use snapshot to capture the rendered UI.",
     parameters: CanvasToolSchema,
@@ -1088,8 +1088,8 @@ const NodesToolSchema = Type.Union([
 
 function createNodesTool(): AnyAgentTool {
   return {
-    label: "Clawdis Nodes",
-    name: "clawdis_nodes",
+    label: "Nodes",
+    name: "nodes",
     description:
       "Discover and control paired nodes (status/describe/pairing/notify/camera/screen).",
     parameters: NodesToolSchema,
@@ -1454,8 +1454,8 @@ const CronToolSchema = Type.Union([
 
 function createCronTool(): AnyAgentTool {
   return {
-    label: "Clawdis Cron",
-    name: "clawdis_cron",
+    label: "Cron",
+    name: "cron",
     description:
       "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.",
     parameters: CronToolSchema,
@@ -1736,7 +1736,7 @@ const DiscordToolSchema = Type.Union([
 
 function createDiscordTool(): AnyAgentTool {
   return {
-    label: "Clawdis Discord",
+    label: "Discord",
     name: "discord",
     description: "Manage Discord messages, reactions, and moderation.",
     parameters: DiscordToolSchema,
@@ -2264,8 +2264,8 @@ function createDiscordTool(): AnyAgentTool {
 
 function createGatewayTool(): AnyAgentTool {
   return {
-    label: "Clawdis Gateway",
-    name: "clawdis_gateway",
+    label: "Gateway",
+    name: "gateway",
     description:
       "Restart the running gateway process in-place (SIGUSR1) without needing an external supervisor. Use delayMs to avoid interrupting an in-flight reply.",
     parameters: GatewayToolSchema,
