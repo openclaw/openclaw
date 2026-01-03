@@ -753,6 +753,8 @@ Gateway auto-start:
 - If `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
 - Set `CLAWDIS_SKIP_GMAIL_WATCHER=1` to disable the auto-start (for manual runs).
+- Avoid running a separate `gog gmail watch serve` alongside the Gateway; it will
+  fail with `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
 Note: when `tailscale.mode` is on, Clawdis defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).

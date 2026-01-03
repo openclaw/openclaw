@@ -60,6 +60,8 @@ Gateway auto-start (recommended):
 - When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
 - Set `CLAWDIS_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
+- Do not run the manual daemon at the same time, or you will hit
+  `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
 Manual daemon (starts `gog gmail watch serve` + auto-renew):
 
