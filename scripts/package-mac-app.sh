@@ -6,7 +6,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_ROOT="$ROOT_DIR/dist/Clawdis.app"
-BUILD_PATH="$ROOT_DIR/apps/macos/.build"
+BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
 PRODUCT="Clawdis"
 BUNDLE_ID="${BUNDLE_ID:-com.steipete.clawdis.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
@@ -16,6 +16,9 @@ GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || ec
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-$GIT_BUILD_NUMBER}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
+BUILD_ARCHS_VALUE="${BUILD_ARCHS:-arm64 x86_64}"
+IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
+PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml}"
 AUTO_CHECKS=true
@@ -23,6 +26,59 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
+if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: APP_BUILD must be numeric for Sparkle compare (CFBundleVersion). Got: $APP_BUILD" >&2
+  exit 1
+fi
+
+build_path_for_arch() {
+  echo "$BUILD_ROOT/$1"
+}
+
+bin_for_arch() {
+  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/$PRODUCT"
+}
+
+sparkle_framework_for_arch() {
+  echo "$(build_path_for_arch "$1")/$BUILD_CONFIG/Sparkle.framework"
+}
+
+merge_framework_machos() {
+  local primary="$1"
+  local dest="$2"
+  shift 2
+  local others=("$@")
+  while IFS= read -r -d '' file; do
+    if /usr/bin/file "$file" | /usr/bin/grep -q "Mach-O"; then
+      local rel="${file#$primary/}"
+      local inputs=("$file")
+      for fw in "${others[@]}"; do
+        if [[ ! -f "$fw/$rel" ]]; then
+          echo "ERROR: Missing $rel in $fw" >&2
+          exit 1
+        fi
+        inputs+=("$fw/$rel")
+      done
+      /usr/bin/lipo -create "${inputs[@]}" -output "$dest/$rel"
+    fi
+  done < <(find "$primary" -type f -print0)
+}
+
+build_relay_binary() {
+  local arch="$1"
+  local out="$2"
+  local define_arg="__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
+  local -a cmd=(bun build "$ROOT_DIR/dist/macos/relay.js" --compile --bytecode --outfile "$out" -e electron --define "$define_arg")
+  if [[ "$arch" == "x86_64" ]]; then
+    if ! arch -x86_64 /usr/bin/true >/dev/null 2>&1; then
+      echo "ERROR: Rosetta is required to build the x86_64 relay. Install Rosetta and retry." >&2
+      exit 1
+    fi
+    arch -x86_64 "${cmd[@]}"
+  else
+    "${cmd[@]}"
+  fi
+}
 
 echo "📦 Ensuring deps (pnpm install)"
 (cd "$ROOT_DIR" && pnpm install --no-frozen-lockfile --config.node-linker=hoisted)
@@ -42,11 +98,14 @@ fi
 
 cd "$ROOT_DIR/apps/macos"
 
-echo "🔨 Building $PRODUCT ($BUILD_CONFIG)"
-swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+echo "🔨 Building $PRODUCT ($BUILD_CONFIG) [${BUILD_ARCHS[*]}]"
+for arch in "${BUILD_ARCHS[@]}"; do
+  BUILD_PATH="$(build_path_for_arch "$arch")"
+  swift build -c "$BUILD_CONFIG" --product "$PRODUCT" --build-path "$BUILD_PATH" --arch "$arch" -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+done
 
-BIN="$BUILD_PATH/$BUILD_CONFIG/$PRODUCT"
-echo "pkg: binary $BIN" >&2
+BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"
+echo "pkg: binary $BIN_PRIMARY" >&2
 echo "🧹 Cleaning old app bundle"
 rm -rf "$APP_ROOT"
 mkdir -p "$APP_ROOT/Contents/MacOS"
@@ -77,15 +136,32 @@ else
 fi
 
 echo "🚚 Copying binary"
-cp "$BIN" "$APP_ROOT/Contents/MacOS/Clawdis"
+cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/Clawdis"
+if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+  BIN_INPUTS=()
+  for arch in "${BUILD_ARCHS[@]}"; do
+    BIN_INPUTS+=("$(bin_for_arch "$arch")")
+  done
+  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/Clawdis"
+fi
 chmod +x "$APP_ROOT/Contents/MacOS/Clawdis"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
 /usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/Clawdis" 2>/dev/null || true
 
-SPARKLE_FRAMEWORK="$BUILD_PATH/$BUILD_CONFIG/Sparkle.framework"
-if [ -d "$SPARKLE_FRAMEWORK" ]; then
+SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
+if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
   echo "✨ Embedding Sparkle.framework"
-  cp -R "$SPARKLE_FRAMEWORK" "$APP_ROOT/Contents/Frameworks/"
+  cp -R "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/"
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    OTHER_FRAMEWORKS=()
+    for arch in "${BUILD_ARCHS[@]}"; do
+      if [[ "$arch" == "$PRIMARY_ARCH" ]]; then
+        continue
+      fi
+      OTHER_FRAMEWORKS+=("$(sparkle_framework_for_arch "$arch")")
+    done
+    merge_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "${OTHER_FRAMEWORKS[@]}"
+  fi
   chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
 fi
 
@@ -106,14 +182,21 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
 
   echo "🧰 Building bundled relay (bun --compile)"
   mkdir -p "$RELAY_DIR"
-	  RELAY_OUT="$RELAY_DIR/clawdis"
-	  bun build "$ROOT_DIR/dist/macos/relay.js" \
-	    --compile \
-	    --bytecode \
-	    --outfile "$RELAY_OUT" \
-	    -e electron \
-	    --define "__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
-	  chmod +x "$RELAY_OUT"
+  RELAY_OUT="$RELAY_DIR/clawdis"
+  RELAY_BUILD_DIR="$RELAY_DIR/.relay-build"
+  rm -rf "$RELAY_BUILD_DIR"
+  mkdir -p "$RELAY_BUILD_DIR"
+  for arch in "${BUILD_ARCHS[@]}"; do
+    RELAY_ARCH_OUT="$RELAY_BUILD_DIR/clawdis-$arch"
+    build_relay_binary "$arch" "$RELAY_ARCH_OUT"
+    chmod +x "$RELAY_ARCH_OUT"
+  done
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    /usr/bin/lipo -create "$RELAY_BUILD_DIR"/clawdis-* -output "$RELAY_OUT"
+  else
+    cp "$RELAY_BUILD_DIR/clawdis-${BUILD_ARCHS[0]}" "$RELAY_OUT"
+  fi
+  rm -rf "$RELAY_BUILD_DIR"
 
   echo "🎨 Copying gateway A2UI host assets"
   rm -rf "$RELAY_DIR/a2ui"

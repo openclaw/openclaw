@@ -21,11 +21,16 @@ This app now ships Sparkle auto-updates. Release builds must be Developer ID–s
 - Sparkle tools are fetched automatically via SwiftPM at `apps/macos/.build/artifacts/sparkle/Sparkle/bin/` (`sign_update`, `generate_appcast`, etc.).
 
 ## Build & package
+Notes:
+- `APP_BUILD` maps to `CFBundleVersion`/`sparkle:version`; keep it numeric + monotonic (no `-beta`), or Sparkle compares it as equal.
+- Universal by default (`arm64 x86_64`). Override with `BUILD_ARCHS="arm64"` if you need arm-only.
+
 ```bash
-# From repo root; set release IDs so Sparkle feed is enabled
+# From repo root; set release IDs so Sparkle feed is enabled.
+# APP_BUILD must be numeric + monotonic for Sparkle compare.
 BUNDLE_ID=com.steipete.clawdis \
 APP_VERSION=0.1.0 \
-APP_BUILD=0.1.0 \
+APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: Peter Steinberger (Y5PE65HELJ)" \
 scripts/package-mac-app.sh
@@ -43,7 +48,7 @@ scripts/create-dmg.sh dist/Clawdis.app dist/Clawdis-0.1.0.dmg
 NOTARIZE=1 NOTARYTOOL_PROFILE=clawdis-notary \
 BUNDLE_ID=com.steipete.clawdis \
 APP_VERSION=0.1.0 \
-APP_BUILD=0.1.0 \
+APP_BUILD="$(git rev-list --count HEAD)" \
 BUILD_CONFIG=release \
 SIGN_IDENTITY="Developer ID Application: Peter Steinberger (Y5PE65HELJ)" \
 scripts/package-mac-dist.sh
