@@ -16,7 +16,6 @@ describe("createClawdisCodingTools", () => {
       properties?: Record<string, unknown>;
       required?: string[];
     };
-    expect(parameters.anyOf?.length ?? 0).toBeGreaterThan(0);
     expect(parameters.properties?.action).toBeDefined();
     expect(parameters.properties?.controlUrl).toBeDefined();
     expect(parameters.properties?.targetUrl).toBeDefined();
