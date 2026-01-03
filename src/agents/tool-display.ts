@@ -1,5 +1,5 @@
+import fs from "node:fs";
 import { shortenHomeInString } from "../utils.js";
-import rawConfig from "./tool-display.json" assert { type: "json" };
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -29,7 +29,17 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const TOOL_DISPLAY_CONFIG = rawConfig as ToolDisplayConfig;
+const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = (() => {
+  try {
+    const raw = fs.readFileSync(
+      new URL("./tool-display.json", import.meta.url),
+      "utf8",
+    );
+    return JSON.parse(raw) as ToolDisplayConfig;
+  } catch {
+    return {};
+  }
+})();
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
 const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
 
@@ -91,7 +101,10 @@ function lookupValueByPath(args: unknown, path: string): unknown {
   return current;
 }
 
-function resolveDetailFromKeys(args: unknown, keys: string[]): string | undefined {
+function resolveDetailFromKeys(
+  args: unknown,
+  keys: string[],
+): string | undefined {
   for (const key of keys) {
     const value = lookupValueByPath(args, key);
     const display = coerceDisplayValue(value);
