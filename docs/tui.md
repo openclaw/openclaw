@@ -28,7 +28,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `--url <url>`: Gateway WebSocket URL (defaults to config `gateway.remote.url` or `ws://127.0.0.1:18789`).
 - `--token <token>`: Gateway token (if required).
 - `--password <password>`: Gateway password (if required).
-- `--session <key>`: Session key (default: `session.mainKey` or `main`).
+- `--session <key>`: Session key (default: `main`, or `global` when scope is global).
 - `--deliver`: Deliver assistant replies to the provider (default off).
 - `--thinking <level>`: Override thinking level for sends.
 - `--timeout-ms <ms>`: Agent timeout in ms (default 30000).

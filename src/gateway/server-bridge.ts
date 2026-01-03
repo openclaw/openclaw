@@ -3,6 +3,12 @@ import fs from "node:fs";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  resolveEmbeddedSessionLane,
+  waitForEmbeddedPiRunEnd,
+} from "../agents/pi-embedded.js";
+import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -29,6 +35,7 @@ import {
 import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
+  resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -38,6 +45,7 @@ import {
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
 import { defaultRuntime } from "../runtime.js";
+import { clearCommandLane } from "../process/command-queue.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
@@ -569,12 +577,37 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             };
           }
 
+          const mainKey = resolveMainSessionKey(loadConfig());
+          if (key === mainKey) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `Cannot delete the main session (${mainKey}).`,
+              },
+            };
+          }
+
           const deleteTranscript =
             typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
           const { storePath, store, entry } = loadSessionEntry(key);
           const sessionId = entry?.sessionId;
           const existed = Boolean(store[key]);
+          clearCommandLane(resolveEmbeddedSessionLane(key));
+          if (sessionId && isEmbeddedPiRunActive(sessionId)) {
+            abortEmbeddedPiRun(sessionId);
+            const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+            if (!ended) {
+              return {
+                ok: false,
+                error: {
+                  code: ErrorCodes.UNAVAILABLE,
+                  message: `Session ${key} is still active; try again in a moment.`,
+                },
+              };
+            }
+          }
           if (existed) delete store[key];
           await saveSessionStore(storePath, store);
 

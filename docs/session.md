@@ -5,7 +5,7 @@ read_when:
 ---
 # Session Management
 
-Clawdis treats **one session as primary**. By default the canonical key is `main` for every direct chat; no configuration is required. You can rename it via `session.mainKey` if you really want, but there is still only a single primary session. Older/local sessions can stay on disk, but only the primary key is used for desktop/web chat and direct agent calls.
+Clawdis treats **one session as primary**. The canonical key is fixed to `main` for direct chats (or `global` when scope is global); no configuration is required. `session.mainKey` is ignored. Older/local sessions can stay on disk, but only the primary key is used for desktop/web chat and direct agent calls.
 
 ## Gateway is the source of truth
 All session state is **owned by the gateway** (the “master” Clawdis). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
@@ -67,7 +67,7 @@ Runtime override (owner only):
     idleMinutes: 120,
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdis/sessions/sessions.json",
-    mainKey: "main"           // optional rename; still a single primary
+    // mainKey is ignored; primary key is fixed to "main"
   }
 }
 ```

@@ -6,6 +6,7 @@
 - Identifiers: rename bundle IDs and internal domains to `com.clawdis.*` (macOS: `com.clawdis.mac`, iOS: `com.clawdis.ios`, Android: `com.clawdis.android`) and update the gateway LaunchAgent label to `com.clawdis.gateway`.
 - Agent tools: drop the `clawdis_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
 - Bash tool: remove `stdinMode: "pty"`/node-pty support; use the tmux skill for real TTYs.
+- Sessions: primary session key is fixed to `main` (or `global` for global scope); `session.mainKey` is ignored.
 
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
@@ -40,6 +41,7 @@
 - Agent tools: emit verbose tool summaries at tool start (no debounce).
 - Gateway: split server helpers/tests into hooks/session-utils/ws-log/net modules for better isolation; add unit coverage for hooks/session utils/ws log.
 - Gateway: extract WS method handling + HTTP/provider/constant helpers to shrink server wiring and improve testability.
+- Gateway: prevent deleting the main session and abort active runs before deleting other sessions.
 - Onboarding: fix Control UI basePath usage when showing/opening gateway URLs.
 - Onboarding: clarify provider requirements (WhatsApp/Signal phone numbers, iMessage Apple ID guidance) in the provider picker.
 - macOS Connections: move to sidebar + detail layout with structured sections and header actions.

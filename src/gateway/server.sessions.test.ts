@@ -5,6 +5,7 @@ import { describe, expect, test } from "vitest";
 import {
   connectOk,
   installGatewayTestHooks,
+  embeddedRunMock,
   piSdkMock,
   rpcReq,
   startServerWithClient,
@@ -213,6 +214,61 @@ describe("gateway server sessions", () => {
     expect(
       (badThinking.error as { message?: unknown } | undefined)?.message ?? "",
     ).toMatch(/invalid thinkinglevel/i);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("sessions.delete rejects main and aborts active runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      `${JSON.stringify({ role: "user", content: "hello" })}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(dir, "sess-active.jsonl"),
+      `${JSON.stringify({ role: "user", content: "active" })}\n`,
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          main: { sessionId: "sess-main", updatedAt: Date.now() },
+          "discord:group:dev": {
+            sessionId: "sess-active",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    embeddedRunMock.activeIds.add("sess-active");
+    embeddedRunMock.waitResults.set("sess-active", true);
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const mainDelete = await rpcReq(ws, "sessions.delete", { key: "main" });
+    expect(mainDelete.ok).toBe(false);
+
+    const deleted = await rpcReq<{ ok: true; deleted: boolean }>(
+      ws,
+      "sessions.delete",
+      { key: "discord:group:dev" },
+    );
+    expect(deleted.ok).toBe(true);
+    expect(deleted.payload?.deleted).toBe(true);
+    expect(embeddedRunMock.abortCalls).toEqual(["sess-active"]);
+    expect(embeddedRunMock.waitCalls).toEqual(["sess-active"]);
 
     ws.close();
     await server.close();

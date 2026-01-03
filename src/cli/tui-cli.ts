@@ -14,7 +14,7 @@ export function registerTuiCli(program: Command) {
     .option("--password <password>", "Gateway password (if required)")
     .option(
       "--session <key>",
-      "Session key (default: session.mainKey from config)",
+      'Session key (default: "main", or "global" when scope is global)',
     )
     .option("--deliver", "Deliver assistant replies", false)
     .option("--thinking <level>", "Thinking level override")

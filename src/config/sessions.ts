@@ -103,6 +103,13 @@ export function resolveStorePath(store?: string) {
   return path.resolve(store);
 }
 
+export function resolveMainSessionKey(
+  cfg?: { session?: { scope?: SessionScope; mainKey?: string } },
+): string {
+  if (cfg?.session?.scope === "global") return "global";
+  return "main";
+}
+
 function normalizeGroupLabel(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
   if (!trimmed) return "";
