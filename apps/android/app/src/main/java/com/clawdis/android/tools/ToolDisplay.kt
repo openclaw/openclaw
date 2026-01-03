@@ -186,9 +186,10 @@ object ToolDisplayRegistry {
         if (firstLine.isEmpty()) return null
         return if (firstLine.length > 160) "${firstLine.take(157)}…" else firstLine
       }
-      value.booleanOrNull?.let { return it.toString() }
-      value.longOrNull?.let { return it.toString() }
-      value.doubleOrNull?.let { return it.toString() }
+      val raw = value.contentOrNull?.trim().orEmpty()
+      raw.toBooleanStrictOrNull()?.let { return it.toString() }
+      raw.toLongOrNull()?.let { return it.toString() }
+      raw.toDoubleOrNull()?.let { return it.toString() }
     }
     if (value is JsonArray) {
       val items = value.mapNotNull { renderValue(it) }
@@ -215,6 +216,7 @@ object ToolDisplayRegistry {
 
   private fun JsonElement?.asNumberOrNull(): Double? {
     val primitive = this as? JsonPrimitive ?: return null
-    return primitive.doubleOrNull
+    val raw = primitive.contentOrNull ?: return null
+    return raw.toDoubleOrNull()
   }
 }

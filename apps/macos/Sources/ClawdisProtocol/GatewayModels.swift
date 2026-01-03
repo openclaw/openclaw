@@ -774,23 +774,27 @@ public struct ModelChoice: Codable {
     public let name: String
     public let provider: String
     public let contextwindow: Int?
+    public let reasoning: Bool?
 
     public init(
         id: String,
         name: String,
         provider: String,
-        contextwindow: Int?
+        contextwindow: Int?,
+        reasoning: Bool?
     ) {
         self.id = id
         self.name = name
         self.provider = provider
         self.contextwindow = contextwindow
+        self.reasoning = reasoning
     }
     private enum CodingKeys: String, CodingKey {
         case id
         case name
         case provider
         case contextwindow = "contextWindow"
+        case reasoning
     }
 }
 
