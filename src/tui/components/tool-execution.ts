@@ -1,5 +1,8 @@
 import { Box, Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
-import { formatToolDetail, resolveToolDisplay } from "../../agents/tool-display.js";
+import {
+  formatToolDetail,
+  resolveToolDisplay,
+} from "../../agents/tool-display.js";
 import { markdownTheme, theme } from "../theme/theme.js";
 
 type ToolResultContent = {
@@ -106,7 +109,10 @@ export class ToolExecutionComponent extends Container {
         : theme.toolSuccessBg;
     this.box.setBgFn((line) => bg(line));
 
-    const display = resolveToolDisplay({ name: this.toolName, args: this.args });
+    const display = resolveToolDisplay({
+      name: this.toolName,
+      args: this.args,
+    });
     const title = `${display.emoji} ${display.label}${this.isPartial ? " (running)" : ""}`;
     this.header.setText(theme.toolTitle(theme.bold(title)));
 

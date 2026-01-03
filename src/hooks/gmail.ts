@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import {
   type ClawdisConfig,
   DEFAULT_GATEWAY_PORT,
-  HooksGmailTailscaleMode,
+  type HooksGmailTailscaleMode,
   resolveGatewayPort,
 } from "../config/config.js";
 

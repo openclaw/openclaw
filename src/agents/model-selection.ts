@@ -164,8 +164,7 @@ export function resolveThinkingDefault(params: {
   const configured = params.cfg.agent?.thinkingDefault;
   if (configured) return configured;
   const candidate = params.catalog?.find(
-    (entry) =>
-      entry.provider === params.provider && entry.id === params.model,
+    (entry) => entry.provider === params.provider && entry.id === params.model,
   );
   if (candidate?.reasoning) return "low";
   return "off";
