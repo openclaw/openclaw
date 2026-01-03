@@ -1124,14 +1124,14 @@ export async function getReplyFromConfig(
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
   const resolvedBlockStreaming =
     agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
-  // TODO(steipete): Default to message_end for now; figure out why text_end breaks and whether we can revert.
   const resolvedBlockStreamingBreak =
-    agentCfg?.blockStreamingBreak === "text_end" ? "text_end" : "message_end";
+    agentCfg?.blockStreamingBreak === "message_end" ? "message_end" : "text_end";
   const blockStreamingEnabled = resolvedBlockStreaming === "on";
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Surface)
     : undefined;
   const streamedPayloadKeys = new Set<string>();
+  const pendingStreamedPayloadKeys = new Set<string>();
   const pendingBlockTasks = new Set<Promise<void>>();
   const buildPayloadKey = (payload: ReplyPayload) => {
     const text = payload.text?.trim() ?? "";
@@ -2232,6 +2232,13 @@ export async function getReplyFromConfig(
                   replyToId: tagResult.replyToId,
                 };
                 const payloadKey = buildPayloadKey(blockPayload);
+                if (
+                  streamedPayloadKeys.has(payloadKey) ||
+                  pendingStreamedPayloadKeys.has(payloadKey)
+                ) {
+                  return;
+                }
+                pendingStreamedPayloadKeys.add(payloadKey);
                 const task = (async () => {
                   await startTypingOnText(cleaned);
                   await opts.onBlockReply?.(blockPayload);
@@ -2241,6 +2248,9 @@ export async function getReplyFromConfig(
                   })
                   .catch((err) => {
                     logVerbose(`block reply delivery failed: ${String(err)}`);
+                  })
+                  .finally(() => {
+                    pendingStreamedPayloadKeys.delete(payloadKey);
                   });
                 pendingBlockTasks.add(task);
                 void task.finally(() => pendingBlockTasks.delete(task));

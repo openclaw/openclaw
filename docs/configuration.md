@@ -393,7 +393,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 
 Block streaming:
 - `agent.blockStreamingDefault`: `"on"`/`"off"` (default on).
-- `agent.blockStreamingBreak`: `"text_end"` or `"message_end"`.
+- `agent.blockStreamingBreak`: `"text_end"` or `"message_end"` (default: text_end).
 - `agent.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
   800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
   Example:
