@@ -1,11 +1,11 @@
 import {
   type Component,
   Input,
+  isCtrlC,
+  isEscape,
   ProcessTerminal,
   Text,
   TUI,
-  isCtrlC,
-  isEscape,
 } from "@mariozechner/pi-tui";
 import { loadConfig } from "../config/config.js";
 import { GatewayChatClient } from "./gateway-chat.js";
@@ -37,8 +37,7 @@ class InputWrapper implements Component {
     private input: Input,
     private onAbort: () => void,
     private onExit: () => void,
-  ) {
-  }
+  ) {}
 
   handleInput(data: string): void {
     if (isCtrlC(data)) {
@@ -76,10 +75,13 @@ function extractText(message?: unknown): string {
   return parts.join("\n").trim();
 }
 
-function renderHistoryEntry(entry: unknown): { role: "user" | "assistant"; text: string } | null {
+function renderHistoryEntry(
+  entry: unknown,
+): { role: "user" | "assistant"; text: string } | null {
   if (!entry || typeof entry !== "object") return null;
   const record = entry as Record<string, unknown>;
-  const role = record.role === "user" || record.role === "assistant" ? record.role : null;
+  const role =
+    record.role === "user" || record.role === "assistant" ? record.role : null;
   if (!role) return null;
   const text = extractText(record);
   if (!text) return null;
@@ -112,7 +114,10 @@ export async function runTui(opts: TuiOptions) {
     async () => {
       if (!activeRunId) return;
       try {
-        await client.abortChat({ sessionKey: currentSession, runId: activeRunId });
+        await client.abortChat({
+          sessionKey: currentSession,
+          runId: activeRunId,
+        });
       } catch (err) {
         messages.addSystem(`Abort failed: ${String(err)}`);
       }
@@ -245,14 +250,23 @@ export async function runTui(opts: TuiOptions) {
           messages.addSystem("no active run");
           break;
         }
-        await client.abortChat({ sessionKey: currentSession, runId: activeRunId });
+        await client.abortChat({
+          sessionKey: currentSession,
+          runId: activeRunId,
+        });
         break;
       }
-      case "exit":
+      case "exit": {
+        client.stop();
+        tui.stop();
+        process.exit(0);
+        break;
+      }
       case "quit": {
         client.stop();
         tui.stop();
         process.exit(0);
+        break;
       }
       default:
         messages.addSystem(`unknown command: /${command}`);
@@ -319,7 +333,9 @@ export async function runTui(opts: TuiOptions) {
   };
 
   client.onGap = (info) => {
-    messages.addSystem(`event gap: expected ${info.expected}, got ${info.received}`);
+    messages.addSystem(
+      `event gap: expected ${info.expected}, got ${info.received}`,
+    );
     tui.requestRender();
   };
 

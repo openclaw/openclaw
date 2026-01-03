@@ -81,8 +81,7 @@ export class GatewayChatClient {
     await this.readyPromise;
   }
 
-  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }>
-  {
+  async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = randomUUID();
     await this.client.request("chat.send", {
       sessionKey: opts.sessionKey,

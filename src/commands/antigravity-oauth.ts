@@ -5,16 +5,20 @@
  * On VPS/SSH/headless: Shows URL and prompts user to paste the callback URL manually.
  */
 
-import { createInterface } from "node:readline/promises";
-import { stdin, stdout } from "node:process";
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { randomBytes, createHash } from "node:crypto";
+import { stdin, stdout } from "node:process";
+import { createInterface } from "node:readline/promises";
 import { loginAntigravity, type OAuthCredentials } from "@mariozechner/pi-ai";
 
 // OAuth constants - decoded from pi-ai's base64 encoded values to stay in sync
 const decode = (s: string) => Buffer.from(s, "base64").toString();
-const CLIENT_ID = decode("MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==");
-const CLIENT_SECRET = decode("R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQWY=");
+const CLIENT_ID = decode(
+  "MTA3MTAwNjA2MDU5MS10bWhzc2luMmgyMWxjcmUyMzV2dG9sb2poNGc0MDNlcC5hcHBzLmdvb2dsZXVzZXJjb250ZW50LmNvbQ==",
+);
+const CLIENT_SECRET = decode(
+  "R09DU1BYLUs1OEZXUjQ4NkxkTEoxbUxCOHNYQzR6NnFEQWY=",
+);
 const REDIRECT_URI = "http://localhost:51121/oauth-callback";
 const AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
@@ -98,9 +102,7 @@ export function shouldUseManualOAuthFlow(): boolean {
  */
 function generatePKCESync(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString("hex");
-  const challenge = createHash("sha256")
-    .update(verifier)
-    .digest("base64url");
+  const challenge = createHash("sha256").update(verifier).digest("base64url");
   return { verifier, challenge };
 }
 
@@ -196,7 +198,7 @@ async function exchangeCodeForTokens(
 
   // Fetch user email
   const email = await getUserEmail(data.access_token);
-  
+
   // Fetch project ID
   const projectId = await fetchProjectId(data.access_token);
 
@@ -288,7 +290,7 @@ async function fetchProjectId(accessToken: string): Promise<string> {
         return data.cloudaicompanionProject.id;
       }
     } catch {
-      continue;
+      // ignore failed endpoint, try next
     }
   }
 
@@ -370,7 +372,9 @@ export async function loginAntigravityManual(
   console.log("=".repeat(60));
   console.log("\n1. Open the URL above in your LOCAL browser");
   console.log("2. Complete the Google sign-in");
-  console.log("3. Your browser will redirect to a localhost URL that won't load");
+  console.log(
+    "3. Your browser will redirect to a localhost URL that won't load",
+  );
   console.log("4. Copy the ENTIRE URL from your browser's address bar");
   console.log("5. Paste it below\n");
   console.log("The URL will look like:");

@@ -9,16 +9,7 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-import {
-  loginAnthropic,
-  type OAuthCredentials,
-} from "@mariozechner/pi-ai";
-
-import {
-  loginAntigravityVpsAware,
-  isRemoteEnvironment,
-} from "./antigravity-oauth.js";
-
+import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
 import type { ClawdisConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDIS,
@@ -31,6 +22,10 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import {
+  isRemoteEnvironment,
+  loginAntigravityVpsAware,
+} from "./antigravity-oauth.js";
 import { healthCommand } from "./health.js";
 import {
   applyMinimaxConfig,

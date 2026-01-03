@@ -22,8 +22,14 @@ export function registerTuiCli(program: Command) {
     .option("--history-limit <n>", "History entries to load", "200")
     .action(async (opts) => {
       try {
-        const timeoutMs = Number.parseInt(String(opts.timeoutMs ?? "30000"), 10);
-        const historyLimit = Number.parseInt(String(opts.historyLimit ?? "200"), 10);
+        const timeoutMs = Number.parseInt(
+          String(opts.timeoutMs ?? "30000"),
+          10,
+        );
+        const historyLimit = Number.parseInt(
+          String(opts.historyLimit ?? "200"),
+          10,
+        );
         await runTui({
           url: opts.url as string | undefined,
           token: opts.token as string | undefined,

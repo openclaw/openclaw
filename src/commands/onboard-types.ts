@@ -1,5 +1,10 @@
 export type OnboardMode = "local" | "remote";
-export type AuthChoice = "oauth" | "antigravity" | "apiKey" | "minimax" | "skip";
+export type AuthChoice =
+  | "oauth"
+  | "antigravity"
+  | "apiKey"
+  | "minimax"
+  | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "tailnet" | "auto";

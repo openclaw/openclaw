@@ -21,7 +21,8 @@ export class ChatLayout implements Component {
     const statusLines = this.status.render(width);
     const inputLines = this.input.render(width);
 
-    const reserved = headerLines.length + statusLines.length + inputLines.length;
+    const reserved =
+      headerLines.length + statusLines.length + inputLines.length;
     const available = Math.max(rows - reserved, 0);
 
     const messageLines = this.messages.render(width);
@@ -30,7 +31,12 @@ export class ChatLayout implements Component {
         ? messageLines.slice(Math.max(0, messageLines.length - available))
         : [];
 
-    const lines = [...headerLines, ...slicedMessages, ...statusLines, ...inputLines];
+    const lines = [
+      ...headerLines,
+      ...slicedMessages,
+      ...statusLines,
+      ...inputLines,
+    ];
     if (lines.length < rows) {
       const padding = Array.from({ length: rows - lines.length }, () => "");
       return [...lines, ...padding];
