@@ -138,8 +138,7 @@ Example:
   session: {
     scope: "per-sender",
     resetTriggers: ["/new", "/reset"],
-    idleMinutes: 10080,
-    mainKey: "main"
+    idleMinutes: 10080
   }
 }
 ```

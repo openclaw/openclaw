@@ -306,6 +306,7 @@ extension GatewayConnection {
         struct SnapshotConfig: Decodable, Sendable {
             struct Session: Decodable, Sendable {
                 let mainKey: String?
+                let scope: String?
             }
 
             let session: Session?
@@ -316,9 +317,11 @@ extension GatewayConnection {
 
     static func mainSessionKey(fromConfigGetData data: Data) throws -> String {
         let snapshot = try JSONDecoder().decode(ConfigGetSnapshot.self, from: data)
-        let raw = snapshot.config?.session?.mainKey
-        let trimmed = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "main" : trimmed
+        let scope = snapshot.config?.session?.scope?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if scope == "global" {
+            return "global"
+        }
+        return "main"
     }
 
     func mainSessionKey(timeoutMs: Double = 15000) async -> String {

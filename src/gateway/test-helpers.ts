@@ -39,7 +39,7 @@ export type BridgeStartOpts = {
   >;
 };
 
-const hoisted = vi.hoisted(() => ({
+  const hoisted = vi.hoisted(() => ({
   bridgeStartCalls: [] as BridgeStartOpts[],
   bridgeInvoke: vi.fn(async () => ({
     type: "invoke-res",
@@ -66,6 +66,12 @@ const hoisted = vi.hoisted(() => ({
   agentCommand: vi.fn().mockResolvedValue(undefined),
   testIsNixMode: { value: false },
   sessionStoreSaveDelayMs: { value: 0 },
+  embeddedRunMock: {
+    activeIds: new Set<string>(),
+    abortCalls: [] as string[],
+    waitCalls: [] as string[],
+    waitResults: new Map<string, boolean>(),
+  },
 }));
 
 export const bridgeStartCalls = hoisted.bridgeStartCalls;
@@ -95,6 +101,7 @@ export const testState = {
 
 export const testIsNixMode = hoisted.testIsNixMode;
 export const sessionStoreSaveDelayMs = hoisted.sessionStoreSaveDelayMs;
+export const embeddedRunMock = hoisted.embeddedRunMock;
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<
@@ -284,6 +291,25 @@ vi.mock("../config/config.js", async () => {
   };
 });
 
+vi.mock("../agents/pi-embedded.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
+    "../agents/pi-embedded.js",
+  );
+  return {
+    ...actual,
+    isEmbeddedPiRunActive: (sessionId: string) =>
+      embeddedRunMock.activeIds.has(sessionId),
+    abortEmbeddedPiRun: (sessionId: string) => {
+      embeddedRunMock.abortCalls.push(sessionId);
+      return embeddedRunMock.activeIds.has(sessionId);
+    },
+    waitForEmbeddedPiRunEnd: async (sessionId: string) => {
+      embeddedRunMock.waitCalls.push(sessionId);
+      return embeddedRunMock.waitResults.get(sessionId) ?? true;
+    },
+  };
+});
+
 vi.mock("../commands/health.js", () => ({
   getHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
 }));
@@ -329,6 +355,10 @@ export function installGatewayTestHooks() {
     testIsNixMode.value = false;
     cronIsolatedRun.mockClear();
     agentCommand.mockClear();
+    embeddedRunMock.activeIds.clear();
+    embeddedRunMock.abortCalls = [];
+    embeddedRunMock.waitCalls = [];
+    embeddedRunMock.waitResults.clear();
     drainSystemEvents();
     resetAgentRunContextForTest();
     const mod = await import("./server.js");

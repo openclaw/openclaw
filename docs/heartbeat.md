@@ -50,7 +50,7 @@ message. If the reply is only `HEARTBEAT_OK`, it is dropped.
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
 
 ## Behavior
-- Runs in the main session (`session.mainKey`, or `global` when scope is global).
+- Runs in the main session (`main`, or `global` when scope is global).
 - Uses the main lane queue; if requests are in flight, the wake is retried.
 - Empty output or `HEARTBEAT_OK` is treated as “ok” and does **not** keep the
   session alive (`updatedAt` is restored).

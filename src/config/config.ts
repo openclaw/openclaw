@@ -15,6 +15,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
  * - Config is managed externally (read-only from Nix perspective)
  */
 export const isNixMode = process.env.CLAWDIS_NIX_MODE === "1";
+let warnedMainKeyOverride = false;
 
 export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
@@ -1771,6 +1772,22 @@ function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
   return mutated ? next : cfg;
 }
 
+function applySessionDefaults(cfg: ClawdisConfig): ClawdisConfig {
+  const session = cfg.session;
+  if (!session || session.mainKey === undefined) return cfg;
+
+  const trimmed = session.mainKey.trim();
+  const next: ClawdisConfig = { ...cfg, session: { ...session } };
+  next.session.mainKey = "main";
+
+  if (trimmed && trimmed !== "main" && !warnedMainKeyOverride) {
+    warnedMainKeyOverride = true;
+    console.warn('session.mainKey is ignored; main session is always "main".');
+  }
+
+  return next;
+}
+
 export function loadConfig(): ClawdisConfig {
   // Read config file (JSON5) if present.
   const configPath = CONFIG_PATH_CLAWDIS;
@@ -1787,7 +1804,9 @@ export function loadConfig(): ClawdisConfig {
       }
       return {};
     }
-    return applyIdentityDefaults(validated.data as ClawdisConfig);
+    return applySessionDefaults(
+      applyIdentityDefaults(validated.data as ClawdisConfig),
+    );
   } catch (err) {
     console.error(`Failed to read config at ${configPath}`, err);
     return {};
@@ -1821,7 +1840,9 @@ export function validateConfigObject(
   }
   return {
     ok: true,
-    config: applyIdentityDefaults(validated.data as ClawdisConfig),
+    config: applySessionDefaults(
+      applyIdentityDefaults(validated.data as ClawdisConfig),
+    ),
   };
 }
 
@@ -1880,7 +1901,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
   const configPath = CONFIG_PATH_CLAWDIS;
   const exists = fs.existsSync(configPath);
   if (!exists) {
-    const config = applyTalkApiKey({});
+    const config = applyTalkApiKey(applySessionDefaults({}));
     const legacyIssues: LegacyConfigIssue[] = [];
     return {
       path: configPath,
@@ -1934,7 +1955,7 @@ export async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
       raw,
       parsed: parsedRes.parsed,
       valid: true,
-      config: applyTalkApiKey(validated.config),
+      config: applyTalkApiKey(applySessionDefaults(validated.config)),
       issues: [],
       legacyIssues,
     };

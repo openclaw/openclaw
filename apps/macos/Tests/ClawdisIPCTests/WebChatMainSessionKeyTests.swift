@@ -32,7 +32,7 @@ import Testing
         }
         """
         let key = try GatewayConnection.mainSessionKey(fromConfigGetData: Data(json.utf8))
-        #expect(key == "primary")
+        #expect(key == "main")
     }
 
     @Test func configGetSnapshotMainKeyFallsBackWhenEmptyOrWhitespace() throws {
@@ -53,5 +53,15 @@ import Testing
         """
         let key = try GatewayConnection.mainSessionKey(fromConfigGetData: Data(json.utf8))
         #expect(key == "main")
+    }
+
+    @Test func configGetSnapshotUsesGlobalScope() throws {
+        let json = """
+        {
+          "config": { "session": { "scope": "global" } }
+        }
+        """
+        let key = try GatewayConnection.mainSessionKey(fromConfigGetData: Data(json.utf8))
+        #expect(key == "global")
     }
 }

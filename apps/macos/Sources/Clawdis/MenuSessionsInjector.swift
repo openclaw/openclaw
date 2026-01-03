@@ -435,7 +435,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         compact.representedObject = row.key
         menu.addItem(compact)
 
-        if row.key != "main" {
+        if row.key != "main" && row.key != "global" {
             let del = NSMenuItem(title: "Delete Session", action: #selector(self.deleteSession(_:)), keyEquivalent: "")
             del.target = self
             del.representedObject = row.key

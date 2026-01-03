@@ -620,7 +620,7 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     idleMinutes: 60,
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdis/sessions/sessions.json",
-    mainKey: "main",
+    // mainKey is ignored; primary key is fixed to "main"
     sendPolicy: {
       rules: [
         { action: "deny", match: { surface: "discord", chatType: "group" } }
