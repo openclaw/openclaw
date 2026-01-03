@@ -8,6 +8,7 @@
 ### Docs
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.
 - Skills: clarify bear-notes token + callback usage (#120) — thanks @tylerwince.
+- Gateway: document port configuration + multi-instance isolation.
 
 ## 2.0.0-beta5 — 2026-01-03
 

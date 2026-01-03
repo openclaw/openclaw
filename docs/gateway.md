@@ -23,6 +23,7 @@ pnpm clawdis gateway --force
 pnpm gateway:watch
 ```
 - Binds WebSocket control plane to `127.0.0.1:<port>` (default 18789).
+- The same port also serves HTTP (control UI, hooks, A2UI). Single-port multiplex.
 - Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__clawdis__/canvas/` from `~/clawd/canvas`. Disable with `canvasHost.enabled=false` or `CLAWDIS_SKIP_CANVAS_HOST=1`.
 - Logs to stdout; use launchd/systemd to keep it alive and rotate logs.
 - Pass `--verbose` to mirror debug logging (handshakes, req/res, events) from the log file into stdio when troubleshooting.
@@ -30,6 +31,7 @@ pnpm gateway:watch
 - If you run under a supervisor (launchd/systemd/mac app child-process mode), a stop/restart typically sends **SIGTERM**; older builds may surface this as `pnpm` `ELIFECYCLE` exit code **143** (SIGTERM), which is a normal shutdown, not a crash.
 - **SIGUSR1** triggers an in-process restart (no external supervisor required). This is what the `clawdis_gateway` agent tool uses.
 - Optional shared secret: pass `--token <value>` or set `CLAWDIS_GATEWAY_TOKEN` to require clients to send `connect.params.auth.token`.
+- Port precedence: `--port` > `CLAWDIS_GATEWAY_PORT` > `gateway.port` > default `18789`.
 
 ## Remote access
 - Tailscale/VPN preferred; otherwise SSH tunnel:
@@ -38,6 +40,23 @@ pnpm gateway:watch
   ```
 - Clients then connect to `ws://127.0.0.1:18789` through the tunnel.
 - If a token is configured, clients must include it in `connect.params.auth.token` even over the tunnel.
+
+## Multiple gateways (same host)
+
+Supported if you isolate state + config and use unique ports.
+
+Checklist per instance:
+- unique `gateway.port`
+- unique `CLAWDIS_CONFIG_PATH`
+- unique `CLAWDIS_STATE_DIR`
+- unique `agent.workspace`
+- separate WhatsApp numbers (if using WA)
+
+Example:
+```bash
+CLAWDIS_CONFIG_PATH=~/.clawdis/a.json CLAWDIS_STATE_DIR=~/.clawdis-a clawdis gateway --port 19001
+CLAWDIS_CONFIG_PATH=~/.clawdis/b.json CLAWDIS_STATE_DIR=~/.clawdis-b clawdis gateway --port 19002
+```
 
 ## Protocol (operator view)
 - Mandatory first frame from client: `req {type:"req", id, method:"connect", params:{minProtocol,maxProtocol,client:{name,version,platform,deviceFamily?,modelIdentifier?,mode,instanceId}, caps, auth?, locale?, userAgent? } }`.
