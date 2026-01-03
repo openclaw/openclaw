@@ -1,26 +1,31 @@
 ---
 name: coding-agent
-description: Run Claude Code, Codex CLI, or OpenCode via tmux for resilient coding sessions.
-metadata: {"clawdis":{"emoji":"🧩","requires":{"bins":["tmux"],"anyBins":["claude","codex","opencode"]}}}
+description: Run Claude Code, Codex CLI, or OpenCode via background process for programmatic control.
+metadata: {"clawdis":{"emoji":"🧩","requires":{"anyBins":["claude","codex","opencode"]}}}
 ---
 
-# Coding Agent (tmux-first)
+# Coding Agent (background-first)
 
-Use **tmux** for all coding-agent CLIs. Keep sessions resumable and logs visible.
+Use **bash background mode** for all coding-agent CLIs. Full programmatic control, no tmux needed.
 
-## The Pattern: workdir + tmux
-
-**All coding agents need this pattern:**
+## The Pattern: workdir + background
 
 ```bash
 # Start agent in target directory ("little box" - only sees relevant files)
-bash workdir:~/project/folder command:"tmux new -d -s task-name '<agent command>'"
+bash workdir:~/project/folder background:true command:"<agent command>"
+# Returns sessionId for tracking
 
 # Monitor progress
-tmux capture-pane -t task-name -p | tail -20
+process action:log sessionId:XXX
 
-# Attach to watch live
-tmux attach -t task-name
+# Check if done
+process action:poll sessionId:XXX
+
+# Send input (if agent asks a question)
+process action:write sessionId:XXX data:"y"
+
+# Kill if needed
+process action:kill sessionId:XXX
 ```
 
 Why workdir matters: Agent wakes up in a focused directory, doesn't wander off reading unrelated files.
@@ -29,16 +34,13 @@ Why workdir matters: Agent wakes up in a focused directory, doesn't wander off r
 
 ## Codex CLI
 
-**Model:** `gpt-5.2-codex` with reasoning effort (choose based on task):
+**Model:** `gpt-5.2-codex` — choose reasoning effort based on task:
 - `medium` — most tasks
 - `high` — complex/architectural tasks
 
 ```bash
-bash workdir:~/project command:"tmux new -d -s codex-task 'codex exec --model gpt-5.2-codex -c reasoning_effort=\"medium\" -s workspace-write \"Your task\"'"
+bash workdir:~/project background:true command:"codex exec --model gpt-5.2-codex -c reasoning_effort=\"medium\" -s workspace-write \"Your task\""
 ```
-
-**Interactive:**
-- `codex "prompt"` / `codex resume` / `codex resume --last`
 
 **Flags:** `-s workspace-write`, `--full-auto`, `--skip-git-repo-check`
 
@@ -47,24 +49,16 @@ bash workdir:~/project command:"tmux new -d -s codex-task 'codex exec --model gp
 ## Claude Code
 
 ```bash
-bash workdir:~/project command:"tmux new -d -s claude-task 'claude \"Your task\"'"
+bash workdir:~/project background:true command:"claude \"Your task\""
 ```
-
-**Interactive:**
-- `claude` — start session
-- `claude -c` — continue most recent
-- `claude -r ""` — picker
 
 ---
 
 ## OpenCode
 
 ```bash
-bash workdir:~/project command:"tmux new -d -s opencode-task 'opencode run \"Your task\"'"
+bash workdir:~/project background:true command:"opencode run \"Your task\""
 ```
-
-**Interactive:**
-- `opencode` / `opencode -c` / `opencode -s <session-id>`
 
 ---
 
@@ -72,4 +66,4 @@ bash workdir:~/project command:"tmux new -d -s opencode-task 'opencode run \"You
 
 1. **Respect tool choice** — if user asks for Codex, use Codex. Don't offer to build it yourself!
 2. **Be patient** — don't kill sessions because they're "slow"
-3. **Monitor, don't interfere** — use `tmux capture-pane` to watch progress
+3. **Monitor with process:log** — check progress without interfering
