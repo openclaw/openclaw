@@ -28,10 +28,7 @@ import {
   STATE_DIR_CLAWDIS,
   writeConfigFile,
 } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveStorePath,
-} from "../config/sessions.js";
+import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
@@ -69,9 +66,7 @@ import {
   enableTailscaleServe,
   getTailnetHostname,
 } from "../infra/tailscale.js";
-import {
-  loadVoiceWakeConfig,
-} from "../infra/voicewake.js";
+import { loadVoiceWakeConfig } from "../infra/voicewake.js";
 import {
   WIDE_AREA_DISCOVERY_DOMAIN,
   writeWideAreaBridgeZone,
@@ -98,6 +93,10 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "./net.js";
+import { createBridgeHandlers } from "./server-bridge.js";
+import { createBridgeSubscriptionManager } from "./server-bridge-subscriptions.js";
+import { startBrowserControlServerIfEnabled } from "./server-browser.js";
+import { createAgentEventHandler, createChatRunState } from "./server-chat.js";
 import {
   DEDUPE_MAX,
   DEDUPE_TTL_MS,
@@ -107,13 +106,6 @@ import {
   MAX_PAYLOAD_BYTES,
   TICK_INTERVAL_MS,
 } from "./server-constants.js";
-import { startBrowserControlServerIfEnabled } from "./server-browser.js";
-import { createBridgeHandlers } from "./server-bridge.js";
-import { createBridgeSubscriptionManager } from "./server-bridge-subscriptions.js";
-import {
-  createAgentEventHandler,
-  createChatRunState,
-} from "./server-chat.js";
 import {
   formatBonjourInstanceName,
   resolveBonjourCliPath,
@@ -126,8 +118,8 @@ import {
 } from "./server-http.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { createProviderManager } from "./server-providers.js";
-import { formatError } from "./server-utils.js";
 import type { DedupeEntry } from "./server-shared.js";
+import { formatError } from "./server-utils.js";
 import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 ensureClawdisCliOnPath();

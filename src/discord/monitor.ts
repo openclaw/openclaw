@@ -983,15 +983,8 @@ export function shouldEmitDiscordReactionNotification(params: {
   userTag?: string | null;
   allowlist?: Array<string | number> | null;
 }) {
-  const {
-    mode,
-    botId,
-    messageAuthorId,
-    userId,
-    userName,
-    userTag,
-    allowlist,
-  } = params;
+  const { mode, botId, messageAuthorId, userId, userName, userTag, allowlist } =
+    params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") return false;
   if (effectiveMode === "own") {

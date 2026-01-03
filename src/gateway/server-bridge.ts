@@ -1,6 +1,7 @@
-import fs from "node:fs";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -14,7 +15,9 @@ import {
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
-import { buildConfigSchema } from "../config/schema.js";
+import type { CliDeps } from "../cli/deps.js";
+import { agentCommand } from "../commands/agent.js";
+import type { HealthSummary } from "../commands/health.js";
 import {
   CONFIG_PATH_CLAWDIS,
   loadConfig,
@@ -23,29 +26,19 @@ import {
   validateConfigObject,
   writeConfigFile,
 } from "../config/config.js";
+import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
-import type { CliDeps } from "../cli/deps.js";
-import { agentCommand } from "../commands/agent.js";
-import { type HealthSummary } from "../commands/health.js";
-import { defaultRuntime } from "../runtime.js";
-import { loadVoiceWakeConfig, setVoiceWakeTriggers } from "../infra/voicewake.js";
 import {
-  archiveFileOnDisk,
-  capArrayByJsonBytes,
-  listSessionsFromStore,
-  loadSessionEntry,
-  readSessionMessages,
-  resolveSessionModelRef,
-  resolveSessionTranscriptCandidates,
-  type SessionsPatchResult,
-} from "./session-utils.js";
+  loadVoiceWakeConfig,
+  setVoiceWakeTriggers,
+} from "../infra/voicewake.js";
+import { defaultRuntime } from "../runtime.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
-import { normalizeVoiceWakeTriggers } from "./server-utils.js";
 import {
   ErrorCodes,
   errorShape,
@@ -69,18 +62,32 @@ import {
   validateSessionsResetParams,
   validateTalkModeParams,
 } from "./protocol/index.js";
+import type { ChatRunEntry } from "./server-chat.js";
 import {
   HEALTH_REFRESH_INTERVAL_MS,
   MAX_CHAT_HISTORY_MESSAGES_BYTES,
 } from "./server-constants.js";
-import { formatForLog } from "./ws-log.js";
-import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { normalizeVoiceWakeTriggers } from "./server-utils.js";
+import {
+  archiveFileOnDisk,
+  capArrayByJsonBytes,
+  listSessionsFromStore,
+  loadSessionEntry,
+  readSessionMessages,
+  resolveSessionModelRef,
+  resolveSessionTranscriptCandidates,
+  type SessionsPatchResult,
+} from "./session-utils.js";
+import { formatForLog } from "./ws-log.js";
 
 export type BridgeHandlersContext = {
   deps: CliDeps;
-  broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
+  broadcast: (
+    event: string,
+    payload: unknown,
+    opts?: { dropIfSlow?: boolean },
+  ) => void;
   bridgeSendToSession: (
     sessionKey: string,
     event: string,

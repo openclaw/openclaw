@@ -2,9 +2,7 @@ export type BrowserControlServer = {
   stop: () => Promise<void>;
 };
 
-export async function startBrowserControlServerIfEnabled(): Promise<
-  BrowserControlServer | null
-> {
+export async function startBrowserControlServerIfEnabled(): Promise<BrowserControlServer | null> {
   if (process.env.CLAWDIS_SKIP_BROWSER_CONTROL_SERVER === "1") return null;
   // Lazy import: keeps startup fast, but still bundles for the embedded
   // gateway (bun --compile) via the static specifier path.
