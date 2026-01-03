@@ -211,49 +211,38 @@ export async function evaluateViaPlaywright(opts: {
   ensurePageState(page);
   if (opts.ref) {
     const locator = refLocator(page, opts.ref);
-    return await locator.evaluate((el, fnBody) => {
-      const compileRunner = (body: string) => {
-        const inner = `"use strict"; const candidate = ${body}; return typeof candidate === "function" ? candidate(element) : candidate;`;
-        // This intentionally evaluates user-supplied code in the browser context.
-        // oxlint-disable-next-line typescript-eslint/no-implied-eval
-        return new Function("element", inner) as (element: Element) => unknown;
-      };
-      let compiled: unknown;
+    // Use Function constructor at runtime to avoid esbuild adding __name helper
+    // which doesn't exist in the browser context
+    const elementEvaluator = new Function(
+      "el",
+      "fnBody",
+      `
+      "use strict";
       try {
-        compiled = compileRunner(fnBody);
+        var candidate = eval("(" + fnBody + ")");
+        return typeof candidate === "function" ? candidate(el) : candidate;
       } catch (err) {
-        const message =
-          err instanceof Error
-            ? err.message
-            : typeof err === "string"
-              ? err
-              : "invalid expression";
-        throw new Error(`Invalid evaluate function: ${message}`);
+        throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
       }
-      return (compiled as (element: Element) => unknown)(el as Element);
-    }, fnText);
+      `,
+    ) as (el: Element, fnBody: string) => unknown;
+    return await locator.evaluate(elementEvaluator, fnText);
   }
-  return await page.evaluate((fnBody) => {
-    const compileRunner = (body: string) => {
-      const inner = `"use strict"; const candidate = ${body}; return typeof candidate === "function" ? candidate() : candidate;`;
-      // This intentionally evaluates user-supplied code in the browser context.
-      // oxlint-disable-next-line typescript-eslint/no-implied-eval
-      return new Function(inner) as () => unknown;
-    };
-    let compiled: unknown;
+  // Use Function constructor at runtime to avoid esbuild adding __name helper
+  // which doesn't exist in the browser context
+  const browserEvaluator = new Function(
+    "fnBody",
+    `
+    "use strict";
     try {
-      compiled = compileRunner(fnBody);
+      var candidate = eval("(" + fnBody + ")");
+      return typeof candidate === "function" ? candidate() : candidate;
     } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-            ? err
-            : "invalid expression";
-      throw new Error(`Invalid evaluate function: ${message}`);
+      throw new Error("Invalid evaluate function: " + (err && err.message ? err.message : String(err)));
     }
-    return (compiled as () => unknown)();
-  }, fnText);
+    `,
+  ) as (fnBody: string) => unknown;
+  return await page.evaluate(browserEvaluator, fnText);
 }
 
 export async function armFileUploadViaPlaywright(opts: {
