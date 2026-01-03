@@ -4,8 +4,8 @@ import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
-import { defaultRuntime } from "../runtime.js";
 import {
   extractAssistantText,
   inferToolMetaFromArgs,
@@ -15,6 +15,7 @@ const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
 const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
 const TOOL_RESULT_MAX_CHARS = 8000;
+const log = createSubsystemLogger("agent/embedded");
 
 export type BlockReplyChunking = {
   minChars: number;
@@ -324,7 +325,7 @@ export function subscribeEmbeddedPiSession(params: {
         const args = (evt as AgentEvent & { args: unknown }).args;
         const meta = inferToolMetaFromArgs(toolName, args);
         toolMetaById.set(toolCallId, meta);
-        defaultRuntime.log?.(
+        log.debug(
           `embedded run tool start: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
         );
 
@@ -590,19 +591,19 @@ export function subscribeEmbeddedPiSession(params: {
         const toolCallId = String(
           (evt as AgentEvent & { toolCallId: string }).toolCallId,
         );
-        defaultRuntime.log?.(
+        log.debug(
           `embedded run tool end: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
         );
       }
 
       if (evt.type === "agent_start") {
-        defaultRuntime.log?.(`embedded run agent start: runId=${params.runId}`);
+        log.debug(`embedded run agent start: runId=${params.runId}`);
       }
 
       if (evt.type === "auto_compaction_start") {
         compactionInFlight = true;
         ensureCompactionPromise();
-        defaultRuntime.log?.(
+        log.debug(
           `embedded run compaction start: runId=${params.runId}`,
         );
       }
@@ -613,7 +614,7 @@ export function subscribeEmbeddedPiSession(params: {
         if (willRetry) {
           noteCompactionRetry();
           resetForCompactionRetry();
-          defaultRuntime.log?.(
+          log.debug(
             `embedded run compaction retry: runId=${params.runId}`,
           );
         } else {
@@ -622,7 +623,7 @@ export function subscribeEmbeddedPiSession(params: {
       }
 
       if (evt.type === "agent_end") {
-        defaultRuntime.log?.(`embedded run agent end: runId=${params.runId}`);
+        log.debug(`embedded run agent end: runId=${params.runId}`);
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {

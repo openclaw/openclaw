@@ -31,7 +31,7 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
-import { defaultRuntime } from "../runtime.js";
+import { createSubsystemLogger } from "../logging.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveClawdisAgentDir } from "./agent-paths.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -93,6 +93,8 @@ type EmbeddedPiQueueHandle = {
   isStreaming: () => boolean;
   abort: () => void;
 };
+
+const log = createSubsystemLogger("agent/embedded");
 
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 
@@ -383,7 +385,7 @@ export async function runEmbeddedPiAgent(params: {
 
       const thinkingLevel = mapThinkingLevel(params.thinkLevel);
 
-      defaultRuntime.log?.(
+      log.debug(
         `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
       );
 
@@ -515,14 +517,14 @@ export async function runEmbeddedPiAgent(params: {
         let abortWarnTimer: NodeJS.Timeout | undefined;
         const abortTimer = setTimeout(
           () => {
-            defaultRuntime.log(
+            log.warn(
               `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
             );
             abortRun();
             if (!abortWarnTimer) {
               abortWarnTimer = setTimeout(() => {
                 if (!session.isStreaming) return;
-                defaultRuntime.log(
+                log.warn(
                   `embedded run abort still streaming: runId=${params.runId} sessionId=${params.sessionId}`,
                 );
               }, 10_000);
@@ -548,7 +550,7 @@ export async function runEmbeddedPiAgent(params: {
         let promptError: unknown = null;
         try {
           const promptStartedAt = Date.now();
-          defaultRuntime.log?.(
+          log.debug(
             `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
           );
           try {
@@ -556,7 +558,7 @@ export async function runEmbeddedPiAgent(params: {
           } catch (err) {
             promptError = err;
           } finally {
-            defaultRuntime.log?.(
+            log.debug(
               `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
             );
           }
@@ -645,7 +647,7 @@ export async function runEmbeddedPiAgent(params: {
               p.text || p.mediaUrl || (p.mediaUrls && p.mediaUrls.length > 0),
           );
 
-        defaultRuntime.log?.(
+        log.debug(
           `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
         );
         return {
