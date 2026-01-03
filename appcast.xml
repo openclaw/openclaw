@@ -4,7 +4,7 @@
         <title>Clawdis</title>
         <item>
             <title>2.0.0-beta4</title>
-            <pubDate>Sat, 03 Jan 2026 05:54:47 +0100</pubDate>
+            <pubDate>Sat, 03 Jan 2026 06:04:02 +0100</pubDate>
             <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
             <sparkle:version>2.0.0-beta4</sparkle:version>
             <sparkle:shortVersionString>2.0.0-beta4</sparkle:shortVersionString>
@@ -13,7 +13,7 @@
         </item>
         <item>
             <title>2.0.0-beta5</title>
-            <pubDate>Sat, 03 Jan 2026 05:54:47 +0100</pubDate>
+            <pubDate>Sat, 03 Jan 2026 06:04:02 +0100</pubDate>
             <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
             <sparkle:version>2.0.0-beta5</sparkle:version>
             <sparkle:shortVersionString>2.0.0-beta5</sparkle:shortVersionString>
@@ -214,7 +214,7 @@
 </ul>
 <p><a href="https://github.com/steipete/clawdis/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta5/Clawdis-2.0.0-beta5.zip" length="72075582" type="application/octet-stream" sparkle:edSignature="sBiXVlahejA3xFsmvJN+bNQnjnsefyTQM/oT14mrDMHW41kAtOtiuO370zzktrv0k+uYm9x/LnZswDJqmvwhBg=="/>
+            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta5/Clawdis-2.0.0-beta5.zip" length="72078343" type="application/octet-stream" sparkle:edSignature="xSfMHcYYEktlE+EC8cnM7GJP0oqjfN4EK+oIIcTHvXtgXG7LcBqo4kMQEVrr1kIzCIqQ+7/R6HMd/rWtfkc3Cg=="/>
         </item>
     </channel>
 </rss>
