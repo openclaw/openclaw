@@ -396,6 +396,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         MediaType: media?.contentType,
         MediaUrl: media?.path,
       };
+      const replyTarget = ctxPayload.To ?? undefined;
+      if (!replyTarget) {
+        runtime.error?.(danger("discord: missing reply target"));
+        return;
+      }
 
       if (isDirectMessage) {
         const sessionCfg = cfg.session;
@@ -430,7 +435,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           .then(async () => {
             await deliverReplies({
               replies: [payload],
-              target: ctxPayload.To,
+              target: replyTarget,
               token,
               runtime,
               replyToMode,
@@ -473,7 +478,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
       await deliverReplies({
         replies,
-        target: ctxPayload.To,
+        target: replyTarget,
         token,
         runtime,
         replyToMode,
@@ -482,7 +487,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       didSendReply = true;
       if (isVerbose()) {
         logVerbose(
-          `discord: delivered ${replies.length} reply${replies.length === 1 ? "" : "ies"} to ${ctxPayload.To}`,
+          `discord: delivered ${replies.length} reply${replies.length === 1 ? "" : "ies"} to ${replyTarget}`,
         );
       }
       if (

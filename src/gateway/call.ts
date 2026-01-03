@@ -27,6 +27,7 @@ export async function callGateway<T = unknown>(
   const config = loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
+  const authToken = config.gateway?.auth?.token;
   const url =
     (typeof opts.url === "string" && opts.url.trim().length > 0
       ? opts.url.trim()
@@ -44,9 +45,8 @@ export async function callGateway<T = unknown>(
         ? remote.token.trim()
         : undefined
       : process.env.CLAWDIS_GATEWAY_TOKEN?.trim() ||
-        (typeof config.gateway?.auth?.token === "string" &&
-        config.gateway.auth.token.trim().length > 0
-          ? config.gateway.auth.token.trim()
+        (typeof authToken === "string" && authToken.trim().length > 0
+          ? authToken.trim()
           : undefined));
   const password =
     (typeof opts.password === "string" && opts.password.trim().length > 0
