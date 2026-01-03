@@ -15,6 +15,7 @@
 - Agent tools: scope the Discord tool to Discord surface runs.
 - Agent tools: format verbose tool summaries without brackets, with unique emojis and `tool: detail` style.
 - Thinking: default to low for reasoning-capable models when no /think or config default is set.
+- Logging: decouple file log levels from console verbosity; verbose-only details are captured when `logging.level` is debug/trace.
 
 ### Docs
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.

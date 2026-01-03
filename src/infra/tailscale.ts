@@ -1,7 +1,13 @@
 import { existsSync } from "node:fs";
 import chalk from "chalk";
 import { promptYesNo } from "../cli/prompt.js";
-import { danger, info, isVerbose, logVerbose, warn } from "../globals.js";
+import {
+  danger,
+  info,
+  logVerbose,
+  shouldLogVerbose,
+  warn,
+} from "../globals.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { ensureBinary } from "./binaries.js";
@@ -173,7 +179,7 @@ export async function ensureFunnel(
         "Tip: Funnel is optional for CLAWDIS. You can keep running the web gateway without it: `pnpm clawdis gateway`",
       ),
     );
-    if (isVerbose()) {
+    if (shouldLogVerbose()) {
       if (stdout.trim()) runtime.error(chalk.gray(`stdout: ${stdout.trim()}`));
       if (stderr.trim()) runtime.error(chalk.gray(`stderr: ${stderr.trim()}`));
       runtime.error(err as Error);

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import type { ClawdisConfig } from "../config/config.js";
-import { isVerbose, logVerbose } from "../globals.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { applyTemplate, type MsgContext } from "./templating.js";
@@ -36,7 +36,7 @@ export async function transcribeInboundAudio(
       );
       await fs.writeFile(tmpPath, buffer);
       mediaPath = tmpPath;
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logVerbose(
           `Downloaded audio for transcription (${(buffer.length / (1024 * 1024)).toFixed(2)}MB) -> ${tmpPath}`,
         );
@@ -48,7 +48,7 @@ export async function transcribeInboundAudio(
     const argv = transcriber.command.map((part) =>
       applyTemplate(part, templCtx),
     );
-    if (isVerbose()) {
+    if (shouldLogVerbose()) {
       logVerbose(`Transcribing audio via command: ${argv.join(" ")}`);
     }
     const { stdout } = await runExec(argv[0], argv.slice(1), {

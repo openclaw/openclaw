@@ -21,7 +21,7 @@ import {
   saveSessionStore,
   updateLastRoute,
 } from "../config/sessions.js";
-import { isVerbose, logVerbose } from "../globals.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
@@ -325,7 +325,7 @@ export async function runWebHeartbeatOnce(opts: {
         },
         "heartbeat skipped",
       );
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         whatsappHeartbeatLog.debug("heartbeat ok (empty reply)");
       }
       emitHeartbeatEvent({ status: "ok-empty", to });
@@ -352,7 +352,7 @@ export async function runWebHeartbeatOnce(opts: {
         { to, reason: "heartbeat-token", rawLength: replyPayload.text?.length },
         "heartbeat skipped",
       );
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         whatsappHeartbeatLog.debug("heartbeat ok (HEARTBEAT_OK)");
       }
       emitHeartbeatEvent({ status: "ok-token", to });
@@ -593,7 +593,7 @@ async function deliverWebReply(params: {
       index === 0 ? remainingText.shift() || undefined : undefined;
     try {
       const media = await loadWebMedia(mediaUrl, maxMediaBytes);
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logVerbose(
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,
         );
@@ -1015,7 +1015,7 @@ export async function monitorWebProvider(
       whatsappInboundLog.info(
         `Inbound message ${fromDisplay} -> ${msg.to} (${msg.chatType}${kindLabel}, ${combinedBody.length} chars)`,
       );
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         whatsappInboundLog.debug(`Inbound body: ${elide(combinedBody, 400)}`);
       }
 
@@ -1268,7 +1268,7 @@ export async function monitorWebProvider(
           whatsappOutboundLog.info(
             `Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
           );
-          if (isVerbose()) {
+          if (shouldLogVerbose()) {
             const preview =
               replyPayload.text != null
                 ? elide(replyPayload.text, 400)

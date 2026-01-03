@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import { isVerbose, logVerbose } from "../globals.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import {
   type MediaKind,
   maxBytesForKind,
@@ -26,7 +26,7 @@ export async function loadWebMedia(
   const optimizeAndClampImage = async (buffer: Buffer, cap: number) => {
     const originalSize = buffer.length;
     const optimized = await optimizeImageToJpeg(buffer, cap);
-    if (optimized.optimizedSize < originalSize && isVerbose()) {
+    if (optimized.optimizedSize < originalSize && shouldLogVerbose()) {
       logVerbose(
         `Optimized media from ${(originalSize / (1024 * 1024)).toFixed(2)}MB to ${(optimized.optimizedSize / (1024 * 1024)).toFixed(2)}MB (side≤${optimized.resizeSide}px, q=${optimized.quality})`,
       );

@@ -23,11 +23,24 @@ Clawdis uses a file logger backed by `tslog` (`src/logging.ts`).
 
 The file format is one JSON object per line.
 
+**Verbose vs. log levels**
+
+- **File logs** are controlled exclusively by `logging.level`.
+- `--verbose` only affects **console verbosity** (and WS log style); it does **not**
+  raise the file log level.
+- To capture verbose-only details in file logs, set `logging.level` to `debug` or
+  `trace`.
+
 ## Console capture
 
 The CLI entrypoint enables console capture (`src/index.ts` calls `enableConsoleCapture()`).
 That means every `console.log/info/warn/error/debug/trace` is also written into the file logs,
 while still behaving normally on stdout/stderr.
+
+You can tune console verbosity independently via:
+
+- `logging.consoleLevel` (default `info`)
+- `logging.consoleStyle` (`pretty` | `compact` | `json`)
 
 ## Gateway WebSocket logs
 
@@ -80,7 +93,7 @@ Behavior:
 - **Sub-loggers by subsystem** (auto prefix + structured field `{ subsystem }`)
 - **`logRaw()`** for QR/UX output (no prefix, no formatting)
 - **Console styles** (e.g. `pretty | compact | json`)
-- **Console log level** separate from file log level (file keeps full detail)
+- **Console log level** separate from file log level (file keeps full detail when `logging.level` is set to `debug`/`trace`)
 - **WhatsApp message bodies** are logged at `debug` (use `--verbose` to see them)
 
 This keeps existing file logs stable while making interactive output scannable.

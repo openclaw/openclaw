@@ -13,7 +13,7 @@ import {
 } from "@whiskeysockets/baileys";
 
 import { loadConfig } from "../config/config.js";
-import { isVerbose, logVerbose } from "../globals.js";
+import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -87,7 +87,8 @@ export async function monitorWebInbox(options: {
   try {
     // Advertise that the gateway is online right after connecting.
     await sock.sendPresenceUpdate("available");
-    if (isVerbose()) logVerbose("Sent global 'available' presence on connect");
+    if (shouldLogVerbose())
+      logVerbose("Sent global 'available' presence on connect");
   } catch (err) {
     logVerbose(
       `Failed to send 'available' presence on connect: ${String(err)}`,
@@ -189,7 +190,7 @@ export async function monitorWebInbox(options: {
           await sock.readMessages([
             { remoteJid, id, participant, fromMe: false },
           ]);
-          if (isVerbose()) {
+        if (shouldLogVerbose()) {
             const suffix = participant ? ` (participant ${participant})` : "";
             logVerbose(
               `Marked message ${id} as read for ${remoteJid}${suffix}`,
@@ -198,7 +199,7 @@ export async function monitorWebInbox(options: {
         } catch (err) {
           logVerbose(`Failed to mark message ${id} read: ${String(err)}`);
         }
-      } else if (id && isSelfChat && isVerbose()) {
+      } else if (id && isSelfChat && shouldLogVerbose()) {
         // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
         logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
       }

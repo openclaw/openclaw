@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { getLogger } from "./logging.js";
+import { getLogger, isFileLogLevelEnabled } from "./logging.js";
 
 let globalVerbose = false;
 let globalYes = false;
@@ -12,14 +12,24 @@ export function isVerbose() {
   return globalVerbose;
 }
 
+export function shouldLogVerbose() {
+  return globalVerbose || isFileLogLevelEnabled("debug");
+}
+
 export function logVerbose(message: string) {
-  if (!globalVerbose) return;
-  console.log(chalk.gray(message));
+  if (!shouldLogVerbose()) return;
   try {
     getLogger().debug({ message }, "verbose");
   } catch {
     // ignore logger failures to avoid breaking verbose printing
   }
+  if (!globalVerbose) return;
+  console.log(chalk.gray(message));
+}
+
+export function logVerboseConsole(message: string) {
+  if (!globalVerbose) return;
+  console.log(chalk.gray(message));
 }
 
 export function setYes(v: boolean) {

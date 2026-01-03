@@ -1,11 +1,4 @@
-import {
-  danger,
-  info,
-  isVerbose,
-  logVerbose,
-  success,
-  warn,
-} from "./globals.js";
+import { danger, info, logVerboseConsole, success, warn } from "./globals.js";
 import { createSubsystemLogger, getLogger } from "./logging.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
@@ -67,5 +60,5 @@ export function logError(
 export function logDebug(message: string) {
   // Always emit to file logger (level-filtered); console only when verbose.
   getLogger().debug(message);
-  if (isVerbose()) logVerbose(message);
+  logVerboseConsole(message);
 }

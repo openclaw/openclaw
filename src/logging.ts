@@ -65,7 +65,6 @@ let rawConsole: {
 } | null = null;
 
 function normalizeLevel(level?: string): Level {
-  if (isVerbose()) return "trace";
   const candidate = level ?? "info";
   return ALLOWED_LEVELS.includes(candidate as Level)
     ? (candidate as Level)
@@ -110,6 +109,12 @@ function levelToMinLevel(level: Level): number {
     silent: Number.POSITIVE_INFINITY,
   };
   return map[level];
+}
+
+export function isFileLogLevelEnabled(level: LogLevel): boolean {
+  const settings = cachedSettings ?? resolveSettings();
+  if (!cachedSettings) cachedSettings = settings;
+  return levelToMinLevel(level) <= levelToMinLevel(settings.level);
 }
 
 function normalizeConsoleLevel(level?: string): Level {

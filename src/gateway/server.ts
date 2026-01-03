@@ -83,7 +83,7 @@ import {
   sendMessageDiscord,
 } from "../discord/index.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
-import { isVerbose } from "../globals.js";
+import { isVerbose, shouldLogVerbose } from "../globals.js";
 import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import {
   monitorIMessageProvider,
@@ -2084,7 +2084,7 @@ export async function startGatewayServer(
       lastError: null,
     };
     const task = monitorWebProvider(
-      isVerbose(),
+      shouldLogVerbose(),
       undefined,
       true,
       undefined,
@@ -2137,7 +2137,7 @@ export async function startGatewayServer(
         running: false,
         lastError: "disabled",
       };
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logTelegram.debug(
           "telegram provider disabled (telegram.enabled=false)",
         );
@@ -2154,7 +2154,7 @@ export async function startGatewayServer(
         lastError: "not configured",
       };
       // keep quiet by default; this is a normal state
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logTelegram.debug(
           "telegram provider not configured (no TELEGRAM_BOT_TOKEN)",
         );
@@ -2171,7 +2171,7 @@ export async function startGatewayServer(
       const username = probe.ok ? probe.bot?.username?.trim() : null;
       if (username) telegramBotLabel = ` (@${username})`;
     } catch (err) {
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logTelegram.debug(`bot probe failed: ${String(err)}`);
       }
     }
@@ -2240,7 +2240,7 @@ export async function startGatewayServer(
         running: false,
         lastError: "disabled",
       };
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logDiscord.debug("discord provider disabled (discord.enabled=false)");
       }
       return;
@@ -2254,7 +2254,7 @@ export async function startGatewayServer(
         lastError: "not configured",
       };
       // keep quiet by default; this is a normal state
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logDiscord.debug(
           "discord provider not configured (no DISCORD_BOT_TOKEN)",
         );
@@ -2267,7 +2267,7 @@ export async function startGatewayServer(
       const username = probe.ok ? probe.bot?.username?.trim() : null;
       if (username) discordBotLabel = ` (@${username})`;
     } catch (err) {
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logDiscord.debug(`bot probe failed: ${String(err)}`);
       }
     }
@@ -2335,7 +2335,7 @@ export async function startGatewayServer(
         lastError: "not configured",
       };
       // keep quiet by default; this is a normal state
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logSignal.debug("signal provider not configured (no signal config)");
       }
       return;
@@ -2346,7 +2346,7 @@ export async function startGatewayServer(
         running: false,
         lastError: "disabled",
       };
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logSignal.debug("signal provider disabled (signal.enabled=false)");
       }
       return;
@@ -2367,7 +2367,7 @@ export async function startGatewayServer(
         lastError: "not configured",
       };
       // keep quiet by default; this is a normal state
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logSignal.debug(
           "signal provider not configured (signal config present but missing required fields)",
         );
@@ -2448,7 +2448,7 @@ export async function startGatewayServer(
         lastError: "not configured",
       };
       // keep quiet by default; this is a normal state
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logIMessage.debug(
           "imessage provider not configured (no imessage config)",
         );
@@ -2461,7 +2461,7 @@ export async function startGatewayServer(
         running: false,
         lastError: "disabled",
       };
-      if (isVerbose()) {
+      if (shouldLogVerbose()) {
         logIMessage.debug(
           "imessage provider disabled (imessage.enabled=false)",
         );
@@ -4725,7 +4725,10 @@ export async function startGatewayServer(
                 if (configured) {
                   thinkingLevel = configured;
                 } else {
-                  const { provider, model } = resolveSessionModelRef(cfg, entry);
+                  const { provider, model } = resolveSessionModelRef(
+                    cfg,
+                    entry,
+                  );
                   const catalog = await loadGatewayModelCatalog();
                   thinkingLevel = resolveThinkingDefault({
                     cfg,
@@ -6629,7 +6632,7 @@ export async function startGatewayServer(
                   const { token } = resolveTelegramToken(cfg);
                   const result = await sendMessageTelegram(to, message, {
                     mediaUrl: params.mediaUrl,
-                    verbose: isVerbose(),
+                    verbose: shouldLogVerbose(),
                     token: token || undefined,
                   });
                   const payload = {
@@ -6707,7 +6710,7 @@ export async function startGatewayServer(
                 } else {
                   const result = await sendMessageWhatsApp(to, message, {
                     mediaUrl: params.mediaUrl,
-                    verbose: isVerbose(),
+                    verbose: shouldLogVerbose(),
                   });
                   const payload = {
                     runId: idem,
