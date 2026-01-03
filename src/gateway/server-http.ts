@@ -58,14 +58,14 @@ export type HooksRequestHandler = (
 
 export function createHooksRequestHandler(
   opts: {
-    hooksConfig: HooksConfigResolved | null;
+    getHooksConfig: () => HooksConfigResolved | null;
     bindHost: string;
     port: number;
     logHooks: SubsystemLogger;
   } & HookDispatchers,
 ): HooksRequestHandler {
   const {
-    hooksConfig,
+    getHooksConfig,
     bindHost,
     port,
     logHooks,
@@ -73,6 +73,7 @@ export function createHooksRequestHandler(
     dispatchWakeHook,
   } = opts;
   return async (req, res) => {
+    const hooksConfig = getHooksConfig();
     if (!hooksConfig) return false;
     const url = new URL(req.url ?? "/", `http://${bindHost}:${port}`);
     const basePath = hooksConfig.basePath;

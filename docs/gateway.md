@@ -22,6 +22,10 @@ pnpm clawdis gateway --force
 # dev loop (auto-reload on TS changes):
 pnpm gateway:watch
 ```
+- Config hot reload watches `~/.clawdis/clawdis.json` (or `CLAWDIS_CONFIG_PATH`).
+  - Default mode: `gateway.reload.mode="hybrid"` (hot-apply safe changes, restart on critical).
+  - Hot reload uses in-process restart via **SIGUSR1** when needed.
+  - Disable with `gateway.reload.mode="off"`.
 - Binds WebSocket control plane to `127.0.0.1:<port>` (default 18789).
 - The same port also serves HTTP (control UI, hooks, A2UI). Single-port multiplex.
 - Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__clawdis__/canvas/` from `~/clawd/canvas`. Disable with `canvasHost.enabled=false` or `CLAWDIS_SKIP_CANVAS_HOST=1`.

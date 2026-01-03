@@ -696,6 +696,48 @@ Remote client defaults (CLI):
 }
 ```
 
+### `gateway.reload` (Config hot reload)
+
+The Gateway watches `~/.clawdis/clawdis.json` (or `CLAWDIS_CONFIG_PATH`) and applies changes automatically.
+
+Modes:
+- `hybrid` (default): hot-apply safe changes; restart the Gateway for critical changes.
+- `hot`: only apply hot-safe changes; log when a restart is required.
+- `restart`: restart the Gateway on any config change.
+- `off`: disable hot reload.
+
+```json5
+{
+  gateway: {
+    reload: {
+      mode: "hybrid",
+      debounceMs: 300
+    }
+  }
+}
+```
+
+#### Hot reload matrix (files + impact)
+
+Files watched:
+- `~/.clawdis/clawdis.json` (or `CLAWDIS_CONFIG_PATH`)
+
+Hot-applied (no full gateway restart):
+- `hooks` (webhook auth/path/mappings) + `hooks.gmail` (Gmail watcher restarted)
+- `browser` (browser control server restart)
+- `cron` (cron service restart + concurrency update)
+- `agent.heartbeat` (heartbeat runner restart)
+- `web` (WhatsApp web provider restart)
+- `telegram`, `discord`, `signal`, `imessage` (provider restarts)
+- `agent`, `models`, `routing`, `messages`, `session`, `whatsapp`, `logging`, `skills`, `ui`, `talk`, `identity`, `wizard` (dynamic reads)
+
+Requires full Gateway restart:
+- `gateway` (port/bind/auth/control UI/tailscale)
+- `bridge`
+- `discovery`
+- `canvasHost`
+- Any unknown/unsupported config path (defaults to restart for safety)
+
 ### Multi-instance isolation
 
 To run multiple gateways on one host, isolate per-instance state + config and use unique ports:

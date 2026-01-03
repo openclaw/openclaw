@@ -82,6 +82,8 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.reload.mode": "Config Reload Mode",
+  "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agent.workspace": "Workspace",
   "agent.model": "Default Model",
   "ui.seamColor": "Accent Color",
@@ -100,6 +102,10 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdis).",
+  "gateway.reload.mode":
+    'Hot reload strategy for config changes ("hybrid" recommended).',
+  "gateway.reload.debounceMs":
+    "Debounce window (ms) before applying config changes.",
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

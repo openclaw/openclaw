@@ -8,6 +8,7 @@
 
 ### Features
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
+- Gateway: add config hot reload with hybrid restart strategy (`gateway.reload`) and per-section reload handling.
 - UI: centralize tool display metadata and show action/detail summaries across Web Chat, SwiftUI, Android, and the TUI.
 - Control UI: support configurable base paths (`gateway.controlUi.basePath`, default unchanged) for hosting under URL prefixes.
 - Onboarding: shared wizard engine powering CLI + macOS via gateway wizard RPC.
@@ -45,6 +46,7 @@
 - Skills: document Discord `sendMessage` media attachments and `to` format clarification.
 - Skills: add tmux skill + interactive coding guidance in coding-agent.
 - Gateway: document port configuration + multi-instance isolation.
+- Gateway: document config hot reload + reload matrix.
 - Onboarding/Config: add protocol notes for wizard + schema RPC.
 - Queue: clarify steer-backlog behavior with inline commands and update examples for streaming surfaces.
 

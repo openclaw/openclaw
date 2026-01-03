@@ -447,6 +447,15 @@ export type GatewayRemoteConfig = {
   password?: string;
 };
 
+export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
+
+export type GatewayReloadConfig = {
+  /** Reload strategy for config changes (default: hybrid). */
+  mode?: GatewayReloadMode;
+  /** Debounce window for config reloads (ms). Default: 300. */
+  debounceMs?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -464,6 +473,7 @@ export type GatewayConfig = {
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
   remote?: GatewayRemoteConfig;
+  reload?: GatewayReloadConfig;
 };
 
 export type SkillConfig = {
@@ -1306,6 +1316,19 @@ export const ClawdisSchema = z.object({
           url: z.string().optional(),
           token: z.string().optional(),
           password: z.string().optional(),
+        })
+        .optional(),
+      reload: z
+        .object({
+          mode: z
+            .union([
+              z.literal("off"),
+              z.literal("restart"),
+              z.literal("hot"),
+              z.literal("hybrid"),
+            ])
+            .optional(),
+          debounceMs: z.number().int().min(0).optional(),
         })
         .optional(),
     })
