@@ -545,6 +545,28 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
+  test("agent.wait resolves when job completed before wait call", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    emitAgentEvent({
+      runId: "run-wait-early",
+      stream: "job",
+      data: { state: "done", startedAt: 50, endedAt: 55 },
+    });
+
+    const res = await rpcReq(ws, "agent.wait", {
+      runId: "run-wait-early",
+      timeoutMs: 1000,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload.status).toBe("ok");
+    expect(res.payload.startedAt).toBe(50);
+
+    ws.close();
+    await server.close();
+  });
+
   test("agent.wait ignores jobs before afterMs", async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);

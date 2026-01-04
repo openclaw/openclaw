@@ -327,6 +327,8 @@ async function waitForAgentJob(params: {
   });
 }
 
+ensureAgentJobListener();
+
 export type GatewayRequestContext = {
   deps: ReturnType<typeof createDefaultDeps>;
   cron: CronService;
