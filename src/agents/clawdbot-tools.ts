@@ -9,12 +9,16 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSlackTool } from "./tools/slack-tool.js";
+import { createImageTool } from "./tools/image-tool.js";
+import type { ClawdbotConfig } from "../config/config.js";
 
 export function createClawdbotTools(options?: {
   browserControlUrl?: string;
   agentSessionKey?: string;
   agentSurface?: string;
+  config?: ClawdbotConfig;
 }): AnyAgentTool[] {
+  const imageTool = createImageTool({ config: options?.config });
   return [
     createBrowserTool({ defaultControlUrl: options?.browserControlUrl }),
     createCanvasTool(),
@@ -29,5 +33,6 @@ export function createClawdbotTools(options?: {
       agentSessionKey: options?.agentSessionKey,
       agentSurface: options?.agentSurface,
     }),
+    ...(imageTool ? [imageTool] : []),
   ];
 }

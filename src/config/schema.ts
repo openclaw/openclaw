@@ -88,7 +88,9 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agent.workspace": "Workspace",
   "agent.model": "Default Model",
+  "agent.imageModel": "Image Model",
   "agent.modelFallbacks": "Model Fallbacks",
+  "agent.imageModelFallbacks": "Image Model Fallbacks",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
@@ -114,6 +116,10 @@ const FIELD_HELP: Record<string, string> = {
     "Debounce window (ms) before applying config changes.",
   "agent.modelFallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
+  "agent.imageModel":
+    "Optional image-capable model (provider/model) used by the image tool.",
+  "agent.imageModelFallbacks":
+    "Ordered fallback image models (provider/model) used by the image tool.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
 };

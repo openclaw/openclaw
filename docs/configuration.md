@@ -431,6 +431,8 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 (omit to show the full catalog).
 `modelAliases` adds short names for `/model` (alias -> provider/model).
 `modelFallbacks` lists ordered fallback models to try when the default fails.
+`imageModel` selects an image-capable model for the `image` tool.
+`imageModelFallbacks` lists ordered fallback image models for the `image` tool.
 
 ```json5
 {
@@ -447,6 +449,10 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
     modelFallbacks: [
       "openrouter/deepseek/deepseek-r1:free",
       "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+    ],
+    imageModel: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
+    imageModelFallbacks: [
+      "openrouter/google/gemini-2.0-flash-vision:free"
     ],
     thinkingDefault: "low",
     verboseDefault: "off",

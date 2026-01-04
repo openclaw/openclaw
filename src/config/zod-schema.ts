@@ -363,10 +363,12 @@ export const ClawdbotSchema = z.object({
   agent: z
     .object({
       model: z.string().optional(),
+      imageModel: z.string().optional(),
       workspace: z.string().optional(),
       allowedModels: z.array(z.string()).optional(),
       modelAliases: z.record(z.string(), z.string()).optional(),
       modelFallbacks: z.array(z.string()).optional(),
+      imageModelFallbacks: z.array(z.string()).optional(),
       contextTokens: z.number().int().positive().optional(),
       thinkingDefault: z
         .union([

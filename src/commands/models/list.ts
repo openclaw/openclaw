@@ -120,6 +120,26 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
     addEntry(resolved.ref, `fallback#${idx + 1}`);
   });
 
+  const imageModelRaw = cfg.agent?.imageModel?.trim();
+  if (imageModelRaw) {
+    const resolved = resolveModelRefFromString({
+      raw: imageModelRaw,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (resolved) addEntry(resolved.ref, "image");
+  }
+
+  (cfg.agent?.imageModelFallbacks ?? []).forEach((raw, idx) => {
+    const resolved = resolveModelRefFromString({
+      raw: String(raw ?? ""),
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (!resolved) return;
+    addEntry(resolved.ref, `img-fallback#${idx + 1}`);
+  });
+
   (cfg.agent?.allowedModels ?? []).forEach((raw) => {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (!parsed) return;
@@ -375,6 +395,8 @@ export async function modelsStatusCommand(
   const rawModel = cfg.agent?.model?.trim() ?? "";
   const defaultLabel = rawModel || `${resolved.provider}/${resolved.model}`;
   const fallbacks = cfg.agent?.modelFallbacks ?? [];
+  const imageModel = cfg.agent?.imageModel?.trim() ?? "";
+  const imageFallbacks = cfg.agent?.imageModelFallbacks ?? [];
   const aliases = cfg.agent?.modelAliases ?? {};
   const allowed = cfg.agent?.allowedModels ?? [];
 
@@ -386,6 +408,8 @@ export async function modelsStatusCommand(
           defaultModel: defaultLabel,
           resolvedDefault: `${resolved.provider}/${resolved.model}`,
           fallbacks,
+          imageModel: imageModel || null,
+          imageFallbacks,
           aliases,
           allowed,
         },
@@ -405,6 +429,12 @@ export async function modelsStatusCommand(
   runtime.log(`Default: ${defaultLabel}`);
   runtime.log(
     `Fallbacks (${fallbacks.length || 0}): ${fallbacks.join(", ") || "-"}`,
+  );
+  runtime.log(`Image model: ${imageModel || "-"}`);
+  runtime.log(
+    `Image fallbacks (${imageFallbacks.length || 0}): ${
+      imageFallbacks.length ? imageFallbacks.join(", ") : "-"
+    }`,
   );
   runtime.log(
     `Aliases (${Object.keys(aliases).length || 0}): ${

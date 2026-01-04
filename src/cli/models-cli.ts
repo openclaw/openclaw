@@ -8,9 +8,14 @@ import {
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
   modelsFallbacksRemoveCommand,
+  modelsImageFallbacksAddCommand,
+  modelsImageFallbacksClearCommand,
+  modelsImageFallbacksListCommand,
+  modelsImageFallbacksRemoveCommand,
   modelsListCommand,
   modelsScanCommand,
   modelsSetCommand,
+  modelsSetImageCommand,
   modelsStatusCommand,
 } from "../commands/models.js";
 import { defaultRuntime } from "../runtime.js";
@@ -58,6 +63,19 @@ export function registerModelsCli(program: Command) {
     .action(async (model: string) => {
       try {
         await modelsSetCommand(model, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  models
+    .command("set-image")
+    .description("Set the image model")
+    .argument("<model>", "Model id or alias")
+    .action(async (model: string) => {
+      try {
+        await modelsSetImageCommand(model, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
@@ -163,6 +181,62 @@ export function registerModelsCli(program: Command) {
       }
     });
 
+  const imageFallbacks = models
+    .command("image-fallbacks")
+    .description("Manage image model fallback list");
+
+  imageFallbacks
+    .command("list")
+    .description("List image fallback models")
+    .option("--json", "Output JSON", false)
+    .option("--plain", "Plain output", false)
+    .action(async (opts) => {
+      try {
+        await modelsImageFallbacksListCommand(opts, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  imageFallbacks
+    .command("add")
+    .description("Add an image fallback model")
+    .argument("<model>", "Model id or alias")
+    .action(async (model: string) => {
+      try {
+        await modelsImageFallbacksAddCommand(model, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  imageFallbacks
+    .command("remove")
+    .description("Remove an image fallback model")
+    .argument("<model>", "Model id or alias")
+    .action(async (model: string) => {
+      try {
+        await modelsImageFallbacksRemoveCommand(model, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  imageFallbacks
+    .command("clear")
+    .description("Clear all image fallback models")
+    .action(async () => {
+      try {
+        await modelsImageFallbacksClearCommand(defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
   models
     .command("scan")
     .description("Scan OpenRouter free models for tools + images")
@@ -175,6 +249,7 @@ export function registerModelsCli(program: Command) {
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
     .option("--set-default", "Set agent.model to the first selection", false)
+    .option("--set-image", "Set agent.imageModel to the first image selection", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       try {

@@ -49,6 +49,24 @@ function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
   });
 }
 
+function sortImageResults(results: ModelScanResult[]): ModelScanResult[] {
+  return results.slice().sort((a, b) => {
+    const aLatency = a.image.latencyMs ?? Number.POSITIVE_INFINITY;
+    const bLatency = b.image.latencyMs ?? Number.POSITIVE_INFINITY;
+    if (aLatency !== bLatency) return aLatency - bLatency;
+
+    const aCtx = a.contextLength ?? 0;
+    const bCtx = b.contextLength ?? 0;
+    if (aCtx !== bCtx) return bCtx - aCtx;
+
+    const aParams = a.inferredParamB ?? 0;
+    const bParams = b.inferredParamB ?? 0;
+    if (aParams !== bParams) return bParams - aParams;
+
+    return a.modelRef.localeCompare(b.modelRef);
+  });
+}
+
 function buildScanHint(result: ModelScanResult): string {
   const toolLabel = result.tool.ok
     ? `tool ${formatMs(result.tool.latencyMs)}`
@@ -71,8 +89,9 @@ function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
   const toolOk = results.filter((r) => r.tool.ok);
   const imageOk = results.filter((r) => r.image.ok);
   const toolImageOk = results.filter((r) => r.tool.ok && r.image.ok);
+  const imageOnly = imageOk.filter((r) => !r.tool.ok);
   runtime.log(
-    `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}`,
+    `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}, image only ${imageOnly.length}`,
   );
 }
 
@@ -127,6 +146,7 @@ export async function modelsScanCommand(
     yes?: boolean;
     input?: boolean;
     setDefault?: boolean;
+    setImage?: boolean;
     json?: boolean;
   },
   runtime: RuntimeEnv,
@@ -177,10 +197,16 @@ export async function modelsScanCommand(
     throw new Error("No tool-capable OpenRouter free models found.");
   }
 
-  const sorted = sortScanResults(toolOk);
-  const imagePreferred = sorted.filter((entry) => entry.image.ok);
-  const preselectPool = imagePreferred.length > 0 ? imagePreferred : sorted;
+  const sorted = sortScanResults(results);
+  const toolSorted = sortScanResults(toolOk);
+  const imageOk = results.filter((entry) => entry.image.ok);
+  const imageSorted = sortImageResults(imageOk);
+  const imagePreferred = toolSorted.filter((entry) => entry.image.ok);
+  const preselectPool = imagePreferred.length > 0 ? imagePreferred : toolSorted;
   const preselected = preselectPool
+    .slice(0, Math.floor(maxCandidates))
+    .map((entry) => entry.modelRef);
+  const imagePreselected = imageSorted
     .slice(0, Math.floor(maxCandidates))
     .map((entry) => entry.modelRef);
 
@@ -192,11 +218,12 @@ export async function modelsScanCommand(
   const noInput = opts.input === false;
   const canPrompt = process.stdin.isTTY && !opts.yes && !noInput && !opts.json;
   let selected: string[] = preselected;
+  let selectedImages: string[] = imagePreselected;
 
   if (canPrompt) {
     const selection = await multiselect({
       message: "Select fallback models (ordered)",
-      options: sorted.map((entry) => ({
+      options: toolSorted.map((entry) => ({
         value: entry.modelRef,
         label: entry.modelRef,
         hint: buildScanHint(entry),
@@ -210,6 +237,24 @@ export async function modelsScanCommand(
     }
 
     selected = selection as string[];
+    if (imageSorted.length > 0) {
+      const imageSelection = await multiselect({
+        message: "Select image fallback models (ordered)",
+        options: imageSorted.map((entry) => ({
+          value: entry.modelRef,
+          label: entry.modelRef,
+          hint: buildScanHint(entry),
+        })),
+        initialValues: imagePreselected,
+      });
+
+      if (isCancel(imageSelection)) {
+        cancel("Model scan cancelled.");
+        runtime.exit(0);
+      }
+
+      selectedImages = imageSelection as string[];
+    }
   } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
     throw new Error("Non-interactive scan: pass --yes to apply defaults.");
   }
@@ -217,34 +262,58 @@ export async function modelsScanCommand(
   if (selected.length === 0) {
     throw new Error("No models selected for fallbacks.");
   }
+  if (opts.setImage && selectedImages.length === 0) {
+    throw new Error("No image-capable models selected for image model.");
+  }
 
   const updated = await updateConfig((cfg) => {
-    const next = {
+    const agent = {
+      ...cfg.agent,
+      modelFallbacks: selected,
+      ...(opts.setDefault ? { model: selected[0] } : {}),
+      ...(opts.setImage && selectedImages.length > 0
+        ? { imageModel: selectedImages[0] }
+        : {}),
+    } satisfies NonNullable<typeof cfg.agent>;
+    if (imageSorted.length > 0) {
+      agent.imageModelFallbacks = selectedImages;
+    }
+    return {
       ...cfg,
-      agent: {
-        ...cfg.agent,
-        modelFallbacks: selected,
-        ...(opts.setDefault ? { model: selected[0] } : {}),
-      },
+      agent,
     };
-    return next;
   });
 
   const allowlist = buildAllowlistSet(updated);
   const allowlistMissing =
     allowlist.size > 0 ? selected.filter((entry) => !allowlist.has(entry)) : [];
+  const allowlistMissingImages =
+    allowlist.size > 0
+      ? selectedImages.filter((entry) => !allowlist.has(entry))
+      : [];
 
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           selected,
+          selectedImages,
           setDefault: Boolean(opts.setDefault),
+          setImage: Boolean(opts.setImage),
           results,
           warnings:
-            allowlistMissing.length > 0
+            allowlistMissing.length > 0 || allowlistMissingImages.length > 0
               ? [
-                  `Selected models not in agent.allowedModels: ${allowlistMissing.join(", ")}`,
+                  ...(allowlistMissing.length > 0
+                    ? [
+                        `Selected models not in agent.allowedModels: ${allowlistMissing.join(", ")}`,
+                      ]
+                    : []),
+                  ...(allowlistMissingImages.length > 0
+                    ? [
+                        `Selected image models not in agent.allowedModels: ${allowlistMissingImages.join(", ")}`,
+                      ]
+                    : []),
                 ]
               : [],
         },
@@ -262,10 +331,23 @@ export async function modelsScanCommand(
       ),
     );
   }
+  if (allowlistMissingImages.length > 0) {
+    runtime.log(
+      warn(
+        `Warning: ${allowlistMissingImages.length} selected image models are not in agent.allowedModels and will be ignored by fallback: ${allowlistMissingImages.join(", ")}`,
+      ),
+    );
+  }
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   runtime.log(`Fallbacks: ${selected.join(", ")}`);
+  if (selectedImages.length > 0) {
+    runtime.log(`Image fallbacks: ${selectedImages.join(", ")}`);
+  }
   if (opts.setDefault) {
     runtime.log(`Default model: ${selected[0]}`);
+  }
+  if (opts.setImage && selectedImages.length > 0) {
+    runtime.log(`Image model: ${selectedImages[0]}`);
   }
 }
