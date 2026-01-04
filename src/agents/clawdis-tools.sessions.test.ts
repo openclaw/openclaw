@@ -268,4 +268,105 @@ describe("sessions tools", () => {
     ).toBe(true);
     expect(sendCallCount).toBe(0);
   });
+
+  it("sessions_send runs ping-pong then announces", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
+    const targetKey = "discord:group:target";
+    let sendParams: { to?: string; provider?: string; message?: string } = {};
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | { message?: string; sessionKey?: string; extraSystemPrompt?: string }
+          | undefined;
+        let reply = "initial";
+        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+          reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
+        }
+        if (
+          params?.extraSystemPrompt?.includes("Agent-to-agent announce step")
+        ) {
+          reply = "announce now";
+        }
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 2000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text =
+          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [
+            {
+              role: "assistant",
+              content: [{ type: "text", text }],
+              timestamp: 20,
+            },
+          ],
+        };
+      }
+      if (request.method === "send") {
+        const params = request.params as
+          | { to?: string; provider?: string; message?: string }
+          | undefined;
+        sendParams = {
+          to: params?.to,
+          provider: params?.provider,
+          message: params?.message,
+        };
+        return { messageId: "m-announce" };
+      }
+      return {};
+    });
+
+    const tool = createClawdisTools({
+      agentSessionKey: requesterKey,
+      agentSurface: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) throw new Error("missing sessions_send tool");
+
+    const waited = await tool.execute("call7", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "initial",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const replySteps = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })
+          ?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string })
+          ?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
+    );
+    expect(replySteps).toHaveLength(2);
+    expect(sendParams).toMatchObject({
+      to: "channel:target",
+      provider: "discord",
+      message: "announce now",
+    });
+  });
 });
