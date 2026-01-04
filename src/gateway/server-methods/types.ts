@@ -4,9 +4,13 @@ import type { HealthSummary } from "../../commands/health.js";
 import type { CronService } from "../../cron/service.js";
 import type { startNodeBridgeServer } from "../../infra/bridge/server.js";
 import type { WizardSession } from "../../wizard/session.js";
-import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
-import type { DedupeEntry } from "../server-shared.js";
+import type {
+  ConnectParams,
+  ErrorShape,
+  RequestFrame,
+} from "../protocol/index.js";
 import type { ProviderRuntimeSnapshot } from "../server-providers.js";
+import type { DedupeEntry } from "../server-shared.js";
 
 export type GatewayClient = {
   connect: ConnectParams;

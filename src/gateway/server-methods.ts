@@ -13,13 +13,13 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
-import { voicewakeHandlers } from "./server-methods/voicewake.js";
-import { webHandlers } from "./server-methods/web.js";
-import { wizardHandlers } from "./server-methods/wizard.js";
 import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { voicewakeHandlers } from "./server-methods/voicewake.js";
+import { webHandlers } from "./server-methods/web.js";
+import { wizardHandlers } from "./server-methods/wizard.js";
 
 const handlers: GatewayRequestHandlers = {
   ...connectHandlers,

@@ -65,7 +65,8 @@ export const systemHandlers: GatewayRequestHandlers = {
       Number.isFinite(params.lastInputSeconds)
         ? params.lastInputSeconds
         : undefined;
-    const reason = typeof params.reason === "string" ? params.reason : undefined;
+    const reason =
+      typeof params.reason === "string" ? params.reason : undefined;
     const tags =
       Array.isArray(params.tags) &&
       params.tags.every((t) => typeof t === "string")

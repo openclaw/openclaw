@@ -1,7 +1,7 @@
+import { loadConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/index.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { sendMessageIMessage } from "../../imessage/index.js";
-import { loadConfig } from "../../config/config.js";
 import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
