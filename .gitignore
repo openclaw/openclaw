@@ -16,6 +16,7 @@ ui/test-results/
 *.bun-build
 apps/macos/.build/
 apps/shared/ClawdbotKit/.build/
+**/ModuleCache/
 bin/
 bin/clawdbot-mac
 bin/docs-list
