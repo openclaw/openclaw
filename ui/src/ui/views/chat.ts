@@ -23,13 +23,11 @@ export type ChatProps = {
 
 export function renderChat(props: ChatProps) {
   const canInteract = props.connected;
-  const canCompose = props.canSend && !props.sending;
+  const canCompose = props.connected && !props.sending;
   const sessionOptions = resolveSessionOptions(props.sessionKey, props.sessions);
-  const composePlaceholder = (() => {
-    if (!props.connected) return "Connect to the gateway to start chatting…";
-    if (!props.canSend) return "Connect an iOS/Android node to enable Web Chat + Talk…";
-    return "Message (⌘↩ to send)";
-  })();
+  const composePlaceholder = props.connected
+    ? "Message (⌘↩ to send)"
+    : "Connect to the gateway to start chatting…";
 
   return html`
     <section class="card chat">
@@ -90,7 +88,7 @@ export function renderChat(props: ChatProps) {
           <span>Message</span>
           <textarea
             .value=${props.draft}
-            ?disabled=${!props.canSend}
+            ?disabled=${!props.connected}
             @keydown=${(e: KeyboardEvent) => {
               if (e.key !== "Enter") return;
               if (!e.metaKey && !e.ctrlKey) return;
@@ -105,7 +103,7 @@ export function renderChat(props: ChatProps) {
         <div class="row chat-compose__actions">
           <button
             class="btn primary"
-            ?disabled=${!props.canSend || props.sending}
+            ?disabled=${!props.connected || props.sending}
             @click=${props.onSend}
           >
             ${props.sending ? "Sending…" : "Send"}
