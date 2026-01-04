@@ -176,7 +176,7 @@ async function promptGatewayConfig(
       ...next,
       gateway: {
         ...next.gateway,
-        auth: { ...next.gateway?.auth, mode: "token" },
+        auth: { ...next.gateway?.auth, mode: "token", token: gatewayToken },
       },
     };
   }
@@ -453,7 +453,7 @@ export async function runConfigureWizard(
   const localUrl = "ws://127.0.0.1:18789";
   const localProbe = await probeGatewayReachable({
     url: localUrl,
-    token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+    token: baseConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
     password:
       baseConfig.gateway?.auth?.password ??
       process.env.CLAWDBOT_GATEWAY_PASSWORD,

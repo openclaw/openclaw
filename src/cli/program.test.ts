@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendCommand = vi.fn();
 const statusCommand = vi.fn();
+const configureCommand = vi.fn();
 const loginWeb = vi.fn();
 const callGateway = vi.fn();
 
@@ -16,6 +17,7 @@ const runtime = {
 
 vi.mock("../commands/send.js", () => ({ sendCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
+vi.mock("../commands/configure.js", () => ({ configureCommand }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
 vi.mock("../provider-web.js", () => ({
   loginWeb,
@@ -49,7 +51,13 @@ describe("cli program", () => {
     expect(statusCommand).toHaveBeenCalled();
   });
 
-  it("runs nodes list and calls node.pair.list", async () => {
+    it("runs config alias as configure", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["config"], { from: "user" });
+    expect(configureCommand).toHaveBeenCalled();
+  });
+
+it("runs nodes list and calls node.pair.list", async () => {
     callGateway.mockResolvedValue({ pending: [], paired: [] });
     const program = buildProgram();
     runtime.log.mockClear();

@@ -232,6 +232,7 @@ export function buildProgram() {
 
   program
     .command("configure")
+    .alias("config")
     .description(
       "Interactive wizard to update models, providers, skills, and gateway",
     )

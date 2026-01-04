@@ -92,9 +92,10 @@ export async function callGateway<T = unknown>(
           client.stop();
           stop(err as Error);
         }
-      },
-      onClose: (code, reason) => {
+      },      onClose: (code, reason) => {
         if (settled || ignoreClose) return;
+        ignoreClose = true;
+        client.stop();
         stop(new Error(`gateway closed (${code}): ${reason}`));
       },
     });

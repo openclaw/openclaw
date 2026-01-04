@@ -194,6 +194,8 @@ export async function probeGatewayReachable(params: {
       password: params.password,
       method: "health",
       timeoutMs,
+      clientName: "clawdbot-probe",
+      mode: "probe",
     });
     return { ok: true };
   } catch (err) {

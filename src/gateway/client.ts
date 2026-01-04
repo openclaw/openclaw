@@ -119,7 +119,9 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
-        logError(`gateway connect failed: ${String(err)}`);
+        const msg = `gateway connect failed: ${String(err)}`;
+        if (this.opts.mode === "probe") logDebug(msg);
+        else logError(msg);
         this.ws?.close(1008, "connect failed");
       });
   }
