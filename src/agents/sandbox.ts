@@ -104,7 +104,7 @@ const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(
   ".clawdbot",
   "sandboxes",
 );
-const DEFAULT_SANDBOX_IMAGE = "clawdbot-sandbox:bookworm-slim";
+export const DEFAULT_SANDBOX_IMAGE = "clawdbot-sandbox:bookworm-slim";
 const DEFAULT_SANDBOX_CONTAINER_PREFIX = "clawdbot-sbx-";
 const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 const DEFAULT_SANDBOX_IDLE_HOURS = 24;
@@ -118,7 +118,10 @@ const DEFAULT_TOOL_DENY = [
   "discord",
   "gateway",
 ];
-const DEFAULT_SANDBOX_BROWSER_IMAGE = "clawdbot-sandbox-browser:bookworm-slim";
+export const DEFAULT_SANDBOX_BROWSER_IMAGE =
+  "clawdbot-sandbox-browser:bookworm-slim";
+export const DEFAULT_SANDBOX_COMMON_IMAGE =
+  "clawdbot-sandbox-common:bookworm-slim";
 const DEFAULT_SANDBOX_BROWSER_PREFIX = "clawdbot-sbx-browser-";
 const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
