@@ -86,6 +86,7 @@ const QueueModeBySurfaceSchema = z
     whatsapp: QueueModeSchema.optional(),
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
+    slack: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
@@ -163,6 +164,7 @@ const HeartbeatSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
+        z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),
         z.literal("none"),
@@ -225,6 +227,7 @@ const HookMappingSchema = z
         z.literal("whatsapp"),
         z.literal("telegram"),
         z.literal("discord"),
+        z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),
       ])
@@ -613,6 +616,59 @@ export const ClawdisSchema = z.object({
                     .optional(),
                 )
                 .optional(),
+            })
+            .optional(),
+        )
+        .optional(),
+    })
+    .optional(),
+  slack: z
+    .object({
+      enabled: z.boolean().optional(),
+      botToken: z.string().optional(),
+      appToken: z.string().optional(),
+      textChunkLimit: z.number().int().positive().optional(),
+      replyToMode: ReplyToModeSchema.optional(),
+      mediaMaxMb: z.number().positive().optional(),
+      reactionNotifications: z
+        .enum(["off", "own", "all", "allowlist"])
+        .optional(),
+      reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+      actions: z
+        .object({
+          reactions: z.boolean().optional(),
+          messages: z.boolean().optional(),
+          pins: z.boolean().optional(),
+          search: z.boolean().optional(),
+          permissions: z.boolean().optional(),
+          memberInfo: z.boolean().optional(),
+          channelInfo: z.boolean().optional(),
+          emojiList: z.boolean().optional(),
+        })
+        .optional(),
+      slashCommand: z
+        .object({
+          enabled: z.boolean().optional(),
+          name: z.string().optional(),
+          sessionPrefix: z.string().optional(),
+          ephemeral: z.boolean().optional(),
+        })
+        .optional(),
+      dm: z
+        .object({
+          enabled: z.boolean().optional(),
+          allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+          groupEnabled: z.boolean().optional(),
+          groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+        })
+        .optional(),
+      channels: z
+        .record(
+          z.string(),
+          z
+            .object({
+              allow: z.boolean().optional(),
+              requireMention: z.boolean().optional(),
             })
             .optional(),
         )

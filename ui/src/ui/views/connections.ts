@@ -28,6 +28,14 @@ const discordActionOptions = [
   { key: "moderation", label: "Moderation" },
 ] satisfies Array<{ key: keyof DiscordActionForm; label: string }>;
 
+const slackActionOptions = [
+  { key: "reactions", label: "Reactions" },
+  { key: "messages", label: "Messages" },
+  { key: "pins", label: "Pins" },
+  { key: "memberInfo", label: "Member info" },
+  { key: "emojiList", label: "Emoji list" },
+] satisfies Array<{ key: keyof SlackActionForm; label: string }>;
+
 export type ConnectionsProps = {
   connected: boolean;
   loading: boolean;
@@ -1347,3 +1355,4 @@ function renderProvider(
       return nothing;
   }
 }
+

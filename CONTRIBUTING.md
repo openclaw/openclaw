@@ -12,7 +12,7 @@ Welcome to the lobster tank! 🦞
 - **Peter Steinberger** - Benevolent Dictator
   - GitHub: [@steipete](https://github.com/steipete) · X: [@steipete](https://x.com/steipete)
 
-- **Shadow** - Discord subsystem
+- **Shadow** - Discord + Slack subsystem
   - GitHub: [@4shadowed](https://github.com/4shadowed) · X: [@4shad0wed](https://x.com/4shad0wed)
 
 - **Jos** - Telegram, API, Nix mode

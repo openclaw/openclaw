@@ -292,6 +292,64 @@ Reaction notification modes:
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
 
+### `slack` (socket mode)
+
+Slack runs in Socket Mode and requires both a bot token and app token:
+
+```json5
+{
+  slack: {
+    enabled: true,
+    botToken: "xoxb-...",
+    appToken: "xapp-...",
+    dm: {
+      enabled: true,
+      allowFrom: ["U123", "U456", "*"],
+      groupEnabled: false,
+      groupChannels: ["G123"]
+    },
+    channels: {
+      C123: { allow: true, requireMention: true },
+      "#general": { allow: true, requireMention: false }
+    },
+    reactionNotifications: "own", // off | own | all | allowlist
+    reactionAllowlist: ["U123"],
+    actions: {
+      reactions: true,
+      messages: true,
+      pins: true,
+      memberInfo: true,
+      emojiList: true
+    },
+    slashCommand: {
+      enabled: true,
+      name: "clawd",
+      sessionPrefix: "slack:slash",
+      ephemeral: true
+    },
+    replyToMode: "off",      // off | first | all
+    textChunkLimit: 4000,
+    mediaMaxMb: 20
+  }
+}
+```
+
+Clawdis starts Slack only when a `slack` config section exists and both tokens are set (unless `slack.enabled` is `false`). Provide `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` env vars if you prefer. Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+
+Reaction notification modes:
+- `off`: no reaction events.
+- `own`: reactions on the bot's own messages (default).
+- `all`: all reactions on all messages.
+- `allowlist`: reactions from `slack.reactionAllowlist` on all messages (empty list disables).
+
+Slack action groups (gate `slack` tool actions):
+| Action group | Default | Notes |
+| --- | --- | --- |
+| reactions | enabled | React + list reactions |
+| messages | enabled | Read/send/edit/delete |
+| pins | enabled | Pin/unpin/list |
+| memberInfo | enabled | Member info |
+| emojiList | enabled | Custom emoji list |
 ### `imessage` (imsg CLI)
 
 Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.

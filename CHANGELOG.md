@@ -20,6 +20,7 @@
 - Skills: add blogwatcher skill for RSS/Atom monitoring — thanks @Hyaxia.
 - Skills: add Notion API skill — thanks @scald.
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
+- Slack: add socket-mode connector, tools, and UI/docs updates (#170) — thanks @thewilloftheshadow.
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
 - Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
