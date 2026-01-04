@@ -18,6 +18,28 @@ import {
 installGatewayTestHooks();
 
 describe("gateway server chat", () => {
+  test("webchat can chat.send without a mobile node", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws, {
+      client: {
+        name: "clawdbot-control-ui",
+        version: "dev",
+        platform: "web",
+        mode: "webchat",
+      },
+    });
+
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "hello",
+      idempotencyKey: "idem-webchat-1",
+    });
+    expect(res.ok).toBe(true);
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.send blocked by send policy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
