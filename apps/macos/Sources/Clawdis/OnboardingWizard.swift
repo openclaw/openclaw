@@ -7,17 +7,22 @@ import SwiftUI
 private let onboardingWizardLogger = Logger(subsystem: "com.clawdis", category: "onboarding.wizard")
 
 // MARK: - Swift 6 AnyCodable Bridging Helpers
-// These helpers bridge between ClawdisProtocol.AnyCodable and the local module
-// to avoid Swift 6 strict concurrency type conflicts.
+// Bridge between ClawdisProtocol.AnyCodable and the local module to avoid
+// Swift 6 strict concurrency type conflicts.
 
 private typealias ProtocolAnyCodable = ClawdisProtocol.AnyCodable
 
-private func bridgeToProtocol(_ value: Any) -> ProtocolAnyCodable {
-    ProtocolAnyCodable(value)
+private func bridgeToLocal(_ value: ProtocolAnyCodable) -> AnyCodable {
+    if let data = try? JSONEncoder().encode(value),
+       let decoded = try? JSONDecoder().decode(AnyCodable.self, from: data)
+    {
+        return decoded
+    }
+    return AnyCodable(value.value)
 }
 
-private func bridgeDict(_ dict: [String: Any]) -> [String: ProtocolAnyCodable] {
-    dict.mapValues { ProtocolAnyCodable($0) }
+private func bridgeToLocal(_ value: ProtocolAnyCodable?) -> AnyCodable? {
+    value.map(bridgeToLocal)
 }
 
 @MainActor
@@ -299,11 +304,11 @@ struct OnboardingWizardStepView: View {
                 return
             }
             let option = optionItems[selectedIndex].option
-            onSubmit(option.value ?? AnyCodable(option.label))
+            onSubmit(bridgeToLocal(option.value) ?? AnyCodable(option.label))
         case "multiselect":
             let values = optionItems
                 .filter { selectedIndices.contains($0.index) }
-                .map { $0.option.value ?? AnyCodable($0.option.label) }
+                .map { bridgeToLocal($0.option.value) ?? AnyCodable($0.option.label) }
             onSubmit(AnyCodable(values))
         case "action":
             onSubmit(AnyCodable(true))
