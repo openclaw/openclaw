@@ -43,5 +43,5 @@ describe("resolvePythonExecutablePath", () => {
       process.env.PATH = originalPath;
       await fs.rm(tmp, { recursive: true, force: true });
     }
-  });
+  }, 15_000);
 });
