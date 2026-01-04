@@ -29,7 +29,11 @@ import type {
   ReplyToMode,
 } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
+import {
+  resolveSessionKey,
+  resolveStorePath,
+  updateLastRoute,
+} from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
@@ -356,7 +360,22 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
       const systemText = resolveDiscordSystemEvent(message);
       if (systemText) {
+        const sessionCfg = cfg.session;
+        const sessionScope = sessionCfg?.scope ?? "per-sender";
+        const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
+        const sessionKey = resolveSessionKey(
+          sessionScope,
+          {
+            From: isDirectMessage
+              ? `discord:${message.author.id}`
+              : `group:${message.channelId}`,
+            ChatType: isDirectMessage ? "direct" : "group",
+            Surface: "discord",
+          },
+          mainKey,
+        );
         enqueueSystemEvent(systemText, {
+          sessionKey,
           contextKey: `discord:system:${message.channelId}:${message.id}`,
         });
         return;
@@ -645,7 +664,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const authorLabel = message.author?.tag ?? message.author?.username;
       const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${message.id}`;
       const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
+      const sessionCfg = cfg.session;
+      const sessionScope = sessionCfg?.scope ?? "per-sender";
+      const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
+      const sessionKey = resolveSessionKey(
+        sessionScope,
+        {
+          From: `group:${message.channelId}`,
+          ChatType: "group",
+          Surface: "discord",
+        },
+        mainKey,
+      );
       enqueueSystemEvent(text, {
+        sessionKey,
         contextKey: `discord:reaction:${action}:${message.id}:${user.id}:${emojiLabel}`,
       });
     } catch (err) {

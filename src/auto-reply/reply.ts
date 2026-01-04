@@ -515,6 +515,7 @@ export async function getReplyFromConfig(
     !isGroupSession && sessionKey === (sessionCfg?.mainKey ?? "main");
   prefixedBodyBase = await prependSystemEvents({
     cfg,
+    sessionKey,
     isMainSession,
     isNewSession,
     prefixedBodyBase,
