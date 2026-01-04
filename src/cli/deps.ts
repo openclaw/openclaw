@@ -1,7 +1,6 @@
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
 import { logWebSelfId, sendMessageWhatsApp } from "../providers/web/index.js";
-import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageTelegram } from "../telegram/send.js";
