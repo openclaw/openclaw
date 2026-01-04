@@ -8,6 +8,7 @@ const BLOCK_CHUNK_SURFACES = new Set<TextChunkSurface>([
   "whatsapp",
   "telegram",
   "discord",
+  "slack",
   "signal",
   "imessage",
   "webchat",
