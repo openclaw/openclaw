@@ -1,5 +1,5 @@
 import { VERSION } from "../version.js";
-import { ClawdisSchema } from "./config.js";
+import { ClawdisSchema } from "./zod-schema.js";
 
 export type ConfigUiHint = {
   label?: string;

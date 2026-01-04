@@ -378,16 +378,8 @@ describe("web auto-reply", () => {
     await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
     await Promise.resolve();
 
-    const waitForSecondCall = async () => {
-      const started = Date.now();
-      while (
-        listenerFactory.mock.calls.length < 2 &&
-        Date.now() - started < 200
-      ) {
-        await Promise.resolve();
-      }
-    };
-    await waitForSecondCall();
+    await vi.advanceTimersByTimeAsync(1);
+    await Promise.resolve();
     expect(listenerFactory).toHaveBeenCalledTimes(2);
 
     controller.abort();

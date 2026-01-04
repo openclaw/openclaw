@@ -107,7 +107,7 @@ function resolveElevatedAllowList(
       return allowFrom?.telegram;
     case "discord": {
       const hasExplicit = Boolean(
-        allowFrom && Object.prototype.hasOwnProperty.call(allowFrom, "discord"),
+        allowFrom && Object.hasOwn(allowFrom, "discord"),
       );
       if (hasExplicit) return allowFrom?.discord;
       return discordFallback;
@@ -308,7 +308,7 @@ export async function getReplyFromConfig(
     : "on";
   const resolvedBlockStreaming =
     agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
-  const resolvedBlockStreamingBreak =
+  const resolvedBlockStreamingBreak: "text_end" | "message_end" =
     agentCfg?.blockStreamingBreak === "message_end"
       ? "message_end"
       : "text_end";
@@ -468,9 +468,10 @@ export async function getReplyFromConfig(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const shouldEagerType = !isGroupChat || wasMentioned;
-  const shouldInjectGroupIntro =
+  const shouldInjectGroupIntro = Boolean(
     isGroupChat &&
-    (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro);
+      (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
+  );
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
         sessionCtx,
@@ -626,7 +627,7 @@ export async function getReplyFromConfig(
       ownerNumbers:
         command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: groupIntro || undefined,
-      enforceFinalTag: provider === "ollama" ? true : undefined,
+      ...(provider === "ollama" ? { enforceFinalTag: true } : {}),
     },
   };
 

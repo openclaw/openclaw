@@ -1,5 +1,9 @@
 import type { ClawdisConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import {
+  type SessionEntry,
+  type SessionScope,
+  saveSessionStore,
+} from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { triggerClawdisRestart } from "../../infra/restart.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -101,7 +105,7 @@ export async function handleCommands(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
-  sessionScope: string;
+  sessionScope?: SessionScope;
   workspaceDir: string;
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;

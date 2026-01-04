@@ -11,6 +11,7 @@ import {
   resolveSessionKey,
   resolveStorePath,
   type SessionEntry,
+  type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -26,7 +27,7 @@ export type SessionInitResult = {
   systemSent: boolean;
   abortedLastRun: boolean;
   storePath: string;
-  sessionScope: string;
+  sessionScope: SessionScope;
   groupResolution?: GroupKeyResolution;
   isGroup: boolean;
   bodyStripped?: string;
@@ -66,7 +67,7 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
-  const groupResolution = resolveGroupSessionKey(ctx);
+  const groupResolution = resolveGroupSessionKey(ctx) ?? undefined;
   const isGroup =
     ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
   const triggerBodyNormalized = stripStructuralPrefixes(ctx.Body ?? "")
