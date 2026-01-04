@@ -157,7 +157,7 @@ enum CommandResolver {
     }
 
     static func findExecutable(named name: String, searchPaths: [String]? = nil) -> String? {
-        for dir in (searchPaths ?? self.preferredPaths()) {
+        for dir in searchPaths ?? self.preferredPaths() {
             let candidate = (dir as NSString).appendingPathComponent(name)
             if FileManager.default.isExecutableFile(atPath: candidate) {
                 return candidate

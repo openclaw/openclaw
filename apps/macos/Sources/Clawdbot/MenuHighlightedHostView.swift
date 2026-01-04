@@ -86,7 +86,6 @@ final class HighlightedMenuItemHostView: NSView {
         self.frame = NSRect(origin: .zero, size: NSSize(width: width, height: size.height))
         self.invalidateIntrinsicContentSize()
     }
-
 }
 
 struct MenuHostedHighlightedItem: NSViewRepresentable {

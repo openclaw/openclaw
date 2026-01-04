@@ -244,7 +244,7 @@ actor CameraCaptureService {
         deviceId: String?) -> AVCaptureDevice?
     {
         if let deviceId, !deviceId.isEmpty {
-            if let match = Self.availableCameras().first(where: { $0.uniqueID == deviceId }) {
+            if let match = availableCameras().first(where: { $0.uniqueID == deviceId }) {
                 return match
             }
         }
@@ -331,7 +331,7 @@ actor CameraCaptureService {
 
     private func sleepDelayMs(_ delayMs: Int) async {
         guard delayMs > 0 else { return }
-        let ns = UInt64(min(delayMs, 10_000)) * 1_000_000
+        let ns = UInt64(min(delayMs, 10000)) * 1_000_000
         try? await Task.sleep(nanoseconds: ns)
     }
 

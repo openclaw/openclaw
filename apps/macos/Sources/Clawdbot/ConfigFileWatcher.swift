@@ -90,8 +90,8 @@ extension ConfigFileWatcher {
     private func handleEvents(
         numEvents: Int,
         eventPaths: UnsafeMutableRawPointer?,
-        eventFlags: UnsafePointer<FSEventStreamEventFlags>?
-    ) {
+        eventFlags: UnsafePointer<FSEventStreamEventFlags>?)
+    {
         guard numEvents > 0 else { return }
         guard eventFlags != nil else { return }
         guard self.matchesTarget(eventPaths: eventPaths) else { return }

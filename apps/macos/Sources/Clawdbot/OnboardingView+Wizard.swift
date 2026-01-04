@@ -44,15 +44,15 @@ private struct OnboardingWizardCardContent: View {
 
     private var state: CardState {
         if let error = wizard.errorMessage { return .error(error) }
-        if wizard.isStarting { return .starting }
+        if self.wizard.isStarting { return .starting }
         if let step = wizard.currentStep { return .step(step) }
-        if wizard.isComplete { return .complete }
+        if self.wizard.isComplete { return .complete }
         return .waiting
     }
 
     var body: some View {
-        switch state {
-        case .error(let error):
+        switch self.state {
+        case let .error(error):
             Text("Wizard error")
                 .font(.headline)
             Text(error)
@@ -60,11 +60,11 @@ private struct OnboardingWizardCardContent: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Button("Retry") {
-                wizard.reset()
+                self.wizard.reset()
                 Task {
-                    await wizard.startIfNeeded(
-                        mode: mode,
-                        workspace: workspacePath.isEmpty ? nil : workspacePath)
+                    await self.wizard.startIfNeeded(
+                        mode: self.mode,
+                        workspace: self.workspacePath.isEmpty ? nil : self.workspacePath)
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -74,12 +74,12 @@ private struct OnboardingWizardCardContent: View {
                 Text("Starting wizard…")
                     .foregroundStyle(.secondary)
             }
-        case .step(let step):
+        case let .step(step):
             OnboardingWizardStepView(
                 step: step,
-                isSubmitting: wizard.isSubmitting)
+                isSubmitting: self.wizard.isSubmitting)
             { value in
-                Task { await wizard.submit(step: step, value: value) }
+                Task { await self.wizard.submit(step: step, value: value) }
             }
             .id(step.id)
         case .complete:

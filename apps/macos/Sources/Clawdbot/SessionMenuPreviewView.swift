@@ -174,12 +174,13 @@ struct SessionMenuPreviewView: View {
             let timeoutMs = Int(Self.previewTimeoutSeconds * 1000)
             let payload = try await AsyncTimeout.withTimeout(
                 seconds: Self.previewTimeoutSeconds,
-                onTimeout: { PreviewTimeoutError() }) {
+                onTimeout: { PreviewTimeoutError() },
+                operation: {
                     try await GatewayConnection.shared.chatHistory(
                         sessionKey: self.sessionKey,
                         limit: self.previewLimit,
                         timeoutMs: timeoutMs)
-                }
+                })
             let built = Self.previewItems(from: payload, maxItems: self.maxItems)
             await SessionPreviewCache.shared.store(items: built, for: self.sessionKey)
             await MainActor.run {
@@ -198,7 +199,10 @@ struct SessionMenuPreviewView: View {
                     self.status = .error("Preview unavailable")
                 }
             }
-            Self.logger.warning("Session preview failed session=\(self.sessionKey, privacy: .public) error=\(String(describing: error), privacy: .public)")
+            let errorDescription = String(describing: error)
+            Self.logger.warning(
+                "Session preview failed session=\(self.sessionKey, privacy: .public) " +
+                    "error=\(errorDescription, privacy: .public)")
         }
     }
 

@@ -435,7 +435,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         compact.representedObject = row.key
         menu.addItem(compact)
 
-        if row.key != "main" && row.key != "global" {
+        if row.key != "main", row.key != "global" {
             let del = NSMenuItem(title: "Delete Session", action: #selector(self.deleteSession(_:)), keyEquivalent: "")
             del.target = self
             del.representedObject = row.key
@@ -541,12 +541,14 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         menu.addItem(self.makeNodeDetailItem(label: "Paired", value: entry.isPaired ? "Yes" : "No"))
 
         if let caps = entry.caps?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-           !caps.isEmpty {
+           !caps.isEmpty
+        {
             menu.addItem(self.makeNodeCopyItem(label: "Caps", value: caps.joined(separator: ", ")))
         }
 
         if let commands = entry.commands?.filter({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-           !commands.isEmpty {
+           !commands.isEmpty
+        {
             menu.addItem(self.makeNodeMultilineItem(
                 label: "Commands",
                 value: commands.joined(separator: ", "),
@@ -589,6 +591,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
         return trimmed
     }
+
     @objc
     private func patchThinking(_ sender: NSMenuItem) {
         guard let dict = sender.representedObject as? [String: Any],
@@ -770,7 +773,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     }
 
     private func sortedNodeEntries() -> [NodeInfo] {
-        let entries = self.nodesStore.nodes.filter { $0.isConnected }
+        let entries = self.nodesStore.nodes.filter(\.isConnected)
         return entries.sorted { lhs, rhs in
             if lhs.isConnected != rhs.isConnected { return lhs.isConnected }
             if lhs.isPaired != rhs.isPaired { return lhs.isPaired }
@@ -780,8 +783,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             return lhsName < rhsName
         }
     }
-
-
 
     // MARK: - Views
 

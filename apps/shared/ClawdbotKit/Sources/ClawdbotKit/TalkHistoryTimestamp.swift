@@ -10,4 +10,3 @@ public enum TalkHistoryTimestamp: Sendable {
         return timestamp >= sinceSeconds - 0.5
     }
 }
-

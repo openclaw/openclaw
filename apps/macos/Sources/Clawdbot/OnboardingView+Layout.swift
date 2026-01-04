@@ -112,7 +112,8 @@ extension OnboardingView {
 
             HStack(spacing: 8) {
                 ForEach(0..<self.pageCount, id: \.self) { index in
-                    let isLocked = wizardLockIndex != nil && !self.onboardingWizard.isComplete && index > (wizardLockIndex ?? 0)
+                    let isLocked = wizardLockIndex != nil && !self.onboardingWizard
+                        .isComplete && index > (wizardLockIndex ?? 0)
                     Button {
                         withAnimation { self.currentPage = index }
                     } label: {

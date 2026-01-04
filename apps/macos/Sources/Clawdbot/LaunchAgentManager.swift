@@ -6,6 +6,7 @@ enum LaunchAgentManager {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/com.clawdbot.mac.plist")
     }
+
     private static var legacyPlistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(legacyLaunchdLabel).plist")
@@ -19,7 +20,7 @@ enum LaunchAgentManager {
 
     static func set(enabled: Bool, bundlePath: String) async {
         if enabled {
-            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(legacyLaunchdLabel)"])
+            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(self.legacyLaunchdLabel)"])
             try? FileManager.default.removeItem(at: self.legacyPlistURL)
             self.writePlist(bundlePath: bundlePath)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(launchdLabel)"])

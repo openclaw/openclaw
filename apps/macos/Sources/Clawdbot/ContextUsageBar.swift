@@ -12,11 +12,13 @@ struct ContextUsageBar: View {
         if match == .darkAqua { return base }
         return base.blended(withFraction: 0.24, of: .black) ?? base
     }
+
     private static let trackFill: NSColor = .init(name: nil) { appearance in
         let match = appearance.bestMatch(from: [.aqua, .darkAqua])
         if match == .darkAqua { return NSColor.white.withAlphaComponent(0.14) }
         return NSColor.black.withAlphaComponent(0.12)
     }
+
     private static let trackStroke: NSColor = .init(name: nil) { appearance in
         let match = appearance.bestMatch(from: [.aqua, .darkAqua])
         if match == .darkAqua { return NSColor.white.withAlphaComponent(0.22) }

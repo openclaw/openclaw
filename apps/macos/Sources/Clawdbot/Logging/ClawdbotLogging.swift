@@ -1,7 +1,7 @@
-@_exported import Logging
 import Foundation
-import OSLog
+@_exported import Logging
 import os
+import OSLog
 
 typealias Logger = Logging.Logger
 
@@ -65,15 +65,15 @@ enum ClawdbotLogging {
     }()
 
     static func bootstrapIfNeeded() {
-        _ = Self.didBootstrap
+        _ = self.didBootstrap
     }
 
     static func makeLabel(subsystem: String, category: String) -> String {
-        "\(subsystem)\(Self.labelSeparator)\(category)"
+        "\(subsystem)\(self.labelSeparator)\(category)"
     }
 
     static func parseLabel(_ label: String) -> (String, String) {
-        guard let range = label.range(of: Self.labelSeparator) else {
+        guard let range = label.range(of: labelSeparator) else {
             return ("com.clawdbot", label)
         }
         let subsystem = String(label[..<range.lowerBound])
@@ -91,7 +91,7 @@ extension Logging.Logger {
 }
 
 extension Logger.Message.StringInterpolation {
-    mutating func appendInterpolation<T>(_ value: T, privacy: OSLogPrivacy) {
+    mutating func appendInterpolation(_ value: some Any, privacy: OSLogPrivacy) {
         self.appendInterpolation(String(describing: value))
     }
 }
@@ -114,7 +114,6 @@ struct ClawdbotOSLogHandler: LogHandler {
         set { self.metadata[key] = newValue }
     }
 
-    // swiftlint:disable:next function_parameter_count
     func log(
         level: Logger.Level,
         message: Logger.Message,
@@ -132,15 +131,15 @@ struct ClawdbotOSLogHandler: LogHandler {
     private static func osLogType(for level: Logger.Level) -> OSLogType {
         switch level {
         case .trace, .debug:
-            return .debug
+            .debug
         case .info, .notice:
-            return .info
+            .info
         case .warning:
-            return .default
+            .default
         case .error:
-            return .error
+            .error
         case .critical:
-            return .fault
+            .fault
         }
     }
 
@@ -156,7 +155,7 @@ struct ClawdbotOSLogHandler: LogHandler {
         guard !metadata.isEmpty else { return message.description }
         let meta = metadata
             .sorted(by: { $0.key < $1.key })
-            .map { "\($0.key)=\(stringify($0.value))" }
+            .map { "\($0.key)=\(self.stringify($0.value))" }
             .joined(separator: " ")
         return "\(message.description) [\(meta)]"
     }
@@ -168,9 +167,9 @@ struct ClawdbotOSLogHandler: LogHandler {
         case let .stringConvertible(value):
             String(describing: value)
         case let .array(values):
-            "[" + values.map { stringify($0) }.joined(separator: ",") + "]"
+            "[" + values.map { self.stringify($0) }.joined(separator: ",") + "]"
         case let .dictionary(entries):
-            "{" + entries.map { "\($0.key)=\(stringify($0.value))" }.joined(separator: ",") + "}"
+            "{" + entries.map { "\($0.key)=\(self.stringify($0.value))" }.joined(separator: ",") + "}"
         }
     }
 }
@@ -189,7 +188,6 @@ struct ClawdbotFileLogHandler: LogHandler {
         set { self.metadata[key] = newValue }
     }
 
-    // swiftlint:disable:next function_parameter_count
     func log(
         level: Logger.Level,
         message: Logger.Message,
@@ -224,9 +222,9 @@ struct ClawdbotFileLogHandler: LogHandler {
         case let .stringConvertible(value):
             String(describing: value)
         case let .array(values):
-            "[" + values.map { stringify($0) }.joined(separator: ",") + "]"
+            "[" + values.map { self.stringify($0) }.joined(separator: ",") + "]"
         case let .dictionary(entries):
-            "{" + entries.map { "\($0.key)=\(stringify($0.value))" }.joined(separator: ",") + "}"
+            "{" + entries.map { "\($0.key)=\(self.stringify($0.value))" }.joined(separator: ",") + "}"
         }
     }
 }

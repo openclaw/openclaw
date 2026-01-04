@@ -35,14 +35,14 @@ struct TalkOverlayView: View {
                             .frame(width: 18, height: 18)
                             .background(Color.black.opacity(0.4))
                             .clipShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .contentShape(Circle())
+                    .offset(x: -2, y: -2)
+                    .opacity(self.hoveringWindow ? 1 : 0)
+                    .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
                 }
-                .buttonStyle(.plain)
-                .contentShape(Circle())
-                .offset(x: -2, y: -2)
-                .opacity(self.hoveringWindow ? 1 : 0)
-                .animation(.easeOut(duration: 0.12), value: self.hoveringWindow)
-            }
-            .onHover { self.hoveringWindow = $0 }
+                .onHover { self.hoveringWindow = $0 }
         }
         .frame(
             width: TalkOverlayController.overlaySize,
@@ -124,7 +124,7 @@ private final class OrbInteractionNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
-        if !self.didDrag && !self.suppressSingleClick {
+        if !self.didDrag, !self.suppressSingleClick {
             self.onSingleClick?()
         }
         self.mouseDownEvent = nil
@@ -148,8 +148,8 @@ private struct TalkOrbView: View {
         } else {
             TimelineView(.animation) { context in
                 let t = context.date.timeIntervalSinceReferenceDate
-                let listenScale = phase == .listening ? (1 + CGFloat(self.level) * 0.12) : 1
-                let pulse = phase == .speaking ? (1 + 0.06 * sin(t * 6)) : 1
+                let listenScale = self.phase == .listening ? (1 + CGFloat(self.level) * 0.12) : 1
+                let pulse = self.phase == .speaking ? (1 + 0.06 * sin(t * 6)) : 1
 
                 ZStack {
                     Circle()
@@ -158,9 +158,9 @@ private struct TalkOrbView: View {
                         .shadow(color: Color.black.opacity(0.22), radius: 10, x: 0, y: 5)
                         .scaleEffect(pulse * listenScale)
 
-                    TalkWaveRings(phase: phase, level: level, time: t, accent: self.accent)
+                    TalkWaveRings(phase: self.phase, level: self.level, time: t, accent: self.accent)
 
-                    if phase == .thinking {
+                    if self.phase == .thinking {
                         TalkOrbitArcs(time: t)
                     }
                 }
@@ -186,11 +186,12 @@ private struct TalkWaveRings: View {
     var body: some View {
         ZStack {
             ForEach(0..<3, id: \.self) { idx in
-                let speed = phase == .speaking ? 1.4 : phase == .listening ? 0.9 : 0.6
+                let speed = self.phase == .speaking ? 1.4 : self.phase == .listening ? 0.9 : 0.6
                 let progress = (time * speed + Double(idx) * 0.28).truncatingRemainder(dividingBy: 1)
-                let amplitude = phase == .speaking ? 0.95 : phase == .listening ? 0.5 + level * 0.7 : 0.35
-                let scale = 0.75 + progress * amplitude + (phase == .listening ? level * 0.15 : 0)
-                let alpha = phase == .speaking ? 0.72 : phase == .listening ? 0.58 + level * 0.28 : 0.4
+                let amplitude = self.phase == .speaking ? 0.95 : self.phase == .listening ? 0.5 + self
+                    .level * 0.7 : 0.35
+                let scale = 0.75 + progress * amplitude + (self.phase == .listening ? self.level * 0.15 : 0)
+                let alpha = self.phase == .speaking ? 0.72 : self.phase == .listening ? 0.58 + self.level * 0.28 : 0.4
                 Circle()
                     .stroke(self.accent.opacity(alpha - progress * 0.3), lineWidth: 1.6)
                     .scaleEffect(scale)
@@ -208,11 +209,11 @@ private struct TalkOrbitArcs: View {
             Circle()
                 .trim(from: 0.08, to: 0.26)
                 .stroke(Color.white.opacity(0.88), style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
-                .rotationEffect(.degrees(time * 42))
+                .rotationEffect(.degrees(self.time * 42))
             Circle()
                 .trim(from: 0.62, to: 0.86)
                 .stroke(Color.white.opacity(0.7), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-                .rotationEffect(.degrees(-time * 35))
+                .rotationEffect(.degrees(-self.time * 35))
         }
         .scaleEffect(1.08)
     }

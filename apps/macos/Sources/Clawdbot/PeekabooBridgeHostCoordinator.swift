@@ -1,9 +1,9 @@
 import Foundation
-import Security
 import os
 import PeekabooAutomationKit
 import PeekabooBridge
 import PeekabooFoundation
+import Security
 
 @MainActor
 final class PeekabooBridgeHostCoordinator {
@@ -80,7 +80,7 @@ final class PeekabooBridgeHostCoordinator {
             staticCode,
             SecCSFlags(rawValue: kSecCSSigningInformation),
             &infoCF) == errSecSuccess,
-              let info = infoCF as? [String: Any]
+            let info = infoCF as? [String: Any]
         else {
             return nil
         }

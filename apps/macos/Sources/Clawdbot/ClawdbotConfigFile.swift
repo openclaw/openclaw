@@ -100,7 +100,8 @@ enum ClawdbotConfigFile {
     static func gatewayPassword() -> String? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any] else {
+              let remote = gateway["remote"] as? [String: Any]
+        else {
             return nil
         }
         return remote["password"] as? String
@@ -121,5 +122,4 @@ enum ClawdbotConfigFile {
         }
         return nil
     }
-
 }

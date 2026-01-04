@@ -24,7 +24,7 @@ enum GatewayLaunchAgentManager {
     }
 
     private static func gatewayProgramArguments(bundlePath: String, port: Int, bind: String) -> [String] {
-#if DEBUG
+        #if DEBUG
         let projectRoot = CommandResolver.projectRoot()
         if let localBin = CommandResolver.projectClawdbotExecutable(projectRoot: projectRoot) {
             return [localBin, "gateway", "--port", "\(port)", "--bind", bind]
@@ -38,7 +38,7 @@ enum GatewayLaunchAgentManager {
                 subcommand: "gateway",
                 extraArgs: ["--port", "\(port)", "--bind", bind])
         }
-#endif
+        #endif
         let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
         return [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
     }
@@ -51,7 +51,7 @@ enum GatewayLaunchAgentManager {
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         if enabled {
-            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(legacyGatewayLaunchdLabel)"])
+            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(self.legacyGatewayLaunchdLabel)"])
             try? FileManager.default.removeItem(at: self.legacyPlistURL)
             let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
             guard FileManager.default.isExecutableFile(atPath: gatewayBin) else {
