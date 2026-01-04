@@ -464,12 +464,15 @@ export async function runCronIsolatedAgentTurn(params: {
         };
       }
       const slackTarget = resolvedDelivery.to;
+      const textLimit = resolveTextChunkLimit(params.cfg, "slack");
       try {
         for (const payload of payloads) {
           const mediaList =
             payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           if (mediaList.length === 0) {
-            await params.deps.sendMessageSlack(slackTarget, payload.text ?? "");
+            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
+              await params.deps.sendMessageSlack(slackTarget, chunk);
+            }
           } else {
             let first = true;
             for (const url of mediaList) {
