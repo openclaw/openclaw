@@ -17,6 +17,8 @@ export type MsgContext = {
   GroupSpace?: string;
   GroupMembers?: string;
   SenderName?: string;
+  SenderUsername?: string;
+  SenderTag?: string;
   SenderE164?: string;
   Surface?: string;
   WasMentioned?: boolean;

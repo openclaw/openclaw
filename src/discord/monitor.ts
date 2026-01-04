@@ -461,6 +461,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           : `channel:${message.channelId}`,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
+        SenderUsername: message.author.username,
+        SenderTag: message.author.tag,
         GroupSubject: groupSubject,
         GroupRoom: groupRoom,
         GroupSpace: isGuildMessage ? guildSlug || undefined : undefined,
