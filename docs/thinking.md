@@ -1,7 +1,7 @@
 ---
-summary: "Directive syntax for /think levels and how they affect model reasoning"
+summary: "Directive syntax for /think + /verbose and how they affect model reasoning"
 read_when:
-  - Adjusting thinking level parsing or defaults
+  - Adjusting thinking or verbose directive parsing or defaults
 ---
 # Thinking Levels (/think directives)
 
@@ -34,10 +34,8 @@ read_when:
 - Inline directive affects only that message; session/global defaults apply otherwise.
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command); the tool output itself is not forwarded. These tool summaries are sent as soon as each tool finishes (separate bubbles), not as streaming deltas. If you toggle `/verbose on|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
-## Elevated directives (/elevated or /elev)
-- Levels: `on` or `off` (default).
-- Directive-only message toggles session elevated mode and replies `Elevated mode enabled.` / `Elevated mode disabled.`.
-- If elevated access is disabled or the sender is not on the approved allowlist, the directive replies `elevated is not available right now.` and does not change session state.
+## Related
+- Elevated mode docs live in `docs/elevated.md`.
 
 ## Heartbeats
 - Heartbeat probe body is `HEARTBEAT`. Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
