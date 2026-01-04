@@ -18,6 +18,7 @@
 - Onboarding: when running from source, auto-build missing Control UI assets (`pnpm ui:build`).
 - Discord/Slack: route reaction + system notifications to the correct session (no main-session bleed).
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
+- Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 
 ## 2026.1.5
 
