@@ -621,6 +621,10 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     resetTriggers: ["/new", "/reset"],
     store: "~/.clawdis/sessions/sessions.json",
     // mainKey is ignored; primary key is fixed to "main"
+    agentToAgent: {
+      // Max ping-pong reply turns between requester/target (0–5).
+      maxPingPongTurns: 5
+    },
     sendPolicy: {
       rules: [
         { action: "deny", match: { surface: "discord", chatType: "group" } }
@@ -632,6 +636,7 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
 ```
 
 Fields:
+- `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
 - `sendPolicy.rules[]`: match by `surface` (provider), `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
 

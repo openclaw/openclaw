@@ -7,7 +7,11 @@ vi.mock("../gateway/call.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () => ({
-    session: { mainKey: "main", scope: "per-sender" },
+    session: {
+      mainKey: "main",
+      scope: "per-sender",
+      agentToAgent: { maxPingPongTurns: 2 },
+    },
   }),
   resolveGatewayPort: () => 18789,
 }));
@@ -127,18 +131,28 @@ describe("sessions tools", () => {
     let agentCallCount = 0;
     let historyCallCount = 0;
     let sendCallCount = 0;
-    let waitRunId: string | undefined;
-    let nextHistoryIsWaitReply = false;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
+    const requesterKey = "discord:group:req";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
-        const params = request.params as { message?: string } | undefined;
-        if (params?.message === "wait") {
-          waitRunId = runId;
+        const params = request.params as
+          | { message?: string; sessionKey?: string }
+          | undefined;
+        const message = params?.message ?? "";
+        let reply = "REPLY_SKIP";
+        if (message === "ping" || message === "wait") {
+          reply = "done";
+        } else if (message === "Agent-to-agent announce step.") {
+          reply = "ANNOUNCE_SKIP";
+        } else if (params?.sessionKey === requesterKey) {
+          reply = "pong";
         }
+        replyByRunId.set(runId, reply);
         return {
           runId,
           status: "accepted",
@@ -147,15 +161,13 @@ describe("sessions tools", () => {
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string } | undefined;
-        if (params?.runId && params.runId === waitRunId) {
-          nextHistoryIsWaitReply = true;
-        }
+        lastWaitedRunId = params?.runId;
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
         historyCallCount += 1;
-        const text = nextHistoryIsWaitReply ? "done" : "ANNOUNCE_SKIP";
-        nextHistoryIsWaitReply = false;
+        const text =
+          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
             {
@@ -178,7 +190,10 @@ describe("sessions tools", () => {
       return {};
     });
 
-    const tool = createClawdisTools().find(
+    const tool = createClawdisTools({
+      agentSessionKey: requesterKey,
+      agentSurface: "discord",
+    }).find(
       (candidate) => candidate.name === "sessions_send",
     );
     expect(tool).toBeDefined();
@@ -190,6 +205,7 @@ describe("sessions tools", () => {
       timeoutSeconds: 0,
     });
     expect(fire.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const waitPromise = tool.execute("call6", {
@@ -204,13 +220,14 @@ describe("sessions tools", () => {
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
     await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter(
       (call) => call.method === "chat.history",
     );
-    expect(agentCalls).toHaveLength(4);
+    expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({ lane: "nested" });
     }
@@ -229,11 +246,20 @@ describe("sessions tools", () => {
           typeof (call.params as { extraSystemPrompt?: string })
             ?.extraSystemPrompt === "string" &&
           (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt?.includes("Agent-to-agent post step"),
+            ?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
       ),
     ).toBe(true);
-    expect(waitCalls).toHaveLength(3);
-    expect(historyOnlyCalls).toHaveLength(3);
+    expect(
+      agentCalls.some(
+        (call) =>
+          typeof (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt?.includes("Agent-to-agent announce step"),
+      ),
+    ).toBe(true);
+    expect(waitCalls).toHaveLength(8);
+    expect(historyOnlyCalls).toHaveLength(8);
     expect(
       waitCalls.some(
         (call) =>
