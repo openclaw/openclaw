@@ -11,7 +11,11 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import { type ClawdisConfig, loadConfig } from "../config/config.js";
+import {
+  type AgentElevatedAllowFromConfig,
+  type ClawdisConfig,
+  loadConfig,
+} from "../config/config.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
@@ -47,6 +51,7 @@ import { createTypingController } from "./reply/typing.js";
 import type { MsgContext } from "./templating.js";
 import {
   normalizeThinkLevel,
+  type ElevatedLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
@@ -55,6 +60,7 @@ import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export {
+  extractElevatedDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply/directives.js";
@@ -64,6 +70,99 @@ export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
+
+function normalizeAllowToken(value?: string) {
+  if (!value) return "";
+  return value.trim().toLowerCase();
+}
+
+function slugAllowToken(value?: string) {
+  if (!value) return "";
+  let text = value.trim().toLowerCase();
+  if (!text) return "";
+  text = text.replace(/^[@#]+/, "");
+  text = text.replace(/[\s_]+/g, "-");
+  text = text.replace(/[^a-z0-9-]+/g, "-");
+  return text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
+}
+
+function stripSenderPrefix(value?: string) {
+  if (!value) return "";
+  const trimmed = value.trim();
+  return trimmed.replace(
+    /^(whatsapp|telegram|discord|signal|imessage|webchat|user|group|channel):/i,
+    "",
+  );
+}
+
+function resolveElevatedAllowList(
+  allowFrom: AgentElevatedAllowFromConfig | undefined,
+  surface: string,
+): Array<string | number> | undefined {
+  switch (surface) {
+    case "whatsapp":
+      return allowFrom?.whatsapp;
+    case "telegram":
+      return allowFrom?.telegram;
+    case "discord":
+      return allowFrom?.discord;
+    case "signal":
+      return allowFrom?.signal;
+    case "imessage":
+      return allowFrom?.imessage;
+    case "webchat":
+      return allowFrom?.webchat;
+    default:
+      return undefined;
+  }
+}
+
+function isApprovedElevatedSender(params: {
+  surface: string;
+  ctx: MsgContext;
+  allowFrom?: AgentElevatedAllowFromConfig;
+}): boolean {
+  const rawAllow = resolveElevatedAllowList(params.allowFrom, params.surface);
+  if (!rawAllow || rawAllow.length === 0) return false;
+
+  const allowTokens = rawAllow
+    .map((entry) => String(entry).trim())
+    .filter(Boolean);
+  if (allowTokens.length === 0) return false;
+  if (allowTokens.some((entry) => entry === "*")) return true;
+
+  const tokens = new Set<string>();
+  const addToken = (value?: string) => {
+    if (!value) return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    tokens.add(trimmed);
+    const normalized = normalizeAllowToken(trimmed);
+    if (normalized) tokens.add(normalized);
+    const slugged = slugAllowToken(trimmed);
+    if (slugged) tokens.add(slugged);
+  };
+
+  addToken(params.ctx.SenderName);
+  addToken(params.ctx.SenderE164);
+  addToken(params.ctx.From);
+  addToken(stripSenderPrefix(params.ctx.From));
+  addToken(params.ctx.To);
+  addToken(stripSenderPrefix(params.ctx.To));
+
+  for (const rawEntry of allowTokens) {
+    const entry = rawEntry.trim();
+    if (!entry) continue;
+    const stripped = stripSenderPrefix(entry);
+    if (tokens.has(entry) || tokens.has(stripped)) return true;
+    const normalized = normalizeAllowToken(stripped);
+    if (normalized && tokens.has(normalized)) return true;
+    const slugged = slugAllowToken(stripped);
+    if (slugged && tokens.has(slugged)) return true;
+  }
+
+  return false;
+}
 
 export async function getReplyFromConfig(
   ctx: MsgContext,
@@ -146,6 +245,27 @@ export async function getReplyFromConfig(
   sessionCtx.Body = directives.cleaned;
   sessionCtx.BodyStripped = directives.cleaned;
 
+  const surfaceKey =
+    sessionCtx.Surface?.trim().toLowerCase() ??
+    ctx.Surface?.trim().toLowerCase() ??
+    "";
+  const elevatedConfig = agentCfg?.elevated;
+  const elevatedEnabled = elevatedConfig?.enabled !== false;
+  const elevatedAllowed =
+    elevatedEnabled &&
+    Boolean(
+      surfaceKey &&
+        isApprovedElevatedSender({
+          surface: surfaceKey,
+          ctx,
+          allowFrom: elevatedConfig?.allowFrom,
+        }),
+    );
+  if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
+    typing.cleanup();
+    return { text: "elevated is not available right now." };
+  }
+
   const requireMention = resolveGroupRequireMention({
     cfg,
     ctx: sessionCtx,
@@ -161,6 +281,12 @@ export async function getReplyFromConfig(
     (directives.verboseLevel as VerboseLevel | undefined) ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const resolvedElevatedLevel = elevatedAllowed
+    ? ((directives.elevatedLevel as ElevatedLevel | undefined) ??
+      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
+      "off")
+    : "off";
   const resolvedBlockStreaming =
     agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
   const resolvedBlockStreamingBreak =
@@ -220,6 +346,8 @@ export async function getReplyFromConfig(
       sessionStore,
       sessionKey,
       storePath,
+      elevatedEnabled,
+      elevatedAllowed,
       defaultProvider,
       defaultModel,
       aliasIndex,
@@ -242,6 +370,8 @@ export async function getReplyFromConfig(
     sessionStore,
     sessionKey,
     storePath,
+    elevatedEnabled,
+    elevatedAllowed,
     defaultProvider,
     defaultModel,
     aliasIndex,
@@ -466,6 +596,12 @@ export async function getReplyFromConfig(
       model,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
+      elevatedLevel: resolvedElevatedLevel,
+      bashElevated: {
+        enabled: elevatedEnabled,
+        allowed: elevatedAllowed,
+        defaultLevel: resolvedElevatedLevel ?? "off",
+      },
       timeoutMs,
       blockReplyBreak: resolvedBlockStreamingBreak,
       ownerNumbers:

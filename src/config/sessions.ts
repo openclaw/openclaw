@@ -30,6 +30,7 @@ export type SessionEntry = {
   chatType?: SessionChatType;
   thinkingLevel?: string;
   verboseLevel?: string;
+  elevatedLevel?: string;
   providerOverride?: string;
   modelOverride?: string;
   groupActivation?: "mention" | "always";

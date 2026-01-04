@@ -78,6 +78,7 @@ export function createFollowupRunner(params: {
         model: queued.run.model,
         thinkLevel: queued.run.thinkLevel,
         verboseLevel: queued.run.verboseLevel,
+        bashElevated: queued.run.bashElevated,
         timeoutMs: queued.run.timeoutMs,
         runId,
         blockReplyBreak: queued.run.blockReplyBreak,

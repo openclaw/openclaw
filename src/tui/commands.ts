@@ -2,6 +2,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 
 const THINK_LEVELS = ["off", "minimal", "low", "medium", "high"];
 const VERBOSE_LEVELS = ["on", "off"];
+const ELEVATED_LEVELS = ["on", "off"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const TOGGLE = ["on", "off"];
 
@@ -45,6 +46,14 @@ export function getSlashCommands(): SlashCommand[] {
         ),
     },
     {
+      name: "elevated",
+      description: "Set elevated on/off",
+      getArgumentCompletions: (prefix) =>
+        ELEVATED_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
+          (value) => ({ value, label: value }),
+        ),
+    },
+    {
       name: "activation",
       description: "Set group activation",
       getArgumentCompletions: (prefix) =>
@@ -78,6 +87,7 @@ export function helpText(): string {
     "/model <provider/model> (or /models)",
     "/think <off|minimal|low|medium|high>",
     "/verbose <on|off>",
+    "/elevated <on|off>",
     "/activation <mention|always>",
     "/deliver <on|off>",
     "/new or /reset",

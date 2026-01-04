@@ -15,6 +15,7 @@ Run shell commands in the workspace. Supports foreground + background execution 
 - `yieldMs` (default 10000): auto-background after delay
 - `background` (bool): background immediately
 - `timeout` (seconds, default 1800): kill on expiry
+- `elevated` (bool): run on host if elevated mode is enabled/allowed
 - Need a real TTY? Use the tmux skill.
 
 ## Examples

@@ -1,6 +1,8 @@
 import {
+  normalizeElevatedLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  type ElevatedLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
@@ -50,4 +52,26 @@ export function extractVerboseDirective(body?: string): {
   };
 }
 
-export type { ThinkLevel, VerboseLevel };
+export function extractElevatedDirective(body?: string): {
+  cleaned: string;
+  elevatedLevel?: ElevatedLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) return { cleaned: "", hasDirective: false };
+  const match = body.match(
+    /(?:^|\s)\/(?:elevated|elev)(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i,
+  );
+  const elevatedLevel = normalizeElevatedLevel(match?.[1]);
+  const cleaned = match
+    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    : body.trim();
+  return {
+    cleaned,
+    elevatedLevel,
+    rawLevel: match?.[1],
+    hasDirective: !!match,
+  };
+}
+
+export type { ElevatedLevel, ThinkLevel, VerboseLevel };

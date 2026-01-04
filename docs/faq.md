@@ -494,6 +494,7 @@ Quick reference (send these in chat):
 | `/new` or `/reset` | Reset the session |
 | `/think <level>` | Set thinking level (off\|minimal\|low\|medium\|high) |
 | `/verbose on\|off` | Toggle verbose mode |
+| `/elevated on\|off` | Toggle elevated bash mode (approved senders only) |
 | `/activation mention\|always` | Group activation (owner-only) |
 | `/model <name>` | Switch AI model (see below) |
 | `/queue instant\|batch\|serial` | Message queuing mode |

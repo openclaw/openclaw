@@ -21,6 +21,7 @@ Core parameters:
 - `yieldMs` (auto-background after timeout, default 10000)
 - `background` (immediate background)
 - `timeout` (seconds; kills the process if exceeded, default 1800)
+- `elevated` (bool; run on host if elevated mode is enabled/allowed)
 - Need a real TTY? Use the tmux skill.
 
 Notes:

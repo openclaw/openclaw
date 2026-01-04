@@ -26,6 +26,7 @@ import {
   killProcessTree,
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
+import { logInfo } from "../logger.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 const DEFAULT_MAX_OUTPUT = clampNumber(
@@ -53,6 +54,7 @@ export type BashToolDefaults = {
   backgroundMs?: number;
   timeoutSec?: number;
   sandbox?: BashSandboxConfig;
+  elevated?: BashElevatedDefaults;
 };
 
 export type ProcessToolDefaults = {
@@ -64,6 +66,12 @@ export type BashSandboxConfig = {
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
+};
+
+export type BashElevatedDefaults = {
+  enabled: boolean;
+  allowed: boolean;
+  defaultLevel: "on" | "off";
 };
 
 const bashSchema = Type.Object({
@@ -83,6 +91,11 @@ const bashSchema = Type.Object({
   timeout: Type.Optional(
     Type.Number({
       description: "Timeout in seconds (optional, kills process on expiry)",
+    }),
+  ),
+  elevated: Type.Optional(
+    Type.Boolean({
+      description: "Run on the host with elevated permissions (if allowed)",
     }),
   ),
 });
@@ -131,6 +144,7 @@ export function createBashTool(
         yieldMs?: number;
         background?: boolean;
         timeout?: number;
+        elevated?: boolean;
       };
 
       if (!params.command) {
@@ -149,7 +163,24 @@ export function createBashTool(
       const startedAt = Date.now();
       const sessionId = randomUUID();
       const warnings: string[] = [];
-      const sandbox = defaults?.sandbox;
+      const elevatedDefaults = defaults?.elevated;
+      const elevatedRequested =
+        typeof params.elevated === "boolean"
+          ? params.elevated
+          : elevatedDefaults?.defaultLevel === "on";
+      if (elevatedRequested) {
+        if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
+          throw new Error("elevated is not available right now.");
+        }
+        logInfo(
+          `bash: elevated command (${sessionId.slice(0, 8)}) ${truncateMiddle(
+            params.command,
+            120,
+          )}`,
+        );
+      }
+
+      const sandbox = elevatedRequested ? undefined : defaults?.sandbox;
       const rawWorkdir = params.workdir?.trim() || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;

@@ -119,6 +119,19 @@ describe("bash tool backgrounding", () => {
     expect(status).toBe("failed");
   });
 
+  it("rejects elevated requests when not allowed", async () => {
+    const customBash = createBashTool({
+      elevated: { enabled: true, allowed: false, defaultLevel: "off" },
+    });
+
+    await expect(
+      customBash.execute("call1", {
+        command: "echo hi",
+        elevated: true,
+      }),
+    ).rejects.toThrow("elevated is not available right now.");
+  });
+
   it("logs line-based slices and defaults to last lines", async () => {
     const result = await bashTool.execute("call1", {
       command:

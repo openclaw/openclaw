@@ -13,6 +13,7 @@ import {
 } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import {
+  extractElevatedDirective,
   extractQueueDirective,
   extractReplyToTag,
   extractThinkDirective,
@@ -83,6 +84,12 @@ describe("directive parsing", () => {
     const res = extractVerboseDirective(" please /verbose on now");
     expect(res.hasDirective).toBe(true);
     expect(res.verboseLevel).toBe("on");
+  });
+
+  it("matches elevated with leading space", () => {
+    const res = extractElevatedDirective(" please /elevated on now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBe("on");
   });
 
   it("matches think at start of line", () => {

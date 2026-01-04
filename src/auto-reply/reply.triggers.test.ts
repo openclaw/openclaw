@@ -143,6 +143,85 @@ describe("trigger handling", () => {
     });
   });
 
+  it("allows approved sender to toggle elevated mode", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1000",
+          To: "+2000",
+          Surface: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode enabled");
+
+      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const store = JSON.parse(storeRaw) as Record<
+        string,
+        { elevatedLevel?: string }
+      >;
+      expect(store.main?.elevatedLevel).toBe("on");
+    });
+  });
+
+  it("rejects elevated toggles when disabled", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            enabled: false,
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1000",
+          To: "+2000",
+          Surface: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("elevated is not available right now.");
+
+      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const store = JSON.parse(storeRaw) as Record<
+        string,
+        { elevatedLevel?: string }
+      >;
+      expect(store.main?.elevatedLevel).toBeUndefined();
+    });
+  });
+
   it("returns a context overflow fallback when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockRejectedValue(

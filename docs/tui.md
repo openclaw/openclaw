@@ -51,6 +51,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/model <provider/model>` (or `/models`)
 - `/think <off|minimal|low|medium|high>`
 - `/verbose <on|off>`
+- `/elevated <on|off>`
 - `/activation <mention|always>`
 - `/deliver <on|off>`
 - `/new` or `/reset`

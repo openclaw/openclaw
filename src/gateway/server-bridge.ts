@@ -18,6 +18,7 @@ import {
 } from "../agents/pi-embedded.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
+  normalizeElevatedLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -381,6 +382,25 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 };
               }
               next.verboseLevel = normalized;
+            }
+          }
+
+          if ("elevatedLevel" in p) {
+            const raw = p.elevatedLevel;
+            if (raw === null) {
+              delete next.elevatedLevel;
+            } else if (raw !== undefined) {
+              const normalized = normalizeElevatedLevel(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid elevatedLevel: ${String(raw)}`,
+                  },
+                };
+              }
+              next.elevatedLevel = normalized;
             }
           }
 

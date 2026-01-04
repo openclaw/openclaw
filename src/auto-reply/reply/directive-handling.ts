@@ -18,8 +18,10 @@ import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
+  extractElevatedDirective,
   extractThinkDirective,
   extractVerboseDirective,
+  type ElevatedLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./directives.js";
@@ -44,6 +46,9 @@ export type InlineDirectives = {
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
+  hasElevatedDirective: boolean;
+  elevatedLevel?: ElevatedLevel;
+  rawElevatedLevel?: string;
   hasModelDirective: boolean;
   rawModelDirective?: string;
   hasQueueDirective: boolean;
@@ -73,10 +78,16 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     hasDirective: hasVerboseDirective,
   } = extractVerboseDirective(thinkCleaned);
   const {
+    cleaned: elevatedCleaned,
+    elevatedLevel,
+    rawLevel: rawElevatedLevel,
+    hasDirective: hasElevatedDirective,
+  } = extractElevatedDirective(verboseCleaned);
+  const {
     cleaned: modelCleaned,
     rawModel,
     hasDirective: hasModelDirective,
-  } = extractModelDirective(verboseCleaned);
+  } = extractModelDirective(elevatedCleaned);
   const {
     cleaned: queueCleaned,
     queueMode,
@@ -100,6 +111,9 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
+    hasElevatedDirective,
+    elevatedLevel,
+    rawElevatedLevel,
     hasModelDirective,
     rawModelDirective: rawModel,
     hasQueueDirective,
@@ -127,6 +141,7 @@ export function isDirectiveOnly(params: {
   if (
     !directives.hasThinkDirective &&
     !directives.hasVerboseDirective &&
+    !directives.hasElevatedDirective &&
     !directives.hasModelDirective &&
     !directives.hasQueueDirective
   )
@@ -142,6 +157,8 @@ export async function handleDirectiveOnly(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  elevatedEnabled: boolean;
+  elevatedAllowed: boolean;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
@@ -161,6 +178,8 @@ export async function handleDirectiveOnly(params: {
     sessionStore,
     sessionKey,
     storePath,
+    elevatedEnabled,
+    elevatedAllowed,
     defaultProvider,
     defaultModel,
     aliasIndex,
@@ -212,6 +231,17 @@ export async function handleDirectiveOnly(params: {
     return {
       text: `Unrecognized verbose level "${directives.rawVerboseLevel ?? ""}". Valid levels: off, on.`,
     };
+  }
+  if (directives.hasElevatedDirective && !directives.elevatedLevel) {
+    return {
+      text: `Unrecognized elevated level "${directives.rawElevatedLevel ?? ""}". Valid levels: off, on.`,
+    };
+  }
+  if (
+    directives.hasElevatedDirective &&
+    (!elevatedEnabled || !elevatedAllowed)
+  ) {
+    return { text: "elevated is not available right now." };
   }
 
   const queueModeInvalid =
@@ -296,6 +326,10 @@ export async function handleDirectiveOnly(params: {
       if (directives.verboseLevel === "off") delete sessionEntry.verboseLevel;
       else sessionEntry.verboseLevel = directives.verboseLevel;
     }
+    if (directives.hasElevatedDirective && directives.elevatedLevel) {
+      if (directives.elevatedLevel === "off") delete sessionEntry.elevatedLevel;
+      else sessionEntry.elevatedLevel = directives.elevatedLevel;
+    }
     if (modelSelection) {
       if (modelSelection.isDefault) {
         delete sessionEntry.providerOverride;
@@ -344,6 +378,13 @@ export async function handleDirectiveOnly(params: {
         : `${SYSTEM_MARK} Verbose logging enabled.`,
     );
   }
+  if (directives.hasElevatedDirective && directives.elevatedLevel) {
+    parts.push(
+      directives.elevatedLevel === "off"
+        ? `${SYSTEM_MARK} Elevated mode disabled.`
+        : `${SYSTEM_MARK} Elevated mode enabled.`,
+    );
+  }
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;
     const labelWithAlias = modelSelection.alias
@@ -385,6 +426,8 @@ export async function persistInlineDirectives(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
+  elevatedEnabled: boolean;
+  elevatedAllowed: boolean;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
@@ -401,6 +444,8 @@ export async function persistInlineDirectives(params: {
     sessionStore,
     sessionKey,
     storePath,
+    elevatedEnabled,
+    elevatedAllowed,
     defaultProvider,
     defaultModel,
     aliasIndex,
@@ -426,6 +471,19 @@ export async function persistInlineDirectives(params: {
         delete sessionEntry.verboseLevel;
       } else {
         sessionEntry.verboseLevel = directives.verboseLevel;
+      }
+      updated = true;
+    }
+    if (
+      directives.hasElevatedDirective &&
+      directives.elevatedLevel &&
+      elevatedEnabled &&
+      elevatedAllowed
+    ) {
+      if (directives.elevatedLevel === "off") {
+        delete sessionEntry.elevatedLevel;
+      } else {
+        sessionEntry.elevatedLevel = directives.elevatedLevel;
       }
       updated = true;
     }

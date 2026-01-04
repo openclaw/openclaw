@@ -161,6 +161,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
   const verboseLevel =
     args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
+  const elevatedLevel =
+    args.entry?.elevatedLevel ?? args.agent?.elevatedDefault ?? "off";
 
   const webLine = (() => {
     if (args.webLinked === false) {
@@ -200,7 +202,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     contextTokens ?? null,
   )}${entry?.abortedLastRun ? " • last run aborted" : ""}`;
 
-  const optionsLine = `Options: thinking=${thinkLevel} | verbose=${verboseLevel} (set with /think <level>, /verbose on|off, /model <id>)`;
+  const optionsLine = `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel} (set with /think <level>, /verbose on|off, /elevated on|off, /model <id>)`;
 
   const modelLabel = model ? `${resolved.provider}/${model}` : "unknown";
 

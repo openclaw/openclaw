@@ -36,6 +36,7 @@ export type GatewaySessionRow = {
   abortedLastRun?: boolean;
   thinkingLevel?: string;
   verboseLevel?: string;
+  elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
   inputTokens?: number;
   outputTokens?: number;
@@ -276,6 +277,7 @@ export function listSessionsFromStore(params: {
         abortedLastRun: entry?.abortedLastRun,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
+        elevatedLevel: entry?.elevatedLevel,
         sendPolicy: entry?.sendPolicy,
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,

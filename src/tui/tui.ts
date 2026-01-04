@@ -586,6 +586,22 @@ export async function runTui(opts: TuiOptions) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
         }
         break;
+      case "elevated":
+        if (!args) {
+          chatLog.addSystem("usage: /elevated <on|off>");
+          break;
+        }
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            elevatedLevel: args,
+          });
+          chatLog.addSystem(`elevated set to ${args}`);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`elevated failed: ${String(err)}`);
+        }
+        break;
       case "activation":
         if (!args) {
           chatLog.addSystem("usage: /activation <mention|always>");

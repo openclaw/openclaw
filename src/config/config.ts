@@ -79,6 +79,15 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
+export type AgentElevatedAllowFromConfig = {
+  whatsapp?: string[];
+  telegram?: Array<string | number>;
+  discord?: Array<string | number>;
+  signal?: Array<string | number>;
+  imessage?: Array<string | number>;
+  webchat?: Array<string | number>;
+};
+
 export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
@@ -619,6 +628,8 @@ export type ClawdisConfig = {
     thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
     /** Default verbose level when no /verbose directive is present. */
     verboseDefault?: "off" | "on";
+    /** Default elevated level when no /elevated directive is present. */
+    elevatedDefault?: "off" | "on";
     /** Default block streaming level when no override is present. */
     blockStreamingDefault?: "off" | "on";
     /**
@@ -667,6 +678,13 @@ export type ClawdisConfig = {
       timeoutSec?: number;
       /** How long to keep finished sessions in memory (ms). */
       cleanupMs?: number;
+    };
+    /** Elevated bash permissions for the host machine. */
+    elevated?: {
+      /** Enable or disable elevated mode (default: true). */
+      enabled?: boolean;
+      /** Approved senders for /elevated (per-surface allowlists). */
+      allowFrom?: AgentElevatedAllowFromConfig;
     };
     /** Optional sandbox settings for non-main sessions. */
     sandbox?: {
@@ -1149,6 +1167,7 @@ export const ClawdisSchema = z.object({
         ])
         .optional(),
       verboseDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
+      elevatedDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
       blockStreamingDefault: z
         .union([z.literal("off"), z.literal("on")])
         .optional(),
@@ -1178,6 +1197,21 @@ export const ClawdisSchema = z.object({
           backgroundMs: z.number().int().positive().optional(),
           timeoutSec: z.number().int().positive().optional(),
           cleanupMs: z.number().int().positive().optional(),
+        })
+        .optional(),
+      elevated: z
+        .object({
+          enabled: z.boolean().optional(),
+          allowFrom: z
+            .object({
+              whatsapp: z.array(z.string()).optional(),
+              telegram: z.array(z.union([z.string(), z.number()])).optional(),
+              discord: z.array(z.union([z.string(), z.number()])).optional(),
+              signal: z.array(z.union([z.string(), z.number()])).optional(),
+              imessage: z.array(z.union([z.string(), z.number()])).optional(),
+              webchat: z.array(z.union([z.string(), z.number()])).optional(),
+            })
+            .optional(),
         })
         .optional(),
       sandbox: z

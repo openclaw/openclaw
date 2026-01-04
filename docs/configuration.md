@@ -388,6 +388,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
     },
     thinkingDefault: "low",
     verboseDefault: "off",
+    elevatedDefault: "off",
     timeoutSeconds: 600,
     mediaMaxMb: 5,
     heartbeat: {
@@ -438,6 +439,31 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `backgroundMs`: time before auto-background (ms, default 10000)
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
+
+`agent.elevated` controls elevated (host) bash access:
+- `enabled`: allow elevated mode (default true)
+- `allowFrom`: per-surface allowlists (required to enable; empty = disabled)
+  - `whatsapp`: E.164 numbers
+  - `telegram`: chat ids or usernames
+  - `discord`: user ids or usernames
+  - `signal`: E.164 numbers
+  - `imessage`: handles/chat ids
+  - `webchat`: session ids or usernames
+
+Example:
+```json5
+{
+  agent: {
+    elevated: {
+      enabled: true,
+      allowFrom: {
+        whatsapp: ["+15555550123"],
+        discord: ["steipete", "1234567890123"]
+      }
+    }
+  }
+}
+```
 
 `agent.maxConcurrent` sets the maximum number of embedded agent runs that can
 execute in parallel across sessions. Each session is still serialized (one run

@@ -34,6 +34,7 @@ import {
 } from "../process/command-queue.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveClawdisAgentDir } from "./agent-paths.js";
+import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { ensureClawdisModelsJson } from "./models-config.js";
 import {
@@ -390,6 +391,7 @@ export async function runEmbeddedPiAgent(params: {
   model?: string;
   thinkLevel?: ThinkLevel;
   verboseLevel?: VerboseLevel;
+  bashElevated?: BashElevatedDefaults;
   timeoutMs: number;
   runId: string;
   abortSignal?: AbortSignal;
@@ -495,7 +497,10 @@ export async function runEmbeddedPiAgent(params: {
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
         const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
         const tools = createClawdisCodingTools({
-          bash: params.config?.agent?.bash,
+          bash: {
+            ...params.config?.agent?.bash,
+            elevated: params.bashElevated,
+          },
           sandbox,
           surface: params.surface,
           sessionKey: params.sessionKey ?? params.sessionId,

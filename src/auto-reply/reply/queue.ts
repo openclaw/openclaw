@@ -3,7 +3,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { ClawdisConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { ThinkLevel, VerboseLevel } from "./directives.js";
+import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 export type QueueMode =
   | "steer"
   | "followup"
@@ -34,6 +34,12 @@ export type FollowupRun = {
     model: string;
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
+    elevatedLevel?: ElevatedLevel;
+    bashElevated?: {
+      enabled: boolean;
+      allowed: boolean;
+      defaultLevel: ElevatedLevel;
+    };
     timeoutMs: number;
     blockReplyBreak: "text_end" | "message_end";
     ownerNumbers?: string[];
