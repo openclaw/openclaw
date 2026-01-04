@@ -88,6 +88,7 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agent.workspace": "Workspace",
   "agent.model": "Default Model",
+  "agent.modelFallbacks": "Model Fallbacks",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
@@ -111,6 +112,8 @@ const FIELD_HELP: Record<string, string> = {
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
     "Debounce window (ms) before applying config changes.",
+  "agent.modelFallbacks":
+    "Ordered fallback models (provider/model). Used when the primary model fails.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
 };

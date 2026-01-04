@@ -50,6 +50,7 @@ export type SessionEntry = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  modelProvider?: string;
   model?: string;
   contextTokens?: number;
   displayName?: string;
@@ -335,6 +336,7 @@ export async function updateLastRoute(params: {
     inputTokens: existing?.inputTokens,
     outputTokens: existing?.outputTokens,
     totalTokens: existing?.totalTokens,
+    modelProvider: existing?.modelProvider,
     model: existing?.model,
     contextTokens: existing?.contextTokens,
     displayName: existing?.displayName,

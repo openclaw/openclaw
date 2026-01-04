@@ -10,6 +10,7 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { runWithModelFallback } from "../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
@@ -264,6 +265,8 @@ export async function runCronIsolatedAgentTurn(params: {
   }
 
   let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let fallbackProvider = provider;
+  let fallbackModel = model;
   try {
     const sessionFile = resolveSessionTranscriptPath(
       cronSession.sessionEntry.sessionId,
@@ -272,25 +275,34 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: params.sessionKey,
     });
     const surface = resolvedDelivery.channel;
-    runResult = await runEmbeddedPiAgent({
-      sessionId: cronSession.sessionEntry.sessionId,
-      sessionKey: params.sessionKey,
-      surface,
-      sessionFile,
-      workspaceDir,
-      config: params.cfg,
-      skillsSnapshot,
-      prompt: commandBody,
-      lane: params.lane ?? "cron",
+    const fallbackResult = await runWithModelFallback({
+      cfg: params.cfg,
       provider,
       model,
-      thinkLevel,
-      verboseLevel:
-        (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
-        (agentCfg?.verboseDefault as "on" | "off" | undefined),
-      timeoutMs,
-      runId: cronSession.sessionEntry.sessionId,
+      run: (providerOverride, modelOverride) =>
+        runEmbeddedPiAgent({
+          sessionId: cronSession.sessionEntry.sessionId,
+          sessionKey: params.sessionKey,
+          surface,
+          sessionFile,
+          workspaceDir,
+          config: params.cfg,
+          skillsSnapshot,
+          prompt: commandBody,
+          lane: params.lane ?? "cron",
+          provider: providerOverride,
+          model: modelOverride,
+          thinkLevel,
+          verboseLevel:
+            (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
+            (agentCfg?.verboseDefault as "on" | "off" | undefined),
+          timeoutMs,
+          runId: cronSession.sessionEntry.sessionId,
+        }),
     });
+    runResult = fallbackResult.result;
+    fallbackProvider = fallbackResult.provider;
+    fallbackModel = fallbackResult.model;
   } catch (err) {
     return { status: "error", error: String(err) };
   }
@@ -300,12 +312,16 @@ export async function runCronIsolatedAgentTurn(params: {
   // Update token+model fields in the session store.
   {
     const usage = runResult.meta.agentMeta?.usage;
-    const modelUsed = runResult.meta.agentMeta?.model ?? model;
+    const modelUsed =
+      runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
+    const providerUsed =
+      runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
       agentCfg?.contextTokens ??
       lookupContextTokens(modelUsed) ??
       DEFAULT_CONTEXT_TOKENS;
 
+    cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
     if (usage) {

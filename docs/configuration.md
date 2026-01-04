@@ -430,6 +430,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `allowedModels` lets `/model` list/filter and enforce a per-session allowlist
 (omit to show the full catalog).
 `modelAliases` adds short names for `/model` (alias -> provider/model).
+`modelFallbacks` lists ordered fallback models to try when the default fails.
 
 ```json5
 {
@@ -443,6 +444,10 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
       Opus: "anthropic/claude-opus-4-5",
       Sonnet: "anthropic/claude-sonnet-4-1"
     },
+    modelFallbacks: [
+      "openrouter/deepseek/deepseek-r1:free",
+      "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+    ],
     thinkingDefault: "low",
     verboseDefault: "off",
     elevatedDefault: "on",

@@ -12,6 +12,7 @@ import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import { runWithModelFallback } from "../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
@@ -364,6 +365,8 @@ export async function agentCommand(
   });
 
   let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+  let fallbackProvider = provider;
+  let fallbackModel = model;
   try {
     const surface =
       opts.surface?.trim().toLowerCase() ||
@@ -372,32 +375,41 @@ export async function agentCommand(
         if (!raw) return undefined;
         return raw === "imsg" ? "imessage" : raw;
       })();
-    result = await runEmbeddedPiAgent({
-      sessionId,
-      sessionKey,
-      surface,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      skillsSnapshot,
-      prompt: body,
+    const fallbackResult = await runWithModelFallback({
+      cfg,
       provider,
       model,
-      thinkLevel: resolvedThinkLevel,
-      verboseLevel: resolvedVerboseLevel,
-      timeoutMs,
-      runId,
-      lane: opts.lane,
-      abortSignal: opts.abortSignal,
-      extraSystemPrompt: opts.extraSystemPrompt,
-      onAgentEvent: (evt) => {
-        emitAgentEvent({
+      run: (providerOverride, modelOverride) =>
+        runEmbeddedPiAgent({
+          sessionId,
+          sessionKey,
+          surface,
+          sessionFile,
+          workspaceDir,
+          config: cfg,
+          skillsSnapshot,
+          prompt: body,
+          provider: providerOverride,
+          model: modelOverride,
+          thinkLevel: resolvedThinkLevel,
+          verboseLevel: resolvedVerboseLevel,
+          timeoutMs,
           runId,
-          stream: evt.stream,
-          data: evt.data,
-        });
-      },
+          lane: opts.lane,
+          abortSignal: opts.abortSignal,
+          extraSystemPrompt: opts.extraSystemPrompt,
+          onAgentEvent: (evt) => {
+            emitAgentEvent({
+              runId,
+              stream: evt.stream,
+              data: evt.data,
+            });
+          },
+        }),
     });
+    result = fallbackResult.result;
+    fallbackProvider = fallbackResult.provider;
+    fallbackModel = fallbackResult.model;
     emitAgentEvent({
       runId,
       stream: "job",
@@ -431,7 +443,10 @@ export async function agentCommand(
   // Update token+model fields in the session store.
   if (sessionStore && sessionKey) {
     const usage = result.meta.agentMeta?.usage;
-    const modelUsed = result.meta.agentMeta?.model ?? model;
+    const modelUsed =
+      result.meta.agentMeta?.model ?? fallbackModel ?? model;
+    const providerUsed =
+      result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =
       agentCfg?.contextTokens ??
       lookupContextTokens(modelUsed) ??
@@ -445,6 +460,7 @@ export async function agentCommand(
       ...entry,
       sessionId,
       updatedAt: Date.now(),
+      modelProvider: providerUsed,
       model: modelUsed,
       contextTokens,
     };

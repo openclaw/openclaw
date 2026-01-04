@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -61,28 +62,39 @@ export function createFollowupRunner(params: {
       registerAgentRunContext(runId, { sessionKey: queued.run.sessionKey });
     }
     let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
+    let fallbackProvider = queued.run.provider;
+    let fallbackModel = queued.run.model;
     try {
-      runResult = await runEmbeddedPiAgent({
-        sessionId: queued.run.sessionId,
-        sessionKey: queued.run.sessionKey,
-        surface: queued.run.surface,
-        sessionFile: queued.run.sessionFile,
-        workspaceDir: queued.run.workspaceDir,
-        config: queued.run.config,
-        skillsSnapshot: queued.run.skillsSnapshot,
-        prompt: queued.prompt,
-        extraSystemPrompt: queued.run.extraSystemPrompt,
-        ownerNumbers: queued.run.ownerNumbers,
-        enforceFinalTag: queued.run.enforceFinalTag,
+      const fallbackResult = await runWithModelFallback({
+        cfg: queued.run.config,
         provider: queued.run.provider,
         model: queued.run.model,
-        thinkLevel: queued.run.thinkLevel,
-        verboseLevel: queued.run.verboseLevel,
-        bashElevated: queued.run.bashElevated,
-        timeoutMs: queued.run.timeoutMs,
-        runId,
-        blockReplyBreak: queued.run.blockReplyBreak,
+        run: (provider, model) =>
+          runEmbeddedPiAgent({
+            sessionId: queued.run.sessionId,
+            sessionKey: queued.run.sessionKey,
+            surface: queued.run.surface,
+            sessionFile: queued.run.sessionFile,
+            workspaceDir: queued.run.workspaceDir,
+            config: queued.run.config,
+            skillsSnapshot: queued.run.skillsSnapshot,
+            prompt: queued.prompt,
+            extraSystemPrompt: queued.run.extraSystemPrompt,
+            ownerNumbers: queued.run.ownerNumbers,
+            enforceFinalTag: queued.run.enforceFinalTag,
+            provider,
+            model,
+            thinkLevel: queued.run.thinkLevel,
+            verboseLevel: queued.run.verboseLevel,
+            bashElevated: queued.run.bashElevated,
+            timeoutMs: queued.run.timeoutMs,
+            runId,
+            blockReplyBreak: queued.run.blockReplyBreak,
+          }),
       });
+      runResult = fallbackResult.result;
+      fallbackProvider = fallbackResult.provider;
+      fallbackModel = fallbackResult.model;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
@@ -121,7 +133,8 @@ export function createFollowupRunner(params: {
 
     if (sessionStore && sessionKey) {
       const usage = runResult.meta.agentMeta?.usage;
-      const modelUsed = runResult.meta.agentMeta?.model ?? defaultModel;
+      const modelUsed =
+        runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
       const contextTokensUsed =
         agentCfgContextTokens ??
         lookupContextTokens(modelUsed) ??
@@ -141,6 +154,7 @@ export function createFollowupRunner(params: {
             outputTokens: output,
             totalTokens:
               promptTokens > 0 ? promptTokens : (usage.total ?? input),
+            modelProvider: fallbackProvider ?? entry.modelProvider,
             model: modelUsed,
             contextTokens: contextTokensUsed ?? entry.contextTokens,
             updatedAt: Date.now(),
@@ -154,6 +168,7 @@ export function createFollowupRunner(params: {
         if (entry) {
           sessionStore[sessionKey] = {
             ...entry,
+            modelProvider: fallbackProvider ?? entry.modelProvider,
             model: modelUsed ?? entry.model,
             contextTokens: contextTokensUsed ?? entry.contextTokens,
           };

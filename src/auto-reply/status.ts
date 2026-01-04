@@ -133,6 +133,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  const provider = entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
   let model = entry?.model ?? resolved.model ?? DEFAULT_MODEL;
   let contextTokens =
     entry?.contextTokens ??
@@ -204,7 +205,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const optionsLine = `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel} (set with /think <level>, /verbose on|off, /elevated on|off, /model <id>)`;
 
-  const modelLabel = model ? `${resolved.provider}/${model}` : "unknown";
+  const modelLabel = model ? `${provider}/${model}` : "unknown";
 
   const agentLine = `Agent: embedded pi • ${modelLabel}`;
 

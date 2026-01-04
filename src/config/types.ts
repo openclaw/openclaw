@@ -666,6 +666,8 @@ export type ClawdbotConfig = {
     allowedModels?: string[];
     /** Optional model aliases for /model (alias -> provider/model). */
     modelAliases?: Record<string, string>;
+    /** Ordered fallback models (provider/model). */
+    modelFallbacks?: string[];
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
     /** Default thinking level when no /think directive is present. */

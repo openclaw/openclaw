@@ -12,18 +12,18 @@ that prefers tool-call + image-capable models and maintains ordered fallbacks.
 
 ## Command tree (draft)
 
-- `clawdis models list`
+- `clawdbot models list`
   - default: configured models only
   - flags: `--all` (full catalog), `--local`, `--provider <name>`, `--json`, `--plain`
-- `clawdis models status`
-  - show default model + last used + aliases + fallbacks
-- `clawdis models set <modelOrAlias>`
+- `clawdbot models status`
+  - show default model + aliases + fallbacks + allowlist
+- `clawdbot models set <modelOrAlias>`
   - writes `agent.model` in config
-- `clawdis models aliases list|add|remove`
+- `clawdbot models aliases list|add|remove`
   - writes `agent.modelAliases`
-- `clawdis models fallbacks list|add|remove|clear`
+- `clawdbot models fallbacks list|add|remove|clear`
   - writes `agent.modelFallbacks`
-- `clawdis models scan`
+- `clawdbot models scan`
   - OpenRouter :free scan; probe tool-call + image; interactive selection
 
 ## Config changes
@@ -38,7 +38,9 @@ that prefers tool-call + image-capable models and maintains ordered fallbacks.
 
 Input
 - OpenRouter `/models` list (filter `:free`)
+- Requires `OPENROUTER_API_KEY` (or stored OpenRouter key in auth storage)
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
+- Probe controls: `--timeout`, `--concurrency`
 
 Probes (direct pi-ai complete)
 - Tool-call probe (required):
@@ -49,13 +51,13 @@ Probes (direct pi-ai complete)
 Scoring/selection
 - Prefer models passing tool + image.
 - Fallback to tool-only if no tool+image pass.
-- Rank by: tool+image first, then lower median latency, then larger context.
+- Rank by: image ok, then lower tool latency, then larger context, then params.
 
 Interactive selection (TTY)
 - Multiselect list with per-model stats:
   - model id, tool ok, image ok, median latency, context, inferred params.
 - Pre-select top N (default 6).
-- Non-TTY: auto-select; require `--yes` or use defaults.
+- Non-TTY: auto-select; require `--yes`/`--no-input` to apply.
 
 Output
 - Writes `agent.modelFallbacks` ordered.
@@ -64,6 +66,7 @@ Output
 ## Runtime fallback
 
 - On model failure: try `agent.modelFallbacks` in order.
+- Ignore fallback entries not in `agent.allowedModels` (if allowlist set).
 - Persist last successful provider/model to session entry.
 - `/status` shows last used model (not just default).
 

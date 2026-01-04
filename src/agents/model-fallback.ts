@@ -1,0 +1,150 @@
+import type { ClawdbotConfig } from "../config/config.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import {
+  buildModelAliasIndex,
+  modelKey,
+  parseModelRef,
+  resolveModelRefFromString,
+} from "./model-selection.js";
+
+type ModelCandidate = {
+  provider: string;
+  model: string;
+};
+
+type FallbackAttempt = {
+  provider: string;
+  model: string;
+  error: string;
+};
+
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const name = "name" in err ? String(err.name) : "";
+  if (name === "AbortError") return true;
+  const message =
+    "message" in err && typeof err.message === "string"
+      ? err.message.toLowerCase()
+      : "";
+  return message.includes("aborted");
+}
+
+function buildAllowedModelKeys(
+  cfg: ClawdbotConfig | undefined,
+  defaultProvider: string,
+): Set<string> | null {
+  const rawAllowlist = cfg?.agent?.allowedModels ?? [];
+  if (rawAllowlist.length === 0) return null;
+  const keys = new Set<string>();
+  for (const raw of rawAllowlist) {
+    const parsed = parseModelRef(String(raw ?? ""), defaultProvider);
+    if (!parsed) continue;
+    keys.add(modelKey(parsed.provider, parsed.model));
+  }
+  return keys.size > 0 ? keys : null;
+}
+
+function resolveFallbackCandidates(params: {
+  cfg: ClawdbotConfig | undefined;
+  provider: string;
+  model: string;
+}): ModelCandidate[] {
+  const provider = params.provider.trim() || DEFAULT_PROVIDER;
+  const model = params.model.trim() || DEFAULT_MODEL;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg ?? {},
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const allowlist = buildAllowedModelKeys(params.cfg, DEFAULT_PROVIDER);
+  const seen = new Set<string>();
+  const candidates: ModelCandidate[] = [];
+
+  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
+    if (!candidate.provider || !candidate.model) return;
+    const key = modelKey(candidate.provider, candidate.model);
+    if (seen.has(key)) return;
+    if (enforceAllowlist && allowlist && !allowlist.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  addCandidate({ provider, model }, false);
+
+  for (const raw of params.cfg?.agent?.modelFallbacks ?? []) {
+    const resolved = resolveModelRefFromString({
+      raw: String(raw ?? ""),
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    if (!resolved) continue;
+    addCandidate(resolved.ref, true);
+  }
+
+  return candidates;
+}
+
+export async function runWithModelFallback<T>(params: {
+  cfg: ClawdbotConfig | undefined;
+  provider: string;
+  model: string;
+  run: (provider: string, model: string) => Promise<T>;
+  onError?: (attempt: {
+    provider: string;
+    model: string;
+    error: unknown;
+    attempt: number;
+    total: number;
+  }) => void | Promise<void>;
+}): Promise<{
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+}> {
+  const candidates = resolveFallbackCandidates(params);
+  const attempts: FallbackAttempt[] = [];
+  let lastError: unknown;
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i] as ModelCandidate;
+    try {
+      const result = await params.run(candidate.provider, candidate.model);
+      return {
+        result,
+        provider: candidate.provider,
+        model: candidate.model,
+        attempts,
+      };
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      lastError = err;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await params.onError?.({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: err,
+        attempt: i + 1,
+        total: candidates.length,
+      });
+    }
+  }
+
+  if (attempts.length <= 1 && lastError) throw lastError;
+  const summary =
+    attempts.length > 0
+      ? attempts
+          .map(
+            (attempt) =>
+              `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+          )
+          .join(" | ")
+      : "unknown";
+  throw new Error(
+    `All models failed (${attempts.length || candidates.length}): ${summary}`,
+    { cause: lastError instanceof Error ? lastError : undefined },
+  );
+}

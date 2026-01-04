@@ -1,0 +1,267 @@
+import { cancel, isCancel, multiselect } from "@clack/prompts";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+
+import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
+import {
+  scanOpenRouterModels,
+  type ModelScanResult,
+} from "../../agents/model-scan.js";
+import { warn } from "../../globals.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import {
+  buildAllowlistSet,
+  formatMs,
+  formatTokenK,
+  updateConfig,
+} from "./shared.js";
+import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
+
+const MODEL_PAD = 42;
+const CTX_PAD = 8;
+
+const pad = (value: string, size: number) => value.padEnd(size);
+
+const truncate = (value: string, max: number) => {
+  if (value.length <= max) return value;
+  if (max <= 3) return value.slice(0, max);
+  return `${value.slice(0, max - 3)}...`;
+};
+
+
+function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
+  return results.slice().sort((a, b) => {
+    const aImage = a.image.ok ? 1 : 0;
+    const bImage = b.image.ok ? 1 : 0;
+    if (aImage !== bImage) return bImage - aImage;
+
+    const aToolLatency = a.tool.latencyMs ?? Number.POSITIVE_INFINITY;
+    const bToolLatency = b.tool.latencyMs ?? Number.POSITIVE_INFINITY;
+    if (aToolLatency !== bToolLatency) return aToolLatency - bToolLatency;
+
+    const aCtx = a.contextLength ?? 0;
+    const bCtx = b.contextLength ?? 0;
+    if (aCtx !== bCtx) return bCtx - aCtx;
+
+    const aParams = a.inferredParamB ?? 0;
+    const bParams = b.inferredParamB ?? 0;
+    if (aParams !== bParams) return bParams - aParams;
+
+    return a.modelRef.localeCompare(b.modelRef);
+  });
+}
+
+function buildScanHint(result: ModelScanResult): string {
+  const toolLabel = result.tool.ok
+    ? `tool ${formatMs(result.tool.latencyMs)}`
+    : "tool fail";
+  const imageLabel = result.image.skipped
+    ? "img skip"
+    : result.image.ok
+      ? `img ${formatMs(result.image.latencyMs)}`
+      : "img fail";
+  const ctxLabel = result.contextLength
+    ? `ctx ${formatTokenK(result.contextLength)}`
+    : "ctx ?";
+  const paramLabel = result.inferredParamB ? `${result.inferredParamB}b` : null;
+  return [toolLabel, imageLabel, ctxLabel, paramLabel]
+    .filter(Boolean)
+    .join(" | ");
+}
+
+function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
+  const toolOk = results.filter((r) => r.tool.ok);
+  const imageOk = results.filter((r) => r.image.ok);
+  const toolImageOk = results.filter((r) => r.tool.ok && r.image.ok);
+  runtime.log(
+    `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}`,
+  );
+}
+
+function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
+  const header = [
+    pad("Model", MODEL_PAD),
+    pad("Tool", 10),
+    pad("Image", 10),
+    pad("Ctx", CTX_PAD),
+    pad("Params", 8),
+    "Notes",
+  ].join(" ");
+  runtime.log(header);
+
+  for (const entry of results) {
+    const modelLabel = pad(truncate(entry.modelRef, MODEL_PAD), MODEL_PAD);
+    const toolLabel = pad(
+      entry.tool.ok ? formatMs(entry.tool.latencyMs) : "fail",
+      10,
+    );
+    const imageLabel = pad(
+      entry.image.ok
+        ? formatMs(entry.image.latencyMs)
+        : entry.image.skipped
+          ? "skip"
+          : "fail",
+      10,
+    );
+    const ctxLabel = pad(formatTokenK(entry.contextLength), CTX_PAD);
+    const paramsLabel = pad(
+      entry.inferredParamB ? `${entry.inferredParamB}b` : "-",
+      8,
+    );
+    const notes = entry.modality ? `modality:${entry.modality}` : "";
+
+    runtime.log(
+      [modelLabel, toolLabel, imageLabel, ctxLabel, paramsLabel, notes].join(
+        " ",
+      ),
+    );
+  }
+}
+
+export async function modelsScanCommand(
+  opts: {
+    minParams?: string;
+    maxAgeDays?: string;
+    provider?: string;
+    maxCandidates?: string;
+    timeout?: string;
+    concurrency?: string;
+    yes?: boolean;
+    input?: boolean;
+    setDefault?: boolean;
+    json?: boolean;
+  },
+  runtime: RuntimeEnv,
+) {
+  const minParams = opts.minParams ? Number(opts.minParams) : undefined;
+  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
+    throw new Error("--min-params must be >= 0");
+  }
+  const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
+  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
+    throw new Error("--max-age-days must be >= 0");
+  }
+  const maxCandidates = opts.maxCandidates
+    ? Number(opts.maxCandidates)
+    : 6;
+  if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
+    throw new Error("--max-candidates must be > 0");
+  }
+  const timeout = opts.timeout ? Number(opts.timeout) : undefined;
+  if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) {
+    throw new Error("--timeout must be > 0");
+  }
+  const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
+  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
+    throw new Error("--concurrency must be > 0");
+  }
+
+  const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
+  const storedKey = await authStorage.getApiKey("openrouter");
+  const results = await scanOpenRouterModels({
+    apiKey: storedKey ?? undefined,
+    minParamB: minParams,
+    maxAgeDays,
+    providerFilter: opts.provider,
+    timeoutMs: timeout,
+    concurrency,
+  });
+
+  const toolOk = results.filter((entry) => entry.tool.ok);
+  if (toolOk.length === 0) {
+    throw new Error("No tool-capable OpenRouter free models found.");
+  }
+
+  const sorted = sortScanResults(toolOk);
+  const imagePreferred = sorted.filter((entry) => entry.image.ok);
+  const preselectPool = imagePreferred.length > 0 ? imagePreferred : sorted;
+  const preselected = preselectPool
+    .slice(0, Math.floor(maxCandidates))
+    .map((entry) => entry.modelRef);
+
+  if (!opts.json) {
+    printScanSummary(results, runtime);
+    printScanTable(sorted, runtime);
+  }
+
+  const noInput = opts.input === false;
+  const canPrompt = process.stdin.isTTY && !opts.yes && !noInput && !opts.json;
+  let selected: string[] = preselected;
+
+  if (canPrompt) {
+    const selection = await multiselect({
+      message: "Select fallback models (ordered)",
+      options: sorted.map((entry) => ({
+        value: entry.modelRef,
+        label: entry.modelRef,
+        hint: buildScanHint(entry),
+      })),
+      initialValues: preselected,
+    });
+
+    if (isCancel(selection)) {
+      cancel("Model scan cancelled.");
+      runtime.exit(0);
+    }
+
+    selected = selection as string[];
+  } else if (!process.stdin.isTTY && !opts.yes && !noInput && !opts.json) {
+    throw new Error("Non-interactive scan: pass --yes to apply defaults.");
+  }
+
+  if (selected.length === 0) {
+    throw new Error("No models selected for fallbacks.");
+  }
+
+  const updated = await updateConfig((cfg) => {
+    const next = {
+      ...cfg,
+      agent: {
+        ...cfg.agent,
+        modelFallbacks: selected,
+        ...(opts.setDefault ? { model: selected[0] } : {}),
+      },
+    };
+    return next;
+  });
+
+  const allowlist = buildAllowlistSet(updated);
+  const allowlistMissing =
+    allowlist.size > 0
+      ? selected.filter((entry) => !allowlist.has(entry))
+      : [];
+
+  if (opts.json) {
+    runtime.log(
+      JSON.stringify(
+        {
+          selected,
+          setDefault: Boolean(opts.setDefault),
+          results,
+          warnings:
+            allowlistMissing.length > 0
+              ? [
+                  `Selected models not in agent.allowedModels: ${allowlistMissing.join(", ")}`,
+                ]
+              : [],
+        },
+        null,
+        2,
+      ),
+    );
+    return;
+  }
+
+  if (allowlistMissing.length > 0) {
+    runtime.log(
+      warn(
+        `Warning: ${allowlistMissing.length} selected models are not in agent.allowedModels and will be ignored by fallback: ${allowlistMissing.join(", ")}`,
+      ),
+    );
+  }
+
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Fallbacks: ${selected.join(", ")}`);
+  if (opts.setDefault) {
+    runtime.log(`Default model: ${selected[0]}`);
+  }
+}

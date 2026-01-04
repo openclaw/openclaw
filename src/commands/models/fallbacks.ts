@@ -1,0 +1,134 @@
+import {
+  CONFIG_PATH_CLAWDBOT,
+  loadConfig,
+} from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
+import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
+import {
+  DEFAULT_PROVIDER,
+  ensureFlagCompatibility,
+  modelKey,
+  resolveModelTarget,
+  updateConfig,
+} from "./shared.js";
+
+export async function modelsFallbacksListCommand(
+  opts: { json?: boolean; plain?: boolean },
+  runtime: RuntimeEnv,
+) {
+  ensureFlagCompatibility(opts);
+  const cfg = loadConfig();
+  const fallbacks = cfg.agent?.modelFallbacks ?? [];
+
+  if (opts.json) {
+    runtime.log(JSON.stringify({ fallbacks }, null, 2));
+    return;
+  }
+  if (opts.plain) {
+    for (const entry of fallbacks) runtime.log(entry);
+    return;
+  }
+
+  runtime.log(`Fallbacks (${fallbacks.length}):`);
+  if (fallbacks.length === 0) {
+    runtime.log("- none");
+    return;
+  }
+  for (const entry of fallbacks) runtime.log(`- ${entry}`);
+}
+
+export async function modelsFallbacksAddCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+) {
+  const updated = await updateConfig((cfg) => {
+    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
+    const targetKey = modelKey(resolved.provider, resolved.model);
+    const aliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const existing = cfg.agent?.modelFallbacks ?? [];
+    const existingKeys = existing
+      .map((entry) =>
+        resolveModelRefFromString({
+          raw: String(entry ?? ""),
+          defaultProvider: DEFAULT_PROVIDER,
+          aliasIndex,
+        }),
+      )
+      .filter(Boolean)
+      .map((entry) => modelKey(entry!.ref.provider, entry!.ref.model));
+
+    if (existingKeys.includes(targetKey)) return cfg;
+
+    return {
+      ...cfg,
+      agent: {
+        ...cfg.agent,
+        modelFallbacks: [...existing, targetKey],
+      },
+    };
+  });
+
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Fallbacks: ${(updated.agent?.modelFallbacks ?? []).join(", ")}`);
+}
+
+export async function modelsFallbacksRemoveCommand(
+  modelRaw: string,
+  runtime: RuntimeEnv,
+) {
+  const updated = await updateConfig((cfg) => {
+    const resolved = resolveModelTarget({ raw: modelRaw, cfg });
+    const targetKey = modelKey(resolved.provider, resolved.model);
+    const aliasIndex = buildModelAliasIndex({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const existing = cfg.agent?.modelFallbacks ?? [];
+    const filtered = existing.filter((entry) => {
+      const resolvedEntry = resolveModelRefFromString({
+        raw: String(entry ?? ""),
+        defaultProvider: DEFAULT_PROVIDER,
+        aliasIndex,
+      });
+      if (!resolvedEntry) return true;
+      return (
+        modelKey(resolvedEntry.ref.provider, resolvedEntry.ref.model) !==
+        targetKey
+      );
+    });
+
+    if (filtered.length === existing.length) {
+      throw new Error(`Fallback not found: ${targetKey}`);
+    }
+
+    return {
+      ...cfg,
+      agent: {
+        ...cfg.agent,
+        modelFallbacks: filtered,
+      },
+    };
+  });
+
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log(`Fallbacks: ${(updated.agent?.modelFallbacks ?? []).join(", ")}`);
+}
+
+export async function modelsFallbacksClearCommand(runtime: RuntimeEnv) {
+  await updateConfig((cfg) => ({
+    ...cfg,
+    agent: {
+      ...cfg.agent,
+      modelFallbacks: [],
+    },
+  }));
+
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  runtime.log("Fallback list cleared.");
+}
