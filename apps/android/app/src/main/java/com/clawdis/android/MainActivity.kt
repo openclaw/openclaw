@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
     screenCaptureRequester = ScreenCaptureRequester(this)
     viewModel.camera.attachLifecycleOwner(this)
     viewModel.camera.attachPermissionRequester(permissionRequester)
+    viewModel.sms.attachPermissionRequester(permissionRequester)
     viewModel.screenRecorder.attachScreenCaptureRequester(screenCaptureRequester)
     viewModel.screenRecorder.attachPermissionRequester(permissionRequester)
 

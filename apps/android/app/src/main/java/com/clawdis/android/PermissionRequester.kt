@@ -115,7 +115,7 @@ class PermissionRequester(private val activity: ComponentActivity) {
 
   private fun buildRationaleMessage(permissions: List<String>): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "Clawdis needs ${labels.joinToString(", ")} to capture camera media."
+    return "Clawdis needs ${labels.joinToString(", ")} permissions to continue."
   }
 
   private fun buildSettingsMessage(permissions: List<String>): String {
@@ -127,6 +127,7 @@ class PermissionRequester(private val activity: ComponentActivity) {
     when (permission) {
       Manifest.permission.CAMERA -> "Camera"
       Manifest.permission.RECORD_AUDIO -> "Microphone"
+      Manifest.permission.SEND_SMS -> "SMS"
       else -> permission
     }
 }

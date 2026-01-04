@@ -391,7 +391,10 @@ class NodeRuntime(context: Context) {
             add(ClawdisCameraCommand.Snap.rawValue)
             add(ClawdisCameraCommand.Clip.rawValue)
           }
-          if (sms.hasSmsPermission()) {
+          if (locationMode.value != LocationMode.Off) {
+            add(ClawdisLocationCommand.Get.rawValue)
+          }
+          if (sms.canSendSms()) {
             add(ClawdisSmsCommand.Send.rawValue)
           }
         }
@@ -402,7 +405,7 @@ class NodeRuntime(context: Context) {
             add(ClawdisCapability.Canvas.rawValue)
             add(ClawdisCapability.Screen.rawValue)
             if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
-            if (sms.hasSmsPermission()) add(ClawdisCapability.Sms.rawValue)
+            if (sms.canSendSms()) add(ClawdisCapability.Sms.rawValue)
             if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
               add(ClawdisCapability.VoiceWake.rawValue)
             }
@@ -467,7 +470,7 @@ class NodeRuntime(context: Context) {
                 add(ClawdisCapability.Canvas.rawValue)
                 add(ClawdisCapability.Screen.rawValue)
                 if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
-                if (sms.hasSmsPermission()) add(ClawdisCapability.Sms.rawValue)
+                if (sms.canSendSms()) add(ClawdisCapability.Sms.rawValue)
                 if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
                   add(ClawdisCapability.VoiceWake.rawValue)
                 }

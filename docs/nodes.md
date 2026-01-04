@@ -110,6 +110,20 @@ Notes:
 - “Always” requires system permission; background fetch is best-effort.
 - The response includes lat/lon, accuracy (meters), and timestamp.
 
+## SMS (Android nodes)
+
+Android nodes can expose `sms.send` when the user grants **SMS** permission and the device supports telephony.
+
+Low-level invoke:
+
+```bash
+clawdis nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from Clawdis"}'
+```
+
+Notes:
+- The permission prompt must be accepted on the Android device before the capability is advertised.
+- Wi-Fi-only devices without telephony will not advertise `sms.send`.
+
 ## System commands (mac node)
 
 The macOS node exposes `system.run` and `system.notify`.

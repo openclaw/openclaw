@@ -149,6 +149,22 @@ fun SettingsSheet(viewModel: MainViewModel) {
       // Status text is handled by NodeRuntime.
     }
 
+  val smsPermissionAvailable =
+    remember {
+      context.packageManager?.hasSystemFeature(PackageManager.FEATURE_TELEPHONY) == true
+    }
+  var smsPermissionGranted by
+    remember {
+      mutableStateOf(
+        ContextCompat.checkSelfPermission(context, Manifest.permission.SEND_SMS) ==
+          PackageManager.PERMISSION_GRANTED,
+      )
+    }
+  val smsPermissionLauncher =
+    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+      smsPermissionGranted = granted
+    }
+
   fun setCameraEnabledChecked(checked: Boolean) {
     if (!checked) {
       viewModel.setCameraEnabled(false)
@@ -233,7 +249,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     contentPadding = PaddingValues(16.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp),
   ) {
-    // Order parity: Node → Bridge → Voice → Camera → Location → Screen.
+    // Order parity: Node → Bridge → Voice → Camera → Messaging → Location → Screen.
     item { Text("Node", style = MaterialTheme.typography.titleSmall) }
     item {
       OutlinedTextField(
@@ -502,6 +518,46 @@ fun SettingsSheet(viewModel: MainViewModel) {
       Text(
         "Tip: grant Microphone permission for video clips with audio.",
         color = MaterialTheme.colorScheme.onSurfaceVariant,
+      )
+    }
+
+    item { HorizontalDivider() }
+
+    // Messaging
+    item { Text("Messaging", style = MaterialTheme.typography.titleSmall) }
+    item {
+      val buttonLabel =
+        when {
+          !smsPermissionAvailable -> "Unavailable"
+          smsPermissionGranted -> "Manage"
+          else -> "Grant"
+        }
+      ListItem(
+        headlineContent = { Text("SMS Permission") },
+        supportingContent = {
+          Text(
+            if (smsPermissionAvailable) {
+              "Allow the bridge to send SMS from this device."
+            } else {
+              "SMS requires a device with telephony hardware."
+            },
+          )
+        },
+        trailingContent = {
+          Button(
+            onClick = {
+              if (!smsPermissionAvailable) return@Button
+              if (smsPermissionGranted) {
+                openAppSettings(context)
+              } else {
+                smsPermissionLauncher.launch(Manifest.permission.SEND_SMS)
+              }
+            },
+            enabled = smsPermissionAvailable,
+          ) {
+            Text(buttonLabel)
+          }
+        },
       )
     }
 
