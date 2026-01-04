@@ -14,7 +14,7 @@
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
 - Onboarding: when running from source, auto-build missing Control UI assets (`pnpm ui:build`).
 
-## 2026.1.4-1
+## 2026.1.5
 
 ### Fixes
 - Control UI: render Markdown in chat messages (sanitized).
