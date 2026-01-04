@@ -27,7 +27,7 @@ const makeModel = (id: string): Model<"google-generative-ai"> =>
   }) as Model<"google-generative-ai">;
 
 describe("google-shared convertTools", () => {
-  it("preserves properties/required when type is missing", () => {
+  it("adds type:object when properties/required exist but type is missing", () => {
     const tools = [
       {
         name: "noType",
@@ -46,7 +46,7 @@ describe("google-shared convertTools", () => {
       converted?.[0]?.functionDeclarations?.[0]?.parameters,
     );
 
-    expect(params.type).toBeUndefined();
+    expect(params.type).toBe("object");
     expect(params.properties).toBeDefined();
     expect(params.required).toEqual(["action"]);
   });
@@ -147,7 +147,7 @@ describe("google-shared convertTools", () => {
 });
 
 describe("google-shared convertMessages", () => {
-  it("keeps thinking blocks with signatures for Gemini", () => {
+  it("skips thinking blocks for Gemini to avoid mimicry", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
       messages: [
@@ -184,13 +184,7 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(1);
-    const parts = contents?.[0]?.parts ?? [];
-    expect(parts).toHaveLength(1);
-    expect(parts[0]).toMatchObject({
-      thought: true,
-      thoughtSignature: "sig",
-    });
+    expect(contents).toHaveLength(0);
   });
 
   it("keeps thought signatures for Claude models", () => {
