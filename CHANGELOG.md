@@ -5,6 +5,7 @@
 ## Unreleased
 
 ### Fixes
+- Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
 - Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
 
 
