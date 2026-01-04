@@ -17,6 +17,7 @@
 - Primary session key is fixed to `main` (or `global` for global scope).
 
 ### Fixes
+- Doctor migrates legacy Clawdis config/service installs and normalizes sandbox Docker names.
 - Presence beacons keep node lists fresh; Instances view stays accurate.
 - Block streaming/chunking reliability (Telegram/Discord ordering, fewer duplicates).
 - WhatsApp GIF playback for MP4-based GIFs.
