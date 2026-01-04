@@ -66,10 +66,8 @@ export async function handleSlackAction(
         const to = readStringParam(params, "to", { required: true });
         const content = readStringParam(params, "content", { required: true });
         const mediaUrl = readStringParam(params, "mediaUrl");
-        const replyTo = readStringParam(params, "replyTo");
         const result = await sendSlackMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
-          replyTo: replyTo ?? undefined,
         });
         return jsonResult({ ok: true, result });
       }

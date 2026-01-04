@@ -86,12 +86,11 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & { mediaUrl?: string; replyTo?: string } = {},
+  opts: SlackActionClientOpts & { mediaUrl?: string } = {},
 ) {
   return await sendMessageSlack(to, content, {
     token: opts.token,
     mediaUrl: opts.mediaUrl,
-    threadTs: opts.replyTo,
     client: opts.client,
   });
 }

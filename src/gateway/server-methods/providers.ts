@@ -8,6 +8,11 @@ import { type DiscordProbe, probeDiscord } from "../../discord/probe.js";
 import { type IMessageProbe, probeIMessage } from "../../imessage/probe.js";
 import { webAuthExists } from "../../providers/web/index.js";
 import { probeSignal, type SignalProbe } from "../../signal/probe.js";
+import { probeSlack, type SlackProbe } from "../../slack/probe.js";
+import {
+  resolveSlackAppToken,
+  resolveSlackBotToken,
+} from "../../slack/token.js";
 import { probeTelegram, type TelegramProbe } from "../../telegram/probe.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { getWebAuthAgeMs, readWebSelfId } from "../../web/session.js";
@@ -72,6 +77,41 @@ export const providersHandlers: GatewayRequestHandlers = {
     if (probe && discordToken && discordEnabled) {
       discordProbe = await probeDiscord(discordToken, timeoutMs);
       discordLastProbeAt = Date.now();
+    }
+
+    const slackCfg = cfg.slack;
+    const slackEnabled = slackCfg?.enabled !== false;
+    const slackBotEnvToken = slackEnabled
+      ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN)
+      : undefined;
+    const slackBotConfigToken = slackEnabled
+      ? resolveSlackBotToken(slackCfg?.botToken)
+      : undefined;
+    const slackBotToken = slackBotEnvToken ?? slackBotConfigToken ?? "";
+    const slackBotTokenSource = slackBotEnvToken
+      ? "env"
+      : slackBotConfigToken
+        ? "config"
+        : "none";
+    const slackAppEnvToken = slackEnabled
+      ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN)
+      : undefined;
+    const slackAppConfigToken = slackEnabled
+      ? resolveSlackAppToken(slackCfg?.appToken)
+      : undefined;
+    const slackAppToken = slackAppEnvToken ?? slackAppConfigToken ?? "";
+    const slackAppTokenSource = slackAppEnvToken
+      ? "env"
+      : slackAppConfigToken
+        ? "config"
+        : "none";
+    const slackConfigured =
+      slackEnabled && Boolean(slackBotToken) && Boolean(slackAppToken);
+    let slackProbe: SlackProbe | undefined;
+    let slackLastProbeAt: number | null = null;
+    if (probe && slackConfigured) {
+      slackProbe = await probeSlack(slackBotToken, timeoutMs);
+      slackLastProbeAt = Date.now();
     }
 
     const signalCfg = cfg.signal;
@@ -151,6 +191,17 @@ export const providersHandlers: GatewayRequestHandlers = {
           lastError: runtime.discord.lastError ?? null,
           probe: discordProbe,
           lastProbeAt: discordLastProbeAt,
+        },
+        slack: {
+          configured: slackConfigured,
+          botTokenSource: slackBotTokenSource,
+          appTokenSource: slackAppTokenSource,
+          running: runtime.slack.running,
+          lastStartAt: runtime.slack.lastStartAt ?? null,
+          lastStopAt: runtime.slack.lastStopAt ?? null,
+          lastError: runtime.slack.lastError ?? null,
+          probe: slackProbe,
+          lastProbeAt: slackLastProbeAt,
         },
         signal: {
           configured: signalConfigured,

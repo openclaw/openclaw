@@ -121,7 +121,6 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
       "sessionPrefix": "slack:slash",
       "ephemeral": true
     },
-    "replyToMode": "off",
     "textChunkLimit": 4000,
     "mediaMaxMb": 20
   }
@@ -136,13 +135,6 @@ Tokens can also be supplied via env vars:
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
-
-## Reply threading
-Slack replies can be threaded when reply tags are present and `slack.replyToMode` is enabled.
-
-```json
-{ "slack": { "replyToMode": "first" } }
-```
 
 ## Delivery targets
 Use these with cron/CLI sends:

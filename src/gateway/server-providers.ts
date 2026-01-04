@@ -7,6 +7,11 @@ import type { createSubsystemLogger } from "../logging.js";
 import { monitorWebProvider, webAuthExists } from "../providers/web/index.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { monitorSignalProvider } from "../signal/index.js";
+import {
+  monitorSlackProvider,
+  resolveSlackAppToken,
+  resolveSlackBotToken,
+} from "../slack/index.js";
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { probeTelegram } from "../telegram/probe.js";
 import { resolveTelegramToken } from "../telegram/token.js";
@@ -23,6 +28,13 @@ export type TelegramRuntimeStatus = {
 };
 
 export type DiscordRuntimeStatus = {
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+};
+
+export type SlackRuntimeStatus = {
   running: boolean;
   lastStartAt?: number | null;
   lastStopAt?: number | null;
@@ -50,6 +62,7 @@ export type ProviderRuntimeSnapshot = {
   whatsapp: WebProviderStatus;
   telegram: TelegramRuntimeStatus;
   discord: DiscordRuntimeStatus;
+  slack: SlackRuntimeStatus;
   signal: SignalRuntimeStatus;
   imessage: IMessageRuntimeStatus;
 };
@@ -61,11 +74,13 @@ type ProviderManagerOptions = {
   logWhatsApp: SubsystemLogger;
   logTelegram: SubsystemLogger;
   logDiscord: SubsystemLogger;
+  logSlack: SubsystemLogger;
   logSignal: SubsystemLogger;
   logIMessage: SubsystemLogger;
   whatsappRuntimeEnv: RuntimeEnv;
   telegramRuntimeEnv: RuntimeEnv;
   discordRuntimeEnv: RuntimeEnv;
+  slackRuntimeEnv: RuntimeEnv;
   signalRuntimeEnv: RuntimeEnv;
   imessageRuntimeEnv: RuntimeEnv;
 };
@@ -79,6 +94,8 @@ export type ProviderManager = {
   stopTelegramProvider: () => Promise<void>;
   startDiscordProvider: () => Promise<void>;
   stopDiscordProvider: () => Promise<void>;
+  startSlackProvider: () => Promise<void>;
+  stopSlackProvider: () => Promise<void>;
   startSignalProvider: () => Promise<void>;
   stopSignalProvider: () => Promise<void>;
   startIMessageProvider: () => Promise<void>;
@@ -94,11 +111,13 @@ export function createProviderManager(
     logWhatsApp,
     logTelegram,
     logDiscord,
+    logSlack,
     logSignal,
     logIMessage,
     whatsappRuntimeEnv,
     telegramRuntimeEnv,
     discordRuntimeEnv,
+    slackRuntimeEnv,
     signalRuntimeEnv,
     imessageRuntimeEnv,
   } = opts;
@@ -106,11 +125,13 @@ export function createProviderManager(
   let whatsappAbort: AbortController | null = null;
   let telegramAbort: AbortController | null = null;
   let discordAbort: AbortController | null = null;
+  let slackAbort: AbortController | null = null;
   let signalAbort: AbortController | null = null;
   let imessageAbort: AbortController | null = null;
   let whatsappTask: Promise<unknown> | null = null;
   let telegramTask: Promise<unknown> | null = null;
   let discordTask: Promise<unknown> | null = null;
+  let slackTask: Promise<unknown> | null = null;
   let signalTask: Promise<unknown> | null = null;
   let imessageTask: Promise<unknown> | null = null;
 
@@ -132,6 +153,12 @@ export function createProviderManager(
     mode: null,
   };
   let discordRuntime: DiscordRuntimeStatus = {
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+  };
+  let slackRuntime: SlackRuntimeStatus = {
     running: false,
     lastStartAt: null,
     lastStopAt: null,
@@ -432,6 +459,93 @@ export function createProviderManager(
     };
   };
 
+  const startSlackProvider = async () => {
+    if (slackTask) return;
+    const cfg = loadConfig();
+    if (cfg.slack?.enabled === false) {
+      slackRuntime = {
+        ...slackRuntime,
+        running: false,
+        lastError: "disabled",
+      };
+      if (shouldLogVerbose()) {
+        logSlack.debug("slack provider disabled (slack.enabled=false)");
+      }
+      return;
+    }
+    const botToken = resolveSlackBotToken(
+      process.env.SLACK_BOT_TOKEN ?? cfg.slack?.botToken ?? undefined,
+    );
+    const appToken = resolveSlackAppToken(
+      process.env.SLACK_APP_TOKEN ?? cfg.slack?.appToken ?? undefined,
+    );
+    if (!botToken || !appToken) {
+      slackRuntime = {
+        ...slackRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      if (shouldLogVerbose()) {
+        logSlack.debug(
+          "slack provider not configured (missing SLACK_BOT_TOKEN/SLACK_APP_TOKEN)",
+        );
+      }
+      return;
+    }
+    logSlack.info(
+      `starting provider${cfg.slack ? "" : " (no slack config; tokens via env)"}`,
+    );
+    slackAbort = new AbortController();
+    slackRuntime = {
+      ...slackRuntime,
+      running: true,
+      lastStartAt: Date.now(),
+      lastError: null,
+    };
+    const task = monitorSlackProvider({
+      botToken,
+      appToken,
+      runtime: slackRuntimeEnv,
+      abortSignal: slackAbort.signal,
+      mediaMaxMb: cfg.slack?.mediaMaxMb,
+      slashCommand: cfg.slack?.slashCommand,
+    })
+      .catch((err) => {
+        slackRuntime = {
+          ...slackRuntime,
+          lastError: formatError(err),
+        };
+        logSlack.error(`provider exited: ${formatError(err)}`);
+      })
+      .finally(() => {
+        slackAbort = null;
+        slackTask = null;
+        slackRuntime = {
+          ...slackRuntime,
+          running: false,
+          lastStopAt: Date.now(),
+        };
+      });
+    slackTask = task;
+  };
+
+  const stopSlackProvider = async () => {
+    if (!slackAbort && !slackTask) return;
+    slackAbort?.abort();
+    try {
+      await slackTask;
+    } catch {
+      // ignore
+    }
+    slackAbort = null;
+    slackTask = null;
+    slackRuntime = {
+      ...slackRuntime,
+      running: false,
+      lastStopAt: Date.now(),
+    };
+  };
+
   const startSignalProvider = async () => {
     if (signalTask) return;
     const cfg = loadConfig();
@@ -634,6 +748,7 @@ export function createProviderManager(
   const startProviders = async () => {
     await startWhatsAppProvider();
     await startDiscordProvider();
+    await startSlackProvider();
     await startTelegramProvider();
     await startSignalProvider();
     await startIMessageProvider();
@@ -652,6 +767,7 @@ export function createProviderManager(
     whatsapp: { ...whatsappRuntime },
     telegram: { ...telegramRuntime },
     discord: { ...discordRuntime },
+    slack: { ...slackRuntime },
     signal: { ...signalRuntime },
     imessage: { ...imessageRuntime },
   });
@@ -665,6 +781,8 @@ export function createProviderManager(
     stopTelegramProvider,
     startDiscordProvider,
     stopDiscordProvider,
+    startSlackProvider,
+    stopSlackProvider,
     startSignalProvider,
     stopSignalProvider,
     startIMessageProvider,

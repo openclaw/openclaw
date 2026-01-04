@@ -17,7 +17,6 @@ export const SlackToolSchema = Type.Union([
     to: Type.String(),
     content: Type.String(),
     mediaUrl: Type.Optional(Type.String()),
-    replyTo: Type.Optional(Type.String()),
   }),
   Type.Object({
     action: Type.Literal("editMessage"),

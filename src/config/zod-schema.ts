@@ -417,6 +417,7 @@ export const ClawdisSchema = z.object({
               whatsapp: z.array(z.string()).optional(),
               telegram: z.array(z.union([z.string(), z.number()])).optional(),
               discord: z.array(z.union([z.string(), z.number()])).optional(),
+              slack: z.array(z.union([z.string(), z.number()])).optional(),
               signal: z.array(z.union([z.string(), z.number()])).optional(),
               imessage: z.array(z.union([z.string(), z.number()])).optional(),
               webchat: z.array(z.union([z.string(), z.number()])).optional(),
@@ -628,7 +629,6 @@ export const ClawdisSchema = z.object({
       botToken: z.string().optional(),
       appToken: z.string().optional(),
       textChunkLimit: z.number().int().positive().optional(),
-      replyToMode: ReplyToModeSchema.optional(),
       mediaMaxMb: z.number().positive().optional(),
       reactionNotifications: z
         .enum(["off", "own", "all", "allowlist"])

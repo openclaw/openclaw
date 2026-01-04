@@ -84,7 +84,6 @@ export type SlackForm = {
   groupChannels: string;
   mediaMaxMb: string;
   textChunkLimit: string;
-  replyToMode: "off" | "first" | "all";
   reactionNotifications: "off" | "own" | "all" | "allowlist";
   reactionAllowlist: string;
   slashEnabled: boolean;
@@ -168,4 +167,3 @@ export type CronFormState = {
   timeoutSeconds: string;
   postToMainPrefix: string;
 };
-

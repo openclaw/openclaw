@@ -6,11 +6,14 @@ import type {
 } from "../types";
 import {
   defaultDiscordActions,
+  defaultSlackActions,
   type DiscordActionForm,
   type DiscordForm,
   type DiscordGuildChannelForm,
   type DiscordGuildForm,
   type IMessageForm,
+  type SlackChannelForm,
+  type SlackForm,
   type SignalForm,
   type TelegramForm,
 } from "../ui-types";
@@ -34,10 +37,12 @@ export type ConfigState = {
   lastError: string | null;
   telegramForm: TelegramForm;
   discordForm: DiscordForm;
+  slackForm: SlackForm;
   signalForm: SignalForm;
   imessageForm: IMessageForm;
   telegramConfigStatus: string | null;
   discordConfigStatus: string | null;
+  slackConfigStatus: string | null;
   signalConfigStatus: string | null;
   imessageConfigStatus: string | null;
 };
@@ -255,10 +260,6 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       typeof slack.textChunkLimit === "number"
         ? String(slack.textChunkLimit)
         : "",
-    replyToMode:
-      slack.replyToMode === "first" || slack.replyToMode === "all"
-        ? slack.replyToMode
-        : "off",
     reactionNotifications:
       slack.reactionNotifications === "off" ||
       slack.reactionNotifications === "all" ||
@@ -492,4 +493,3 @@ function removePathValue(
     delete (current as Record<string, unknown>)[lastKey];
   }
 }
-
