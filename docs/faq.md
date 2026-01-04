@@ -446,31 +446,54 @@ cd ~/path/to/clawdbot
 codex --full-auto "debug why clawdbot gateway won't start"
 ```
 
-### Processes keep restarting after I kill them (Linux)
+### Processes keep restarting after I kill them
 
-Something is supervising them. Check:
+The gateway runs under a supervisor that auto-restarts it. You need to stop the supervisor, not just kill the process.
+
+**macOS (launchd)**
 
 ```bash
-# systemd?
-systemctl list-units | grep -i clawdbot
-sudo systemctl stop clawdbot
+# Check if running
+launchctl list | grep clawdbot
 
-# pm2?
-pm2 list
-pm2 delete all
+# Stop and disable
+launchctl disable gui/$UID/com.clawdbot.gateway
+launchctl bootout gui/$UID/com.clawdbot.gateway
+
+# Re-enable later
+launchctl enable gui/$UID/com.clawdbot.gateway
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.gateway.plist
 ```
 
-Stop the supervisor first, then the processes.
+**Linux (systemd)**
+
+```bash
+# Check if running
+systemctl list-units | grep -i clawdbot
+
+# Stop and disable
+sudo systemctl disable --now clawdbot
+```
+
+**pm2 (if used)**
+
+```bash
+pm2 list
+pm2 delete clawdbot
+```
 
 ### Clean uninstall (start fresh)
 
 ```bash
-# Stop processes
-pkill -f "clawdbot"
+# macOS: stop launchd service
+launchctl disable gui/$UID/com.clawdbot.gateway
+launchctl bootout gui/$UID/com.clawdbot.gateway 2>/dev/null
 
-# If using systemd
-sudo systemctl stop clawdbot
-sudo systemctl disable clawdbot
+# Linux: stop systemd service
+sudo systemctl disable --now clawdbot
+
+# Kill any remaining processes
+pkill -f "clawdbot"
 
 # Remove data
 rm -rf ~/.clawdbot
