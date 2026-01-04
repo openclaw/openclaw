@@ -213,6 +213,7 @@ export async function evaluateViaPlaywright(opts: {
     const locator = refLocator(page, opts.ref);
     // Use Function constructor at runtime to avoid esbuild adding __name helper
     // which doesn't exist in the browser context
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
     const elementEvaluator = new Function(
       "el",
       "fnBody",
@@ -230,6 +231,7 @@ export async function evaluateViaPlaywright(opts: {
   }
   // Use Function constructor at runtime to avoid esbuild adding __name helper
   // which doesn't exist in the browser context
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval -- required for browser-context eval
   const browserEvaluator = new Function(
     "fnBody",
     `

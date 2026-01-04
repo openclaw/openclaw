@@ -2767,7 +2767,11 @@ function createSessionsSendTool(): AnyAgentTool {
           });
         } catch (err) {
           const message =
-            err instanceof Error ? err.message : String(err ?? "error");
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : "error";
           return jsonResult({
             runId,
             status: "error",
@@ -2792,7 +2796,11 @@ function createSessionsSendTool(): AnyAgentTool {
         }
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : String(err ?? "error");
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "error";
         return jsonResult({
           runId,
           status: "error",
@@ -2818,7 +2826,11 @@ function createSessionsSendTool(): AnyAgentTool {
         waitError = typeof wait?.error === "string" ? wait.error : undefined;
       } catch (err) {
         const message =
-          err instanceof Error ? err.message : String(err ?? "error");
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "error";
         return jsonResult({
           runId,
           status: message.includes("gateway timeout") ? "timeout" : "error",

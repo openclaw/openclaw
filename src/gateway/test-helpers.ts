@@ -250,7 +250,7 @@ vi.mock("../config/config.js", async () => {
       session: {
         mainKey: "main",
         store: testState.sessionStorePath,
-        ...(testState.sessionConfig ?? {}),
+        ...testState.sessionConfig,
       },
       gateway: (() => {
         const gateway: Record<string, unknown> = {};
@@ -366,7 +366,7 @@ export function installGatewayTestHooks() {
     piSdkMock.enabled = false;
     piSdkMock.discoverCalls = 0;
     piSdkMock.models = [];
-  });
+  }, 20_000);
 
   afterEach(async () => {
     process.env.HOME = previousHome;
