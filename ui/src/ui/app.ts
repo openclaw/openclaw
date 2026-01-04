@@ -756,8 +756,9 @@ export class ClawdbotApp extends LitElement {
   }
   async handleSendChat() {
     if (!this.connected) return;
-    await sendChat(this);
-    void loadChatHistory(this);
+    const ok = await sendChat(this);
+    if (ok) void loadChatHistory(this);
+    this.scheduleChatScroll();
   }
 
   async handleWhatsAppStart(force: boolean) {
