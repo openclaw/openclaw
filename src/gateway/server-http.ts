@@ -22,6 +22,7 @@ import {
   resolveHookProvider,
 } from "./hooks.js";
 import { applyHookMappings } from "./hooks-mapping.js";
+import { handleServeRequest } from "./serve.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -206,12 +207,14 @@ export function createGatewayHttpServer(opts: {
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   handleHooksRequest: HooksRequestHandler;
+  serveBaseUrl?: string;
 }): HttpServer {
   const {
     canvasHost,
     controlUiEnabled,
     controlUiBasePath,
     handleHooksRequest,
+    serveBaseUrl,
   } = opts;
   const httpServer: HttpServer = createHttpServer((req, res) => {
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
@@ -219,6 +222,7 @@ export function createGatewayHttpServer(opts: {
 
     void (async () => {
       if (await handleHooksRequest(req, res)) return;
+      if (serveBaseUrl && handleServeRequest(req, res, { baseUrl: serveBaseUrl })) return;
       if (canvasHost) {
         if (await handleA2uiHttpRequest(req, res)) return;
         if (await canvasHost.handleHttpRequest(req, res)) return;
