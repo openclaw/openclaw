@@ -317,6 +317,20 @@ export function subscribeEmbeddedPiSession(params: {
 
   const unsubscribe = params.session.subscribe(
     (evt: AgentEvent | { type: string; [k: string]: unknown }) => {
+      if (evt.type === "message_start") {
+        const msg = (evt as AgentEvent & { message: AgentMessage }).message;
+        if (msg?.role === "assistant") {
+          // Start-of-message is a safer reset point than message_end: some providers
+          // may deliver late text_end updates after message_end, which would
+          // otherwise re-trigger block replies.
+          deltaBuffer = "";
+          blockBuffer = "";
+          lastStreamedAssistant = undefined;
+          lastBlockReplyText = undefined;
+          assistantTextBaseline = assistantTexts.length;
+        }
+      }
+
       if (evt.type === "tool_execution_start") {
         const toolName = String(
           (evt as AgentEvent & { toolName: string }).toolName,
@@ -585,7 +599,6 @@ export function subscribeEmbeddedPiSession(params: {
           deltaBuffer = "";
           blockBuffer = "";
           lastStreamedAssistant = undefined;
-          lastBlockReplyText = undefined;
         }
       }
 
