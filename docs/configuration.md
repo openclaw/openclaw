@@ -327,14 +327,13 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       sessionPrefix: "slack:slash",
       ephemeral: true
     },
-    replyToMode: "off",      // off | first | all
     textChunkLimit: 4000,
     mediaMaxMb: 20
   }
 }
 ```
 
-Clawdis starts Slack only when a `slack` config section exists and both tokens are set (unless `slack.enabled` is `false`). Provide `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` env vars if you prefer. Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+Clawdis starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
 
 Reaction notification modes:
 - `off`: no reaction events.

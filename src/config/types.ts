@@ -65,6 +65,7 @@ export type AgentElevatedAllowFromConfig = {
   whatsapp?: string[];
   telegram?: Array<string | number>;
   discord?: Array<string | number>;
+  slack?: Array<string | number>;
   signal?: Array<string | number>;
   imessage?: Array<string | number>;
   webchat?: Array<string | number>;
@@ -337,7 +338,6 @@ export type SlackConfig = {
   botToken?: string;
   appToken?: string;
   textChunkLimit?: number;
-  replyToMode?: ReplyToMode;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;

@@ -6,7 +6,6 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
-  ReplyToMode,
   SlackReactionNotificationMode,
   SlackSlashCommandConfig,
 } from "../config/config.js";
@@ -26,7 +25,6 @@ export type MonitorSlackOpts = {
   appToken?: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  replyToMode?: ReplyToMode;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
 };
@@ -134,18 +132,6 @@ type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
 };
-
-export function resolveSlackReplyTarget(opts: {
-  replyToMode: ReplyToMode;
-  replyToId?: string;
-  hasReplied: boolean;
-}): string | undefined {
-  if (opts.replyToMode === "off") return undefined;
-  const replyToId = opts.replyToId?.trim();
-  if (!replyToId) return undefined;
-  if (opts.replyToMode === "all") return replyToId;
-  return opts.hasReplied ? undefined : replyToId;
-}
 
 function normalizeSlackSlug(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
@@ -353,7 +339,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const groupDmChannels = normalizeAllowList(dmConfig?.groupChannels);
   const channelsConfig = cfg.slack?.channels;
   const dmEnabled = dmConfig?.enabled ?? true;
-  const replyToMode = opts.replyToMode ?? cfg.slack?.replyToMode ?? "off";
   const reactionMode = cfg.slack?.reactionNotifications ?? "own";
   const reactionAllowlist = cfg.slack?.reactionAllowlist ?? [];
   const slashCommand = resolveSlackSlashCommandConfig(
@@ -583,6 +568,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const senderName = sender?.name ?? message.user;
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
+    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+    const inboundLabel = isDirectMessage
+      ? `Slack DM from ${senderName}`
+      : `Slack message in ${roomLabel} from ${senderName}`;
+    enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
+    });
+
     const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
     const body = formatAgentEnvelope({
       surface: "Slack",
@@ -634,7 +627,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
 
     if (shouldLogVerbose()) {
-      const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
       logVerbose(
         `slack inbound: channel=${message.channel} from=${ctxPayload.From} preview="${preview}"`,
       );
@@ -656,7 +648,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             target: replyTarget,
             token: botToken,
             runtime,
-            replyToMode,
             textLimit,
           });
         })
@@ -685,7 +676,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       target: replyTarget,
       token: botToken,
       runtime,
-      replyToMode,
       textLimit,
     });
     if (shouldLogVerbose()) {
@@ -1222,49 +1212,36 @@ async function deliverReplies(params: {
   target: string;
   token: string;
   runtime: RuntimeEnv;
-  replyToMode: ReplyToMode;
   textLimit: number;
 }) {
   const chunkLimit = Math.min(params.textLimit, 4000);
-  let hasReplied = false;
   for (const payload of params.replies) {
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
-    const replyToId = payload.replyToId;
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
       for (const chunk of chunkText(text, chunkLimit)) {
-        const threadTs = resolveSlackReplyTarget({
-          replyToMode: params.replyToMode,
-          replyToId,
-          hasReplied,
-        });
+        const threadTs = undefined;
         const trimmed = chunk.trim();
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
           threadTs,
         });
-        if (threadTs && !hasReplied) hasReplied = true;
       }
     } else {
       let first = true;
       for (const mediaUrl of mediaList) {
         const caption = first ? text : "";
         first = false;
-        const threadTs = resolveSlackReplyTarget({
-          replyToMode: params.replyToMode,
-          replyToId,
-          hasReplied,
-        });
+        const threadTs = undefined;
         await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
           threadTs,
         });
-        if (threadTs && !hasReplied) hasReplied = true;
       }
     }
     params.runtime.log?.(`delivered reply to ${params.target}`);

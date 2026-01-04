@@ -3,11 +3,14 @@ import { parseList } from "../format";
 import type { ConfigSnapshot, ProvidersStatusSnapshot } from "../types";
 import {
   defaultDiscordActions,
+  defaultSlackActions,
   type DiscordActionForm,
   type DiscordForm,
   type DiscordGuildChannelForm,
   type DiscordGuildForm,
   type IMessageForm,
+  type SlackActionForm,
+  type SlackForm,
   type SignalForm,
   type TelegramForm,
 } from "../ui-types";
@@ -31,6 +34,11 @@ export type ConnectionsState = {
   discordSaving: boolean;
   discordTokenLocked: boolean;
   discordConfigStatus: string | null;
+  slackForm: SlackForm;
+  slackSaving: boolean;
+  slackTokenLocked: boolean;
+  slackAppTokenLocked: boolean;
+  slackConfigStatus: string | null;
   signalForm: SignalForm;
   signalSaving: boolean;
   signalConfigStatus: string | null;
@@ -54,6 +62,8 @@ export async function loadProviders(state: ConnectionsState, probe: boolean) {
     state.providersLastSuccess = Date.now();
     state.telegramTokenLocked = res.telegram.tokenSource === "env";
     state.discordTokenLocked = res.discord?.tokenSource === "env";
+    state.slackTokenLocked = res.slack?.botTokenSource === "env";
+    state.slackAppTokenLocked = res.slack?.appTokenSource === "env";
   } catch (err) {
     state.providersError = String(err);
   } finally {
@@ -134,6 +144,21 @@ export function updateDiscordForm(
     return;
   }
   state.discordForm = { ...state.discordForm, ...patch };
+}
+
+export function updateSlackForm(
+  state: ConnectionsState,
+  patch: Partial<SlackForm>,
+) {
+  if (patch.actions) {
+    state.slackForm = {
+      ...state.slackForm,
+      ...patch,
+      actions: { ...state.slackForm.actions, ...patch.actions },
+    };
+    return;
+  }
+  state.slackForm = { ...state.slackForm, ...patch };
 }
 
 export function updateSignalForm(
@@ -437,9 +462,6 @@ export async function saveSlackConfig(state: ConnectionsState) {
       delete slack.textChunkLimit;
     }
 
-    if (form.replyToMode === "off") delete slack.replyToMode;
-    else slack.replyToMode = form.replyToMode;
-
     if (form.reactionNotifications === "own") {
       delete slack.reactionNotifications;
     } else {
@@ -670,4 +692,3 @@ export async function saveIMessageConfig(state: ConnectionsState) {
     state.imessageSaving = false;
   }
 }
-

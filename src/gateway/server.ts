@@ -148,12 +148,14 @@ const logWsControl = log.child("ws");
 const logWhatsApp = logProviders.child("whatsapp");
 const logTelegram = logProviders.child("telegram");
 const logDiscord = logProviders.child("discord");
+const logSlack = logProviders.child("slack");
 const logSignal = logProviders.child("signal");
 const logIMessage = logProviders.child("imessage");
 const canvasRuntime = runtimeForLogger(logCanvas);
 const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
 const telegramRuntimeEnv = runtimeForLogger(logTelegram);
 const discordRuntimeEnv = runtimeForLogger(logDiscord);
+const slackRuntimeEnv = runtimeForLogger(logSlack);
 const signalRuntimeEnv = runtimeForLogger(logSignal);
 const imessageRuntimeEnv = runtimeForLogger(logIMessage);
 
@@ -478,6 +480,7 @@ export async function startGatewayServer(
       | "whatsapp"
       | "telegram"
       | "discord"
+      | "slack"
       | "signal"
       | "imessage";
     to?: string;
@@ -722,11 +725,13 @@ export async function startGatewayServer(
     logWhatsApp,
     logTelegram,
     logDiscord,
+    logSlack,
     logSignal,
     logIMessage,
     whatsappRuntimeEnv,
     telegramRuntimeEnv,
     discordRuntimeEnv,
+    slackRuntimeEnv,
     signalRuntimeEnv,
     imessageRuntimeEnv,
   });
@@ -736,11 +741,13 @@ export async function startGatewayServer(
     startWhatsAppProvider,
     startTelegramProvider,
     startDiscordProvider,
+    startSlackProvider,
     startSignalProvider,
     startIMessageProvider,
     stopWhatsAppProvider,
     stopTelegramProvider,
     stopDiscordProvider,
+    stopSlackProvider,
     stopSignalProvider,
     stopIMessageProvider,
     markWhatsAppLoggedOut,
@@ -1593,7 +1600,7 @@ export async function startGatewayServer(
     }
   }
 
-  // Launch configured providers (WhatsApp Web, Discord, Telegram) so gateway replies via the
+  // Launch configured providers (WhatsApp Web, Discord, Slack, Telegram) so gateway replies via the
   // surface the message came from. Tests can opt out via CLAWDIS_SKIP_PROVIDERS.
   if (process.env.CLAWDIS_SKIP_PROVIDERS !== "1") {
     try {
@@ -1703,6 +1710,9 @@ export async function startGatewayServer(
             startDiscordProvider,
           );
         }
+        if (plan.restartProviders.has("slack")) {
+          await restartProvider("slack", stopSlackProvider, startSlackProvider);
+        }
         if (plan.restartProviders.has("signal")) {
           await restartProvider(
             "signal",
@@ -1806,6 +1816,7 @@ export async function startGatewayServer(
       await stopWhatsAppProvider();
       await stopTelegramProvider();
       await stopDiscordProvider();
+      await stopSlackProvider();
       await stopSignalProvider();
       await stopIMessageProvider();
       await stopGmailWatcher();

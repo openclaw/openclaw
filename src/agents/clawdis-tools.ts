@@ -8,6 +8,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
+import { createSlackTool } from "./tools/slack-tool.js";
 
 export function createClawdisTools(options?: {
   browserControlUrl?: string;
@@ -20,6 +21,7 @@ export function createClawdisTools(options?: {
     createNodesTool(),
     createCronTool(),
     createDiscordTool(),
+    createSlackTool(),
     createGatewayTool(),
     createSessionsListTool(),
     createSessionsHistoryTool(),

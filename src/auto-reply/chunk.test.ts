@@ -63,7 +63,10 @@ describe("resolveTextChunkLimit", () => {
   });
 
   it("uses the matching provider override", () => {
-    const cfg = { discord: { textChunkLimit: 111 }, slack: { textChunkLimit: 222 } };
+    const cfg = {
+      discord: { textChunkLimit: 111 },
+      slack: { textChunkLimit: 222 },
+    };
     expect(resolveTextChunkLimit(cfg, "discord")).toBe(111);
     expect(resolveTextChunkLimit(cfg, "slack")).toBe(222);
     expect(resolveTextChunkLimit(cfg, "telegram")).toBe(4000);

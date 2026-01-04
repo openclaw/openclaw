@@ -31,6 +31,7 @@ async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
       "WhatsApp: dedicated second number recommended; primary number OK (self-chat).",
       "Telegram: Bot API (token from @BotFather), replies via your bot.",
       "Discord: Bot token from Discord Developer Portal; invite bot to your server.",
+      "Slack: Socket Mode app token + bot token, DMs via App Home Messages tab.",
       "Signal: signal-cli as a linked device; separate number recommended.",
       "iMessage: local imsg CLI; separate Apple ID recommended only on a separate Mac.",
     ].join("\n"),
@@ -74,6 +75,10 @@ function buildSlackManifest(botName: string) {
         display_name: safeName,
         always_online: false,
       },
+      app_home: {
+        messages_tab_enabled: true,
+        messages_tab_read_only_enabled: false,
+      },
       slash_commands: [
         {
           command: "/clawd",
@@ -94,6 +99,7 @@ function buildSlackManifest(botName: string) {
           "users:read",
           "app_mentions:read",
           "reactions:read",
+          "reactions:write",
           "pins:read",
           "pins:write",
           "emoji:read",
@@ -137,6 +143,7 @@ async function noteSlackTokenHelp(
       "2) Add Socket Mode + enable it to get the app-level token (xapp-...)",
       "3) OAuth & Permissions → install app to workspace (xoxb- bot token)",
       "4) Enable Event Subscriptions (socket) for message events",
+      "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
       "",
       "Manifest (JSON):",
@@ -237,10 +244,16 @@ export async function setupProviders(
   const whatsappLinked = await detectWhatsAppLinked();
   const telegramEnv = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
   const discordEnv = Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
+  const slackBotEnv = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
+  const slackAppEnv = Boolean(process.env.SLACK_APP_TOKEN?.trim());
   const telegramConfigured = Boolean(
     telegramEnv || cfg.telegram?.botToken || cfg.telegram?.tokenFile,
   );
   const discordConfigured = Boolean(discordEnv || cfg.discord?.token);
+  const slackConfigured = Boolean(
+    (slackBotEnv && slackAppEnv) ||
+      (cfg.slack?.botToken && cfg.slack?.appToken),
+  );
   const signalConfigured = Boolean(
     cfg.signal?.account || cfg.signal?.httpUrl || cfg.signal?.httpPort,
   );
@@ -257,6 +270,7 @@ export async function setupProviders(
       `WhatsApp: ${whatsappLinked ? "linked" : "not linked"}`,
       `Telegram: ${telegramConfigured ? "configured" : "needs token"}`,
       `Discord: ${discordConfigured ? "configured" : "needs token"}`,
+      `Slack: ${slackConfigured ? "configured" : "needs tokens"}`,
       `Signal: ${signalConfigured ? "configured" : "needs setup"}`,
       `iMessage: ${imessageConfigured ? "configured" : "needs setup"}`,
       `signal-cli: ${signalCliDetected ? "found" : "missing"} (${signalCliPath})`,
@@ -290,6 +304,11 @@ export async function setupProviders(
         value: "discord",
         label: "Discord (Bot API)",
         hint: discordConfigured ? "configured" : "needs token",
+      },
+      {
+        value: "slack",
+        label: "Slack (Socket Mode)",
+        hint: slackConfigured ? "configured" : "needs tokens",
       },
       {
         value: "signal",
@@ -695,6 +714,19 @@ export async function setupProviders(
       }
     }
 
+    if (!selection.includes("slack") && slackConfigured) {
+      const disable = await prompter.confirm({
+        message: "Disable Slack provider?",
+        initialValue: false,
+      });
+      if (disable) {
+        next = {
+          ...next,
+          slack: { ...next.slack, enabled: false },
+        };
+      }
+    }
+
     if (!selection.includes("signal") && signalConfigured) {
       const disable = await prompter.confirm({
         message: "Disable Signal provider?",
@@ -724,4 +756,3 @@ export async function setupProviders(
 
   return next;
 }
-

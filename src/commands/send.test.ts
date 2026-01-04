@@ -41,6 +41,7 @@ const makeDeps = (overrides: Partial<CliDeps> = {}): CliDeps => ({
   sendMessageWhatsApp: vi.fn(),
   sendMessageTelegram: vi.fn(),
   sendMessageDiscord: vi.fn(),
+  sendMessageSlack: vi.fn(),
   sendMessageSignal: vi.fn(),
   sendMessageIMessage: vi.fn(),
   ...overrides,
@@ -167,6 +168,25 @@ describe("sendCommand", () => {
     );
     expect(deps.sendMessageSignal).toHaveBeenCalledWith(
       "+15551234567",
+      "hi",
+      expect.objectContaining({ mediaUrl: undefined }),
+    );
+    expect(deps.sendMessageWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("routes to slack provider", async () => {
+    const deps = makeDeps({
+      sendMessageSlack: vi
+        .fn()
+        .mockResolvedValue({ messageId: "s1", channelId: "C123" }),
+    });
+    await sendCommand(
+      { to: "channel:C123", message: "hi", provider: "slack" },
+      deps,
+      runtime,
+    );
+    expect(deps.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
       "hi",
       expect.objectContaining({ mediaUrl: undefined }),
     );
