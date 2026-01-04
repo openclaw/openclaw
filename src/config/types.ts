@@ -477,6 +477,8 @@ export type CanvasHostConfig = {
   root?: string;
   /** HTTP port to listen on (default: 18793). */
   port?: number;
+  /** Enable live-reload file watching + WS reloads (default: true). */
+  liveReload?: boolean;
 };
 
 export type TalkConfig = {

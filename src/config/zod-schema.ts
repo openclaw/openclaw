@@ -748,6 +748,7 @@ export const ClawdisSchema = z.object({
       enabled: z.boolean().optional(),
       root: z.string().optional(),
       port: z.number().int().positive().optional(),
+      liveReload: z.boolean().optional(),
     })
     .optional(),
   talk: z

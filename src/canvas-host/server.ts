@@ -27,6 +27,7 @@ export type CanvasHostOpts = {
   port?: number;
   listenHost?: string;
   allowInTests?: boolean;
+  liveReload?: boolean;
 };
 
 export type CanvasHostServerOpts = CanvasHostOpts & {
@@ -45,6 +46,7 @@ export type CanvasHostHandlerOpts = {
   rootDir?: string;
   basePath?: string;
   allowInTests?: boolean;
+  liveReload?: boolean;
 };
 
 export type CanvasHostHandler = {
@@ -234,15 +236,19 @@ export async function createCanvasHostHandler(
   );
   const rootReal = await prepareCanvasRoot(rootDir);
 
-  const wss = new WebSocketServer({ noServer: true });
+  const liveReload = opts.liveReload !== false;
+  const wss = liveReload ? new WebSocketServer({ noServer: true }) : null;
   const sockets = new Set<WebSocket>();
-  wss.on("connection", (ws) => {
-    sockets.add(ws);
-    ws.on("close", () => sockets.delete(ws));
-  });
+  if (wss) {
+    wss.on("connection", (ws) => {
+      sockets.add(ws);
+      ws.on("close", () => sockets.delete(ws));
+    });
+  }
 
   let debounce: NodeJS.Timeout | null = null;
   const broadcastReload = () => {
+    if (!liveReload) return;
     for (const ws of sockets) {
       try {
         ws.send("reload");
@@ -261,19 +267,23 @@ export async function createCanvasHostHandler(
   };
 
   let watcherClosed = false;
-  const watcher = chokidar.watch(rootReal, {
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
-    ignored: [
-      /(^|[\\/])\../, // dotfiles
-      /(^|[\\/])node_modules([\\/]|$)/,
-    ],
-  });
-  watcher.on("all", () => scheduleReload());
-  watcher.on("error", (err) => {
+  const watcher = liveReload
+    ? chokidar.watch(rootReal, {
+        ignoreInitial: true,
+        awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
+        ignored: [
+          /(^|[\\/])\../, // dotfiles
+          /(^|[\\/])node_modules([\\/]|$)/,
+        ],
+      })
+    : null;
+  watcher?.on("all", () => scheduleReload());
+  watcher?.on("error", (err) => {
     if (watcherClosed) return;
     watcherClosed = true;
-    opts.runtime.error(`canvasHost watcher error: ${String(err)}`);
+    opts.runtime.error(
+      `canvasHost watcher error: ${String(err)} (live reload disabled; consider canvasHost.liveReload=false or a smaller canvasHost.root)`,
+    );
     void watcher.close().catch(() => {});
   });
 
@@ -282,6 +292,7 @@ export async function createCanvasHostHandler(
     socket: Duplex,
     head: Buffer,
   ) => {
+    if (!wss) return false;
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname !== CANVAS_WS_PATH) return false;
     wss.handleUpgrade(req, socket as Socket, head, (ws) => {
@@ -300,9 +311,9 @@ export async function createCanvasHostHandler(
     try {
       const url = new URL(urlRaw, "http://localhost");
       if (url.pathname === CANVAS_WS_PATH) {
-        res.statusCode = 426;
+        res.statusCode = liveReload ? 426 : 404;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end("upgrade required");
+        res.end(liveReload ? "upgrade required" : "not found");
         return true;
       }
 
@@ -350,7 +361,7 @@ export async function createCanvasHostHandler(
       if (mime === "text/html") {
         const html = await fs.readFile(filePath, "utf8");
         res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(injectCanvasLiveReload(html));
+        res.end(liveReload ? injectCanvasLiveReload(html) : html);
         return true;
       }
 
@@ -374,8 +385,10 @@ export async function createCanvasHostHandler(
     close: async () => {
       if (debounce) clearTimeout(debounce);
       watcherClosed = true;
-      await watcher.close().catch(() => {});
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await watcher?.close().catch(() => {});
+      if (wss) {
+        await new Promise<void>((resolve) => wss.close(() => resolve()));
+      }
     },
   };
 }
@@ -394,6 +407,7 @@ export async function startCanvasHost(
       rootDir: opts.rootDir,
       basePath: CANVAS_HOST_PATH,
       allowInTests: opts.allowInTests,
+      liveReload: opts.liveReload,
     }));
   const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 

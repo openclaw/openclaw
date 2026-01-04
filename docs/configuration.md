@@ -1043,11 +1043,15 @@ The server:
 - also serves A2UI at `/__clawdis__/a2ui/` and is advertised to nodes as `canvasHostUrl`
   (always used by nodes for Canvas/A2UI)
 
+Disable live reload (and file watching) if the directory is large or you hit `EMFILE`:
+- config: `canvasHost: { liveReload: false }`
+
 ```json5
 {
   canvasHost: {
     root: "~/clawd/canvas",
-    port: 18793
+    port: 18793,
+    liveReload: true
   }
 }
 ```

@@ -555,6 +555,7 @@ export async function startGatewayServer(
         rootDir: cfgAtStart.canvasHost?.root,
         basePath: CANVAS_HOST_PATH,
         allowInTests: opts.allowCanvasHostInTests,
+        liveReload: cfgAtStart.canvasHost?.liveReload,
       });
       if (handler.rootDir) {
         canvasHost = handler;
@@ -860,6 +861,7 @@ export async function startGatewayServer(
         port: canvasHostPort,
         listenHost: bridgeHost,
         allowInTests: opts.allowCanvasHostInTests,
+        liveReload: cfgAtStart.canvasHost?.liveReload,
         handler: canvasHost ?? undefined,
         ownsHandler: canvasHost ? false : undefined,
       });

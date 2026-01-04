@@ -49,6 +49,42 @@ describe("canvas host", () => {
     }
   });
 
+  it("skips live reload injection when disabled", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    await fs.writeFile(
+      path.join(dir, "index.html"),
+      "<html><body>no-reload</body></html>",
+      "utf8",
+    );
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+      liveReload: false,
+    });
+
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${server.port}${CANVAS_HOST_PATH}/`,
+      );
+      const html = await res.text();
+      expect(res.status).toBe(200);
+      expect(html).toContain("no-reload");
+      expect(html).not.toContain(CANVAS_WS_PATH);
+
+      const wsRes = await fetch(
+        `http://127.0.0.1:${server.port}${CANVAS_WS_PATH}`,
+      );
+      expect(wsRes.status).toBe(404);
+    } finally {
+      await server.close();
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("serves canvas content from the mounted base path", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
     await fs.writeFile(
