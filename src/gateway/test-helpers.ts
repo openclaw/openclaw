@@ -39,7 +39,7 @@ export type BridgeStartOpts = {
   >;
 };
 
-  const hoisted = vi.hoisted(() => ({
+const hoisted = vi.hoisted(() => ({
   bridgeStartCalls: [] as BridgeStartOpts[],
   bridgeInvoke: vi.fn(async () => ({
     type: "invoke-res",
@@ -292,9 +292,9 @@ vi.mock("../config/config.js", async () => {
 });
 
 vi.mock("../agents/pi-embedded.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/pi-embedded.js")>(
-    "../agents/pi-embedded.js",
-  );
+  const actual = await vi.importActual<
+    typeof import("../agents/pi-embedded.js")
+  >("../agents/pi-embedded.js");
   return {
     ...actual,
     isEmbeddedPiRunActive: (sessionId: string) =>

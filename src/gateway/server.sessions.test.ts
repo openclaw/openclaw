@@ -4,8 +4,8 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import {
   connectOk,
-  installGatewayTestHooks,
   embeddedRunMock,
+  installGatewayTestHooks,
   piSdkMock,
   rpcReq,
   startServerWithClient,

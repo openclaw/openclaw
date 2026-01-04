@@ -3,12 +3,6 @@ import fs from "node:fs";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  resolveEmbeddedSessionLane,
-  waitForEmbeddedPiRunEnd,
-} from "../agents/pi-embedded.js";
-import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -16,6 +10,12 @@ import {
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  resolveEmbeddedSessionLane,
+  waitForEmbeddedPiRunEnd,
+} from "../agents/pi-embedded.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   normalizeThinkLevel,
@@ -44,8 +44,8 @@ import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
-import { defaultRuntime } from "../runtime.js";
 import { clearCommandLane } from "../process/command-queue.js";
+import { defaultRuntime } from "../runtime.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {

@@ -262,11 +262,14 @@ export function waitForEmbeddedPiRunEnd(
     const waiters = EMBEDDED_RUN_WAITERS.get(sessionId) ?? new Set();
     const waiter: EmbeddedRunWaiter = {
       resolve,
-      timer: setTimeout(() => {
-        waiters.delete(waiter);
-        if (waiters.size === 0) EMBEDDED_RUN_WAITERS.delete(sessionId);
-        resolve(false);
-      }, Math.max(100, timeoutMs)),
+      timer: setTimeout(
+        () => {
+          waiters.delete(waiter);
+          if (waiters.size === 0) EMBEDDED_RUN_WAITERS.delete(sessionId);
+          resolve(false);
+        },
+        Math.max(100, timeoutMs),
+      ),
     };
     waiters.add(waiter);
     EMBEDDED_RUN_WAITERS.set(sessionId, waiters);
