@@ -816,6 +816,11 @@ export type ClawdbotConfig = {
         maxAgeDays?: number;
       };
     };
+    /** Global tool allow/deny policy for all providers (deny wins). */
+    tools?: {
+      allow?: string[];
+      deny?: string[];
+    };
   };
   routing?: RoutingConfig;
   messages?: MessagesConfig;

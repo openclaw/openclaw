@@ -509,8 +509,14 @@ export function createClawdbotCodingTools(options?: {
     if (tool.name === "slack") return allowSlack;
     return true;
   });
+  const globallyFiltered =
+    options?.config?.agent?.tools &&
+    (options.config.agent.tools.allow?.length ||
+      options.config.agent.tools.deny?.length)
+      ? filterToolsByPolicy(filtered, options.config.agent.tools)
+      : filtered;
   const sandboxed = sandbox
-    ? filterToolsByPolicy(filtered, sandbox.tools)
-    : filtered;
+    ? filterToolsByPolicy(globallyFiltered, sandbox.tools)
+    : globallyFiltered;
   return sandboxed.map(normalizeToolParameters);
 }

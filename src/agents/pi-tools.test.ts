@@ -195,4 +195,12 @@ describe("createClawdbotCodingTools", () => {
     expect(tools.some((tool) => tool.name === "read")).toBe(false);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
   });
+
+  it("filters tools by agent tool policy even without sandbox", () => {
+    const tools = createClawdbotCodingTools({
+      config: { agent: { tools: { deny: ["browser"] } } },
+    });
+    expect(tools.some((tool) => tool.name === "bash")).toBe(true);
+    expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+  });
 });

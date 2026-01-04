@@ -370,6 +370,12 @@ export const ClawdbotSchema = z.object({
       modelFallbacks: z.array(z.string()).optional(),
       imageModelFallbacks: z.array(z.string()).optional(),
       contextTokens: z.number().int().positive().optional(),
+      tools: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional(),
+        })
+        .optional(),
       thinkingDefault: z
         .union([
           z.literal("off"),
