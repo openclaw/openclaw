@@ -289,7 +289,9 @@ function resolveClawdbotMetadata(
     const osRaw = normalizeStringList(clawdbotObj.os);
     return {
       always:
-        typeof clawdbotObj.always === "boolean" ? clawdbotObj.always : undefined,
+        typeof clawdbotObj.always === "boolean"
+          ? clawdbotObj.always
+          : undefined,
       emoji:
         typeof clawdbotObj.emoji === "string" ? clawdbotObj.emoji : undefined,
       homepage:

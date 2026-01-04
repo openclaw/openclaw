@@ -60,10 +60,7 @@ export type SandboxDockerConfig = {
   memory?: string | number;
   memorySwap?: string | number;
   cpus?: number;
-  ulimits?: Record<
-    string,
-    string | number | { soft?: number; hard?: number }
-  >;
+  ulimits?: Record<string, string | number | { soft?: number; hard?: number }>;
   seccompProfile?: string;
   apparmorProfile?: string;
   dns?: string[];
