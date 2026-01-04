@@ -498,6 +498,7 @@ export async function runEmbeddedPiAgent(params: {
           bash: params.config?.agent?.bash,
           sandbox,
           surface: params.surface,
+          sessionKey: params.sessionKey ?? params.sessionId,
         });
         const machineName = await getMachineDisplayName();
         const runtimeInfo = {

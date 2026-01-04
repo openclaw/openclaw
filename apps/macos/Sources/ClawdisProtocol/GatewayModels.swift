@@ -378,6 +378,8 @@ public struct AgentParams: Codable {
     public let deliver: Bool?
     public let channel: String?
     public let timeout: Int?
+    public let lane: String?
+    public let extrasystemprompt: String?
     public let idempotencykey: String
 
     public init(
@@ -389,6 +391,8 @@ public struct AgentParams: Codable {
         deliver: Bool?,
         channel: String?,
         timeout: Int?,
+        lane: String?,
+        extrasystemprompt: String?,
         idempotencykey: String
     ) {
         self.message = message
@@ -399,6 +403,8 @@ public struct AgentParams: Codable {
         self.deliver = deliver
         self.channel = channel
         self.timeout = timeout
+        self.lane = lane
+        self.extrasystemprompt = extrasystemprompt
         self.idempotencykey = idempotencykey
     }
     private enum CodingKeys: String, CodingKey {
@@ -410,6 +416,8 @@ public struct AgentParams: Codable {
         case deliver
         case channel
         case timeout
+        case lane
+        case extrasystemprompt = "extraSystemPrompt"
         case idempotencykey = "idempotencyKey"
     }
 }

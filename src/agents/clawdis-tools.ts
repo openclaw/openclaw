@@ -2712,7 +2712,88 @@ function createSessionsHistoryTool(): AnyAgentTool {
   };
 }
 
-function createSessionsSendTool(): AnyAgentTool {
+const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
+
+type AnnounceTarget = {
+  channel: string;
+  to: string;
+};
+
+function resolveAnnounceTargetFromKey(
+  sessionKey: string,
+): AnnounceTarget | null {
+  const parts = sessionKey.split(":").filter(Boolean);
+  if (parts.length < 3) return null;
+  const [surface, kind, ...rest] = parts;
+  if (kind !== "group" && kind !== "channel") return null;
+  const id = rest.join(":").trim();
+  if (!id) return null;
+  if (!surface) return null;
+  const channel = surface.toLowerCase();
+  if (channel === "discord") {
+    return { channel, to: `channel:${id}` };
+  }
+  if (channel === "signal") {
+    return { channel, to: `group:${id}` };
+  }
+  return { channel, to: id };
+}
+
+function buildAgentToAgentMessageContext(params: {
+  requesterSessionKey?: string;
+  requesterSurface?: string;
+  targetSessionKey: string;
+}) {
+  const lines = [
+    "Agent-to-agent message context:",
+    params.requesterSessionKey
+      ? `Requester session: ${params.requesterSessionKey}.`
+      : undefined,
+    params.requesterSurface
+      ? `Requester surface: ${params.requesterSurface}.`
+      : undefined,
+    `Target session: ${params.targetSessionKey}.`,
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function buildAgentToAgentPostContext(params: {
+  requesterSessionKey?: string;
+  requesterSurface?: string;
+  targetSessionKey: string;
+  targetChannel?: string;
+  originalMessage: string;
+  roundOneReply?: string;
+}) {
+  const lines = [
+    "Agent-to-agent post step:",
+    params.requesterSessionKey
+      ? `Requester session: ${params.requesterSessionKey}.`
+      : undefined,
+    params.requesterSurface
+      ? `Requester surface: ${params.requesterSurface}.`
+      : undefined,
+    `Target session: ${params.targetSessionKey}.`,
+    params.targetChannel ? `Target surface: ${params.targetChannel}.` : undefined,
+    `Original request: ${params.originalMessage}`,
+    params.roundOneReply
+      ? `Round 1 reply: ${params.roundOneReply}`
+      : "Round 1 reply: (not available).",
+    `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
+    "Any other reply will be posted to the target channel.",
+    "After this reply, the agent-to-agent conversation is over.",
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function isAnnounceSkip(text?: string) {
+  return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
+}
+
+function createSessionsSendTool(opts?: {
+  agentSessionKey?: string;
+  agentSurface?: string;
+}): AnyAgentTool {
   return {
     label: "Session Send",
     name: "sessions_send",
@@ -2736,6 +2817,8 @@ function createSessionsSendTool(): AnyAgentTool {
         Number.isFinite(params.timeoutSeconds)
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
+      const timeoutMs = timeoutSeconds * 1000;
+      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       const displayKey = resolveDisplaySessionKey({
@@ -2743,12 +2826,129 @@ function createSessionsSendTool(): AnyAgentTool {
         alias,
         mainKey,
       });
+      const agentMessageContext = buildAgentToAgentMessageContext({
+        requesterSessionKey: opts?.agentSessionKey,
+        requesterSurface: opts?.agentSurface,
+        targetSessionKey: displayKey,
+      });
       const sendParams = {
         message,
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
         lane: "nested",
+        extraSystemPrompt: agentMessageContext,
+      };
+
+      const resolveAnnounceTarget = async (): Promise<AnnounceTarget | null> => {
+        const parsed = resolveAnnounceTargetFromKey(resolvedKey);
+        if (parsed) return parsed;
+        try {
+          const list = (await callGateway({
+            method: "sessions.list",
+            params: {
+              includeGlobal: true,
+              includeUnknown: true,
+              limit: 200,
+            },
+          })) as { sessions?: Array<Record<string, unknown>> };
+          const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+          const match =
+            sessions.find((entry) => entry?.key === resolvedKey) ??
+            sessions.find((entry) => entry?.key === displayKey);
+          const channel =
+            typeof match?.lastChannel === "string"
+              ? match.lastChannel
+              : undefined;
+          const to =
+            typeof match?.lastTo === "string" ? match.lastTo : undefined;
+          if (channel && to) return { channel, to };
+        } catch {
+          // ignore; fall through to null
+        }
+        return null;
+      };
+
+      const runAgentToAgentPost = async (roundOneReply?: string) => {
+        const announceTarget = await resolveAnnounceTarget();
+        try {
+          const postPrompt = buildAgentToAgentPostContext({
+            requesterSessionKey: opts?.agentSessionKey,
+            requesterSurface: opts?.agentSurface,
+            targetSessionKey: displayKey,
+            targetChannel: announceTarget?.channel ?? "unknown",
+            originalMessage: message,
+            roundOneReply,
+          });
+          const postIdem = crypto.randomUUID();
+          const postResponse = (await callGateway({
+            method: "agent",
+            params: {
+              message: "Agent-to-agent post step.",
+              sessionKey: resolvedKey,
+              idempotencyKey: postIdem,
+              deliver: false,
+              lane: "nested",
+              extraSystemPrompt: postPrompt,
+            },
+            timeoutMs: 10_000,
+          })) as { runId?: string; acceptedAt?: number };
+          const postRunId =
+            typeof postResponse?.runId === "string" && postResponse.runId
+              ? postResponse.runId
+              : postIdem;
+          const postAcceptedAt =
+            typeof postResponse?.acceptedAt === "number"
+              ? postResponse.acceptedAt
+              : undefined;
+          const postWaitMs = Math.min(announceTimeoutMs, 60_000);
+          const postWait = (await callGateway({
+            method: "agent.wait",
+            params: {
+              runId: postRunId,
+              afterMs: postAcceptedAt,
+              timeoutMs: postWaitMs,
+            },
+            timeoutMs: postWaitMs + 2000,
+          })) as { status?: string };
+          if (postWait?.status === "ok") {
+            const postHistory = (await callGateway({
+              method: "chat.history",
+              params: { sessionKey: resolvedKey, limit: 50 },
+            })) as { messages?: unknown[] };
+            const postFiltered = stripToolMessages(
+              Array.isArray(postHistory?.messages)
+                ? postHistory.messages
+                : [],
+            );
+            const postLast =
+              postFiltered.length > 0
+                ? postFiltered[postFiltered.length - 1]
+                : undefined;
+            const postReply = postLast
+              ? extractAssistantText(postLast)
+              : undefined;
+            if (
+              announceTarget &&
+              postReply &&
+              postReply.trim() &&
+              !isAnnounceSkip(postReply)
+            ) {
+              await callGateway({
+                method: "send",
+                params: {
+                  to: announceTarget.to,
+                  message: postReply.trim(),
+                  provider: announceTarget.channel,
+                  idempotencyKey: crypto.randomUUID(),
+                },
+                timeoutMs: 10_000,
+              });
+            }
+          }
+        } catch {
+          // Best-effort announce; ignore failures to avoid breaking the caller response.
+        }
       };
 
       if (timeoutSeconds === 0) {
@@ -2761,6 +2961,7 @@ function createSessionsSendTool(): AnyAgentTool {
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
+          void runAgentToAgentPost();
           return jsonResult({
             runId,
             status: "accepted",
@@ -2810,7 +3011,6 @@ function createSessionsSendTool(): AnyAgentTool {
         });
       }
 
-      const timeoutMs = timeoutSeconds * 1000;
       let waitStatus: string | undefined;
       let waitError: string | undefined;
       try {
@@ -2867,6 +3067,7 @@ function createSessionsSendTool(): AnyAgentTool {
       const last =
         filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
+      void runAgentToAgentPost(reply ?? undefined);
 
       return jsonResult({
         runId,
@@ -2880,6 +3081,8 @@ function createSessionsSendTool(): AnyAgentTool {
 
 export function createClawdisTools(options?: {
   browserControlUrl?: string;
+  agentSessionKey?: string;
+  agentSurface?: string;
 }): AnyAgentTool[] {
   return [
     createBrowserTool({ defaultControlUrl: options?.browserControlUrl }),
@@ -2890,6 +3093,9 @@ export function createClawdisTools(options?: {
     createGatewayTool(),
     createSessionsListTool(),
     createSessionsHistoryTool(),
-    createSessionsSendTool(),
+    createSessionsSendTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentSurface: options?.agentSurface,
+    }),
   ];
 }

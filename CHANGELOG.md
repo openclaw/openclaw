@@ -20,6 +20,7 @@
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
 - Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
+- Sessions: add agent‑to‑agent post step with `ANNOUNCE_SKIP` to suppress channel announcements.
 
 ### Fixes
 - CI: fix lint ordering after merge cleanup (#156) — thanks @steipete.
@@ -71,6 +72,7 @@
 - Queue: clarify steer-backlog behavior with inline commands and update examples for streaming surfaces.
 - Sandbox: document per-session agent sandbox setup, browser image, and Docker build.
 - macOS: clarify menu bar uses sessionKey from agent events.
+- Sessions: document agent-to-agent post step and `ANNOUNCE_SKIP`.
 
 ## 2.0.0-beta5 — 2026-01-03
 

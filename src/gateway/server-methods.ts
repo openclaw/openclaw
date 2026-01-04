@@ -2931,6 +2931,7 @@ export async function handleGatewayRequest(
         deliver?: boolean;
         channel?: string;
         lane?: string;
+        extraSystemPrompt?: string;
         idempotencyKey: string;
         timeout?: number;
       };
@@ -3122,6 +3123,7 @@ export async function handleGatewayRequest(
           surface: "VoiceWake",
           runId,
           lane: params.lane,
+          extraSystemPrompt: params.extraSystemPrompt,
         },
         defaultRuntime,
         deps,

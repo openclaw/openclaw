@@ -75,6 +75,12 @@ Behavior:
 - If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
 - If the run fails: `{ runId, status: "error", error }`.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
+- Agent-to-agent message context is injected for the primary run.
+- After the primary run completes, Clawdis starts an **agent-to-agent post step**:
+  - The agent can reply with the announcement to post to the target session.
+  - To stay silent, reply exactly `ANNOUNCE_SKIP`.
+  - Any other reply is sent to the target channel.
+  - The post step includes the original request and round‑1 reply in context.
 
 ## Provider Field
 - For groups, `provider` is the `surface` recorded on the session entry.

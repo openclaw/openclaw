@@ -124,16 +124,38 @@ describe("sessions tools", () => {
   it("sessions_send supports fire-and-forget and wait", async () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let historyCallCount = 0;
+    let sendCallCount = 0;
+    let waitRunId: string | undefined;
+    let nextHistoryIsWaitReply = false;
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "agent") {
-        return { runId: "run-1", status: "accepted", acceptedAt: 1234 };
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as { message?: string } | undefined;
+        if (params?.message === "wait") {
+          waitRunId = runId;
+        }
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 1234 + agentCallCount,
+        };
       }
       if (request.method === "agent.wait") {
-        return { runId: "run-1", status: "ok" };
+        const params = request.params as { runId?: string } | undefined;
+        if (params?.runId && params.runId === waitRunId) {
+          nextHistoryIsWaitReply = true;
+        }
+        return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
+        historyCallCount += 1;
+        const text = nextHistoryIsWaitReply ? "done" : "ANNOUNCE_SKIP";
+        nextHistoryIsWaitReply = false;
         return {
           messages: [
             {
@@ -141,13 +163,17 @@ describe("sessions tools", () => {
               content: [
                 {
                   type: "text",
-                  text: "done",
+                  text,
                 },
               ],
               timestamp: 20,
             },
           ],
         };
+      }
+      if (request.method === "send") {
+        sendCallCount += 1;
+        return { messageId: "m1" };
       }
       return {};
     });
@@ -164,6 +190,7 @@ describe("sessions tools", () => {
       timeoutSeconds: 0,
     });
     expect(fire.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -173,21 +200,46 @@ describe("sessions tools", () => {
     const waited = await waitPromise;
     expect(waited.details).toMatchObject({
       status: "ok",
-      runId: "run-1",
       reply: "done",
     });
+    expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter(
       (call) => call.method === "chat.history",
     );
-    expect(agentCalls).toHaveLength(2);
+    expect(agentCalls).toHaveLength(4);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({ lane: "nested" });
     }
-    expect(waitCalls).toHaveLength(1);
-    expect(historyOnlyCalls).toHaveLength(1);
-    expect(waitCalls[0]?.params).toMatchObject({ afterMs: 1234 });
+    expect(
+      agentCalls.some(
+        (call) =>
+          typeof (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt?.includes("Agent-to-agent message context"),
+      ),
+    ).toBe(true);
+    expect(
+      agentCalls.some(
+        (call) =>
+          typeof (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string })
+            ?.extraSystemPrompt?.includes("Agent-to-agent post step"),
+      ),
+    ).toBe(true);
+    expect(waitCalls).toHaveLength(3);
+    expect(historyOnlyCalls).toHaveLength(3);
+    expect(
+      waitCalls.some(
+        (call) =>
+          typeof (call.params as { afterMs?: number })?.afterMs === "number",
+      ),
+    ).toBe(true);
+    expect(sendCallCount).toBe(0);
   });
 });
