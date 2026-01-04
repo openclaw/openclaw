@@ -162,7 +162,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
   const elevatedLevel =
-    args.entry?.elevatedLevel ?? args.agent?.elevatedDefault ?? "off";
+    args.entry?.elevatedLevel ?? args.agent?.elevatedDefault ?? "on";
 
   const webLine = (() => {
     if (args.webLinked === false) {

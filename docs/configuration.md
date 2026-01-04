@@ -388,7 +388,7 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
     },
     thinkingDefault: "low",
     verboseDefault: "off",
-    elevatedDefault: "off",
+    elevatedDefault: "on",
     timeoutSeconds: 600,
     mediaMaxMb: 5,
     heartbeat: {
