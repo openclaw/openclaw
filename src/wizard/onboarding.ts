@@ -45,6 +45,7 @@ import {
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
@@ -489,6 +490,11 @@ export async function runOnboardingWizard(
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
   } catch (err) {
     runtime.error(`Health check failed: ${String(err)}`);
+  }
+
+  const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
+  if (!controlUiAssets.ok && controlUiAssets.message) {
+    runtime.error(controlUiAssets.message);
   }
 
   await prompter.note(

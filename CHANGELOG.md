@@ -12,6 +12,7 @@
 - Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
 - Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
+- Onboarding: when running from source, auto-build missing Control UI assets (`pnpm ui:build`).
 
 ## 2026.1.4-1
 
