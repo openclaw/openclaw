@@ -6,15 +6,15 @@ import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { CONFIG_DIR } from "../utils.js";
+import { resolveOAuthPath } from "../config/paths.js";
 
 export async function writeOAuthCredentials(
   provider: OAuthProvider,
   creds: OAuthCredentials,
 ): Promise<void> {
-  const dir = path.join(CONFIG_DIR, "credentials");
+  const filePath = resolveOAuthPath();
+  const dir = path.dirname(filePath);
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const filePath = path.join(dir, "oauth.json");
   let storage: Record<string, OAuthCredentials> = {};
   try {
     const raw = await fs.readFile(filePath, "utf8");
