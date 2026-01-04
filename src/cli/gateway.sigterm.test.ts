@@ -80,6 +80,12 @@ describe("gateway SIGTERM", () => {
     const stateDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-gateway-test-"),
     );
+    const configPath = path.join(stateDir, "clawdbot.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ gateway: { mode: "local", port } }, null, 2),
+      "utf8",
+    );
     const out: string[] = [];
     const err: string[] = [];
 
@@ -101,7 +107,7 @@ describe("gateway SIGTERM", () => {
         env: {
           ...process.env,
           CLAWDBOT_STATE_DIR: stateDir,
-          CLAWDBOT_CONFIG_PATH: path.join(stateDir, "clawdbot.json"),
+          CLAWDBOT_CONFIG_PATH: configPath,
           CLAWDBOT_SKIP_PROVIDERS: "1",
           CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
           CLAWDBOT_SKIP_CANVAS_HOST: "1",
