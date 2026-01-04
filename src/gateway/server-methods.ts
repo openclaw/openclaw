@@ -57,7 +57,7 @@ import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
 import { sendMessageIMessage } from "../imessage/index.js";
 import { type IMessageProbe, probeIMessage } from "../imessage/probe.js";
-import { onAgentEvent } from "../infra/agent-events.js";
+import { onAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import type { startNodeBridgeServer } from "../infra/bridge/server.js";
 import { getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../infra/heartbeat-runner.js";
@@ -2997,15 +2997,16 @@ export async function handleGatewayRequest(
         resolvedSessionId = sessionId;
         const mainKey = (cfg.session?.mainKey ?? "main").trim() || "main";
         if (requestedSessionKey === mainKey) {
-          addChatRun(sessionId, {
+          addChatRun(idem, {
             sessionKey: requestedSessionKey,
             clientRunId: idem,
           });
           bestEffortDeliver = true;
         }
+        registerAgentRunContext(idem, { sessionKey: requestedSessionKey });
       }
 
-      const runId = resolvedSessionId || randomUUID();
+      const runId = idem;
 
       const requestedChannelRaw =
         typeof params.channel === "string" ? params.channel.trim() : "";
@@ -3119,6 +3120,7 @@ export async function handleGatewayRequest(
           timeout: params.timeout?.toString(),
           bestEffortDeliver,
           surface: "VoiceWake",
+          runId,
           lane: params.lane,
         },
         defaultRuntime,
