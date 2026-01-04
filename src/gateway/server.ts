@@ -860,6 +860,8 @@ export async function startGatewayServer(
         port: canvasHostPort,
         listenHost: bridgeHost,
         allowInTests: opts.allowCanvasHostInTests,
+        handler: canvasHost ?? undefined,
+        ownsHandler: canvasHost ? false : undefined,
       });
       if (started.port > 0) {
         canvasHostServer = started;

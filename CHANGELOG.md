@@ -59,6 +59,7 @@
 - Build: drop stale ClawdisCLI product from macOS build-and-run script.
 - Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
 - WhatsApp: honor per-group mention gating overrides when group ids are stored as session keys.
+- Canvas host: reuse shared handler to avoid double file watchers and close watchers on error (EMFILE resilience).
 - Dependencies: bump pi-mono packages to 0.32.3.
 
 ### Docs

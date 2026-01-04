@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { rawDataToString } from "../infra/ws.js";
 import { defaultRuntime } from "../runtime.js";
@@ -96,6 +96,43 @@ describe("canvas host", () => {
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses a handler without closing it twice", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    await fs.writeFile(
+      path.join(dir, "index.html"),
+      "<html><body>v1</body></html>",
+      "utf8",
+    );
+
+    const handler = await createCanvasHostHandler({
+      runtime: defaultRuntime,
+      rootDir: dir,
+      basePath: CANVAS_HOST_PATH,
+      allowInTests: true,
+    });
+    const originalClose = handler.close;
+    const closeSpy = vi.fn(async () => originalClose());
+    handler.close = closeSpy;
+
+    const server = await startCanvasHost({
+      runtime: defaultRuntime,
+      handler,
+      ownsHandler: false,
+      port: 0,
+      listenHost: "127.0.0.1",
+      allowInTests: true,
+    });
+
+    try {
+      expect(server.port).toBeGreaterThan(0);
+    } finally {
+      await server.close();
+      expect(closeSpy).not.toHaveBeenCalled();
+      await originalClose();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
