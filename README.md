@@ -20,7 +20,7 @@ It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, iMe
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · FAQ: [`docs/faq.md`](docs/faq.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Docker (optional): [`docs/docker.md`](docs/docker.md) · Discord: https://discord.gg/clawd
+Website: https://clawd.me · Docs: [`docs/index.md`](docs/index.md) · FAQ: [`docs/faq.md`](docs/faq.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Nix: [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [`docs/docker.md`](docs/docker.md) · Discord: https://discord.gg/clawd
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 

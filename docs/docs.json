@@ -27,9 +27,17 @@
         "pages": [
           "index",
           "onboarding",
-          "wizard",
           "clawd",
           "faq"
+        ]
+      },
+      {
+        "group": "Installation",
+        "pages": [
+          "wizard",
+          "nix",
+          "docker",
+          "setup"
         ]
       },
       {
