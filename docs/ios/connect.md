@@ -100,7 +100,7 @@ Pairing details: `docs/gateway/pairing.md`.
 
 ## 5) Verify the node is connected
 
-- In the macOS app: **Instances** tab should show something like `iOS Node (...)`.
+- In the macOS app: **Instances** tab should show something like `iOS Node (...)` with a green “Active” presence dot shortly after connect.
 - Via nodes status (paired + connected):
   ```bash
   clawdis nodes status

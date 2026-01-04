@@ -24,7 +24,7 @@ Presence entries are structured objects with (some) fields:
 - `modelIdentifier` (optional): hardware model identifier like `iPad16,6` or `Mac16,6`
 - `mode`: e.g. `gateway`, `app`, `webchat`, `cli`
 - `lastInputSeconds` (optional): “seconds since last user input” for that client machine
-- `reason`: a short marker like `self`, `connect`, `periodic`, `instances-refresh`
+- `reason`: a short marker like `self`, `connect`, `node-connected`, `node-disconnected`, `periodic`, `instances-refresh`
 - `text`: legacy/debug summary string (kept for backwards compatibility and UI display)
 - `ts`: last update timestamp (ms since epoch)
 
@@ -60,6 +60,16 @@ Clients can publish richer periodic beacons via the `system-event` method. The m
 Implementation:
 - Gateway: `src/gateway/server.ts` handles method `system-event` by calling `updateSystemPresence(...)`.
 - mac app beaconing: `apps/macos/Sources/Clawdis/PresenceReporter.swift`.
+
+### 4) Node bridge beacons (gateway-owned presence)
+
+When a node bridge connection authenticates, the Gateway emits a presence entry
+for that node and starts periodic refresh beacons so it does not expire.
+
+- Connect/disconnect markers: `node-connected`, `node-disconnected`
+- Periodic heartbeat: every 3 minutes (`reason: periodic`)
+
+Implementation: `src/gateway/server.ts` (node bridge handlers + timer beacons).
 
 ## Merge + dedupe rules (why `instanceId` matters)
 
@@ -108,6 +118,9 @@ The mac app’s Instances tab renders the result of `system-presence`.
 Implementation:
 - View: `apps/macos/Sources/Clawdis/InstancesSettings.swift`
 - Store: `apps/macos/Sources/Clawdis/InstancesStore.swift`
+
+The Instances rows show a small presence indicator (Active/Idle/Stale) based on
+the last beacon age. The label is derived from the entry timestamp (`ts`).
 
 The store refreshes periodically and also applies `presence` WS events.
 

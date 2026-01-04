@@ -212,7 +212,7 @@ git worktree remove /tmp/issue-99
 
 When submitting PRs to external repos, use this format for quality & maintainer-friendliness:
 
-```markdown
+````markdown
 ## Original Prompt
 [Exact request/problem statement]
 
@@ -228,7 +228,7 @@ When submitting PRs to external repos, use this format for quality & maintainer-
 # Example
 command example
 ```
-```
+````
 
 ## Feature intent (maintainer-friendly)
 [Why useful, how it fits, workflows it enables]

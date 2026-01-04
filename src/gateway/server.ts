@@ -946,15 +946,18 @@ export async function startGatewayServer(
     nodePresenceTimers.delete(nodeId);
   };
 
-  const beaconNodePresence = (node: {
-    nodeId: string;
-    displayName?: string;
-    remoteIp?: string;
-    version?: string;
-    platform?: string;
-    deviceFamily?: string;
-    modelIdentifier?: string;
-  }, reason: string) => {
+  const beaconNodePresence = (
+    node: {
+      nodeId: string;
+      displayName?: string;
+      remoteIp?: string;
+      version?: string;
+      platform?: string;
+      deviceFamily?: string;
+      modelIdentifier?: string;
+    },
+    reason: string,
+  ) => {
     const host = node.displayName?.trim() || node.nodeId;
     const rawIp = node.remoteIp?.trim();
     const ip = rawIp && !isLoopbackAddress(rawIp) ? rawIp : undefined;
@@ -1826,6 +1829,10 @@ export async function startGatewayServer(
       await stopGmailWatcher();
       cron.stop();
       heartbeatRunner.stop();
+      for (const timer of nodePresenceTimers.values()) {
+        clearInterval(timer);
+      }
+      nodePresenceTimers.clear();
       broadcast("shutdown", {
         reason,
         restartExpectedMs,

@@ -73,6 +73,7 @@ struct InstancesSettings: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 8) {
                     Text(inst.host ?? "unknown host").font(.subheadline.bold())
+                    self.presenceIndicator(inst)
                     if let ip = inst.ip { Text("(") + Text(ip).monospaced() + Text(")") }
                 }
 
@@ -144,6 +145,29 @@ struct InstancesSettings: View {
             Text(text)
         }
         .font(.footnote)
+    }
+
+    private func presenceIndicator(_ inst: InstanceInfo) -> some View {
+        let status = self.presenceStatus(for: inst)
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(status.color)
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+            Text(status.label)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .help("Presence updated \(inst.ageDescription).")
+        .accessibilityLabel("\(status.label) presence")
+    }
+
+    private func presenceStatus(for inst: InstanceInfo) -> (label: String, color: Color) {
+        let nowMs = Date().timeIntervalSince1970 * 1000
+        let ageSeconds = max(0, Int((nowMs - inst.ts) / 1000))
+        if ageSeconds <= 120 { return ("Active", .green) }
+        if ageSeconds <= 300 { return ("Idle", .yellow) }
+        return ("Stale", .gray)
     }
 
     @ViewBuilder
@@ -307,6 +331,10 @@ struct InstancesSettings: View {
             return "Connect"
         case "disconnect":
             return "Disconnect"
+        case "node-connected":
+            return "Node connect"
+        case "node-disconnected":
+            return "Node disconnect"
         case "launch":
             return "Launch"
         case "periodic":
