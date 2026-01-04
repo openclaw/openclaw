@@ -1727,6 +1727,10 @@ export async function startGatewayServer(
       logReload.info(
         `config hot reload applied (${plan.hotReasons.join(", ")})`,
       );
+    } else if (plan.noopPaths.length > 0) {
+      logReload.info(
+        `config change applied (dynamic reads: ${plan.noopPaths.join(", ")})`,
+      );
     }
   };
 

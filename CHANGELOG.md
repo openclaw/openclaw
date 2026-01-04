@@ -28,6 +28,7 @@
 - CI: fix lint ordering after merge cleanup (#156) — thanks @steipete.
 - CI: consolidate checks to avoid redundant installs (#144) — thanks @thewilloftheshadow.
 - WhatsApp: support `gifPlayback` for MP4 GIF sends via CLI/gateway.
+- Gateway: log config hot reloads for dynamic-read changes without restarts.
 - Sessions: prevent `sessions_send` timeouts by running nested agent turns on a separate lane.
 - Sessions: use per-send run IDs for gateway agent calls to avoid wait collisions.
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
