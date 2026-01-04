@@ -379,12 +379,12 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       const groupRoom =
         isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
       const groupSubject = isDirectMessage ? undefined : groupRoom;
-      const textWithId = `${text}\n[discord message id: ${message.id} channel: ${message.channelId}]`;
+      const messageText = text;
       let combinedBody = formatAgentEnvelope({
         surface: "Discord",
         from: fromLabel,
         timestamp: message.createdTimestamp,
-        body: textWithId,
+        body: messageText,
       });
       let shouldClearHistory = false;
       if (!isDirectMessage) {
@@ -407,7 +407,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
         const name = message.author.tag;
         const id = message.author.id;
-        combinedBody = `${combinedBody}\n[from: ${name} id:${id}]`;
+        combinedBody = `${combinedBody}\n[from: ${name} user id:${id}]`;
         shouldClearHistory = true;
       }
       const replyContext = await resolveReplyContext(message);
@@ -921,7 +921,7 @@ async function resolveReplyContext(message: Message): Promise<string | null> {
     const fromLabel = isDirectMessage
       ? buildDirectLabel(referenced)
       : (referenced.member?.displayName ?? referenced.author.tag);
-    const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${referenced.author.tag} id:${referenced.author.id}]`;
+    const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${referenced.author.tag} user id:${referenced.author.id}]`;
     return formatAgentEnvelope({
       surface: "Discord",
       from: fromLabel,
@@ -938,13 +938,13 @@ async function resolveReplyContext(message: Message): Promise<string | null> {
 
 function buildDirectLabel(message: Message) {
   const username = message.author.tag;
-  return `${username} id:${message.author.id}`;
+  return `${username} user id:${message.author.id}`;
 }
 
 function buildGuildLabel(message: Message) {
   const channelName =
     "name" in message.channel ? message.channel.name : message.channelId;
-  return `${message.guild?.name ?? "Guild"} #${channelName} id:${message.channelId}`;
+  return `${message.guild?.name ?? "Guild"} #${channelName} channel id:${message.channelId}`;
 }
 
 function resolveDiscordSystemEvent(message: Message): string | null {
