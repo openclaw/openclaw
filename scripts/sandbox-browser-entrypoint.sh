@@ -10,6 +10,8 @@ ENABLE_NOVNC="${CLAWDIS_BROWSER_ENABLE_NOVNC:-1}"
 HEADLESS="${CLAWDIS_BROWSER_HEADLESS:-0}"
 
 mkdir -p /workspace/.chrome
+mkdir -p /tmp/.X11-unix
+chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 
 Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
 
@@ -31,6 +33,8 @@ CHROME_ARGS+=(
   "--disable-dev-shm-usage"
   "--disable-background-networking"
   "--disable-features=TranslateUI"
+  "--disable-breakpad"
+  "--disable-crash-reporter"
   "--metrics-recording-only"
   "--no-sandbox"
 )
