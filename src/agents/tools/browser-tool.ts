@@ -97,99 +97,44 @@ const BrowserActSchema = Type.Union([
   }),
 ]);
 
-const BrowserToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("status"),
-    controlUrl: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("start"),
-    controlUrl: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("stop"),
-    controlUrl: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("tabs"),
-    controlUrl: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("open"),
-    controlUrl: Type.Optional(Type.String()),
-    targetUrl: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("focus"),
-    controlUrl: Type.Optional(Type.String()),
-    targetId: Type.String(),
-  }),
-  Type.Object({
-    action: Type.Literal("close"),
-    controlUrl: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("snapshot"),
-    controlUrl: Type.Optional(Type.String()),
-    format: Type.Optional(
-      Type.Union([Type.Literal("aria"), Type.Literal("ai")]),
-    ),
-    targetId: Type.Optional(Type.String()),
-    limit: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("screenshot"),
-    controlUrl: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-    fullPage: Type.Optional(Type.Boolean()),
-    ref: Type.Optional(Type.String()),
-    element: Type.Optional(Type.String()),
-    type: Type.Optional(
-      Type.Union([Type.Literal("png"), Type.Literal("jpeg")]),
-    ),
-  }),
-  Type.Object({
-    action: Type.Literal("navigate"),
-    controlUrl: Type.Optional(Type.String()),
-    targetUrl: Type.String(),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("console"),
-    controlUrl: Type.Optional(Type.String()),
-    level: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("pdf"),
-    controlUrl: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-  }),
-  Type.Object({
-    action: Type.Literal("upload"),
-    controlUrl: Type.Optional(Type.String()),
-    paths: Type.Array(Type.String()),
-    ref: Type.Optional(Type.String()),
-    inputRef: Type.Optional(Type.String()),
-    element: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("dialog"),
-    controlUrl: Type.Optional(Type.String()),
-    accept: Type.Boolean(),
-    promptText: Type.Optional(Type.String()),
-    targetId: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("act"),
-    controlUrl: Type.Optional(Type.String()),
-    request: BrowserActSchema,
-  }),
-]);
+// IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
+// A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
+// which OpenAI rejects ("Invalid schema ... type: None"). Keep this schema an object.
+const BrowserToolSchema = Type.Object({
+  action: Type.Union([
+    Type.Literal("status"),
+    Type.Literal("start"),
+    Type.Literal("stop"),
+    Type.Literal("tabs"),
+    Type.Literal("open"),
+    Type.Literal("focus"),
+    Type.Literal("close"),
+    Type.Literal("snapshot"),
+    Type.Literal("screenshot"),
+    Type.Literal("navigate"),
+    Type.Literal("console"),
+    Type.Literal("pdf"),
+    Type.Literal("upload"),
+    Type.Literal("dialog"),
+    Type.Literal("act"),
+  ]),
+  controlUrl: Type.Optional(Type.String()),
+  targetUrl: Type.Optional(Type.String()),
+  targetId: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Number()),
+  format: Type.Optional(Type.Union([Type.Literal("aria"), Type.Literal("ai")])),
+  fullPage: Type.Optional(Type.Boolean()),
+  ref: Type.Optional(Type.String()),
+  element: Type.Optional(Type.String()),
+  type: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg")])),
+  level: Type.Optional(Type.String()),
+  paths: Type.Optional(Type.Array(Type.String())),
+  inputRef: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
+  accept: Type.Optional(Type.Boolean()),
+  promptText: Type.Optional(Type.String()),
+  request: Type.Optional(BrowserActSchema),
+});
 
 function resolveBrowserBaseUrl(controlUrl?: string) {
   const cfg = loadConfig();

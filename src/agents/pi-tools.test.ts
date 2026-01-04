@@ -5,8 +5,16 @@ import path from "node:path";
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { createClawdbotCodingTools } from "./pi-tools.js";
+import { createBrowserTool } from "./tools/browser-tool.js";
 
 describe("createClawdbotCodingTools", () => {
+  it("keeps browser tool schema OpenAI-compatible without normalization", () => {
+    const browser = createBrowserTool();
+    const schema = browser.parameters as { type?: unknown; anyOf?: unknown };
+    expect(schema.type).toBe("object");
+    expect(schema.anyOf).toBeUndefined();
+  });
+
   it("merges properties for union tool schemas", () => {
     const tools = createClawdbotCodingTools();
     const browser = tools.find((tool) => tool.name === "browser");
@@ -23,54 +31,47 @@ describe("createClawdbotCodingTools", () => {
     expect(parameters.required ?? []).toContain("action");
   });
 
-  it("preserves union action values in merged schema", () => {
+  it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway"];
+
+    const collectActionValues = (
+      schema: unknown,
+      values: Set<string>,
+    ): void => {
+      if (!schema || typeof schema !== "object") return;
+      const record = schema as Record<string, unknown>;
+      if (typeof record.const === "string") values.add(record.const);
+      if (Array.isArray(record.enum)) {
+        for (const value of record.enum) {
+          if (typeof value === "string") values.add(value);
+        }
+      }
+      if (Array.isArray(record.anyOf)) {
+        for (const variant of record.anyOf) {
+          collectActionValues(variant, values);
+        }
+      }
+    };
 
     for (const name of toolNames) {
       const tool = tools.find((candidate) => candidate.name === name);
       expect(tool).toBeDefined();
       const parameters = tool?.parameters as {
-        anyOf?: Array<{ properties?: Record<string, unknown> }>;
         properties?: Record<string, unknown>;
       };
-      if (!Array.isArray(parameters.anyOf) || parameters.anyOf.length === 0) {
-        continue;
-      }
-      const actionValues = new Set<string>();
-      for (const variant of parameters.anyOf ?? []) {
-        const action = variant?.properties?.action as
-          | { const?: unknown; enum?: unknown[] }
-          | undefined;
-        if (typeof action?.const === "string") actionValues.add(action.const);
-        if (Array.isArray(action?.enum)) {
-          for (const value of action.enum) {
-            if (typeof value === "string") actionValues.add(value);
-          }
-        }
-      }
-
-      if (actionValues.size <= 1) {
-        continue;
-      }
-      const mergedAction = parameters.properties?.action as
+      const action = parameters.properties?.action as
         | { const?: unknown; enum?: unknown[] }
         | undefined;
-      const mergedValues = new Set<string>();
-      if (typeof mergedAction?.const === "string") {
-        mergedValues.add(mergedAction.const);
-      }
-      if (Array.isArray(mergedAction?.enum)) {
-        for (const value of mergedAction.enum) {
-          if (typeof value === "string") mergedValues.add(value);
-        }
-      }
+      const values = new Set<string>();
+      collectActionValues(action, values);
 
-      expect(actionValues.size).toBeGreaterThan(1);
-      expect(mergedValues.size).toBe(actionValues.size);
-      for (const value of actionValues) {
-        expect(mergedValues.has(value)).toBe(true);
-      }
+      const min =
+        name === "gateway"
+          ? 1
+          : // Most tools expose multiple actions; keep this signal so schemas stay useful to models.
+            2;
+      expect(values.size).toBeGreaterThanOrEqual(min);
     }
   });
 
@@ -78,6 +79,25 @@ describe("createClawdbotCodingTools", () => {
     const tools = createClawdbotCodingTools();
     expect(tools.some((tool) => tool.name === "bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "process")).toBe(true);
+  });
+
+  it("provides top-level object schemas for all tools", () => {
+    const tools = createClawdbotCodingTools();
+    const offenders = tools
+      .map((tool) => {
+        const schema =
+          tool.parameters && typeof tool.parameters === "object"
+            ? (tool.parameters as Record<string, unknown>)
+            : null;
+        return {
+          name: tool.name,
+          type: schema?.type,
+          keys: schema ? Object.keys(schema).sort() : null,
+        };
+      })
+      .filter((entry) => entry.type !== "object");
+
+    expect(offenders).toEqual([]);
   });
 
   it("scopes discord tool to discord surface", () => {

@@ -364,6 +364,8 @@ export async function runEmbeddedPiAgent(params: {
           await loadWorkspaceBootstrapFiles(resolvedWorkspace);
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
         const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
+        // Tool schemas must be provider-compatible (OpenAI requires top-level `type: "object"`).
+        // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
         const tools = createClawdbotCodingTools({
           bash: {
             ...params.config?.agent?.bash,

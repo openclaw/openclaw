@@ -14,6 +14,7 @@
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
 - macOS: make generated gateway protocol models `Sendable` for Swift 6 strict concurrency. (#195) — thanks @andranik-sahakyan
 - WhatsApp: suppress typing indicator during heartbeat background tasks. (#190) — thanks @mcinteerj
+- Agent tools: OpenAI-compatible tool JSON Schemas (fix `browser`, normalize union schemas).
 - Onboarding: when running from source, auto-build missing Control UI assets (`pnpm ui:build`).
 - Discord/Slack: route reaction + system notifications to the correct session (no main-session bleed).
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
