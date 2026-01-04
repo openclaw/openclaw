@@ -3,9 +3,14 @@ import os from "node:os";
 import path from "node:path";
 
 import JSON5 from "json5";
-
+import {
+  loadShellEnvFallback,
+  resolveShellEnvFallbackTimeoutMs,
+  shouldEnableShellEnvFallback,
+} from "../infra/shell-env.js";
 import {
   applyIdentityDefaults,
+  applyModelAliasDefaults,
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
@@ -22,6 +27,22 @@ import type {
 } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 import { ClawdbotSchema } from "./zod-schema.js";
+
+const SHELL_ENV_EXPECTED_KEYS = [
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_OAUTH_TOKEN",
+  "GEMINI_API_KEY",
+  "ZAI_API_KEY",
+  "MINIMAX_API_KEY",
+  "ELEVENLABS_API_KEY",
+  "TELEGRAM_BOT_TOKEN",
+  "DISCORD_BOT_TOKEN",
+  "SLACK_BOT_TOKEN",
+  "SLACK_APP_TOKEN",
+  "CLAWDBOT_GATEWAY_TOKEN",
+  "CLAWDBOT_GATEWAY_PASSWORD",
+];
 
 export type ParseConfigJson5Result =
   | { ok: true; parsed: unknown }
@@ -69,7 +90,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
   function loadConfig(): ClawdbotConfig {
     try {
-      if (!deps.fs.existsSync(configPath)) return {};
+      if (!deps.fs.existsSync(configPath)) {
+        if (shouldEnableShellEnvFallback(deps.env)) {
+          loadShellEnvFallback({
+            enabled: true,
+            env: deps.env,
+            expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+            logger: deps.logger,
+            timeoutMs: resolveShellEnvFallbackTimeoutMs(deps.env),
+          });
+        }
+        return {};
+      }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
       if (typeof parsed !== "object" || parsed === null) return {};
@@ -81,9 +113,28 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
         return {};
       }
-      return applySessionDefaults(
-        applyIdentityDefaults(validated.data as ClawdbotConfig),
+      const cfg = applyModelAliasDefaults(
+        applySessionDefaults(
+          applyIdentityDefaults(validated.data as ClawdbotConfig),
+        ),
       );
+
+      const enabled =
+        shouldEnableShellEnvFallback(deps.env) ||
+        cfg.env?.shellEnv?.enabled === true;
+      if (enabled) {
+        loadShellEnvFallback({
+          enabled: true,
+          env: deps.env,
+          expectedKeys: SHELL_ENV_EXPECTED_KEYS,
+          logger: deps.logger,
+          timeoutMs:
+            cfg.env?.shellEnv?.timeoutMs ??
+            resolveShellEnvFallbackTimeoutMs(deps.env),
+        });
+      }
+
+      return cfg;
     } catch (err) {
       deps.logger.error(`Failed to read config at ${configPath}`, err);
       return {};
@@ -93,7 +144,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   async function readConfigFileSnapshot(): Promise<ConfigFileSnapshot> {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
-      const config = applyTalkApiKey(applySessionDefaults({}));
+      const config = applyTalkApiKey(
+        applyModelAliasDefaults(applySessionDefaults({})),
+      );
       const legacyIssues: LegacyConfigIssue[] = [];
       return {
         path: configPath,
@@ -147,7 +200,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         raw,
         parsed: parsedRes.parsed,
         valid: true,
-        config: applyTalkApiKey(applySessionDefaults(validated.config)),
+        config: applyTalkApiKey(
+          applyModelAliasDefaults(applySessionDefaults(validated.config)),
+        ),
         issues: [],
         legacyIssues,
       };
@@ -169,7 +224,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     await deps.fs.promises.mkdir(path.dirname(configPath), {
       recursive: true,
     });
-    const json = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
+    const json = JSON.stringify(applyModelAliasDefaults(cfg), null, 2)
+      .trimEnd()
+      .concat("\n");
     await deps.fs.promises.writeFile(configPath, json, "utf-8");
   }
 
