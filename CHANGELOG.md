@@ -16,6 +16,7 @@
 - Gateway quality-of-life: config hot reload, port config support, and Control UI base paths.
 - Sandbox additions: per-session Docker sandbox with hardened limits + optional sandboxed Chromium.
 - New node capability: `location.get` across macOS/iOS/Android (CLI + tools).
+- Models CLI: scan OpenRouter free models (tools/images), manage aliases/fallbacks, and show last-used model in status.
 
 ### Breaking
 - Tool names drop the `clawdbot_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
