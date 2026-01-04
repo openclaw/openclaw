@@ -3,7 +3,7 @@ import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdisConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { resolveNodeManagerOptions } from "./onboard-helpers.js";
+import { detectBinary, resolveNodeManagerOptions } from "./onboard-helpers.js";
 
 function summarizeInstallFailure(message: string): string | undefined {
   const cleaned = message
@@ -59,6 +59,13 @@ export async function setupSkills(
   );
   const blocked = report.skills.filter((s) => s.blockedByAllowlist);
 
+  const needsBrewPrompt =
+    process.platform !== "win32" &&
+    report.skills.some((skill) =>
+      skill.install.some((option) => option.kind === "brew"),
+    ) &&
+    !(await detectBinary("brew"));
+
   await prompter.note(
     [
       `Eligible: ${eligible.length}`,
@@ -73,6 +80,29 @@ export async function setupSkills(
     initialValue: true,
   });
   if (!shouldConfigure) return cfg;
+
+  if (needsBrewPrompt) {
+    await prompter.note(
+      [
+        "Many skill dependencies are shipped via Homebrew.",
+        "Without brew, you'll need to build from source or download releases manually.",
+      ].join("\n"),
+      "Homebrew recommended",
+    );
+    const showBrewInstall = await prompter.confirm({
+      message: "Show Homebrew install command?",
+      initialValue: true,
+    });
+    if (showBrewInstall) {
+      await prompter.note(
+        [
+          "Run:",
+          '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"',
+        ].join("\n"),
+        "Homebrew install",
+      );
+    }
+  }
 
   const nodeManager = (await prompter.select({
     message: "Preferred node manager for skill installs",
