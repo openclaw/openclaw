@@ -37,6 +37,7 @@
 - Gmail hooks: resolve gcloud Python to a real executable when PATH uses mise shims — thanks @joargp.
 - Control UI: generate UUIDs when `crypto.randomUUID()` is unavailable over HTTP — thanks @ratulsarna.
 - Control UI: stream live tool output cards in Chat (agent events include sessionKey).
+- Chat UI: render assistant `<think>`/`<final>` markup as italic thinking text in history + streaming instead of showing raw tags.
 - Agent: add soft block-stream chunking (800–1200 chars default) with paragraph/newline preference.
 - Agent: route embedded run lifecycle logs through subsystem console formatting and reduce log noise.
 - Agent tools: scope the Discord tool to Discord surface runs.

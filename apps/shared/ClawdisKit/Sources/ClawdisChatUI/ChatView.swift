@@ -169,7 +169,7 @@ public struct ClawdisChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if let text = self.viewModel.streamingAssistantText, !text.isEmpty {
+        if let text = self.viewModel.streamingAssistantText, AssistantTextParser.hasVisibleContent(in: text) {
             ChatStreamingAssistantBubble(text: text)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -246,7 +246,7 @@ public struct ClawdisChatView: View {
             return true
         }
         if let text = self.viewModel.streamingAssistantText,
-           !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+           AssistantTextParser.hasVisibleContent(in: text)
         {
             return true
         }
@@ -261,7 +261,7 @@ public struct ClawdisChatView: View {
 
     private var showsEmptyState: Bool {
         self.viewModel.messages.isEmpty &&
-            (self.viewModel.streamingAssistantText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) &&
+            !(self.viewModel.streamingAssistantText.map { AssistantTextParser.hasVisibleContent(in: $0) } ?? false) &&
             self.viewModel.pendingRunCount == 0 &&
             self.viewModel.pendingToolCalls.isEmpty
     }
