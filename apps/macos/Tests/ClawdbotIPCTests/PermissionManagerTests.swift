@@ -1,5 +1,6 @@
 import Testing
 import ClawdbotIPC
+import CoreLocation
 @testable import Clawdbot
 
 @Suite(.serialized)
@@ -21,5 +22,17 @@ struct PermissionManagerTests {
         let caps: [Capability] = [.microphone, .speechRecognition, .screenRecording]
         let ensured = await PermissionManager.ensure(caps, interactive: false)
         #expect(ensured.keys.count == caps.count)
+    }
+
+    @Test func locationStatusMatchesAuthorizationAlways() async {
+        let status = CLLocationManager().authorizationStatus
+        let results = await PermissionManager.status([.location])
+        #expect(results[.location] == (status == .authorizedAlways))
+    }
+
+    @Test func ensureLocationNonInteractiveMatchesAuthorizationAlways() async {
+        let status = CLLocationManager().authorizationStatus
+        let ensured = await PermissionManager.ensure([.location], interactive: false)
+        #expect(ensured[.location] == (status == .authorizedAlways))
     }
 }
