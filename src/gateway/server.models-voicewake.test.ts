@@ -21,7 +21,9 @@ describe("gateway server models + voicewake", () => {
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 15_000 },
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
+      const homeDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "clawdbot-home-"),
+      );
       const prevHome = process.env.HOME;
       process.env.HOME = homeDir;
 

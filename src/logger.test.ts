@@ -91,7 +91,10 @@ describe("logger helpers", () => {
 });
 
 function pathForTest() {
-  const file = path.join(os.tmpdir(), `clawdbot-log-${crypto.randomUUID()}.log`);
+  const file = path.join(
+    os.tmpdir(),
+    `clawdbot-log-${crypto.randomUUID()}.log`,
+  );
   fs.mkdirSync(path.dirname(file), { recursive: true });
   return file;
 }

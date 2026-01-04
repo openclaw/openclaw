@@ -219,7 +219,8 @@ describe("buildWorkspaceSkillsPrompt", () => {
       dir: path.join(skillsDir, "anybin-skill"),
       name: "anybin-skill",
       description: "Needs any bin",
-      metadata: '{"clawdbot":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
+      metadata:
+        '{"clawdbot":{"requires":{"anyBins":["missingbin","fakebin"]}}}',
     });
     await writeSkill({
       dir: path.join(skillsDir, "config-skill"),
