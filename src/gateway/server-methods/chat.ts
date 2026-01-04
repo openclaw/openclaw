@@ -127,13 +127,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     context.bridgeSendToSession(sessionKey, "chat", payload);
     respond(true, { ok: true, aborted: true });
   },
-  "chat.send": async ({
-    params,
-    respond,
-    context,
-    client: _client,
-    isWebchatConnect: _isWebchatConnect,
-  }) => {
+  "chat.send": async ({ params, respond, context }) => {
     if (!validateChatSendParams(params)) {
       respond(
         false,

@@ -3,7 +3,6 @@ summary: "Image and media handling rules for send, gateway, and agent replies"
 read_when:
   - Modifying media pipeline or attachments
 ---
-<!-- {% raw %} -->
 # Image & Media Support — 2025-12-05
 
 CLAWDBOT is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
@@ -49,4 +48,3 @@ CLAWDBOT is now **web-only** (Baileys). This document captures the current media
 - Cover send + reply flows for image/audio/document cases.
 - Validate recompression for images (size bound) and voice-note flag for audio.
 - Ensure multi-media replies fan out as sequential sends.
-<!-- {% endraw %} -->

@@ -3,17 +3,16 @@ summary: "Top-level overview of Clawdbot, features, and purpose"
 read_when:
   - Introducing Clawdbot to newcomers
 ---
-<!-- {% raw %} -->
 # CLAWDBOT 🦞
 
 > *"EXFOLIATE! EXFOLIATE!"* — A space lobster, probably
 
 <p align="center">
-  <img src="whatsapp-clawd.jpg" alt="CLAWDBOT" width="420">
+  <img src="whatsapp-clawd.jpg" alt="CLAWDBOT" width="420" />
 </p>
 
 <p align="center">
-  <strong>WhatsApp + Telegram + Discord + iMessage gateway for AI agents (Pi).</strong><br>
+  <strong>WhatsApp + Telegram + Discord + iMessage gateway for AI agents (Pi).</strong><br />
   Send a message, get an agent response — from your pocket.
 </p>
 
@@ -161,7 +160,6 @@ Example:
 ---
 
 *"We're all just playing with our own prompts."* — an AI, probably high on tokens
-<!-- {% endraw %} -->
 
 ## Credits
 

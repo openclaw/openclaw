@@ -4,7 +4,6 @@ read_when:
   - Designing the macOS onboarding assistant
   - Implementing Anthropic auth or identity setup
 ---
-<!-- {% raw %} -->
 # Onboarding (macOS app)
 
 This doc describes the intended **first-run onboarding** for Clawdbot. The goal is a good “day 0” experience: pick where the Gateway runs, bind Claude (Anthropic) auth for the embedded agent runtime, and then let the **agent bootstrap itself** via a first-run ritual in the workspace.
@@ -182,4 +181,3 @@ chmod 600 ~/.clawdbot/credentials/oauth.json
 | `accessToken` | `access` |
 | `refreshToken` | `refresh` |
 | `expiresAt` | `expires` |
-<!-- {% endraw %} -->

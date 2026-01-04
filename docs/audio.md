@@ -3,7 +3,6 @@ summary: "How inbound audio/voice notes are downloaded, transcribed, and injecte
 read_when:
   - Changing audio transcription or media handling
 ---
-<!-- {% raw %} -->
 # Audio / Voice Notes — 2025-12-05
 
 ## What works
@@ -47,4 +46,3 @@ Requires `OPENAI_API_KEY` in env and `openai` CLI installed:
 ## Gotchas
 - Ensure your CLI exits 0 and prints plain text; JSON needs to be massaged via `jq -r .text`.
 - Keep timeouts reasonable (`timeoutSeconds`, default 45s) to avoid blocking the reply queue.
-<!-- {% endraw %} -->

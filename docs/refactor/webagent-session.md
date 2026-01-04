@@ -3,7 +3,6 @@ summary: "WebChat session migration notes (Gateway WS-only)"
 read_when:
   - Changing WebChat Gateway methods/events
 ---
-<!-- {% raw %} -->
 # WebAgent session migration (WS-only)
 
 Context: web chat currently lives in a WKWebView that loads the pi-web bundle. Sends go over HTTP `/rpc` to the webchat server, and updates come from `/socket` snapshots based on session JSONL file changes. The Gateway itself already speaks WebSocket to the webchat server, and Pi writes the session JSONL files. This doc tracks the plan to move WebChat to a single Gateway WebSocket and drop the HTTP shim/file-watching.
@@ -43,4 +42,3 @@ Context: web chat currently lives in a WKWebView that loads the pi-web bundle. S
 - Streaming granularity: start with `state:"final"` only, or include token/tool deltas immediately?
 - Attachments over WS: text-only initially is OK; confirm before wiring binary/upload path.
 - Error shape: use `res ok:false` for validation/timeout, `chat state:"error"` for model/runtime failures.
-<!-- {% endraw %} -->

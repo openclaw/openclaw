@@ -4,7 +4,6 @@ read_when:
   - Adding or modifying skills
   - Changing skill gating or load rules
 ---
-<!-- {% raw %} -->
 # Skills (Clawdbot)
 
 Clawdbot uses **AgentSkills-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. Clawdbot loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
@@ -146,4 +145,3 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 See `docs/skills-config.md` for the full configuration schema.
 
 ---
-<!-- {% endraw %} -->

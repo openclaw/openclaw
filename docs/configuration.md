@@ -3,7 +3,6 @@ summary: "All configuration options for ~/.clawdbot/clawdbot.json with examples"
 read_when:
   - Adding or modifying config fields
 ---
-<!-- {% raw %} -->
 # Configuration 🔧
 
 CLAWDBOT reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (comments + trailing commas allowed).
@@ -1229,4 +1228,3 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wa
 ---
 
 *Next: [Agent Runtime](./agent.md)* 🦞
-<!-- {% endraw %} -->

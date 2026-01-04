@@ -103,7 +103,7 @@ When you receive a `HEARTBEAT` message, don't just reply `HEARTBEAT_OK` every ti
 
 **When to reach out:**
 - Important email arrived
-- Calendar event coming up (<2h)
+- Calendar event coming up (&lt;2h)
 - Something interesting you found
 - It's been >8h since you said anything
 
@@ -111,7 +111,7 @@ When you receive a `HEARTBEAT` message, don't just reply `HEARTBEAT_OK` every ti
 - Late night (23:00-08:00) unless urgent
 - Human is clearly busy
 - Nothing new since last check
-- You just checked <30 minutes ago
+- You just checked &lt;30 minutes ago
 
 **Proactive work you can do without asking:**
 - Read and organize memory files
