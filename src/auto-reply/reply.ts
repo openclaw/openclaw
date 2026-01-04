@@ -833,7 +833,11 @@ export async function getReplyFromConfig(
   const typingIntervalSeconds =
     typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
   const typingIntervalMs = typingIntervalSeconds * 1000;
-  const typingTtlMs = Math.min(Math.max(15_000, typingIntervalMs * 5), 60_000);
+  const typingTtlMs = 2 * 60_000;
+  const formatTypingTtl = (ms: number) => {
+    if (ms % 60_000 === 0) return `${ms / 60_000}m`;
+    return `${Math.round(ms / 1000)}s`;
+  };
   const cleanupTyping = () => {
     if (typingTtlTimer) {
       clearTimeout(typingTtlTimer);
@@ -854,7 +858,7 @@ export async function getReplyFromConfig(
     typingTtlTimer = setTimeout(() => {
       if (!typingTimer) return;
       defaultRuntime.log(
-        `typing TTL reached (${typingTtlMs}ms); stopping typing indicator`,
+        `typing TTL reached (${formatTypingTtl(typingTtlMs)}); stopping typing indicator`,
       );
       cleanupTyping();
     }, typingTtlMs);

@@ -26,6 +26,7 @@
 - CI: consolidate checks to avoid redundant installs (#144) — thanks @thewilloftheshadow.
 - WhatsApp: support `gifPlayback` for MP4 GIF sends via CLI/gateway.
 - Auto-reply: drop final payloads when block streaming to avoid duplicate Discord sends.
+- Auto-reply: fix typing TTL to 2 minutes and log TTL with s/m units.
 - Bash tool: default auto-background delay to 10s.
 - Telegram: chunk block-stream replies to avoid “message is too long” errors (#124) — thanks @mukhtharcm.
 - Block streaming: default to text_end and suppress duplicate block sends while in-flight.
