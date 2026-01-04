@@ -1072,6 +1072,8 @@ Disable live reload (and file watching) if the directory is large or you hit `EM
 }
 ```
 
+Changes to `canvasHost.*` require a gateway restart (config reload will restart).
+
 Disable with:
 - config: `canvasHost: { enabled: false }`
 - env: `CLAWDBOT_SKIP_CANVAS_HOST=1`
