@@ -12,6 +12,7 @@ const exec = promisify(execCallback);
 export interface GeminiCliOptions {
   timeoutMs?: number;
   model?: string;
+  cliPath?: string;
 }
 
 /**
@@ -24,14 +25,22 @@ export async function executeGeminiSearch(
   const {
     timeoutMs = 30000,
     model = 'gemini-2.5-flash',
+    cliPath,
   } = options;
-  
+
   try {
     // Build prompt
     const prompt = `Search web for: ${query}. Answer in Russian with current information.`;
-    
-    // Use shell explicitly to ensure proper execution
-    const cmd = `sh -c ${JSON.stringify(`gemini -m ${model} -p ${JSON.stringify(prompt)} --output-format json`)}`;
+
+    // Use cliPath if provided (bash wrapper script), otherwise use gemini directly
+    let cmd: string;
+    if (cliPath) {
+      // Use the bash wrapper script with --request parameter
+      cmd = `sh -c ${JSON.stringify(`"${cliPath}" --request ${JSON.stringify(query)}`)}`;
+    } else {
+      // Direct gemini CLI call
+      cmd = `sh -c ${JSON.stringify(`gemini -m ${model} -p ${JSON.stringify(prompt)} --output-format json`)}`
+    }
     
     const { stdout } = await exec(cmd, {
       timeout: timeoutMs,

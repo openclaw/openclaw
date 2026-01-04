@@ -5,7 +5,7 @@
 import type { WebSearchResult } from './messages.js';
 import type { ExecuteResult, ExecuteOptions } from '../deep-research/executor.js';
 import { executeGeminiSearch } from './gemini-cli.js';
-import { formatErrorMessage } from '../infra/errors.js';
+import { loadConfig, getDefaultWebSearchCliPath } from '../config/config.js';
 
 export interface ExecuteWebSearchOptions extends Omit<ExecuteOptions, 'topic'> {
   cliPath?: string;
@@ -23,9 +23,10 @@ export async function executeWebSearch(
   query: string,
   options: ExecuteWebSearchOptions = {}
 ): Promise<ExecuteWebSearchResult> {
+  const cfg = loadConfig();
   const {
-    cliPath = "/home/almaz/TOOLS/web_search_by_gemini/web-search-by-Gemini.sh",
-    timeoutMs = 30000,
+    cliPath = cfg.webSearch?.cliPath ?? getDefaultWebSearchCliPath(),
+    timeoutMs = cfg.webSearch?.timeoutMs ?? 30000,
     dryRun = false,
   } = options;
   
@@ -61,7 +62,7 @@ export async function executeWebSearch(
     }
     
     // Use the standalone gemini CLI module
-    const result = await executeGeminiSearch(query, { timeoutMs });
+    const result = await executeGeminiSearch(query, { timeoutMs, cliPath });
     
     return {
       success: true,
@@ -96,33 +97,4 @@ export async function executeWebSearch(
       stderr: errorStr
     };
   }
-}
-
-// Additional cleaning patterns for very malformed queries
-function aggressivelyCleanQuery(query: string): string {
-  let cleaned = query.toLowerCase();
-  
-  // Remove misspelled search commands
-  cleaned = cleaned.replace(/\b(googel\s+it|web\s+searhc?|seach\s+web|serach)\b/gi, ' ');
-  
-  // Remove "сделай в интернете" and similar
-  cleaned = cleaned.replace(/\b(сделай\s+в\s+интернете|в\s+интернете|in\s+internet|on\s+web)\b/gi, ' ');
-  
-  // Extract the most likely actual query (look for topic patterns)
-  const patterns = [
-    /погода\s+(в\s+)?\w+/i,      // weather
-    /курс\s+\w+/i,               // exchange rate
-    /новости(\s+\w+)*/i,         // news
-    /[а-яА-Я]{4,}/,              // any Russian word (topic)
-  ];
-  
-  for (const pattern of patterns) {
-    const match = cleaned.match(pattern);
-    if (match && match[0].length > 3) {
-      console.log(`[web-search] Extracted topic: "${match[0]}" from "${query}"`);
-      return match[0];
-    }
-  }
-  
-  return cleaned;
 }
