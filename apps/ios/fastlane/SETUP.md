@@ -1,4 +1,4 @@
-# fastlane setup (Clawdis iOS)
+# fastlane setup (Clawdbot iOS)
 
 Install:
 

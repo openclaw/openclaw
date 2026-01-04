@@ -171,7 +171,7 @@ async function sleep(ms: number) {
 export async function startNodeBridgeServer(
   opts: NodeBridgeServerOpts,
 ): Promise<NodeBridgeServer> {
-  if (isTestEnv() && process.env.CLAWDIS_ENABLE_BRIDGE_IN_TESTS !== "1") {
+  if (isTestEnv() && process.env.CLAWDBOT_ENABLE_BRIDGE_IN_TESTS !== "1") {
     return {
       port: 0,
       close: async () => {},

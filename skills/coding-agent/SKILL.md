@@ -1,7 +1,7 @@
 ---
 name: coding-agent
 description: Run Codex CLI, Claude Code, OpenCode, or Pi Coding Agent via background process for programmatic control.
-metadata: {"clawdis":{"emoji":"🧩","requires":{"anyBins":["claude","codex","opencode","pi"]}}}
+metadata: {"clawdbot":{"emoji":"🧩","requires":{"anyBins":["claude","codex","opencode","pi"]}}}
 ---
 
 # Coding Agent (background-first)
@@ -54,17 +54,17 @@ bash workdir:~/project background:true command:"codex --yolo \"Build a snake gam
 
 ### Reviewing PRs (vanilla, no flags)
 
-**⚠️ CRITICAL: Never review PRs in Clawdis's own project folder!**
-- Either use the project where the PR is submitted (if it's NOT ~/Projects/clawdis)
+**⚠️ CRITICAL: Never review PRs in Clawdbot's own project folder!**
+- Either use the project where the PR is submitted (if it's NOT ~/Projects/clawdbot)
 - Or clone to a temp folder first
 
 ```bash
-# Option 1: Review in the actual project (if NOT clawdis)
+# Option 1: Review in the actual project (if NOT clawdbot)
 bash workdir:~/Projects/some-other-repo background:true command:"codex review --base main"
 
-# Option 2: Clone to temp folder for safe review (REQUIRED for clawdis PRs!)
+# Option 2: Clone to temp folder for safe review (REQUIRED for clawdbot PRs!)
 REVIEW_DIR=$(mktemp -d)
-git clone https://github.com/steipete/clawdis.git $REVIEW_DIR
+git clone https://github.com/clawdbot/clawdbot.git $REVIEW_DIR
 cd $REVIEW_DIR && gh pr checkout 130
 bash workdir:$REVIEW_DIR background:true command:"codex review --base origin/main"
 # Clean up after: rm -rf $REVIEW_DIR
@@ -74,7 +74,7 @@ git worktree add /tmp/pr-130-review pr-130-branch
 bash workdir:/tmp/pr-130-review background:true command:"codex review --base main"
 ```
 
-**Why?** Checking out branches in the running Clawdis repo can break the live instance!
+**Why?** Checking out branches in the running Clawdbot repo can break the live instance!
 
 ### Batch PR Reviews (parallel army!)
 ```bash
@@ -204,7 +204,7 @@ git worktree remove /tmp/issue-99
 5. **vanilla for reviewing** — no special flags needed
 6. **Parallel is OK** — run many Codex processes at once for batch work
 7. **NEVER start Codex in ~/clawd/** — it'll read your soul docs and get weird ideas about the org chart! Use the target project dir or /tmp for blank slate chats
-8. **NEVER checkout branches in ~/Projects/clawdis/** — that's the LIVE Clawdis instance! Clone to /tmp or use git worktree for PR reviews
+8. **NEVER checkout branches in ~/Projects/clawdbot/** — that's the LIVE Clawdbot instance! Clone to /tmp or use git worktree for PR reviews
 
 ---
 

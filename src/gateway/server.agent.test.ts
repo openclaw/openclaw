@@ -24,7 +24,7 @@ installGatewayTestHooks();
 describe("gateway server agent", () => {
   test("agent falls back to allowFrom when lastTo is stale", async () => {
     testState.allowFrom = ["+436769770569"];
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -67,7 +67,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent routes main last-channel whatsapp", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -111,7 +111,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent routes main last-channel telegram", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -155,7 +155,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent routes main last-channel discord", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -199,7 +199,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent routes main last-channel signal", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -244,7 +244,7 @@ describe("gateway server agent", () => {
 
   test("agent ignores webchat last-channel for routing", async () => {
     testState.allowFrom = ["+1555"];
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -415,7 +415,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent events stream to webchat clients when run context is registered", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,

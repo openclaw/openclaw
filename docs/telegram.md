@@ -10,15 +10,15 @@ Updated: 2025-12-07
 Status: ready for bot-mode use with grammY (long-polling by default; webhook supported when configured). Text + media send, mention-gated group replies with per-group overrides, and optional proxy support are implemented.
 
 ## Goals
-- Let you talk to Clawdis via a Telegram bot in DMs and groups.
+- Let you talk to Clawdbot via a Telegram bot in DMs and groups.
 - Share the same `main` session used by WhatsApp/WebChat; groups stay isolated as `telegram:group:<chatId>`.
 - Keep transport routing deterministic: replies always go back to the surface they arrived on.
 
 ## How it will work (Bot API)
 1) Create a bot with @BotFather and grab the token.
-2) Configure Clawdis with `TELEGRAM_BOT_TOKEN` (or `telegram.botToken` in `~/.clawdis/clawdis.json`).
+2) Configure Clawdbot with `TELEGRAM_BOT_TOKEN` (or `telegram.botToken` in `~/.clawdbot/clawdbot.json`).
 3) Run the gateway; it auto-starts Telegram only when a `telegram` config section exists **and** a bot token is set (unless `telegram.enabled = false`).
-   - If you prefer env vars, still add `telegram: { enabled: true }` to `~/.clawdis/clawdis.json` and set `TELEGRAM_BOT_TOKEN`.
+   - If you prefer env vars, still add `telegram: { enabled: true }` to `~/.clawdbot/clawdbot.json` and set `TELEGRAM_BOT_TOKEN`.
    - **Long-polling** is the default.
    - **Webhook mode** is enabled by setting `telegram.webhookUrl` (optionally `telegram.webhookSecret` / `telegram.webhookPath`).
      - The webhook listener currently binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
@@ -85,6 +85,6 @@ Behavior is controlled by `telegram.replyToMode`:
 - ⏳ Add more grammY coverage (webhook payloads, media edge cases)
 
 ## Safety & ops
-- Treat the bot token as a secret (equivalent to account control); prefer `TELEGRAM_BOT_TOKEN` or a locked-down config file (`chmod 600 ~/.clawdis/clawdis.json`).
+- Treat the bot token as a secret (equivalent to account control); prefer `TELEGRAM_BOT_TOKEN` or a locked-down config file (`chmod 600 ~/.clawdbot/clawdbot.json`).
 - Respect Telegram rate limits (429s); grammY throttling is enabled by default.
 - Use a test bot for development to avoid hitting production chats.

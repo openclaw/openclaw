@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
-import type { ClawdisConfig, SlackActionConfig } from "../../config/config.js";
+import type { ClawdbotConfig, SlackActionConfig } from "../../config/config.js";
 import {
   deleteSlackMessage,
   editSlackMessage,
@@ -33,7 +33,7 @@ type ActionGate = (
 
 export async function handleSlackAction(
   params: Record<string, unknown>,
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const isActionEnabled: ActionGate = (key, defaultValue = true) => {

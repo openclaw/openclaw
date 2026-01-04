@@ -4,8 +4,8 @@ import path from "node:path";
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 
-import { resolveClawdisAgentDir } from "../agents/agent-paths.js";
-import type { ClawdisConfig } from "../config/config.js";
+import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 
 export async function writeOAuthCredentials(
@@ -29,12 +29,12 @@ export async function writeOAuthCredentials(
 }
 
 export async function setAnthropicApiKey(key: string) {
-  const agentDir = resolveClawdisAgentDir();
+  const agentDir = resolveClawdbotAgentDir();
   const authStorage = discoverAuthStorage(agentDir);
   authStorage.set("anthropic", { type: "api_key", key });
 }
 
-export function applyMinimaxConfig(cfg: ClawdisConfig): ClawdisConfig {
+export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const allowed = new Set(cfg.agent?.allowedModels ?? []);
   allowed.add("anthropic/claude-opus-4-5");
   allowed.add("lmstudio/minimax-m2.1-gs32");

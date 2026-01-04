@@ -103,7 +103,7 @@ export function registerDnsCli(program: Command) {
   dns
     .command("setup")
     .description(
-      "Set up CoreDNS to serve clawdis.internal for unicast DNS-SD (Wide-Area Bonjour)",
+      "Set up CoreDNS to serve clawdbot.internal for unicast DNS-SD (Wide-Area Bonjour)",
     )
     .option(
       "--apply",
@@ -122,7 +122,7 @@ export function registerDnsCli(program: Command) {
         `Detected tailnet IP: ${tailnetIPv4 ?? "—"}${tailnetIPv6 ? ` (v6 ${tailnetIPv6})` : ""}`,
       );
       console.log("");
-      console.log("Recommended ~/.clawdis/clawdis.json:");
+      console.log("Recommended ~/.clawdbot/clawdbot.json:");
       console.log(
         JSON.stringify(
           {
@@ -138,7 +138,7 @@ export function registerDnsCli(program: Command) {
       console.log(
         `- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
       );
-      console.log(`- Restrict to domain (Split DNS): clawdis.internal`);
+      console.log(`- Restrict to domain (Split DNS): clawdbot.internal`);
 
       if (!opts.apply) {
         console.log("");
@@ -160,7 +160,7 @@ export function registerDnsCli(program: Command) {
       const corefilePath = path.join(etcDir, "Corefile");
       const confDir = path.join(etcDir, "conf.d");
       const importGlob = path.join(confDir, "*.server");
-      const serverPath = path.join(confDir, "clawdis.internal.server");
+      const serverPath = path.join(confDir, "clawdbot.internal.server");
 
       run("brew", ["list", "coredns"], { allowFailure: true });
       run("brew", ["install", "coredns"], {
@@ -202,7 +202,7 @@ export function registerDnsCli(program: Command) {
         const serial = `${y}${m}${d}01`;
 
         const zoneLines = [
-          `; created by clawdis dns setup (will be overwritten by the gateway when wide-area discovery is enabled)`,
+          `; created by clawdbot dns setup (will be overwritten by the gateway when wide-area discovery is enabled)`,
           `$ORIGIN ${WIDE_AREA_DISCOVERY_DOMAIN}`,
           `$TTL 60`,
           `@ IN SOA ns1 hostmaster ${serial} 7200 3600 1209600 60`,
@@ -224,7 +224,7 @@ export function registerDnsCli(program: Command) {
       if (cfg.discovery?.wideArea?.enabled !== true) {
         console.log("");
         console.log(
-          "Note: enable discovery.wideArea.enabled in ~/.clawdis/clawdis.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
+          "Note: enable discovery.wideArea.enabled in ~/.clawdbot/clawdbot.json on the gateway and restart the gateway so it writes the DNS-SD zone.",
         );
       }
     });

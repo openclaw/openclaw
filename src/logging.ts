@@ -4,16 +4,16 @@ import util from "node:util";
 
 import { Chalk } from "chalk";
 import { Logger as TsLogger } from "tslog";
-import { type ClawdisConfig, loadConfig } from "./config/config.js";
+import { type ClawdbotConfig, loadConfig } from "./config/config.js";
 import { isVerbose } from "./globals.js";
 import { defaultRuntime, type RuntimeEnv } from "./runtime.js";
 
 // Pin to /tmp so mac Debug UI and docs match; os.tmpdir() can be a per-user
 // randomized path on macOS which made the “Open log” button a no-op.
-export const DEFAULT_LOG_DIR = "/tmp/clawdis";
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "clawdis.log"); // legacy single-file path
+export const DEFAULT_LOG_DIR = "/tmp/clawdbot";
+export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "clawdbot.log"); // legacy single-file path
 
-const LOG_PREFIX = "clawdis";
+const LOG_PREFIX = "clawdbot";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -72,7 +72,7 @@ function normalizeLevel(level?: string): Level {
 }
 
 function resolveSettings(): ResolvedSettings {
-  const cfg: ClawdisConfig["logging"] | undefined =
+  const cfg: ClawdbotConfig["logging"] | undefined =
     overrideSettings ?? loadConfig().logging;
   const level = normalizeLevel(cfg?.level);
   const file = cfg?.file ?? defaultRollingPathForToday();
@@ -80,7 +80,7 @@ function resolveSettings(): ResolvedSettings {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
-  const cfg: ClawdisConfig["logging"] | undefined =
+  const cfg: ClawdbotConfig["logging"] | undefined =
     overrideSettings ?? loadConfig().logging;
   const level = normalizeConsoleLevel(cfg?.consoleLevel);
   const style = normalizeConsoleStyle(cfg?.consoleStyle);
@@ -140,7 +140,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
   const logger = new TsLogger<LogObj>({
-    name: "clawdis",
+    name: "clawdbot",
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });

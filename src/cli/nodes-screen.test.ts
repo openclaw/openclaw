@@ -35,6 +35,6 @@ describe("nodes screen helpers", () => {
       tmpDir: "/tmp",
       id: "id1",
     });
-    expect(p).toBe("/tmp/clawdis-screen-record-id1.mp4");
+    expect(p).toBe("/tmp/clawdbot-screen-record-id1.mp4");
   });
 });

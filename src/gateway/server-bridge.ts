@@ -26,7 +26,7 @@ import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
@@ -249,7 +249,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             ok: true,
             payloadJSON: JSON.stringify({
               ok: true,
-              path: CONFIG_PATH_CLAWDIS,
+              path: CONFIG_PATH_CLAWDBOT,
               config: validated.config,
             }),
           };

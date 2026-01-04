@@ -1,6 +1,6 @@
-import { type ClawdisConfig, loadConfig } from "../config/config.js";
-import { resolveClawdisAgentDir } from "./agent-paths.js";
-import { ensureClawdisModelsJson } from "./models-config.js";
+import { type ClawdbotConfig, loadConfig } from "../config/config.js";
+import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { ensureClawdbotModelsJson } from "./models-config.js";
 
 export type ModelCatalogEntry = {
   id: string;
@@ -25,7 +25,7 @@ export function resetModelCatalogCacheForTest() {
 }
 
 export async function loadModelCatalog(params?: {
-  config?: ClawdisConfig;
+  config?: ClawdbotConfig;
   useCache?: boolean;
 }): Promise<ModelCatalogEntry[]> {
   if (params?.useCache === false) {
@@ -39,8 +39,8 @@ export async function loadModelCatalog(params?: {
     const models: ModelCatalogEntry[] = [];
     try {
       const cfg = params?.config ?? loadConfig();
-      await ensureClawdisModelsJson(cfg);
-      const agentDir = resolveClawdisAgentDir();
+      await ensureClawdbotModelsJson(cfg);
+      const agentDir = resolveClawdbotAgentDir();
       const authStorage = piSdk.discoverAuthStorage(agentDir);
       const registry = piSdk.discoverModels(authStorage, agentDir) as
         | {

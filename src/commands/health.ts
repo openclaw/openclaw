@@ -125,7 +125,7 @@ export async function healthCommand(
     runtime.log(
       summary.web.linked
         ? `Web: linked (auth age ${summary.web.authAgeMs ? `${Math.round(summary.web.authAgeMs / 60000)}m` : "unknown"})`
-        : "Web: not linked (run clawdis login)",
+        : "Web: not linked (run clawdbot login)",
     );
     if (summary.web.linked) {
       logWebSelfId(runtime, true);

@@ -1,12 +1,12 @@
-import ClawdisKit
+import ClawdbotKit
 import Foundation
 import Network
 import Testing
-@testable import Clawdis
+@testable import Clawdbot
 
 @Suite struct BridgeClientTests {
     private final class LineServer: @unchecked Sendable {
-        private let queue = DispatchQueue(label: "com.clawdis.tests.bridge-client-server")
+        private let queue = DispatchQueue(label: "com.clawdbot.tests.bridge-client-server")
         private let listener: NWListener
         private var connection: NWConnection?
         private var buffer = Data()

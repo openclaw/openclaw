@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { monitorDiscordProvider } from "../discord/index.js";
 import { probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
@@ -70,7 +70,7 @@ export type ProviderRuntimeSnapshot = {
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type ProviderManagerOptions = {
-  loadConfig: () => ClawdisConfig;
+  loadConfig: () => ClawdbotConfig;
   logWhatsApp: SubsystemLogger;
   logTelegram: SubsystemLogger;
   logDiscord: SubsystemLogger;

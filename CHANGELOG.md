@@ -3,13 +3,15 @@
 ## Unreleased
 
 ### Breaking
-- Identifiers: rename bundle IDs and internal domains to `com.clawdis.*` (macOS: `com.clawdis.mac`, iOS: `com.clawdis.ios`, Android: `com.clawdis.android`) and update the gateway LaunchAgent label to `com.clawdis.gateway`.
-- Agent tools: drop the `clawdis_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
+- Project rename: Clawdis → Clawdbot. All CLIs, package/binary names, bundle IDs, config/state paths (`~/.clawdbot`), env vars (`CLAWDBOT_*`), gateway URLs, and docs now use Clawdbot. Old `clawdis` names no longer work.
+- Identifiers: rename bundle IDs and internal domains to `com.clawdbot.*` (macOS: `com.clawdbot.mac`, iOS: `com.clawdbot.ios`, Android: `com.clawdbot.android`) and update the gateway LaunchAgent label to `com.clawdbot.gateway`.
+- Agent tools: drop the `clawdbot_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
 - Bash tool: remove `stdinMode: "pty"`/node-pty support; use the tmux skill for real TTYs.
 - Sessions: primary session key is fixed to `main` (or `global` for global scope); `session.mainKey` is ignored.
 
 ### Features
-- Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
+- Highlight: agent-to-agent ping-pong (reply-back loop) with `REPLY_SKIP` plus target announce step with `ANNOUNCE_SKIP` (max turns configurable, 0–5).
+- Gateway: support `gateway.port` + `CLAWDBOT_GATEWAY_PORT` across CLI, TUI, and macOS app.
 - Gateway: add config hot reload with hybrid restart strategy (`gateway.reload`) and per-section reload handling.
 - Canvas host: add `canvasHost.liveReload` to disable file watching + reload injection.
 - UI: centralize tool display metadata and show action/detail summaries across Web Chat, SwiftUI, Android, and the TUI.
@@ -20,6 +22,7 @@
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
+- Agent: add configurable Docker hardening options for sandboxed sessions (resource limits, seccomp/apparmor, DNS/hosts) and default network isolation.
 - Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
 - Sessions: add agent‑to‑agent post step with `ANNOUNCE_SKIP` to suppress channel announcements.
 
@@ -57,7 +60,7 @@
 - Logging: decouple file log levels from console verbosity; verbose-only details are captured when `logging.level` is debug/trace.
 - Build: fix regex literal in tool-meta path detection (watch build error).
 - Build: require AVX2 Bun for x86_64 relay packaging (reject baseline builds).
-- Build: drop stale ClawdisCLI product from macOS build-and-run script.
+- Build: drop stale ClawdbotCLI product from macOS build-and-run script.
 - Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
 - WhatsApp: honor per-group mention gating overrides when group ids are stored as session keys.
 - Canvas host: reuse shared handler to avoid double file watchers and close watchers on error (EMFILE resilience).
@@ -95,8 +98,8 @@
 - Sessions: group keys now use `surface:group:<id>` / `surface:channel:<id>`; legacy `group:*` keys migrate on next message; `groupdm` keys are no longer recognized.
 - Discord: remove legacy `discord.allowFrom`, `discord.guildAllowFrom`, and `discord.requireMention`; use `discord.dm` + `discord.guilds`.
 - Providers: Discord/Telegram no longer auto-start from env tokens alone; add `discord: { enabled: true }` / `telegram: { enabled: true }` to your config when using `DISCORD_BOT_TOKEN` / `TELEGRAM_BOT_TOKEN`.
-- Config: remove `routing.allowFrom`; use `whatsapp.allowFrom` instead (run `clawdis doctor` to migrate).
-- Config: remove `routing.groupChat.requireMention` + `telegram.requireMention`; use `whatsapp.groups`, `imessage.groups`, and `telegram.groups` defaults instead (run `clawdis doctor` to migrate).
+- Config: remove `routing.allowFrom`; use `whatsapp.allowFrom` instead (run `clawdbot doctor` to migrate).
+- Config: remove `routing.groupChat.requireMention` + `telegram.requireMention`; use `whatsapp.groups`, `imessage.groups`, and `telegram.groups` defaults instead (run `clawdbot doctor` to migrate).
 
 ### Features
 - Discord: expand `discord` tool actions (reactions, stickers, polls, threads, search, moderation gates) (#115) — thanks @thewilloftheshadow.
@@ -104,7 +107,7 @@
 - Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.
 - Auto-reply: expand queue modes (steer/followup/collect/steer-backlog) with debounce/cap/drop options and followup backlog handling.
 - UI: add optional `ui.seamColor` accent to tint the Talk Mode side bubble (macOS/iOS/Android).
-- Nix mode: opt-in declarative config + read-only settings UI when `CLAWDIS_NIX_MODE=1` (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).
+- Nix mode: opt-in declarative config + read-only settings UI when `CLAWDBOT_NIX_MODE=1` (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).
 - CLI: add Google Antigravity OAuth auth option for Claude Opus 4.5/Gemini 3 (#88) — thanks @mukhtharcm.
 - Agent runtime: accept legacy `Z_AI_API_KEY` for Z.AI provider auth (maps to `ZAI_API_KEY`).
 - Groups: add per-group mention gating defaults/overrides for Telegram/WhatsApp/iMessage via `*.groups` with `"*"` defaults; Discord now supports `discord.guilds."*"` as a default.
@@ -114,7 +117,7 @@
 - iMessage: add imsg JSON-RPC integration (stdio), chat_id routing, and group chat support.
 - Chat UI: add recent-session dropdown switcher (main first) in macOS/iOS/Android + Control UI.
 - UI: add Discord/Signal/iMessage connection panels in macOS + Control UI (thanks @thewilloftheshadow).
-- Discord: allow agent-triggered reactions via `clawdis_discord` when enabled, and surface message ids in context.
+- Discord: allow agent-triggered reactions via `clawdbot_discord` when enabled, and surface message ids in context.
 - Discord: revamp guild routing config with per-guild/channel rules and slugged display names; add optional group DM support (default off).
 - Discord: remove legacy guild/channel ignore lists in favor of per-guild allowlists (and proposed per-guild ignore lists).
 - Skills: add Trello skill for board/list/card management (thanks @clawd).
@@ -126,7 +129,7 @@
 - CLI: add `configure`, `doctor`, and `update` wizards for ongoing setup, health checks, and modernization.
 - CLI: add Signal CLI auto-install from GitHub releases in the wizard and persist wizard run metadata in config.
 - CLI: add remote gateway client config (gateway.remote.*) with Bonjour-assisted discovery.
-- CLI: enhance `clawdis tui` with model/session pickers, tool cards, and slash commands (local or remote).
+- CLI: enhance `clawdbot tui` with model/session pickers, tool cards, and slash commands (local or remote).
 - Gateway: allow `sessions.patch` to set per-session model overrides (used by the TUI `/model` flow).
 - Skills: allow `bun` as a node manager for skill installs.
 - Skills: add `things-mac` (Things 3 CLI) for read/search plus add/update via URL scheme.
@@ -151,7 +154,7 @@
 - Chat UI: add extra top padding before the first message bubble in Web Chat (macOS/iOS/Android).
 - Control UI: refine Web Chat session selector styling (chevron spacing + background).
 - WebChat: stream live updates for sessions even when runs start outside the chat UI.
-- Gateway CLI: read `CLAWDIS_GATEWAY_PASSWORD` from environment in `callGateway()` — allows `doctor`/`health` commands to auth without explicit `--password` flag.
+- Gateway CLI: read `CLAWDBOT_GATEWAY_PASSWORD` from environment in `callGateway()` — allows `doctor`/`health` commands to auth without explicit `--password` flag.
 - Gateway: add password auth support for remote gateway connections (thanks @jeffersonwarrior).
 - Auto-reply: strip stray leading/trailing `HEARTBEAT_OK` from normal replies; drop short (≤ 30 chars) heartbeat acks.
 - WhatsApp auto-reply: default to self-only when no config is present.
@@ -201,7 +204,7 @@
 - Docs: clarify self-chat mode and group mention gating config (#111) — thanks @rafaelreis-r.
 - Browser tools: `upload` supports auto-click refs, direct `inputRef`/`element` file inputs, and emits input/change after `setFiles` so JS-heavy sites pick up attachments.
 - Browser tools: harden CDP readiness (HTTP + WS), retry CDP connects, and auto-restart the clawd browser when the socket handshake stalls.
-- Browser CLI: add `clawdis browser reset-profile` to move the clawd profile to Trash when it gets wedged.
+- Browser CLI: add `clawdbot browser reset-profile` to move the clawd profile to Trash when it gets wedged.
 - Signal: fix daemon startup race (wait for `/api/v1/check`) and normalize JSON-RPC `version` probe parsing.
 - Docs/Signal: clarify bot-number vs personal-account setup (self-chat loop protection) and add a quickstart config snippet.
 - Docs: refresh the CLI wizard guide and highlight onboarding in the README.
@@ -265,7 +268,7 @@
 - macOS menu: top status line now shows pending node pairing approvals (incl. repairs).
 - CLI: avoid spurious gateway close errors after successful request/response cycles.
 - Agent runtime: clamp tool-result images to the 5MB Anthropic limit to avoid hard request rejections.
-- Agent runtime: write v2 session headers so Pi session branching stays in the Clawdis sessions dir.
+- Agent runtime: write v2 session headers so Pi session branching stays in the Clawdbot sessions dir.
 - Tests: add Swift Testing coverage for camera errors and Kotest coverage for Android bridge endpoints.
 
 ## 2.0.0-beta4 — 2025-12-27
@@ -281,12 +284,12 @@
 ## 2.0.0-beta3 — 2025-12-27
 
 ### Highlights
-- First-class Clawdis tools (browser, canvas, nodes, cron) replace the old `clawdis-*` skills; tool schemas are now injected directly into the agent runtime.
-- Per-session model selection + custom model providers: `models.providers` merges into `~/.clawdis/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
+- First-class Clawdbot tools (browser, canvas, nodes, cron) replace the old `clawdbot-*` skills; tool schemas are now injected directly into the agent runtime.
+- Per-session model selection + custom model providers: `models.providers` merges into `~/.clawdbot/agent/models.json` (merge/replace modes) for LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.
 - Group chat activation modes: per-group `/activation mention|always` command with status visibility.
 - Discord bot transport for DMs and guild text channels, with allowlists + mention gating.
 - Gateway webhooks: external `wake` and isolated `agent` hooks with dedicated token auth.
-- Hook mappings + Gmail Pub/Sub helper (`clawdis hooks gmail setup/run`) with auto-renew + Tailscale Funnel support.
+- Hook mappings + Gmail Pub/Sub helper (`clawdbot hooks gmail setup/run`) with auto-renew + Tailscale Funnel support.
 - Command queue modes + per-session overrides (`/queue ...`) and new `agent.maxConcurrent` cap for safe parallelism across sessions.
 - Background bash tasks: `bash` auto-yields after 20s (or on demand) with a `process` tool to list/poll/log/write/kill sessions.
 - Gateway in-process restart: `gateway` tool action triggers a SIGUSR1 restart without needing a supervisor.
@@ -383,7 +386,7 @@
 ### Tests
 - Coverage added for models config merging, WhatsApp reply context, QR login flows, auto-reply behavior, and gateway SIGTERM timeouts.
 - Added gateway webhook coverage (auth, validation, and summary posting).
-- Vitest now isolates HOME/XDG config roots so tests never touch a real `~/.clawdis` install.
+- Vitest now isolates HOME/XDG config roots so tests never touch a real `~/.clawdbot` install.
 
 ## 2.0.0-beta2 — 2025-12-21
 
@@ -411,41 +414,41 @@ Second beta focused on bundled gateway packaging, skills management, onboarding 
 - Remote/local gateway: auto-enable local gateway, clearer labels, re-ensure remote tunnel, hide local bridge discovery in remote mode.
 
 ### Build, CI, deps
-- Bundled playwright-core + chromium-bidi/long; bun gateway bytecode builds; swiftformat/biome CI fixes; iOS lint script updates; Android icon/compiler updates; ignored new ClawdisKit `.swiftpm` path.
+- Bundled playwright-core + chromium-bidi/long; bun gateway bytecode builds; swiftformat/biome CI fixes; iOS lint script updates; Android icon/compiler updates; ignored new ClawdbotKit `.swiftpm` path.
 
 ### Docs
 - README architecture refresh + npm header image fix; onboarding/bootstrap steps; skills install guidance + new skills; browser/canvas control docs; bundled gateway + DMG packaging notes.
 
 ## 2.0.0-beta1 — 2025-12-19
 
-First Clawdis release post rebrand. This is a semver-major because we dropped legacy providers/agents and moved defaults to new paths while adding a full macOS companion app, a WebSocket Gateway, and an iOS node.
+First Clawdbot release post rebrand. This is a semver-major because we dropped legacy providers/agents and moved defaults to new paths while adding a full macOS companion app, a WebSocket Gateway, and an iOS node.
 
 ### Bug Fixes
 - macOS: Voice Wake / push-to-talk no longer initialize `AVAudioEngine` at app launch, preventing Bluetooth headphones from switching into headset profile when voice features are unused. (Thanks @Nachx639)
 
 ### Breaking
-- Renamed to **Clawdis**: defaults now live under `~/.clawdis` (sessions in `~/.clawdis/sessions/`, IPC at `~/.clawdis/clawdis.sock`, logs in `/tmp/clawdis`). Launchd labels and config filenames follow the new name; legacy stores are copied forward on first run.
+- Renamed to **Clawdbot**: defaults now live under `~/.clawdbot` (sessions in `~/.clawdbot/sessions/`, IPC at `~/.clawdbot/clawdbot.sock`, logs in `/tmp/clawdbot`). Launchd labels and config filenames follow the new name; legacy stores are copied forward on first run.
 - Pi only: only the embedded Pi runtime remains, and the agent CLI/CLI flags for Claude/Codex/Gemini were removed. The Pi CLI runs in RPC mode with a persistent worker.
 - WhatsApp Web is the only transport; Twilio support and related CLI flags/tests were removed.
 - Direct chats now collapse into a single `main` session by default (no config needed); groups stay isolated as `group:<jid>`.
-- Gateway is now a loopback-only WebSocket daemon (`ws://127.0.0.1:18789`) that owns all providers/state; clients (CLI, WebChat, macOS app, nodes) connect to it. Start it explicitly (`clawdis gateway …`) or via Clawdis.app; helper subcommands no longer auto-spawn a gateway.
+- Gateway is now a loopback-only WebSocket daemon (`ws://127.0.0.1:18789`) that owns all providers/state; clients (CLI, WebChat, macOS app, nodes) connect to it. Start it explicitly (`clawdbot gateway …`) or via Clawdbot.app; helper subcommands no longer auto-spawn a gateway.
 
 ### Gateway, nodes, and automation
-- New typed Gateway WS protocol (JSON schema validated) with `clawdis gateway {health,status,send,agent,call}` helpers and structured presence/instance updates for all clients.
+- New typed Gateway WS protocol (JSON schema validated) with `clawdbot gateway {health,status,send,agent,call}` helpers and structured presence/instance updates for all clients.
 - Optional LAN-facing bridge (`tcp://0.0.0.0:18790`) keeps the Gateway loopback-only while enabling direct Bonjour-discovered connections for paired nodes.
-- Node pairing + management via `clawdis nodes {pending,approve,reject,invoke}` (used by the iOS node and future remote nodes).
-- Cron jobs are Gateway-owned (`clawdis cron …`) with run history stored as JSONL and support for “isolated summary” posting into the main session.
+- Node pairing + management via `clawdbot nodes {pending,approve,reject,invoke}` (used by the iOS node and future remote nodes).
+- Cron jobs are Gateway-owned (`clawdbot cron …`) with run history stored as JSONL and support for “isolated summary” posting into the main session.
 
 ### macOS companion app
-- **Clawdis.app menu bar companion**: packaged, signed bundle with gateway start/stop, launchd toggle, project-root and pnpm/node auto-resolution, live log shortcut, restart button, and status/recipient table plus badges/dimming for attention and paused states.
+- **Clawdbot.app menu bar companion**: packaged, signed bundle with gateway start/stop, launchd toggle, project-root and pnpm/node auto-resolution, live log shortcut, restart button, and status/recipient table plus badges/dimming for attention and paused states.
 - **On-device Voice Wake**: Apple speech recognizer with wake-word table, language picker, live mic meter, “hold until silence,” animated ears/legs, and main-session routing that replies on the **last used surface** (WhatsApp/Telegram/WebChat). Delivery failures are logged, and the run remains visible via WebChat/session logs.
 - **WebChat & Debugging**: bundled WebChat UI, Debug tab with heartbeat sliders, session-store picker, log opener (`clawlog`), gateway restart, health probes, and scrollable settings panes.
-- **Browser control**: manage clawd’s dedicated Chrome/Chromium with tab listing/open/focus/close, screenshots, DOM query/dump, and “AI snapshots” (aria/domSnapshot/ai) via `clawdis browser …` and UI controls.
+- **Browser control**: manage clawd’s dedicated Chrome/Chromium with tab listing/open/focus/close, screenshots, DOM query/dump, and “AI snapshots” (aria/domSnapshot/ai) via `clawdbot browser …` and UI controls.
 - **Remote gateway control**: Bonjour discovery for local masters plus SSH-tunnel fallback for remote control when multicast is unavailable.
 
 ### iOS node
 - New iOS companion app that pairs to the Gateway bridge, reports presence as a node, and exposes a WKWebView “Canvas” for agent-driven UI.
-- `clawdis nodes invoke` supports `canvas.eval` and `canvas.snapshot` to drive and verify the iOS Canvas (fails fast when the iOS node is backgrounded).
+- `clawdbot nodes invoke` supports `canvas.eval` and `canvas.snapshot` to drive and verify the iOS Canvas (fails fast when the iOS node is backgrounded).
 - Voice wake words are configurable in-app; the iOS node reconnects to the last bridge when credentials are still present in Keychain.
 
 ### WhatsApp & agent experience
@@ -453,12 +456,12 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 - Thinking/verbosity directives: `/think` and `/verbose` acknowledge and persist per session while allowing inline overrides; verbose mode streams tool metadata with emoji/args/previews and coalesces bursts to reduce WhatsApp noise.
 - Heartbeats: configurable cadence with CLI/GUI toggles; directive acks suppressed during heartbeats; array/multi-payload replies normalized for Baileys.
 - Reply quality: smarter chunking on words/newlines, fallback warnings when media fails to send, self-number mention detection, and primed group sessions send the roster on first turn.
-- In-chat `/status`: prints agent readiness, session context usage %, current thinking/verbose options, and when the WhatsApp web creds were refreshed (helps decide when to re-scan QR); still available via `clawdis status` CLI for web session health.
+- In-chat `/status`: prints agent readiness, session context usage %, current thinking/verbose options, and when the WhatsApp web creds were refreshed (helps decide when to re-scan QR); still available via `clawdbot status` CLI for web session health.
 
 ### CLI, RPC, and health
-- New `clawdis agent` command plus a persistent Pi RPC worker (auto-started) enables direct agent chats; `clawdis status` renders a colored session/recipient table.
-- `clawdis health` probes WhatsApp link status, connect latency, heartbeat interval, session-store recency, and IPC socket presence (JSON mode for monitors).
-- Added `--help`/`--version` flags; login/logout accept `--provider` (WhatsApp default). Console output is mirrored into pino logs under `/tmp/clawdis`.
+- New `clawdbot agent` command plus a persistent Pi RPC worker (auto-started) enables direct agent chats; `clawdbot status` renders a colored session/recipient table.
+- `clawdbot health` probes WhatsApp link status, connect latency, heartbeat interval, session-store recency, and IPC socket presence (JSON mode for monitors).
+- Added `--help`/`--version` flags; login/logout accept `--provider` (WhatsApp default). Console output is mirrored into pino logs under `/tmp/clawdbot`.
 - RPC stability: stdin/stdout loop for Pi, auto-restart worker, raw error surfacing, and deliver-via-RPC when JSON agent output is returned.
 
 ### Security & hardening
@@ -468,32 +471,32 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 
 ### Docs
 - Added `docs/telegram.md` outlining the Telegram Bot API provider (grammY) and how it shares the `main` session. Default grammY throttler keeps Bot API calls under rate limits.
-- Gateway can run WhatsApp + Telegram together when configured; `clawdis send --provider telegram …` sends via the Telegram bot (webhook/proxy options documented).
+- Gateway can run WhatsApp + Telegram together when configured; `clawdbot send --provider telegram …` sends via the Telegram bot (webhook/proxy options documented).
 
 ## 1.5.0 — 2025-12-05
 
 ### Breaking
 - Dropped all non-Pi agents (Claude, Codex, Gemini, Opencode); only the embedded Pi runtime remains and related CLI helpers have been removed.
-- Removed Twilio support and all related commands/options (webhook/up/provider flags/wait-poll); CLAWDIS is Baileys Web-only.
+- Removed Twilio support and all related commands/options (webhook/up/provider flags/wait-poll); CLAWDBOT is Baileys Web-only.
 
 ### Changes
 - Default agent handling now favors Pi RPC while falling back to plain command execution for non-Pi invocations, keeping heartbeat/session plumbing intact.
 - Documentation updated to reflect Pi-only support and to mark legacy Claude paths as historical.
-- Status command reports web session health + session recipients; config paths are locked to `~/.clawdis` with session metadata stored under `~/.clawdis/sessions/`.
+- Status command reports web session health + session recipients; config paths are locked to `~/.clawdbot` with session metadata stored under `~/.clawdbot/sessions/`.
 - Simplified send/agent/gateway/heartbeat to web-only delivery; removed Twilio mocks/tests and dead code.
 - Pi RPC timeout is now inactivity-based (5m without events) and error messages show seconds only.
-- Pi sessions now write to `~/.clawdis/sessions/` by default (legacy session logs from older installs are copied over when present).
+- Pi sessions now write to `~/.clawdbot/sessions/` by default (legacy session logs from older installs are copied over when present).
 - Directive triggers (`/think`, `/verbose`, `/stop` et al.) now reply immediately using normalized bodies (timestamps/group prefixes stripped) without waiting for the agent.
 - Directive/system acks carry a `⚙️` prefix and verbose parsing rejects typoed `/ver*` strings so unrelated text doesn’t flip verbosity.
 - Batched history blocks no longer trip directive parsing; `/think` in prior messages won't emit stray acknowledgements.
 - RPC fallbacks no longer echo the user's prompt (e.g., pasting a link) when the agent returns no assistant text.
 - Heartbeat prompts with `/think` no longer send directive acks; heartbeat replies stay silent on settings.
-- `clawdis sessions` now renders a colored table (a la oracle) with context usage shown in k tokens and percent of the context window.
+- `clawdbot sessions` now renders a colored table (a la oracle) with context usage shown in k tokens and percent of the context window.
 
 ## 1.4.1 — 2025-12-04
 
 ### Changes
-- Added `clawdis agent` CLI command to talk directly to the configured agent using existing session handling (no WhatsApp send), with JSON output and delivery option.
+- Added `clawdbot agent` CLI command to talk directly to the configured agent using existing session handling (no WhatsApp send), with JSON output and delivery option.
 - `/new` reset trigger now works even when inbound messages have timestamp prefixes (e.g., `[Dec 4 17:35]`).
 - WhatsApp mention parsing accepts nullable arrays and flattens safely to avoid missed mentions.
 
@@ -501,7 +504,7 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 
 ### Highlights
 - **Thinking directives & state:** `/t|/think|/thinking <level>` (aliases off|minimal|low|medium|high|max/highest). Inline applies to that message; directive-only message pins the level for the session; `/think:off` clears. Resolution: inline > session override > `agent.thinkingDefault` > off. Pi gets `--thinking <level>` (except off); other agents append cue words (`think` → `think hard` → `think harder` → `ultrathink`). Heartbeat probe uses `HEARTBEAT /think:high`.
-- **Group chats (web provider):** Clawdis now fully supports WhatsApp groups: mention-gated triggers (including image-only @ mentions), recent group history injection, per-group sessions, sender attribution, and a first-turn primer with group subject/member roster; heartbeats are skipped for groups.
+- **Group chats (web provider):** Clawdbot now fully supports WhatsApp groups: mention-gated triggers (including image-only @ mentions), recent group history injection, per-group sessions, sender attribution, and a first-turn primer with group subject/member roster; heartbeats are skipped for groups.
 - **Group session primer:** The first turn of a group session now tells the agent it is in a WhatsApp group and lists known members/subject so it can address the right speaker.
 - **Media failures are surfaced:** When a web auto-reply media fetch/send fails (e.g., HTTP 404), we now append a warning to the fallback text so you know the attachment was skipped.
 - **Verbose directives + session hints:** `/v|/verbose on|full|off` mirrors thinking: inline > session > config default. Directive-only replies with an acknowledgement; invalid levels return a hint. When enabled, tool results from JSON-emitting agents (Pi, etc.) are forwarded as metadata-only `[🛠️ <tool-name> <arg>]` messages (now streamed as they happen), and new sessions surface a `🧭 New session: <id>` hint.
@@ -510,7 +513,7 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 - **Pi stability:** RPC replies buffered until the assistant turn finishes; parsers return consistent `texts[]`; web auto-replies keep a warm Pi RPC process to avoid cold starts.
 - **Claude prompt flow:** One-time `sessionIntro` with per-message `/think:high` bodyPrefix; system prompt always sent on first turn even with `sendSystemOnce`.
 - **Heartbeat UX:** Backpressure skips reply heartbeats while other commands run; skips don’t refresh session `updatedAt`; web heartbeats normalize array payloads and optional `heartbeatCommand`.
-- **Control via WhatsApp:** Send `/restart` to restart the launchd service (`com.steipete.clawdis`) from your allowed numbers.
+- **Control via WhatsApp:** Send `/restart` to restart the launchd service (`com.steipete.clawdbot`) from your allowed numbers.
 - **Pi completion signal:** RPC now resolves on Pi’s `agent_end` (or process exit) so late assistant messages aren’t truncated; 5-minute hard cap only as a failsafe.
 
 ### Reliability & UX
@@ -523,7 +526,7 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 - Verbose tool messages now include emoji + args + a short result preview for bash/read/edit/write/attach (derived from RPC tool start/end events).
 
 ### Security / Hardening
-- IPC socket hardened (0700 dir / 0600 socket, no symlinks/foreign owners); `clawdis logout` also prunes session store.
+- IPC socket hardened (0700 dir / 0600 socket, no symlinks/foreign owners); `clawdbot logout` also prunes session store.
 - Media server blocks symlinks and enforces path containment; logging rotates daily and prunes >24h.
 
 ### Bug Fixes
@@ -551,11 +554,11 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 - Heartbeat alerts now honor `responsePrefix`.
 - Command failures return user-friendly messages.
 - Test session isolation to avoid touching real `sessions.json`.
-- (Removed in 2.0.0) IPC reuse for `clawdis send/heartbeat` prevents Signal/WhatsApp session corruption.
+- (Removed in 2.0.0) IPC reuse for `clawdbot send/heartbeat` prevents Signal/WhatsApp session corruption.
 - Web send respects media kind (image/audio/video/document) with correct limits.
 
 ### Changes
-- (Removed in 2.0.0) IPC gateway socket at `~/.clawdis/ipc/gateway.sock` with automatic CLI fallback.
+- (Removed in 2.0.0) IPC gateway socket at `~/.clawdbot/ipc/gateway.sock` with automatic CLI fallback.
 - Batched inbound messages with timestamps; typing indicator after sends.
 - Watchdog restarts WhatsApp after long inactivity; heartbeat logging includes minutes since last message.
 - Early `allowFrom` filtering before decryption.
@@ -564,7 +567,7 @@ First Clawdis release post rebrand. This is a semver-major because we dropped le
 ## 1.2.2 — 2025-11-28
 
 ### Changes
-- Manual heartbeat sends: `clawdis heartbeat --message/--body` (web provider only); `--dry-run` previews payloads.
+- Manual heartbeat sends: `clawdbot heartbeat --message/--body` (web provider only); `--dry-run` previews payloads.
 
 ## 1.2.1 — 2025-11-28
 

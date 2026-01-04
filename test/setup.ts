@@ -8,12 +8,12 @@ const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
 const originalXdgDataHome = process.env.XDG_DATA_HOME;
 const originalXdgStateHome = process.env.XDG_STATE_HOME;
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME;
-const originalTestHome = process.env.CLAWDIS_TEST_HOME;
+const originalTestHome = process.env.CLAWDBOT_TEST_HOME;
 
-const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-test-home-"));
+const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-test-home-"));
 process.env.HOME = tempHome;
 process.env.USERPROFILE = tempHome;
-process.env.CLAWDIS_TEST_HOME = tempHome;
+process.env.CLAWDBOT_TEST_HOME = tempHome;
 process.env.XDG_CONFIG_HOME = path.join(tempHome, ".config");
 process.env.XDG_DATA_HOME = path.join(tempHome, ".local", "share");
 process.env.XDG_STATE_HOME = path.join(tempHome, ".local", "state");
@@ -31,7 +31,7 @@ process.on("exit", () => {
   restoreEnv("XDG_DATA_HOME", originalXdgDataHome);
   restoreEnv("XDG_STATE_HOME", originalXdgStateHome);
   restoreEnv("XDG_CACHE_HOME", originalXdgCacheHome);
-  restoreEnv("CLAWDIS_TEST_HOME", originalTestHome);
+  restoreEnv("CLAWDBOT_TEST_HOME", originalTestHome);
   try {
     fs.rmSync(tempHome, { recursive: true, force: true });
   } catch {

@@ -10,7 +10,7 @@ Updated: 2025-12-07
 Status: ready for DM and guild text channels via the official Discord bot gateway.
 
 ## Goals
-- Talk to Clawdis via Discord DMs or guild channels.
+- Talk to Clawdbot via Discord DMs or guild channels.
 - Share the same `main` session used by WhatsApp/Telegram/WebChat; guild channels stay isolated as `discord:group:<channelId>` (display names use `discord:<guildSlug>#<channelSlug>`).
 - Group DMs are ignored by default; enable via `discord.dm.groupEnabled` and optionally restrict by `discord.dm.groupChannels`.
 - Keep routing deterministic: replies always go back to the surface they arrived on.
@@ -18,9 +18,9 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 ## How it works
 1. Create a Discord application → Bot, enable the intents you need (DMs + guild messages + message content), and grab the bot token.
 2. Invite the bot to your server with the permissions required to read/send messages where you want to use it.
-3. Configure Clawdis with `DISCORD_BOT_TOKEN` (or `discord.token` in `~/.clawdis/clawdis.json`).
+3. Configure Clawdbot with `DISCORD_BOT_TOKEN` (or `discord.token` in `~/.clawdbot/clawdbot.json`).
 4. Run the gateway; it auto-starts the Discord provider only when a `discord` config section exists **and** the token is set (unless `discord.enabled = false`).
-   - If you prefer env vars, still add `discord: { enabled: true }` to `~/.clawdis/clawdis.json` and set `DISCORD_BOT_TOKEN`.
+   - If you prefer env vars, still add `discord: { enabled: true }` to `~/.clawdbot/clawdbot.json` and set `DISCORD_BOT_TOKEN`.
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
 7. Optional DM control: set `discord.dm.enabled = false` to ignore all DMs, or `discord.dm.allowFrom` to allow specific users (ids or names). Use `discord.dm.groupEnabled` + `discord.dm.groupChannels` to allow group DMs.
@@ -167,7 +167,7 @@ Slash command notes:
 - Register a chat input command in Discord with at least one string option (e.g., `prompt`).
 - The first non-empty string option is treated as the prompt.
 - Slash commands honor the same allowlists as DMs/guild messages (`discord.dm.allowFrom`, `discord.guilds`, per-channel rules).
-- Clawdis will auto-register `/clawd` (or the configured name) if it doesn't already exist.
+- Clawdbot will auto-register `/clawd` (or the configured name) if it doesn't already exist.
 
 ## Tool actions
 The agent can call `discord` with actions like:
@@ -186,4 +186,4 @@ Emoji can be unicode (e.g., `✅`) or custom emoji syntax like `<:party_blob:123
 ## Safety & ops
 - Treat the bot token like a password; prefer the `DISCORD_BOT_TOKEN` env var on supervised hosts or lock down the config file permissions.
 - Only grant the bot permissions it needs (typically Read/Send Messages).
-- If the bot is stuck or rate limited, restart the gateway (`clawdis gateway --force`) after confirming no other processes own the Discord session.
+- If the bot is stuck or rate limited, restart the gateway (`clawdbot gateway --force`) after confirming no other processes own the Discord session.

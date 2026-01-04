@@ -5,7 +5,7 @@ read_when:
 ---
 # Control channel API (newline-delimited JSON)
 
-**Deprecated (historical):** superseded by the WebSocket Gateway protocol (`clawdis gateway`, see `docs/architecture.md` and `docs/gateway.md`).
+**Deprecated (historical):** superseded by the WebSocket Gateway protocol (`clawdbot gateway`, see `docs/architecture.md` and `docs/gateway.md`).
 Current builds use a WebSocket server on `ws://127.0.0.1:18789` and do **not** expose this TCP control channel.
 
 Legacy endpoint (if present in an older build): `127.0.0.1:18789` (TCP, localhost only), typically reached via SSH port forward in remote mode.
@@ -18,7 +18,7 @@ Each line is a JSON object. Two shapes exist:
 
 ## Methods
 - `ping`: sanity check. Payload: `{ pong: true, ts }`.
-- `health`: returns the gateway health snapshot (same shape as `clawdis health --json`).
+- `health`: returns the gateway health snapshot (same shape as `clawdbot health --json`).
 - `status`: shorter summary (linked/authAge/heartbeatSeconds, session counts).
 - `last-heartbeat`: returns the most recent heartbeat event the gateway has seen.
 - `set-heartbeats { enabled: boolean }`: toggle heartbeat scheduling.

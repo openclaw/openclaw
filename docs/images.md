@@ -6,15 +6,15 @@ read_when:
 <!-- {% raw %} -->
 # Image & Media Support — 2025-12-05
 
-CLAWDIS is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
+CLAWDBOT is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Goals
-- Send media with optional captions via `clawdis send --media`.
+- Send media with optional captions via `clawdbot send --media`.
 - Allow auto-replies from the web inbox to include media alongside text.
 - Keep per-type limits sane and predictable.
 
 ## CLI Surface
-- `clawdis send --media <path-or-url> [--message <caption>]`
+- `clawdbot send --media <path-or-url> [--message <caption>]`
   - `--media` optional; caption can be empty for media-only sends.
   - `--dry-run` prints the resolved payload; `--json` emits `{ provider, to, messageId, mediaUrl, caption }`.
 
@@ -31,11 +31,11 @@ CLAWDIS is now **web-only** (Baileys). This document captures the current media 
 
 ## Auto-Reply Pipeline
 - `getReplyFromConfig` returns `{ text?, mediaUrl?, mediaUrls? }`.
-- When media is present, the web sender resolves local paths or URLs using the same pipeline as `clawdis send`.
+- When media is present, the web sender resolves local paths or URLs using the same pipeline as `clawdbot send`.
 - Multiple media entries are sent sequentially if provided.
 
 ## Inbound Media to Commands (Pi)
-- When inbound web messages include media, CLAWDIS downloads to a temp file and exposes templating variables:
+- When inbound web messages include media, CLAWDBOT downloads to a temp file and exposes templating variables:
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
 - Audio transcription (if configured) runs before templating and can replace `Body` with the transcript.

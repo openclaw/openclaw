@@ -1,11 +1,11 @@
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import {
   type SessionEntry,
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
-import { triggerClawdisRestart } from "../../infra/restart.js";
+import { triggerClawdbotRestart } from "../../infra/restart.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
 import { resolveHeartbeatSeconds } from "../../web/reconnect.js";
@@ -37,7 +37,7 @@ export type CommandContext = {
 
 export function buildCommandContext(params: {
   ctx: MsgContext;
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   sessionKey?: string;
   isGroup: boolean;
   triggerBodyNormalized: string;
@@ -99,7 +99,7 @@ export function buildCommandContext(params: {
 
 export async function handleCommands(params: {
   ctx: MsgContext;
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   command: CommandContext;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -226,11 +226,11 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
-    const restartMethod = triggerClawdisRestart();
+    const restartMethod = triggerClawdbotRestart();
     return {
       shouldContinue: false,
       reply: {
-        text: `⚙️ Restarting clawdis via ${restartMethod}; give me a few seconds to come back online.`,
+        text: `⚙️ Restarting clawdbot via ${restartMethod}; give me a few seconds to come back online.`,
       },
     };
   }

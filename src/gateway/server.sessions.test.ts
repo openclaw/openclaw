@@ -16,7 +16,7 @@ installGatewayTestHooks();
 
 describe("gateway server sessions", () => {
   test("lists and patches session store via sessions.* RPC", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     const now = Date.now();
     testState.sessionStorePath = storePath;
@@ -220,7 +220,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.delete rejects main and aborts active runs", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-sessions-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
 

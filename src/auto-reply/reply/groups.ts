@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import type {
   GroupKeyResolution,
   SessionEntry,
@@ -7,7 +7,7 @@ import { normalizeGroupActivation } from "../group-activation.js";
 import type { TemplateContext } from "../templating.js";
 
 export function resolveGroupRequireMention(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   ctx: TemplateContext;
   groupResolution?: GroupKeyResolution;
 }): boolean {
@@ -86,7 +86,7 @@ export function buildGroupIntro(params: {
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   const silenceLine =
     activation === "always"
-      ? `If no response is needed, reply with exactly "${params.silentToken}" (no other text) so Clawdis stays silent.`
+      ? `If no response is needed, reply with exactly "${params.silentToken}" (no other text) so Clawdbot stays silent.`
       : undefined;
   const cautionLine =
     activation === "always"

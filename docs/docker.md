@@ -1,5 +1,5 @@
 ---
-summary: "Optional Docker-based setup and onboarding for Clawdis"
+summary: "Optional Docker-based setup and onboarding for Clawdbot"
 read_when:
   - You want a containerized gateway instead of local installs
   - You are validating the Docker flow
@@ -10,7 +10,7 @@ read_when:
 Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
 This guide covers:
-- Containerized Gateway (full Clawdis in Docker)
+- Containerized Gateway (full Clawdbot in Docker)
 - Per-session Agent Sandbox (host gateway + Docker-isolated agent tools)
 
 ## Requirements
@@ -35,22 +35,22 @@ This script:
 - starts the gateway via Docker Compose
 
 It writes config/workspace on the host:
-- `~/.clawdis/`
+- `~/.clawdbot/`
 - `~/clawd`
 
 ### Manual flow (compose)
 
 ```bash
-docker build -t clawdis:local -f Dockerfile .
-docker compose run --rm clawdis-cli onboard
-docker compose run --rm clawdis-cli login
-docker compose up -d clawdis-gateway
+docker build -t clawdbot:local -f Dockerfile .
+docker compose run --rm clawdbot-cli onboard
+docker compose run --rm clawdbot-cli login
+docker compose up -d clawdbot-gateway
 ```
 
 ### Health check
 
 ```bash
-docker compose exec clawdis-gateway node dist/index.js health --token "$CLAWDIS_GATEWAY_TOKEN"
+docker compose exec clawdbot-gateway node dist/index.js health --token "$CLAWDBOT_GATEWAY_TOKEN"
 ```
 
 ### E2E smoke test (Docker)
@@ -62,7 +62,7 @@ scripts/e2e/onboard-docker.sh
 ### Notes
 
 - Gateway bind defaults to `lan` for container use.
-- The gateway container is the source of truth for sessions (`~/.clawdis/sessions`).
+- The gateway container is the source of truth for sessions (`~/.clawdbot/sessions`).
 
 ## Per-session Agent Sandbox (host gateway + Docker tools)
 
@@ -76,10 +76,11 @@ container. The gateway stays on your host, but the tool execution is isolated:
 
 ### Default behavior
 
-- Image: `clawdis-sandbox:bookworm-slim`
+- Image: `clawdbot-sandbox:bookworm-slim`
 - One container per session
-- Workspace per session under `~/.clawdis/sandboxes`
+- Workspace per session under `~/.clawdbot/sandboxes`
 - Auto-prune: idle > 24h OR age > 7d
+- Network: `none` by default (explicitly opt-in if you need egress)
 - Default allow: `bash`, `process`, `read`, `write`, `edit`
 - Default deny: `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`
 
@@ -91,17 +92,29 @@ container. The gateway stays on your host, but the tool execution is isolated:
     sandbox: {
       mode: "non-main", // off | non-main | all
       perSession: true,
-      workspaceRoot: "~/.clawdis/sandboxes",
+      workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
-        image: "clawdis-sandbox:bookworm-slim",
+        image: "clawdbot-sandbox:bookworm-slim",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp", "/var/tmp", "/run"],
-        network: "bridge",
+        network: "none",
         user: "1000:1000",
         capDrop: ["ALL"],
         env: { LANG: "C.UTF-8" },
-        setupCommand: "apt-get update && apt-get install -y git curl jq"
+        setupCommand: "apt-get update && apt-get install -y git curl jq",
+        pidsLimit: 256,
+        memory: "1g",
+        memorySwap: "2g",
+        cpus: 1,
+        ulimits: {
+          nofile: { soft: 1024, hard: 2048 },
+          nproc: 256
+        },
+        seccompProfile: "/path/to/seccomp.json",
+        apparmorProfile: "clawdbot-sandbox",
+        dns: ["1.1.1.1", "8.8.8.8"],
+        extraHosts: ["internal.service:10.0.0.5"]
       },
       tools: {
         allow: ["bash", "process", "read", "write", "edit"],
@@ -116,13 +129,17 @@ container. The gateway stays on your host, but the tool execution is isolated:
 }
 ```
 
+Hardening knobs live under `agent.sandbox.docker`:
+`network`, `user`, `pidsLimit`, `memory`, `memorySwap`, `cpus`, `ulimits`,
+`seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`.
+
 ### Build the default sandbox image
 
 ```bash
 scripts/sandbox-setup.sh
 ```
 
-This builds `clawdis-sandbox:bookworm-slim` using `Dockerfile.sandbox`.
+This builds `clawdbot-sandbox:bookworm-slim` using `Dockerfile.sandbox`.
 
 ### Sandbox browser image
 
@@ -132,7 +149,7 @@ To run the browser tool inside the sandbox, build the browser image:
 scripts/sandbox-browser-setup.sh
 ```
 
-This builds `clawdis-sandbox-browser:bookworm-slim` using
+This builds `clawdbot-sandbox-browser:bookworm-slim` using
 `Dockerfile.sandbox-browser`. The container runs Chromium with CDP enabled and
 an optional noVNC observer (headful via Xvfb).
 
@@ -158,7 +175,7 @@ Custom browser image:
 ```json5
 {
   agent: {
-    sandbox: { browser: { image: "my-clawdis-browser" } }
+    sandbox: { browser: { image: "my-clawdbot-browser" } }
   }
 }
 ```
@@ -176,13 +193,13 @@ Prune rules (`agent.sandbox.prune`) apply to browser containers too.
 Build your own image and point config to it:
 
 ```bash
-docker build -t my-clawdis-sbx -f Dockerfile.sandbox .
+docker build -t my-clawdbot-sbx -f Dockerfile.sandbox .
 ```
 
 ```json5
 {
   agent: {
-    sandbox: { docker: { image: "my-clawdis-sbx" } }
+    sandbox: { docker: { image: "my-clawdbot-sbx" } }
   }
 }
 ```

@@ -9,7 +9,7 @@ read_when:
 The Gateway serves a small **browser Control UI** (Vite + Lit) from the same port as the Gateway WebSocket:
 
 - default: `http://<host>:18789/`
-- optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdis`)
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdbot`)
 
 The UI talks directly to the Gateway WS and supports:
 - Chat (`chat.history`, `chat.send`, `chat.abort`)
@@ -20,7 +20,7 @@ The UI talks directly to the Gateway WS and supports:
 - Cron (`cron.*`)
 - Skills (`skills.status`, `skills.update`, `skills.install`)
 - Nodes (`node.list`, `node.describe`, `node.invoke`)
-- Config (`config.get`, `config.set`) for `~/.clawdis/clawdis.json`
+- Config (`config.get`, `config.set`) for `~/.clawdbot/clawdbot.json`
 - Debug (status/health/models snapshots + manual calls)
 
 ## Webhooks
@@ -36,7 +36,7 @@ You can control it via config:
 ```json5
 {
   gateway: {
-    controlUi: { enabled: true, basePath: "/clawdis" } // basePath optional
+    controlUi: { enabled: true, basePath: "/clawdbot" } // basePath optional
   }
 }
 ```
@@ -59,7 +59,7 @@ Keep the Gateway on loopback and let Tailscale Serve proxy it:
 Then start the gateway:
 
 ```bash
-clawdis gateway
+clawdbot gateway
 ```
 
 Open:
@@ -79,8 +79,8 @@ Open:
 Then start the gateway (token required for non-loopback binds):
 
 ```bash
-export CLAWDIS_GATEWAY_TOKEN="…your token…"
-clawdis gateway
+export CLAWDBOT_GATEWAY_TOKEN="…your token…"
+clawdbot gateway
 ```
 
 Open:
@@ -93,14 +93,14 @@ Open:
   gateway: {
     bind: "loopback",
     tailscale: { mode: "funnel" },
-    auth: { mode: "password" } // or CLAWDIS_GATEWAY_PASSWORD
+    auth: { mode: "password" } // or CLAWDBOT_GATEWAY_PASSWORD
   }
 }
 ```
 
 ## Security notes
 
-- Binding the Gateway to a non-loopback address **requires** auth (`CLAWDIS_GATEWAY_TOKEN` or `gateway.auth`).
+- Binding the Gateway to a non-loopback address **requires** auth (`CLAWDBOT_GATEWAY_TOKEN` or `gateway.auth`).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
 - Use `gateway.auth.allowTailscale: false` to require explicit credentials even in Serve mode.
 - `gateway.tailscale.mode: "funnel"` requires `gateway.auth.mode: "password"` (shared password).

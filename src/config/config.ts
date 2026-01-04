@@ -9,4 +9,4 @@ export { migrateLegacyConfig } from "./legacy-migrate.js";
 export * from "./paths.js";
 export * from "./types.js";
 export { validateConfigObject } from "./validation.js";
-export { ClawdisSchema } from "./zod-schema.js";
+export { ClawdbotSchema } from "./zod-schema.js";

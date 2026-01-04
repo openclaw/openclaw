@@ -87,7 +87,7 @@ export class GatewayChatClient {
       url: resolved.url,
       token: resolved.token,
       password: resolved.password,
-      clientName: "clawdis-tui",
+      clientName: "clawdbot-tui",
       clientVersion: VERSION,
       platform: process.platform,
       mode: "tui",
@@ -210,7 +210,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
       ? typeof remote?.token === "string" && remote.token.trim().length > 0
         ? remote.token.trim()
         : undefined
-      : process.env.CLAWDIS_GATEWAY_TOKEN?.trim() ||
+      : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
         (typeof authToken === "string" && authToken.trim().length > 0
           ? authToken.trim()
           : undefined));
@@ -219,7 +219,7 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     (typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
       : undefined) ||
-    process.env.CLAWDIS_GATEWAY_PASSWORD?.trim() ||
+    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
     (typeof remote?.password === "string" && remote.password.trim().length > 0
       ? remote.password.trim()
       : undefined);

@@ -2,7 +2,7 @@
 summary: "Proposal + research notes: offline memory system for Clawd workspaces (Markdown source-of-truth + derived index)"
 read_when:
   - Designing workspace memory (~/clawd) beyond daily Markdown logs
-  - Deciding: standalone CLI vs deep Clawdis integration
+  - Deciding: standalone CLI vs deep Clawdbot integration
   - Adding offline recall + reflection (retain/recall/reflect)
 ---
 
@@ -155,16 +155,16 @@ Opinion evolution (simple, explainable):
 
 ## CLI integration: standalone vs deep integration
 
-Recommendation: **deep integration in Clawdis**, but keep a separable core library.
+Recommendation: **deep integration in Clawdbot**, but keep a separable core library.
 
-### Why integrate into Clawdis?
-- Clawdis already knows:
+### Why integrate into Clawdbot?
+- Clawdbot already knows:
   - the workspace path (`agent.workspace`)
   - the session model + heartbeats
   - logging + troubleshooting patterns
 - You want the agent itself to call the tools:
-  - `clawdis memory recall "…" --k 25 --since 30d`
-  - `clawdis memory reflect --since 7d`
+  - `clawdbot memory recall "…" --k 25 --since 30d`
+  - `clawdbot memory reflect --since 7d`
 
 ### Why still split a library?
 - keep memory logic testable without gateway/runtime
@@ -202,7 +202,7 @@ Open question:
 - add `bank/` files + entity pages
 - add `## Retain` convention to daily logs
 
-### Phase 1: `clawdis memory index|recall` (FTS-only)
+### Phase 1: `clawdbot memory index|recall` (FTS-only)
 - parse Markdown (`memory/*.md`, `bank/*.md`) into chunks
 - write to SQLite: `facts`, `entities`, `fact_entities`, `opinions`
 - FTS5 table over `facts.content`

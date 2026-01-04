@@ -2,7 +2,7 @@
 name: nano-banana-pro
 description: Generate or edit images via Gemini 3 Pro Image (Nano Banana Pro).
 homepage: https://ai.google.dev/
-metadata: {"clawdis":{"emoji":"🍌","requires":{"bins":["uv"],"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY","install":[{"id":"uv-brew","kind":"brew","formula":"uv","bins":["uv"],"label":"Install uv (brew)"}]}}
+metadata: {"clawdbot":{"emoji":"🍌","requires":{"bins":["uv"],"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY","install":[{"id":"uv-brew","kind":"brew","formula":"uv","bins":["uv"],"label":"Install uv (brew)"}]}}
 ---
 
 # Nano Banana Pro (Gemini 3 Pro Image)
@@ -21,7 +21,7 @@ uv run {baseDir}/scripts/generate_image.py --prompt "edit instructions" --filena
 
 API key
 - `GEMINI_API_KEY` env var
-- Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in `~/.clawdis/clawdis.json`
+- Or set `skills."nano-banana-pro".apiKey` / `skills."nano-banana-pro".env.GEMINI_API_KEY` in `~/.clawdbot/clawdbot.json`
 
 Notes
 - Resolutions: `1K` (default), `2K`, `4K`.

@@ -61,7 +61,7 @@ export function renderConfig(props: ConfigProps) {
       </div>
 
       <div class="muted" style="margin-top: 10px;">
-        Writes to <span class="mono">~/.clawdis/clawdis.json</span>. Some changes
+        Writes to <span class="mono">~/.clawdbot/clawdbot.json</span>. Some changes
         require a gateway restart.
       </div>
 

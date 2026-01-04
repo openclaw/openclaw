@@ -1,5 +1,5 @@
 import chalk from "chalk";
-import { type ClawdisConfig, loadConfig } from "../config/config.js";
+import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import {
@@ -9,7 +9,7 @@ import {
 } from "../web/session.js";
 
 export async function buildProviderSummary(
-  cfg?: ClawdisConfig,
+  cfg?: ClawdbotConfig,
 ): Promise<string[]> {
   const effective = cfg ?? loadConfig();
   const lines: string[] = [];

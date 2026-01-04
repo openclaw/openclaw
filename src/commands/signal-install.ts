@@ -132,7 +132,7 @@ export async function installSignalCli(
     "https://api.github.com/repos/AsamK/signal-cli/releases/latest";
   const response = await fetch(apiUrl, {
     headers: {
-      "User-Agent": "clawdis",
+      "User-Agent": "clawdbot",
       Accept: "application/vnd.github+json",
     },
   });
@@ -158,7 +158,7 @@ export async function installSignalCli(
     };
   }
 
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-signal-"));
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-signal-"));
   const archivePath = path.join(tmpDir, assetName);
 
   runtime.log(`Downloading signal-cli ${version} (${assetName})…`);

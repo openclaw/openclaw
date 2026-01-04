@@ -13,7 +13,7 @@ import {
 describe("voicewake store", () => {
   it("returns defaults when missing", async () => {
     const baseDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-voicewake-"),
+      path.join(os.tmpdir(), "clawdbot-voicewake-"),
     );
     const cfg = await loadVoiceWakeConfig(baseDir);
     expect(cfg.triggers).toEqual(defaultVoiceWakeTriggers());
@@ -22,7 +22,7 @@ describe("voicewake store", () => {
 
   it("sanitizes and persists triggers", async () => {
     const baseDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-voicewake-"),
+      path.join(os.tmpdir(), "clawdbot-voicewake-"),
     );
     const saved = await setVoiceWakeTriggers(
       ["  hi  ", "", "  there "],
@@ -38,7 +38,7 @@ describe("voicewake store", () => {
 
   it("falls back to defaults when triggers empty", async () => {
     const baseDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-voicewake-"),
+      path.join(os.tmpdir(), "clawdbot-voicewake-"),
     );
     const saved = await setVoiceWakeTriggers(["", "   "], baseDir);
     expect(saved.triggers).toEqual(defaultVoiceWakeTriggers());

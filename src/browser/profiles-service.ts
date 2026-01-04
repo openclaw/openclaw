@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import type { BrowserProfileConfig, ClawdisConfig } from "../config/config.js";
+import type { BrowserProfileConfig, ClawdbotConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/config.js";
 import { resolveClawdUserDataDir } from "./chrome.js";
 import { parseHttpUrl, resolveProfile } from "./config.js";
@@ -86,7 +86,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
       profileConfig = { cdpPort, color: profileColor };
     }
 
-    const nextConfig: ClawdisConfig = {
+    const nextConfig: ClawdbotConfig = {
       ...cfg,
       browser: {
         ...cfg.browser,
@@ -157,7 +157,7 @@ export function createBrowserProfilesService(ctx: BrowserRouteContext) {
     }
 
     const { [name]: _removed, ...remainingProfiles } = profiles;
-    const nextConfig: ClawdisConfig = {
+    const nextConfig: ClawdbotConfig = {
       ...cfg,
       browser: {
         ...cfg.browser,

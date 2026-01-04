@@ -16,7 +16,7 @@ import {
   createProcessTool,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
-import { createClawdisTools } from "./clawdis-tools.js";
+import { createClawdbotTools } from "./clawdbot-tools.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -332,7 +332,7 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
 
 function createSandboxedReadTool(root: string) {
   const base = createReadTool(root);
-  return wrapSandboxPathGuard(createClawdisReadTool(base), root);
+  return wrapSandboxPathGuard(createClawdbotReadTool(base), root);
 }
 
 function createSandboxedWriteTool(root: string) {
@@ -409,7 +409,7 @@ function createWhatsAppLoginTool(): AnyAgentTool {
   };
 }
 
-function createClawdisReadTool(base: AnyAgentTool): AnyAgentTool {
+function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   return {
     ...base,
     execute: async (toolCallId, params, signal) => {
@@ -447,7 +447,7 @@ function shouldIncludeSlackTool(surface?: string): boolean {
   return normalized === "slack" || normalized.startsWith("slack:");
 }
 
-export function createClawdisCodingTools(options?: {
+export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   surface?: string;
   sandbox?: SandboxContext | null;
@@ -460,7 +460,7 @@ export function createClawdisCodingTools(options?: {
     if (tool.name === readTool.name) {
       return sandboxRoot
         ? [createSandboxedReadTool(sandboxRoot)]
-        : [createClawdisReadTool(tool)];
+        : [createClawdbotReadTool(tool)];
     }
     if (tool.name === bashToolName) return [];
     if (sandboxRoot && (tool.name === "write" || tool.name === "edit")) {
@@ -493,7 +493,7 @@ export function createClawdisCodingTools(options?: {
     bashTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     createWhatsAppLoginTool(),
-    ...createClawdisTools({
+    ...createClawdbotTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
       agentSurface: options?.surface,

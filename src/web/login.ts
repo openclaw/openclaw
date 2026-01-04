@@ -59,7 +59,7 @@ export async function loginWeb(
       await fs.rm(resolveWebAuthDir(), { recursive: true, force: true });
       console.error(
         danger(
-          "WhatsApp reported the session is logged out. Cleared cached web session; please rerun clawdis login and scan the QR again.",
+          "WhatsApp reported the session is logged out. Cleared cached web session; please rerun clawdbot login and scan the QR again.",
         ),
       );
       throw new Error("Session logged out; cache cleared. Re-run login.");

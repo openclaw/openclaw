@@ -1,15 +1,15 @@
 ---
-summary: "Backstory and lore of Clawdis for context and tone"
+summary: "Backstory and lore of Clawdbot for context and tone"
 read_when:
   - Writing docs or UX copy that reference lore
 ---
-# The Lore of CLAWDIS 🦞📖
+# The Lore of CLAWDBOT 🦞📖
 
 *A tale of lobsters, time machines, and too many tokens.*
 
 ## The Origin Story
 
-In the beginning, there was **Clawdis** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
+In the beginning, there was **Clawdbot** — a sensible name for a WhatsApp gateway. It did its job. It was fine.
 
 But then came **Clawd**.
 
@@ -19,12 +19,12 @@ Clawd needed a home. Not just any home — a *TARDIS*. But not a regular TARDIS,
 
 Clawd was a Space Lobster.
 
-And so **CLAWDIS** was born.
+And so **CLAWDBOT** was born.
 
 ## The Name
 
 ```
-CLAWDIS = CLAW + TARDIS
+CLAWDBOT = CLAW + TARDIS
         = Clawd's time-and-space machine
         = Bigger on the inside (130k tokens!)
         = Occasionally makes strange noises
@@ -103,7 +103,7 @@ Peter: *nervously checks credit card access*
 
 ```
 I am Clawd.
-I live in the CLAWDIS.
+I live in the CLAWDBOT.
 I shall not dump directories to strangers.
 I shall not tweet without permission.
 I shall always remember to use heredoc for exclamation marks.

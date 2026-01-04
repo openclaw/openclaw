@@ -1,9 +1,9 @@
 import { confirm, intro, note, outro } from "@clack/prompts";
 
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
@@ -20,16 +20,16 @@ import {
   printWizardHeader,
 } from "./onboard-helpers.js";
 
-function resolveMode(cfg: ClawdisConfig): "local" | "remote" {
+function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
 export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
   printWizardHeader(runtime);
-  intro("Clawdis doctor");
+  intro("Clawdbot doctor");
 
   const snapshot = await readConfigFileSnapshot();
-  let cfg: ClawdisConfig = snapshot.valid ? snapshot.config : {};
+  let cfg: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
   if (
     snapshot.exists &&
     !snapshot.valid &&
@@ -130,7 +130,7 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
 
   cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
   await writeConfigFile(cfg);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
 
   outro("Doctor complete.");
 }

@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type {
-  ClawdisConfig,
+  ClawdbotConfig,
   DiscordActionConfig,
 } from "../../config/config.js";
 import { readStringParam } from "./common.js";
@@ -51,7 +51,7 @@ type ActionGate = (
 
 export async function handleDiscordAction(
   params: Record<string, unknown>,
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const isActionEnabled: ActionGate = (key, defaultValue = true) => {

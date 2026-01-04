@@ -23,12 +23,12 @@ Updated: 2025-12-17
 
 ## Config
 - WebChat does not have a separate HTTP port/config anymore.
-- Gateway WS is configured via the app’s gateway endpoint settings (`GatewayEndpointStore`) or `clawdis gateway --port` when running locally.
+- Gateway WS is configured via the app’s gateway endpoint settings (`GatewayEndpointStore`) or `clawdbot gateway --port` when running locally.
 
 ## Failure handling
 - UI errors when the Gateway handshake fails or the WS drops.
 - No fallback transport; the Gateway WS is required.
 
 ## Dev notes
-- macOS glue: `apps/macos/Sources/Clawdis/WebChatSwiftUI.swift` + `apps/macos/Sources/Clawdis/WebChatManager.swift`.
-- Remote tunnel helper: `apps/macos/Sources/Clawdis/RemotePortTunnel.swift`.
+- macOS glue: `apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift` + `apps/macos/Sources/Clawdbot/WebChatManager.swift`.
+- Remote tunnel helper: `apps/macos/Sources/Clawdbot/RemotePortTunnel.swift`.

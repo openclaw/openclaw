@@ -1,5 +1,5 @@
 ---
-summary: "Frequently asked questions about Clawdis setup, configuration, and usage"
+summary: "Frequently asked questions about Clawdbot setup, configuration, and usage"
 ---
 # FAQ 🦞
 
@@ -7,20 +7,20 @@ Common questions from the community. For detailed configuration, see [configurat
 
 ## Installation & Setup
 
-### Where does Clawdis store its data?
+### Where does Clawdbot store its data?
 
-Everything lives under `~/.clawdis/`:
+Everything lives under `~/.clawdbot/`:
 
 | Path | Purpose |
 |------|---------|
-| `~/.clawdis/clawdis.json` | Main config (JSON5) |
-| `~/.clawdis/credentials/` | WhatsApp/Telegram auth tokens |
-| `~/.clawdis/sessions/` | Conversation history & state |
-| `~/.clawdis/sessions/sessions.json` | Session metadata |
+| `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
+| `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
+| `~/.clawdbot/sessions/` | Conversation history & state |
+| `~/.clawdbot/sessions/sessions.json` | Session metadata |
 
 Your **workspace** (AGENTS.md, memory files, skills) is separate — configured via `agent.workspace` in your config (default: `~/clawd`).
 
-### What platforms does Clawdis run on?
+### What platforms does Clawdbot run on?
 
 **macOS and Linux** are the primary targets. Anywhere Node.js 22+ runs should work in theory.
 
@@ -30,7 +30,7 @@ Your **workspace** (AGENTS.md, memory files, skills) is separate — configured 
 
 Some features are platform-specific:
 - **iMessage** — macOS only (uses `imsg` CLI)
-- **Clawdis.app** — macOS native app (optional, gateway works without it)
+- **Clawdbot.app** — macOS native app (optional, gateway works without it)
 
 ### What are the minimum system requirements?
 
@@ -38,12 +38,12 @@ Some features are platform-specific:
 
 - **RAM:** 512MB-1GB is enough (community member runs on 1GB VPS!)
 - **CPU:** 1 core is fine for personal use
-- **Disk:** ~500MB for Clawdis + deps, plus space for logs/media
+- **Disk:** ~500MB for Clawdbot + deps, plus space for logs/media
 
 The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. You can also use **Bun** instead of Node for even lower memory footprint:
 
 ```bash
-bun clawdis gateway
+bun clawdbot gateway
 ```
 
 ### How do I install on Linux without Homebrew?
@@ -64,23 +64,23 @@ Most of Peter's tools are Go binaries — clone, build, move to PATH. No brew ne
 You need a config file. Run the onboarding wizard:
 
 ```bash
-pnpm clawdis onboard
+pnpm clawdbot onboard
 ```
 
-This creates `~/.clawdis/clawdis.json` with your API keys, workspace path, and owner phone number.
+This creates `~/.clawdbot/clawdbot.json` with your API keys, workspace path, and owner phone number.
 
 ### How do I start fresh?
 
 ```bash
 # Backup first (optional)
-cp -r ~/.clawdis ~/.clawdis-backup
+cp -r ~/.clawdbot ~/.clawdbot-backup
 
 # Remove config and credentials
-rm -rf ~/.clawdis
+rm -rf ~/.clawdbot
 
 # Re-run onboarding
-pnpm clawdis onboard
-pnpm clawdis login
+pnpm clawdbot onboard
+pnpm clawdbot login
 ```
 
 ### Something's broken — how do I diagnose?
@@ -88,14 +88,14 @@ pnpm clawdis login
 Run the doctor:
 
 ```bash
-pnpm clawdis doctor
+pnpm clawdbot doctor
 ```
 
 It checks your config, skills status, and gateway health. It can also restart the gateway daemon if needed.
 
 ### Terminal onboarding vs macOS app?
 
-**Use terminal onboarding** (`pnpm clawdis onboard`) — it's more stable right now.
+**Use terminal onboarding** (`pnpm clawdbot onboard`) — it's more stable right now.
 
 The macOS app onboarding is still being polished and can have quirks (e.g., WhatsApp 515 errors, OAuth issues).
 
@@ -113,10 +113,10 @@ They're **separate billing**! An API key does NOT use your subscription.
 **For OAuth:** During onboarding, pick "Anthropic OAuth", log in to your Claude account, paste the code back. Or just run:
 
 ```bash
-pnpm clawdis login
+pnpm clawdbot login
 ```
 
-**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdis/` to your server. The auth is just a JSON file.
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/` to your server. The auth is just a JSON file.
 
 ### Does enterprise OAuth work?
 
@@ -128,7 +128,7 @@ pnpm clawdis login
 
 OAuth needs the callback to reach the machine running the CLI. Options:
 
-1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdis/credentials/` to the container.
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/` to the container.
 2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
 3. **Tailscale** — Put both machines on your tailnet.
 
@@ -136,12 +136,12 @@ OAuth needs the callback to reach the machine running the CLI. Options:
 
 ## Migration & Deployment
 
-### How do I migrate Clawdis to a new machine (or VPS)?
+### How do I migrate Clawdbot to a new machine (or VPS)?
 
 1. **Backup on old machine:**
    ```bash
    # Config + credentials + sessions
-   tar -czvf clawdis-backup.tar.gz ~/.clawdis
+   tar -czvf clawdbot-backup.tar.gz ~/.clawdbot
    
    # Your workspace (memories, AGENTS.md, etc.)
    tar -czvf workspace-backup.tar.gz ~/path/to/workspace
@@ -149,39 +149,39 @@ OAuth needs the callback to reach the machine running the CLI. Options:
 
 2. **Copy to new machine:**
    ```bash
-   scp clawdis-backup.tar.gz workspace-backup.tar.gz user@new-machine:~/
+   scp clawdbot-backup.tar.gz workspace-backup.tar.gz user@new-machine:~/
    ```
 
 3. **Restore on new machine:**
    ```bash
    cd ~
-   tar -xzvf clawdis-backup.tar.gz
+   tar -xzvf clawdbot-backup.tar.gz
    tar -xzvf workspace-backup.tar.gz
    ```
 
-4. **Install Clawdis** (Node 22+, pnpm, clone repo, `pnpm install && pnpm build`)
+4. **Install Clawdbot** (Node 22+, pnpm, clone repo, `pnpm install && pnpm build`)
 
 5. **Start gateway:**
    ```bash
-   pnpm clawdis gateway
+   pnpm clawdbot gateway
    ```
 
-**Note:** WhatsApp may notice the IP change and require re-authentication. If so, run `pnpm clawdis login` again. Stop the old instance before starting the new one to avoid conflicts.
+**Note:** WhatsApp may notice the IP change and require re-authentication. If so, run `pnpm clawdbot login` again. Stop the old instance before starting the new one to avoid conflicts.
 
-### Can I run Clawdis in Docker?
+### Can I run Clawdbot in Docker?
 
 There's no official Docker setup yet, but it works. Key considerations:
 
 - **WhatsApp login:** QR code works in terminal — no display needed.
-- **Persistence:** Mount `~/.clawdis/` and your workspace as volumes.
+- **Persistence:** Mount `~/.clawdbot/` and your workspace as volumes.
 - **pnpm doesn't persist:** Global npm installs don't survive container restarts. Install pnpm in your startup script.
 - **Browser automation:** Optional. If needed, install headless Chrome + Playwright deps, or connect to a remote browser via `--remote-debugging-port`.
 
 **Volume mappings (e.g., Unraid):**
 ```
-/mnt/user/appdata/clawdis/config    → /root/.clawdis
-/mnt/user/appdata/clawdis/workspace → /root/clawd
-/mnt/user/appdata/clawdis/app       → /app
+/mnt/user/appdata/clawdbot/config    → /root/.clawdbot
+/mnt/user/appdata/clawdbot/workspace → /root/clawd
+/mnt/user/appdata/clawdbot/app       → /app
 ```
 
 **Startup script (`start.sh`):**
@@ -189,7 +189,7 @@ There's no official Docker setup yet, but it works. Key considerations:
 #!/bin/bash
 npm install -g pnpm
 cd /app
-pnpm clawdis gateway
+pnpm clawdbot gateway
 ```
 
 **Container command:**
@@ -199,7 +199,7 @@ bash /app/start.sh
 
 Docker support is on the roadmap — PRs welcome!
 
-### Can I run Clawdis headless on a VPS?
+### Can I run Clawdbot headless on a VPS?
 
 Yes! The terminal QR code login works fine over SSH. For long-running operation:
 
@@ -208,13 +208,13 @@ Yes! The terminal QR code login works fine over SSH. For long-running operation:
 
 ### bun binary vs Node runtime?
 
-Clawdis can run as:
+Clawdbot can run as:
 - **bun binary** — Single executable, easy distribution, auto-restarts via launchd
-- **Node runtime** (`pnpm clawdis gateway`) — More stable for WhatsApp
+- **Node runtime** (`pnpm clawdbot gateway`) — More stable for WhatsApp
 
 If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys).
 
-**For stability:** Use launchd (macOS) or the Clawdis.app — they handle process supervision (auto-restart on crash).
+**For stability:** Use launchd (macOS) or the Clawdbot.app — they handle process supervision (auto-restart on crash).
 
 **For debugging:** Use `pnpm gateway:watch` for live reload during development.
 
@@ -226,7 +226,7 @@ This is often the bun WebSocket issue. Workaround:
    ```bash
    pnpm gateway:watch
    ```
-2. In **Clawdis.app → Settings → Debug**, check **"External gateway"**
+2. In **Clawdbot.app → Settings → Debug**, check **"External gateway"**
 3. The app now connects to your Node gateway instead of spawning bun
 
 This is the most stable setup until bun's WebSocket handling improves.
@@ -246,7 +246,7 @@ The intended design is **one Clawd, one identity**. Rather than running separate
 Why? A unified assistant knows your whole context. Your fitness coach knows when you've had a stressful work week.
 
 If you truly need full separation (different users, privacy boundaries), you'd need:
-- Separate config + state directories (`CLAWDIS_CONFIG_PATH`, `CLAWDIS_STATE_DIR`)
+- Separate config + state directories (`CLAWDBOT_CONFIG_PATH`, `CLAWDBOT_STATE_DIR`)
 - Separate agent workspaces (`agent.workspace`)
 - Separate gateway ports (`gateway.port` / `--port`)
 - Separate phone numbers for WhatsApp (one number = one account)
@@ -259,7 +259,7 @@ Currently, sessions are per-chat:
 
 **Workaround:** Create multiple groups (even just you + the bot) for different contexts. Each group maintains its own session.
 
-Feature request? Open a [GitHub discussion](https://github.com/steipete/clawdis/discussions)!
+Feature request? Open a [GitHub discussion](https://github.com/clawdbot/clawdbot/discussions)!
 
 ### How do groups work?
 
@@ -275,9 +275,9 @@ See [groups.md](./groups.md) for details.
 
 ## Context & Memory
 
-### How much context can Clawdis handle?
+### How much context can Clawdbot handle?
 
-Claude Opus has a 200k token context window, and Clawdis uses **autocompaction** — older conversation gets summarized to stay under the limit.
+Claude Opus has a 200k token context window, and Clawdbot uses **autocompaction** — older conversation gets summarized to stay under the limit.
 
 Practical tips:
 - Keep `AGENTS.md` focused, not bloated.
@@ -293,14 +293,14 @@ In your workspace directory (configured in `agent.workspace`, default `~/clawd`)
 
 Check your config:
 ```bash
-cat ~/.clawdis/clawdis.json | grep workspace
+cat ~/.clawdbot/clawdbot.json | grep workspace
 ```
 
 ---
 
 ## Platforms
 
-### Which platforms does Clawdis support?
+### Which platforms does Clawdbot support?
 
 - **WhatsApp** — Primary. Uses WhatsApp Web protocol.
 - **Telegram** — Via Bot API (grammY).
@@ -350,8 +350,8 @@ Not all models support images! Check `agent.model` in your config:
 **2. Is media being downloaded?**
 
 ```bash
-ls -la ~/.clawdis/media/inbound/
-grep -i "media\|download" /tmp/clawdis/clawdis-*.log | tail -20
+ls -la ~/.clawdbot/media/inbound/
+grep -i "media\|download" /tmp/clawdbot/clawdbot-*.log | tail -20
 ```
 
 **3. Is `agent.mediaMaxMb` too low?**
@@ -368,7 +368,7 @@ Use the [summarize](https://summarize.sh) skill to extract and condense content 
 
 ### Can I use multiple platforms at once?
 
-Yes! One Clawdis gateway can connect to WhatsApp, Telegram, Discord, and more simultaneously. Each platform maintains its own sessions.
+Yes! One Clawdbot gateway can connect to WhatsApp, Telegram, Discord, and more simultaneously. Each platform maintains its own sessions.
 
 ### WhatsApp: Can I use two numbers?
 
@@ -391,13 +391,13 @@ No gateway restart needed!
 
 Use **[Tailscale](https://tailscale.com/)** to create a secure network between your machines:
 
-1. Install Tailscale on all machines (it's separate from Clawdis — set it up yourself)
+1. Install Tailscale on all machines (it's separate from Clawdbot — set it up yourself)
 2. Each gets a stable IP (like `100.x.x.x`)
 3. SSH just works: `ssh user@100.x.x.x "command"`
 
-Clawdis can use Tailscale when you set `bridge.bind: "tailnet"` in your config — it auto-detects your Tailscale IP.
+Clawdbot can use Tailscale when you set `bridge.bind: "tailnet"` in your config — it auto-detects your Tailscale IP.
 
-For deeper integration, look into **Clawdis nodes** — pair remote machines with your gateway for camera/screen/automation access.
+For deeper integration, look into **Clawdbot nodes** — pair remote machines with your gateway for camera/screen/automation access.
 
 ---
 
@@ -408,8 +408,8 @@ For deeper integration, look into **Clawdis nodes** — pair remote machines wit
 If you hit build errors on `main`:
 
 1. Pull latest: `git pull origin main && pnpm install`
-2. Try `pnpm clawdis doctor`
-3. Check [GitHub issues](https://github.com/steipete/clawdis/issues) or Discord
+2. Try `pnpm clawdbot doctor`
+3. Check [GitHub issues](https://github.com/clawdbot/clawdbot/issues) or Discord
 4. Temporary workaround: checkout an older commit
 
 ### WhatsApp logged me out
@@ -417,7 +417,7 @@ If you hit build errors on `main`:
 WhatsApp sometimes disconnects on IP changes or after updates. Re-authenticate:
 
 ```bash
-pnpm clawdis login
+pnpm clawdbot login
 ```
 
 Scan the QR code and you're back.
@@ -426,7 +426,7 @@ Scan the QR code and you're back.
 
 Check logs:
 ```bash
-cat /tmp/clawdis/clawdis-$(date +%Y-%m-%d).log
+cat /tmp/clawdbot/clawdbot-$(date +%Y-%m-%d).log
 ```
 
 Common issues:
@@ -442,8 +442,8 @@ pnpm gateway:watch
 
 **Pro tip:** Use Codex to debug:
 ```bash
-cd ~/path/to/clawdis
-codex --full-auto "debug why clawdis gateway won't start"
+cd ~/path/to/clawdbot
+codex --full-auto "debug why clawdbot gateway won't start"
 ```
 
 ### Processes keep restarting after I kill them (Linux)
@@ -452,8 +452,8 @@ Something is supervising them. Check:
 
 ```bash
 # systemd?
-systemctl list-units | grep -i clawdis
-sudo systemctl stop clawdis
+systemctl list-units | grep -i clawdbot
+sudo systemctl stop clawdbot
 
 # pm2?
 pm2 list
@@ -466,20 +466,20 @@ Stop the supervisor first, then the processes.
 
 ```bash
 # Stop processes
-pkill -f "clawdis"
+pkill -f "clawdbot"
 
 # If using systemd
-sudo systemctl stop clawdis
-sudo systemctl disable clawdis
+sudo systemctl stop clawdbot
+sudo systemctl disable clawdbot
 
 # Remove data
-rm -rf ~/.clawdis
+rm -rf ~/.clawdbot
 
 # Remove repo and re-clone
-rm -rf ~/clawdis
-git clone https://github.com/steipete/clawdis.git
-cd clawdis && pnpm install && pnpm build
-pnpm clawdis onboard
+rm -rf ~/clawdbot
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot && pnpm install && pnpm build
+pnpm clawdbot onboard
 ```
 
 ---
@@ -509,7 +509,7 @@ Use `/model` to switch without restarting:
 /model opus
 ```
 
-**Setup:** Configure allowed models and aliases in `clawdis.json`:
+**Setup:** Configure allowed models and aliases in `clawdbot.json`:
 
 ```json
 {
@@ -614,4 +614,4 @@ If you tend to send multiple short messages, `/queue instant` feels most natural
 
 ---
 
-*Still stuck? Ask in [Discord](https://discord.gg/qkhbAGHRBT) or open a [GitHub discussion](https://github.com/steipete/clawdis/discussions).* 🦞
+*Still stuck? Ask in [Discord](https://discord.gg/qkhbAGHRBT) or open a [GitHub discussion](https://github.com/clawdbot/clawdbot/discussions).* 🦞

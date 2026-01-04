@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-IMAGE_NAME="clawdis-onboard-e2e"
+IMAGE_NAME="clawdbot-onboard-e2e"
 
 echo "Building Docker image..."
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
@@ -13,9 +13,9 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
   export TERM=xterm-256color
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
-  export PATH="/tmp/clawdis-bin:$PATH"
-  mkdir -p /tmp/clawdis-bin
-  cat > /tmp/clawdis-bin/trash <<'"'"'TRASH'"'"'
+  export PATH="/tmp/clawdbot-bin:$PATH"
+  mkdir -p /tmp/clawdbot-bin
+  cat > /tmp/clawdbot-bin/trash <<'"'"'TRASH'"'"'
 #!/usr/bin/env bash
 set -euo pipefail
 trash_dir="$HOME/.Trash"
@@ -30,7 +30,7 @@ for target in "$@"; do
   mv "$target" "$dest"
 done
 TRASH
-  chmod +x /tmp/clawdis-bin/trash
+  chmod +x /tmp/clawdbot-bin/trash
 
   send() {
     local payload="$1"
@@ -75,7 +75,7 @@ TRASH
     export HOME="$home_dir"
     mkdir -p "$HOME"
 
-    input_fifo="$(mktemp -u "/tmp/clawdis-onboard-${case_name}.XXXXXX")"
+    input_fifo="$(mktemp -u "/tmp/clawdbot-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
     # Run under script to keep an interactive TTY for clack prompts.
     script -q -c "$command" /dev/null < "$input_fifo" &
@@ -107,7 +107,7 @@ TRASH
   }
 
   make_home() {
-    mktemp -d "/tmp/clawdis-e2e-$1.XXXXXX"
+    mktemp -d "/tmp/clawdbot-e2e-$1.XXXXXX"
   }
 
   assert_file() {
@@ -208,8 +208,8 @@ TRASH
 
     # Assert config + workspace scaffolding.
     workspace_dir="$HOME/clawd"
-    config_path="$HOME/.clawdis/clawdis.json"
-    sessions_dir="$HOME/.clawdis/sessions"
+    config_path="$HOME/.clawdbot/clawdbot.json"
+    sessions_dir="$HOME/.clawdbot/sessions"
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
@@ -296,7 +296,7 @@ NODE
       --skip-skills \
       --skip-health
 
-    config_path="$HOME/.clawdis/clawdis.json"
+    config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -330,9 +330,9 @@ NODE
     local home_dir
     home_dir="$(make_home reset-config)"
     export HOME="$home_dir"
-    mkdir -p "$HOME/.clawdis"
+    mkdir -p "$HOME/.clawdbot"
     # Seed a remote config to exercise reset path.
-    cat > "$HOME/.clawdis/clawdis.json" <<'"'"'JSON'"'"'
+    cat > "$HOME/.clawdbot/clawdbot.json" <<'"'"'JSON'"'"'
 {
   "agent": { "workspace": "/root/old" },
   "gateway": {
@@ -344,7 +344,7 @@ JSON
 
     run_wizard reset-config "$home_dir" send_reset_config_only
 
-    config_path="$HOME/.clawdis/clawdis.json"
+    config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -377,7 +377,7 @@ NODE
     # Providers-only configure flow.
     run_wizard_cmd providers "$home_dir" "node dist/index.js configure" send_providers_flow
 
-    config_path="$HOME/.clawdis/clawdis.json"
+    config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'
@@ -414,9 +414,9 @@ NODE
     local home_dir
     home_dir="$(make_home skills)"
     export HOME="$home_dir"
-    mkdir -p "$HOME/.clawdis"
+    mkdir -p "$HOME/.clawdbot"
     # Seed skills config to ensure it survives the wizard.
-    cat > "$HOME/.clawdis/clawdis.json" <<'"'"'JSON'"'"'
+    cat > "$HOME/.clawdbot/clawdbot.json" <<'"'"'JSON'"'"'
 {
   "skills": {
     "allowBundled": ["__none__"],
@@ -427,7 +427,7 @@ JSON
 
     run_wizard_cmd skills "$home_dir" "node dist/index.js configure" send_skills_flow
 
-    config_path="$HOME/.clawdis/clawdis.json"
+    config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
 
     CONFIG_PATH="$config_path" node --input-type=module - <<'"'"'NODE'"'"'

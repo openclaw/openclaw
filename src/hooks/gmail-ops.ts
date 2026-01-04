@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
 
 import {
-  type ClawdisConfig,
-  CONFIG_PATH_CLAWDIS,
+  type ClawdbotConfig,
+  CONFIG_PATH_CLAWDBOT,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
@@ -96,7 +96,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const configSnapshot = await readConfigFileSnapshot();
   if (!configSnapshot.valid) {
-    throw new Error(`Config invalid: ${CONFIG_PATH_CLAWDIS}`);
+    throw new Error(`Config invalid: ${CONFIG_PATH_CLAWDBOT}`);
   }
 
   const baseConfig = configSnapshot.config;
@@ -206,7 +206,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
     true,
   );
 
-  const nextConfig: ClawdisConfig = {
+  const nextConfig: ClawdbotConfig = {
     ...baseConfig,
     hooks: {
       ...baseConfig.hooks,
@@ -274,8 +274,8 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   defaultRuntime.log(`- subscription: ${subscription}`);
   defaultRuntime.log(`- push endpoint: ${pushEndpoint}`);
   defaultRuntime.log(`- hook url: ${hookUrl}`);
-  defaultRuntime.log(`- config: ${CONFIG_PATH_CLAWDIS}`);
-  defaultRuntime.log("Next: clawdis hooks gmail run");
+  defaultRuntime.log(`- config: ${CONFIG_PATH_CLAWDBOT}`);
+  defaultRuntime.log("Next: clawdbot hooks gmail run");
 }
 
 export async function runGmailService(opts: GmailRunOptions) {

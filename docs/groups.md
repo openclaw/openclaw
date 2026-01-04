@@ -5,7 +5,7 @@ read_when:
 ---
 # Groups
 
-Clawdis treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, iMessage.
+Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, iMessage.
 
 ## Session keys
 - Group sessions use `surface:group:<id>` session keys (rooms/channels use `surface:channel:<id>`).

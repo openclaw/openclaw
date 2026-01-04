@@ -87,10 +87,10 @@ function serveFile(res: ServerResponse, filePath: string) {
 }
 
 function injectControlUiBasePath(html: string, basePath: string): string {
-  const script = `<script>window.__CLAWDIS_CONTROL_UI_BASE_PATH__=${JSON.stringify(
+  const script = `<script>window.__CLAWDBOT_CONTROL_UI_BASE_PATH__=${JSON.stringify(
     basePath,
   )};</script>`;
-  if (html.includes("__CLAWDIS_CONTROL_UI_BASE_PATH__")) return html;
+  if (html.includes("__CLAWDBOT_CONTROL_UI_BASE_PATH__")) return html;
   const headClose = html.indexOf("</head>");
   if (headClose !== -1) {
     return `${html.slice(0, headClose)}${script}${html.slice(headClose)}`;

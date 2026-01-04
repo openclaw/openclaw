@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import SwabbleKit
-@testable import Clawdis
+@testable import Clawdbot
 
 @Suite struct VoiceWakeManagerExtractCommandTests {
     @Test func extractCommandReturnsNilWhenNoTriggerFound() {

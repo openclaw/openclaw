@@ -20,7 +20,7 @@ vi.mock("../config/config.js", () => ({
 
 const HOME = path.join(
   os.tmpdir(),
-  `clawdis-inbound-media-${crypto.randomUUID()}`,
+  `clawdbot-inbound-media-${crypto.randomUUID()}`,
 );
 process.env.HOME = HOME;
 

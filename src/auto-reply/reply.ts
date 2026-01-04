@@ -13,7 +13,7 @@ import {
 } from "../agents/workspace.js";
 import {
   type AgentElevatedAllowFromConfig,
-  type ClawdisConfig,
+  type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
 import { resolveSessionTranscriptPath } from "../config/sessions.js";
@@ -180,7 +180,7 @@ function isApprovedElevatedSender(params: {
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
-  configOverride?: ClawdisConfig,
+  configOverride?: ClawdbotConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const cfg = configOverride ?? loadConfig();
   const agentCfg = cfg.agent;

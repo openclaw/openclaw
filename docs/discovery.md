@@ -7,12 +7,12 @@ read_when:
 ---
 # Discovery & transports
 
-Clawdis has two distinct problems that look similar on the surface:
+Clawdbot has two distinct problems that look similar on the surface:
 
 1) **Operator remote control**: the macOS menu bar app controlling a gateway running elsewhere.
 2) **Node pairing**: iOS/Android (and future nodes) finding a gateway and pairing securely.
 
-The design goal is to keep all network discovery/advertising in the **Node Gateway** (`clawd` / `clawdis gateway`) and keep clients (mac app, iOS) as consumers.
+The design goal is to keep all network discovery/advertising in the **Node Gateway** (`clawd` / `clawdbot gateway`) and keep clients (mac app, iOS) as consumers.
 
 ## Terms
 
@@ -47,24 +47,24 @@ Troubleshooting and beacon details: `docs/bonjour.md`.
 #### Current implementation
 
 - Service types:
-  - `_clawdis-bridge._tcp` (bridge transport beacon)
+  - `_clawdbot-bridge._tcp` (bridge transport beacon)
 - TXT keys (non-secret):
   - `role=gateway`
   - `lanHost=<hostname>.local`
   - `sshPort=22` (or whatever is advertised)
   - `gatewayPort=18789` (loopback WS port; informational)
   - `bridgePort=18790` (when bridge is enabled)
-  - `canvasPort=18793` (default canvas host port; serves `/__clawdis__/canvas/`)
-  - `cliPath=<path>` (optional; absolute path to a runnable `clawdis` entrypoint or binary)
+  - `canvasPort=18793` (default canvas host port; serves `/__clawdbot__/canvas/`)
+  - `cliPath=<path>` (optional; absolute path to a runnable `clawdbot` entrypoint or binary)
   - `tailnetDns=<magicdns>` (optional hint; auto-detected when Tailscale is available)
 
 Disable/override:
-- `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.
-- `CLAWDIS_BRIDGE_ENABLED=0` disables the bridge listener.
-- `bridge.bind` / `bridge.port` in `~/.clawdis/clawdis.json` control bridge bind/port (preferred).
-- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
-- `CLAWDIS_SSH_PORT` overrides the SSH port advertised in the bridge beacon (defaults to 22).
-- `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in the bridge beacon (auto-detected if unset).
+- `CLAWDBOT_DISABLE_BONJOUR=1` disables advertising.
+- `CLAWDBOT_BRIDGE_ENABLED=0` disables the bridge listener.
+- `bridge.bind` / `bridge.port` in `~/.clawdbot/clawdbot.json` control bridge bind/port (preferred).
+- `CLAWDBOT_BRIDGE_HOST` / `CLAWDBOT_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
+- `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in the bridge beacon (defaults to 22).
+- `CLAWDBOT_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in the bridge beacon (auto-detected if unset).
 
 ### 2) Tailnet (cross-network)
 

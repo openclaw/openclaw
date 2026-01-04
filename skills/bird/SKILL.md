@@ -2,7 +2,7 @@
 name: bird
 description: X/Twitter CLI for reading, searching, and posting via cookies or Sweetistics.
 homepage: https://bird.fast
-metadata: {"clawdis":{"emoji":"🐦","requires":{"bins":["bird"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/bird","bins":["bird"],"label":"Install bird (brew)"}]}}
+metadata: {"clawdbot":{"emoji":"🐦","requires":{"bins":["bird"]},"install":[{"id":"brew","kind":"brew","formula":"steipete/tap/bird","bins":["bird"],"label":"Install bird (brew)"}]}}
 ---
 
 # bird

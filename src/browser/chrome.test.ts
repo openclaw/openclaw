@@ -29,7 +29,7 @@ describe("browser chrome profile decoration", () => {
 
   it("writes expected name + signed ARGB seed to Chrome prefs", async () => {
     const userDataDir = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-chrome-test-"),
+      path.join(os.tmpdir(), "clawdbot-chrome-test-"),
     );
     try {
       decorateClawdProfile(userDataDir, { color: DEFAULT_CLAWD_BROWSER_COLOR });
@@ -71,7 +71,7 @@ describe("browser chrome profile decoration", () => {
 
   it("best-effort writes name when color is invalid", async () => {
     const userDataDir = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-chrome-test-"),
+      path.join(os.tmpdir(), "clawdbot-chrome-test-"),
     );
     try {
       decorateClawdProfile(userDataDir, { color: "lobster-orange" });
@@ -89,7 +89,7 @@ describe("browser chrome profile decoration", () => {
 
   it("recovers from missing/invalid preference files", async () => {
     const userDataDir = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-chrome-test-"),
+      path.join(os.tmpdir(), "clawdbot-chrome-test-"),
     );
     try {
       await fsp.mkdir(path.join(userDataDir, "Default"), { recursive: true });
@@ -116,7 +116,7 @@ describe("browser chrome profile decoration", () => {
 
   it("is idempotent when rerun on an existing profile", async () => {
     const userDataDir = await fsp.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-chrome-test-"),
+      path.join(os.tmpdir(), "clawdbot-chrome-test-"),
     );
     try {
       decorateClawdProfile(userDataDir, { color: DEFAULT_CLAWD_BROWSER_COLOR });

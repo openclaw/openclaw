@@ -1,5 +1,5 @@
 import AVFoundation
-import ClawdisKit
+import ClawdbotKit
 import Foundation
 
 actor CameraController {
@@ -36,7 +36,7 @@ actor CameraController {
         }
     }
 
-    func snap(params: ClawdisCameraSnapParams) async throws -> (
+    func snap(params: ClawdbotCameraSnapParams) async throws -> (
         format: String,
         base64: String,
         width: Int,
@@ -109,7 +109,7 @@ actor CameraController {
             height: res.heightPx)
     }
 
-    func clip(params: ClawdisCameraClipParams) async throws -> (
+    func clip(params: ClawdbotCameraClipParams) async throws -> (
         format: String,
         base64: String,
         durationMs: Int,
@@ -161,9 +161,9 @@ actor CameraController {
         await Self.warmUpCaptureSession()
 
         let movURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clawdis-camera-\(UUID().uuidString).mov")
+            .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mov")
         let mp4URL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clawdis-camera-\(UUID().uuidString).mp4")
+            .appendingPathComponent("clawdbot-camera-\(UUID().uuidString).mp4")
 
         defer {
             try? FileManager.default.removeItem(at: movURL)
@@ -228,7 +228,7 @@ actor CameraController {
     }
 
     private nonisolated static func pickCamera(
-        facing: ClawdisCameraFacing,
+        facing: ClawdbotCameraFacing,
         deviceId: String?) -> AVCaptureDevice?
     {
         if let deviceId, !deviceId.isEmpty {

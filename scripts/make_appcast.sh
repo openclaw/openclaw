@@ -2,8 +2,8 @@
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
-ZIP=${1:?"Usage: $0 Clawdis-<ver>.zip"}
-FEED_URL=${2:-"https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml"}
+ZIP=${1:?"Usage: $0 Clawdbot-<ver>.zip"}
+FEED_URL=${2:-"https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml"}
 PRIVATE_KEY_FILE=${SPARKLE_PRIVATE_KEY_FILE:-}
 if [[ -z "$PRIVATE_KEY_FILE" ]]; then
   echo "Set SPARKLE_PRIVATE_KEY_FILE to your ed25519 private key (Sparkle)." >&2
@@ -19,7 +19,7 @@ ZIP_NAME=$(basename "$ZIP")
 ZIP_BASE="${ZIP_NAME%.zip}"
 VERSION=${SPARKLE_RELEASE_VERSION:-}
 if [[ -z "$VERSION" ]]; then
-  if [[ "$ZIP_NAME" =~ ^Clawdis-([0-9]+(\.[0-9]+){1,2}([-.][^.]*)?)\.zip$ ]]; then
+  if [[ "$ZIP_NAME" =~ ^Clawdbot-([0-9]+(\.[0-9]+){1,2}([-.][^.]*)?)\.zip$ ]]; then
     VERSION="${BASH_REMATCH[1]}"
   else
     echo "Could not infer version from $ZIP_NAME; set SPARKLE_RELEASE_VERSION." >&2
@@ -39,7 +39,7 @@ if [[ "$KEEP_NOTES" != "1" ]]; then
   trap 'rm -f "$NOTES_HTML"' EXIT
 fi
 
-DOWNLOAD_URL_PREFIX=${SPARKLE_DOWNLOAD_URL_PREFIX:-"https://github.com/steipete/clawdis/releases/download/v${VERSION}/"}
+DOWNLOAD_URL_PREFIX=${SPARKLE_DOWNLOAD_URL_PREFIX:-"https://github.com/clawdbot/clawdbot/releases/download/v${VERSION}/"}
 
 export PATH="$ROOT/apps/macos/.build/artifacts/sparkle/Sparkle/bin:$PATH"
 if ! command -v generate_appcast >/dev/null; then

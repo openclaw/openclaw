@@ -1,33 +1,33 @@
 ---
-summary: "Default Clawdis agent instructions and skills roster for the personal assistant setup"
+summary: "Default Clawdbot agent instructions and skills roster for the personal assistant setup"
 read_when:
-  - Starting a new Clawdis agent session
+  - Starting a new Clawdbot agent session
   - Enabling or auditing default skills
 ---
-# AGENTS.md — Clawdis Personal Assistant (default)
+# AGENTS.md — Clawdbot Personal Assistant (default)
 
 ## First run (recommended)
 
-Clawdis uses a dedicated workspace directory for the agent. Default: `~/.clawdis/workspace`.
+Clawdbot uses a dedicated workspace directory for the agent. Default: `~/.clawdbot/workspace`.
 
 1) Create the workspace (if it doesn’t already exist):
 
 ```bash
-mkdir -p ~/.clawdis/workspace
+mkdir -p ~/.clawdbot/workspace
 ```
 
 2) Copy the default workspace templates into the workspace:
 
 ```bash
-cp docs/templates/AGENTS.md ~/.clawdis/workspace/AGENTS.md
-cp docs/templates/SOUL.md ~/.clawdis/workspace/SOUL.md
-cp docs/templates/TOOLS.md ~/.clawdis/workspace/TOOLS.md
+cp docs/templates/AGENTS.md ~/.clawdbot/workspace/AGENTS.md
+cp docs/templates/SOUL.md ~/.clawdbot/workspace/SOUL.md
+cp docs/templates/TOOLS.md ~/.clawdbot/workspace/TOOLS.md
 ```
 
 3) Optional: if you want the personal assistant skill roster, replace AGENTS.md with this file:
 
 ```bash
-cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
+cp docs/AGENTS.default.md ~/.clawdbot/workspace/AGENTS.md
 ```
 
 4) Optional: choose a different workspace by setting `agent.workspace` (supports `~`):
@@ -73,16 +73,16 @@ cp docs/AGENTS.default.md ~/.clawdis/workspace/AGENTS.md
 If you treat this workspace as Clawd’s “memory”, make it a git repo (ideally private) so `AGENTS.md` and your memory files are backed up.
 
 ```bash
-cd ~/.clawdis/workspace
+cd ~/.clawdbot/workspace
 git init
 git add AGENTS.md
 git commit -m "Add Clawd workspace"
 # Optional: add a private remote + push
 ```
 
-## What Clawdis Does
+## What Clawdbot Does
 - Runs WhatsApp gateway + Pi coding agent so the assistant can read/write chats, fetch context, and run skills via the host Mac.
-- macOS app manages permissions (screen recording, notifications, microphone) and exposes the `clawdis` CLI via its bundled binary.
+- macOS app manages permissions (screen recording, notifications, microphone) and exposes the `clawdbot` CLI via its bundled binary.
 - Direct chats collapse into the shared `main` session by default; groups stay isolated as `surface:group:<id>` (rooms: `surface:channel:<id>`); heartbeats keep background tasks alive.
 
 ## Core Skills (enable in Settings → Skills)
@@ -107,10 +107,10 @@ git commit -m "Add Clawd workspace"
 - **agent-tools** — Utility toolkit for automations and helper scripts.
 
 ## Usage Notes
-- Prefer the `clawdis` CLI for scripting; mac app handles permissions.
+- Prefer the `clawdbot` CLI for scripting; mac app handles permissions.
 - Run installs from the Skills tab; it hides the button if a binary is already present.
 - Keep heartbeats enabled so the assistant can schedule reminders, monitor inboxes, and trigger camera captures.
 - Canvas UI runs full-screen with native overlays. Avoid placing critical controls in the top-left/top-right/bottom edges; add explicit gutters in the layout and don’t rely on safe-area insets.
-- For browser-driven verification, use `clawdis browser` (tabs/status/screenshot) with the clawd-managed Chrome profile.
-- For DOM inspection, use `clawdis browser eval|query|dom|snapshot` (and `--json`/`--out` when you need machine output).
-- For interactions, use `clawdis browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (click/type require snapshot refs; use `evaluate` for CSS selectors).
+- For browser-driven verification, use `clawdbot browser` (tabs/status/screenshot) with the clawd-managed Chrome profile.
+- For DOM inspection, use `clawdbot browser eval|query|dom|snapshot` (and `--json`/`--out` when you need machine output).
+- For interactions, use `clawdbot browser click|type|hover|drag|select|upload|press|wait|navigate|back|evaluate|run` (click/type require snapshot refs; use `evaluate` for CSS selectors).

@@ -1,19 +1,19 @@
 ---
-summary: "Gmail Pub/Sub push wired into Clawdis webhooks via gogcli"
+summary: "Gmail Pub/Sub push wired into Clawdbot webhooks via gogcli"
 read_when:
-  - Wiring Gmail inbox triggers to Clawdis
+  - Wiring Gmail inbox triggers to Clawdbot
   - Setting up Pub/Sub push for agent wake
 ---
 
-# Gmail Pub/Sub -> Clawdis
+# Gmail Pub/Sub -> Clawdbot
 
-Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> Clawdis webhook.
+Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> Clawdbot webhook.
 
 ## Prereqs
 
 - `gcloud` installed and logged in.
 - `gog` (gogcli) installed and authorized for the Gmail account.
-- Clawdis hooks enabled (see `docs/webhook.md`).
+- Clawdbot hooks enabled (see `docs/webhook.md`).
 - `tailscale` logged in if you want a public HTTPS endpoint via Funnel.
 
 Example hook config (enable Gmail preset mapping):
@@ -22,7 +22,7 @@ Example hook config (enable Gmail preset mapping):
 {
   hooks: {
     enabled: true,
-    token: "CLAWDIS_HOOK_TOKEN",
+    token: "CLAWDBOT_HOOK_TOKEN",
     path: "/hooks",
     presets: ["gmail"]
   }
@@ -34,19 +34,19 @@ under `hooks.transformsDir` (see `docs/webhook.md`).
 
 ## Wizard (recommended)
 
-Use the Clawdis helper to wire everything together (installs deps on macOS via brew):
+Use the Clawdbot helper to wire everything together (installs deps on macOS via brew):
 
 ```bash
-clawdis hooks gmail setup \
+clawdbot hooks gmail setup \
   --account clawdbot@gmail.com
 ```
 
 Defaults:
 - Uses Tailscale Funnel for the public push endpoint.
-- Writes `hooks.gmail` config for `clawdis hooks gmail run`.
+- Writes `hooks.gmail` config for `clawdbot hooks gmail run`.
 - Enables the Gmail hook preset (`hooks.presets: ["gmail"]`).
 
-Path note: when `tailscale.mode` is enabled, Clawdis automatically sets
+Path note: when `tailscale.mode` is enabled, Clawdbot automatically sets
 `hooks.gmail.serve.path` to `/` and keeps the public path at
 `hooks.gmail.tailscale.path` (default `/gmail-pubsub`) because Tailscale
 strips the set-path prefix before proxying.
@@ -59,14 +59,14 @@ via Homebrew; on Linux install them manually first.
 Gateway auto-start (recommended):
 - When `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
-- Set `CLAWDIS_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
+- Set `CLAWDBOT_SKIP_GMAIL_WATCHER=1` to opt out (useful if you run the daemon yourself).
 - Do not run the manual daemon at the same time, or you will hit
   `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
 Manual daemon (starts `gog gmail watch serve` + auto-renew):
 
 ```bash
-clawdis hooks gmail run
+clawdbot hooks gmail run
 ```
 
 ## One-time setup
@@ -123,17 +123,17 @@ gog gmail watch serve \
   --path /gmail-pubsub \
   --token <shared> \
   --hook-url http://127.0.0.1:18789/hooks/gmail \
-  --hook-token CLAWDIS_HOOK_TOKEN \
+  --hook-token CLAWDBOT_HOOK_TOKEN \
   --include-body \
   --max-bytes 20000
 ```
 
 Notes:
 - `--token` protects the push endpoint (`x-gog-token` or `?token=`).
-- `--hook-url` points to Clawdis `/hooks/gmail` (mapped; isolated run + summary to main).
-- `--include-body` and `--max-bytes` control the body snippet sent to Clawdis.
+- `--hook-url` points to Clawdbot `/hooks/gmail` (mapped; isolated run + summary to main).
+- `--include-body` and `--max-bytes` control the body snippet sent to Clawdbot.
 
-Recommended: `clawdis hooks gmail run` wraps the same flow and auto-renews the watch.
+Recommended: `clawdbot hooks gmail run` wraps the same flow and auto-renews the watch.
 
 ## Expose the handler (dev)
 

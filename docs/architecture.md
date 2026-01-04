@@ -11,7 +11,7 @@ Last updated: 2025-12-09
 - A single long-lived **Gateway** process owns all messaging surfaces (WhatsApp via Baileys, Telegram via grammY, Discord via discord.js) and the control/event plane.
 - All clients (macOS app, CLI, web UI, automations) connect to the Gateway over one transport: **WebSocket on 127.0.0.1:18789** (tunnel or VPN for remote).
 - One Gateway per host; it is the only place that is allowed to open a WhatsApp session. All sends/agent runs go through it.
-- By default: the Gateway exposes a Canvas host on `canvasHost.port` (default `18793`), serving `~/clawd/canvas` at `/__clawdis__/canvas/` with live-reload; disable via `canvasHost.enabled=false` or `CLAWDIS_SKIP_CANVAS_HOST=1`.
+- By default: the Gateway exposes a Canvas host on `canvasHost.port` (default `18793`), serving `~/clawd/canvas` at `/__clawdbot__/canvas/` with live-reload; disable via `canvasHost.enabled=false` or `CLAWDBOT_SKIP_CANVAS_HOST=1`.
 
 ## Components and flows
 - **Gateway (daemon)**  
@@ -21,7 +21,7 @@ Last updated: 2025-12-09
 - **Clients (mac app / CLI / web admin)**  
   - One WS connection per client.  
   - Send requests (`health`, `status`, `send`, `agent`, `system-presence`, toggles) and subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
-  - On macOS, the app can also be invoked via deep links (`clawdis://agent?...`) which translate into the same Gateway `agent` request path (see `docs/clawdis-mac.md`).
+  - On macOS, the app can also be invoked via deep links (`clawdbot://agent?...`) which translate into the same Gateway `agent` request path (see `docs/clawdbot-mac.md`).
 - **Agent process (Pi)**  
   - Spawned by the Gateway on demand for `agent` calls; streams events back over the same WS connection.
 - **WebChat**  
@@ -53,7 +53,7 @@ Client                    Gateway
 - After handshake:  
   - Requests: `{type:"req", id, method, params}` → `{type:"res", id, ok, payload|error}`  
   - Events: `{type:"event", event:"agent"|"presence"|"tick"|"shutdown", payload, seq?, stateVersion?}`
-- If `CLAWDIS_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token` must match; otherwise the socket closes with policy violation.
+- If `CLAWDBOT_GATEWAY_TOKEN` (or `--token`) is set, `connect.params.auth.token` must match; otherwise the socket closes with policy violation.
 - Presence payload is structured, not free text: `{host, ip, version, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId? }`.
 - Agent runs are acked `{runId,status:"accepted"}` then complete with a final res `{runId,status,summary}`; streamed output arrives as `event:"agent"`.
 - Protocol versions are bumped on breaking changes; clients must match `minClient`; Gateway chooses within client’s min/max.
@@ -80,7 +80,7 @@ Client                    Gateway
 - Same protocol over the tunnel; same handshake. If a shared token is configured, clients must send it in `connect.params.auth.token` even over the tunnel.
 
 ## Operations snapshot
-- Start: `clawdis gateway` (foreground, logs to stdout).  
+- Start: `clawdbot gateway` (foreground, logs to stdout).  
   Supervise with launchd/systemd for restarts.  
 - Health: request `health` over WS; also surfaced in `hello-ok.health`.  
 - Metrics/logging: keep outside this spec; gateway should expose Prometheus text or structured logs separately.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ClawdisConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
+import { type ClawdbotConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
   buildTopicPath,
@@ -16,7 +16,7 @@ const baseConfig = {
       pushToken: "push-token",
     },
   },
-} satisfies ClawdisConfig;
+} satisfies ClawdbotConfig;
 
 describe("gmail hook config", () => {
   it("builds default hook url", () => {

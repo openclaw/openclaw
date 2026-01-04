@@ -43,9 +43,9 @@ function parseDnsSdBrowse(stdout: string): string[] {
   const instances = new Set<string>();
   for (const raw of stdout.split("\n")) {
     const line = raw.trim();
-    if (!line || !line.includes("_clawdis-bridge._tcp")) continue;
+    if (!line || !line.includes("_clawdbot-bridge._tcp")) continue;
     if (!line.includes("Add")) continue;
-    const match = line.match(/_clawdis-bridge\._tcp\.?\s+(.+)$/);
+    const match = line.match(/_clawdbot-bridge\._tcp\.?\s+(.+)$/);
     if (match?.[1]) {
       instances.add(match[1].trim());
     }
@@ -97,14 +97,14 @@ async function discoverViaDnsSd(
   timeoutMs: number,
 ): Promise<GatewayBonjourBeacon[]> {
   const browse = await runCommandWithTimeout(
-    ["dns-sd", "-B", "_clawdis-bridge._tcp", "local."],
+    ["dns-sd", "-B", "_clawdbot-bridge._tcp", "local."],
     { timeoutMs },
   );
   const instances = parseDnsSdBrowse(browse.stdout);
   const results: GatewayBonjourBeacon[] = [];
   for (const instance of instances) {
     const resolved = await runCommandWithTimeout(
-      ["dns-sd", "-L", instance, "_clawdis-bridge._tcp", "local."],
+      ["dns-sd", "-L", instance, "_clawdbot-bridge._tcp", "local."],
       { timeoutMs },
     );
     const parsed = parseDnsSdResolve(resolved.stdout, instance);
@@ -120,9 +120,9 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
   for (const raw of stdout.split("\n")) {
     const line = raw.trimEnd();
     if (!line) continue;
-    if (line.startsWith("=") && line.includes("_clawdis-bridge._tcp")) {
+    if (line.startsWith("=") && line.includes("_clawdbot-bridge._tcp")) {
       if (current) results.push(current);
-      const marker = " _clawdis-bridge._tcp";
+      const marker = " _clawdbot-bridge._tcp";
       const idx = line.indexOf(marker);
       const left = idx >= 0 ? line.slice(0, idx).trim() : line;
       const parts = left.split(/\s+/);
@@ -171,7 +171,7 @@ async function discoverViaAvahi(
   timeoutMs: number,
 ): Promise<GatewayBonjourBeacon[]> {
   const browse = await runCommandWithTimeout(
-    ["avahi-browse", "-rt", "_clawdis-bridge._tcp"],
+    ["avahi-browse", "-rt", "_clawdbot-bridge._tcp"],
     { timeoutMs },
   );
   return parseAvahiBrowse(browse.stdout);

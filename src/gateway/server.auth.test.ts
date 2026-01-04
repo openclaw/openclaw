@@ -32,7 +32,7 @@ describe("gateway server auth/connect", () => {
   );
 
   test("connect (req) handshake returns hello-ok payload", async () => {
-    const { CONFIG_PATH_CLAWDIS, STATE_DIR_CLAWDIS } = await import(
+    const { CONFIG_PATH_CLAWDBOT, STATE_DIR_CLAWDBOT } = await import(
       "../config/config.js"
     );
     const port = await getFreePort();
@@ -49,8 +49,8 @@ describe("gateway server auth/connect", () => {
         }
       | undefined;
     expect(payload?.type).toBe("hello-ok");
-    expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH_CLAWDIS);
-    expect(payload?.snapshot?.stateDir).toBe(STATE_DIR_CLAWDIS);
+    expect(payload?.snapshot?.configPath).toBe(CONFIG_PATH_CLAWDBOT);
+    expect(payload?.snapshot?.stateDir).toBe(STATE_DIR_CLAWDBOT);
 
     ws.close();
     await server.close();
@@ -79,9 +79,9 @@ describe("gateway server auth/connect", () => {
     ws.close();
     await server.close();
     if (prevToken === undefined) {
-      delete process.env.CLAWDIS_GATEWAY_TOKEN;
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     } else {
-      process.env.CLAWDIS_GATEWAY_TOKEN = prevToken;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
     }
   });
 

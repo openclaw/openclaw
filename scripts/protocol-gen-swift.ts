@@ -23,7 +23,7 @@ const outPath = path.join(
   "apps",
   "macos",
   "Sources",
-  "ClawdisProtocol",
+  "ClawdbotProtocol",
   "GatewayModels.swift",
 );
 

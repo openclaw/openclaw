@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -14,7 +14,7 @@ export function isAudio(mediaType?: string | null) {
 }
 
 export async function transcribeInboundAudio(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   ctx: MsgContext,
   runtime: RuntimeEnv,
 ): Promise<{ text: string } | undefined> {
@@ -32,7 +32,7 @@ export async function transcribeInboundAudio(
       const buffer = Buffer.from(arrayBuf);
       tmpPath = path.join(
         os.tmpdir(),
-        `clawdis-audio-${crypto.randomUUID()}.ogg`,
+        `clawdbot-audio-${crypto.randomUUID()}.ogg`,
       );
       await fs.writeFile(tmpPath, buffer);
       mediaPath = tmpPath;

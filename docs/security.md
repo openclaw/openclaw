@@ -84,24 +84,24 @@ We're considering a `readOnlyMode` flag that prevents the AI from:
 
 ## Container Isolation (Recommended)
 
-For maximum security, run CLAWDIS in a container with limited access:
+For maximum security, run CLAWDBOT in a container with limited access:
 
 ```yaml
 # docker-compose.yml
 services:
-  clawdis:
+  clawdbot:
     build: .
     volumes:
       - ./clawd-sandbox:/home/clawd  # Limited filesystem
-      - /tmp/clawdis:/tmp/clawdis    # Logs
+      - /tmp/clawdbot:/tmp/clawdbot    # Logs
     environment:
-      - CLAWDIS_SANDBOX=true
+      - CLAWDBOT_SANDBOX=true
     network_mode: bridge  # Limited network
 ```
 
-### Per-session sandbox (Clawdis-native)
+### Per-session sandbox (Clawdbot-native)
 
-Clawdis can also run **non-main sessions** inside per-session Docker containers
+Clawdbot can also run **non-main sessions** inside per-session Docker containers
 (`agent.sandbox`). This keeps the gateway on your host while isolating agent
 tools in a hard wall container. See `docs/configuration.md` for the full config.
 
@@ -128,9 +128,9 @@ Include security guidelines in your agent's system prompt:
 
 If your AI does something bad:
 
-1. **Stop it:** stop the macOS app (if it’s supervising the Gateway) or terminate your `clawdis gateway` process
-2. **Check logs:** `/tmp/clawdis/clawdis-YYYY-MM-DD.log` (or your configured `logging.file`)
-3. **Review session:** Check `~/.clawdis/sessions/` for what happened
+1. **Stop it:** stop the macOS app (if it’s supervising the Gateway) or terminate your `clawdbot gateway` process
+2. **Check logs:** `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
+3. **Review session:** Check `~/.clawdbot/sessions/` for what happened
 4. **Rotate secrets:** If credentials were exposed
 5. **Update rules:** Add to your security prompt
 
@@ -155,7 +155,7 @@ Mario asking for find ~
 
 ## Reporting Security Issues
 
-Found a vulnerability in CLAWDIS? Please report responsibly:
+Found a vulnerability in CLAWDBOT? Please report responsibly:
 
 1. Email: security@[redacted].com
 2. Don't post publicly until fixed

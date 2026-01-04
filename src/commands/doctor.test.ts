@@ -19,7 +19,7 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../config/config.js", () => ({
-  CONFIG_PATH_CLAWDIS: "/tmp/clawdis.json",
+  CONFIG_PATH_CLAWDBOT: "/tmp/clawdbot.json",
   readConfigFileSnapshot,
   writeConfigFile,
   migrateLegacyConfig,
@@ -54,7 +54,7 @@ vi.mock("./onboard-helpers.js", () => ({
 describe("doctor", () => {
   it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
     readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/clawdis.json",
+      path: "/tmp/clawdbot.json",
       exists: true,
       raw: "{}",
       parsed: { routing: { allowFrom: ["+15555550123"] } },

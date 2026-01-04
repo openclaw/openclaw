@@ -1,5 +1,5 @@
 import { resolveTalkApiKey } from "./talk.js";
-import type { ClawdisConfig } from "./types.js";
+import type { ClawdbotConfig } from "./types.js";
 
 type WarnState = { warned: boolean };
 
@@ -14,7 +14,7 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-export function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
+export function applyIdentityDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   const identity = cfg.identity;
   if (!identity) return cfg;
 
@@ -24,7 +24,7 @@ export function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
   const groupChat = routing.groupChat ?? {};
 
   let mutated = false;
-  const next: ClawdisConfig = { ...cfg };
+  const next: ClawdbotConfig = { ...cfg };
 
   if (name && !groupChat.mentionPatterns) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
@@ -41,9 +41,9 @@ export function applyIdentityDefaults(cfg: ClawdisConfig): ClawdisConfig {
 }
 
 export function applySessionDefaults(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   options: SessionDefaultsOptions = {},
-): ClawdisConfig {
+): ClawdbotConfig {
   const session = cfg.session;
   if (!session || session.mainKey === undefined) return cfg;
 
@@ -51,7 +51,7 @@ export function applySessionDefaults(
   const warn = options.warn ?? console.warn;
   const warnState = options.warnState ?? defaultWarnState;
 
-  const next: ClawdisConfig = {
+  const next: ClawdbotConfig = {
     ...cfg,
     session: { ...session, mainKey: "main" },
   };
@@ -64,7 +64,7 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkApiKey(config: ClawdisConfig): ClawdisConfig {
+export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
   const resolved = resolveTalkApiKey();
   if (!resolved) return config;
   const existing = config.talk?.apiKey?.trim();

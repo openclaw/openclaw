@@ -142,7 +142,7 @@ function formatToolOutput(value: unknown): string | null {
 
 declare global {
   interface Window {
-    __CLAWDIS_CONTROL_UI_BASE_PATH__?: string;
+    __CLAWDBOT_CONTROL_UI_BASE_PATH__?: string;
   }
 }
 
@@ -167,8 +167,8 @@ const DEFAULT_CRON_FORM: CronFormState = {
   postToMainPrefix: "",
 };
 
-@customElement("clawdis-app")
-export class ClawdisApp extends LitElement {
+@customElement("clawdbot-app")
+export class ClawdbotApp extends LitElement {
   @state() settings: UiSettings = loadSettings();
   @state() password = "";
   @state() tab: Tab = "chat";
@@ -396,7 +396,7 @@ export class ClawdisApp extends LitElement {
       url: this.settings.gatewayUrl,
       token: this.settings.token.trim() ? this.settings.token : undefined,
       password: this.password.trim() ? this.password : undefined,
-      clientName: "clawdis-control-ui",
+      clientName: "clawdbot-control-ui",
       mode: "webchat",
       onHello: (hello) => {
         this.connected = true;
@@ -663,7 +663,7 @@ export class ClawdisApp extends LitElement {
 
   private inferBasePath() {
     if (typeof window === "undefined") return "";
-    const configured = window.__CLAWDIS_CONTROL_UI_BASE_PATH__;
+    const configured = window.__CLAWDBOT_CONTROL_UI_BASE_PATH__;
     if (typeof configured === "string" && configured.trim()) {
       return normalizeBasePath(configured);
     }

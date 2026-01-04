@@ -142,7 +142,7 @@ export function subtitleForTab(tab: Tab) {
     case "chat":
       return "Direct gateway chat session for quick interventions.";
     case "config":
-      return "Edit ~/.clawdis/clawdis.json safely.";
+      return "Edit ~/.clawdbot/clawdbot.json safely.";
     case "debug":
       return "Gateway snapshots, events, and manual RPC calls.";
     default:

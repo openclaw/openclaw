@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 
 export type ModelRef = {
@@ -38,7 +38,7 @@ export function parseModelRef(
 }
 
 export function buildModelAliasIndex(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   defaultProvider: string;
 }): ModelAliasIndex {
   const rawAliases = params.cfg.agent?.modelAliases ?? {};
@@ -84,7 +84,7 @@ export function resolveModelRefFromString(params: {
 }
 
 export function resolveConfiguredModelRef(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   defaultProvider: string;
   defaultModel: string;
 }): ModelRef {
@@ -108,7 +108,7 @@ export function resolveConfiguredModelRef(params: {
 }
 
 export function buildAllowedModelSet(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
 }): {
@@ -156,7 +156,7 @@ export function buildAllowedModelSet(params: {
 }
 
 export function resolveThinkingDefault(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   provider: string;
   model: string;
   catalog?: ModelCatalogEntry[];

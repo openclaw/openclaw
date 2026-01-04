@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveTextChunkLimit, type TextChunkSurface } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
@@ -23,7 +23,7 @@ function normalizeChunkSurface(surface?: string): TextChunkSurface | undefined {
 }
 
 export function resolveBlockStreamingChunking(
-  cfg: ClawdisConfig | undefined,
+  cfg: ClawdbotConfig | undefined,
   surface?: string,
 ): {
   minChars: number;

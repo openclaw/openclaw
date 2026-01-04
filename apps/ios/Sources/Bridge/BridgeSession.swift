@@ -1,4 +1,4 @@
-import ClawdisKit
+import ClawdbotKit
 import Foundation
 import Network
 
@@ -78,7 +78,7 @@ actor BridgeSession {
         let params = NWParameters.tcp
         params.includePeerToPeer = true
         let connection = NWConnection(to: endpoint, using: params)
-        let queue = DispatchQueue(label: "com.clawdis.ios.bridge-session")
+        let queue = DispatchQueue(label: "com.clawdbot.ios.bridge-session")
         self.connection = connection
         self.queue = queue
 

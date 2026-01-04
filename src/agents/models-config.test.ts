@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-models-"));
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-models-"));
   const previousHome = process.env.HOME;
   process.env.HOME = base;
   try {
@@ -17,7 +17,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   }
 }
 
-const MODELS_CONFIG: ClawdisConfig = {
+const MODELS_CONFIG: ClawdbotConfig = {
   models: {
     providers: {
       "custom-proxy": {
@@ -55,12 +55,12 @@ describe("models config", () => {
   it("writes models.json for configured providers", async () => {
     await withTempHome(async () => {
       vi.resetModules();
-      const { ensureClawdisModelsJson } = await import("./models-config.js");
-      const { resolveClawdisAgentDir } = await import("./agent-paths.js");
+      const { ensureClawdbotModelsJson } = await import("./models-config.js");
+      const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
 
-      await ensureClawdisModelsJson(MODELS_CONFIG);
+      await ensureClawdbotModelsJson(MODELS_CONFIG);
 
-      const modelPath = path.join(resolveClawdisAgentDir(), "models.json");
+      const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<string, { baseUrl?: string }>;
@@ -75,10 +75,10 @@ describe("models config", () => {
   it("merges providers by default", async () => {
     await withTempHome(async () => {
       vi.resetModules();
-      const { ensureClawdisModelsJson } = await import("./models-config.js");
-      const { resolveClawdisAgentDir } = await import("./agent-paths.js");
+      const { ensureClawdbotModelsJson } = await import("./models-config.js");
+      const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
 
-      const agentDir = resolveClawdisAgentDir();
+      const agentDir = resolveClawdbotAgentDir();
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         path.join(agentDir, "models.json"),
@@ -110,7 +110,7 @@ describe("models config", () => {
         "utf8",
       );
 
-      await ensureClawdisModelsJson(MODELS_CONFIG);
+      await ensureClawdbotModelsJson(MODELS_CONFIG);
 
       const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
       const parsed = JSON.parse(raw) as {

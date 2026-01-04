@@ -19,12 +19,12 @@ describe("canvas host", () => {
     const out = injectCanvasLiveReload("<html><body>Hello</body></html>");
     expect(out).toContain(CANVAS_WS_PATH);
     expect(out).toContain("location.reload");
-    expect(out).toContain("clawdisCanvasA2UIAction");
-    expect(out).toContain("clawdisSendUserAction");
+    expect(out).toContain("clawdbotCanvasA2UIAction");
+    expect(out).toContain("clawdbotSendUserAction");
   });
 
   it("creates a default index.html when missing", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
 
     const server = await startCanvasHost({
       runtime: defaultRuntime,
@@ -41,7 +41,7 @@ describe("canvas host", () => {
       const html = await res.text();
       expect(res.status).toBe(200);
       expect(html).toContain("Interactive test page");
-      expect(html).toContain("clawdisSendUserAction");
+      expect(html).toContain("clawdbotSendUserAction");
       expect(html).toContain(CANVAS_WS_PATH);
     } finally {
       await server.close();
@@ -50,7 +50,7 @@ describe("canvas host", () => {
   });
 
   it("skips live reload injection when disabled", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
     await fs.writeFile(
       path.join(dir, "index.html"),
       "<html><body>no-reload</body></html>",
@@ -86,7 +86,7 @@ describe("canvas host", () => {
   });
 
   it("serves canvas content from the mounted base path", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
     await fs.writeFile(
       path.join(dir, "index.html"),
       "<html><body>v1</body></html>",
@@ -137,7 +137,7 @@ describe("canvas host", () => {
   });
 
   it("reuses a handler without closing it twice", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
     await fs.writeFile(
       path.join(dir, "index.html"),
       "<html><body>v1</body></html>",
@@ -174,7 +174,7 @@ describe("canvas host", () => {
   });
 
   it("serves HTML with injection and broadcasts reload on file changes", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
     const index = path.join(dir, "index.html");
     await fs.writeFile(index, "<html><body>v1</body></html>", "utf8");
 
@@ -234,7 +234,7 @@ describe("canvas host", () => {
   });
 
   it("serves the gateway-hosted A2UI scaffold", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-canvas-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));
 
     const server = await startCanvasHost({
       runtime: defaultRuntime,
@@ -246,19 +246,19 @@ describe("canvas host", () => {
 
     try {
       const res = await fetch(
-        `http://127.0.0.1:${server.port}/__clawdis__/a2ui/`,
+        `http://127.0.0.1:${server.port}/__clawdbot__/a2ui/`,
       );
       const html = await res.text();
       expect(res.status).toBe(200);
-      expect(html).toContain("clawdis-a2ui-host");
-      expect(html).toContain("clawdisCanvasA2UIAction");
+      expect(html).toContain("clawdbot-a2ui-host");
+      expect(html).toContain("clawdbotCanvasA2UIAction");
 
       const bundleRes = await fetch(
-        `http://127.0.0.1:${server.port}/__clawdis__/a2ui/a2ui.bundle.js`,
+        `http://127.0.0.1:${server.port}/__clawdbot__/a2ui/a2ui.bundle.js`,
       );
       const js = await bundleRes.text();
       expect(bundleRes.status).toBe(200);
-      expect(js).toContain("clawdisA2UI");
+      expect(js).toContain("clawdbotA2UI");
     } finally {
       await server.close();
       await fs.rm(dir, { recursive: true, force: true });

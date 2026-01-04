@@ -196,7 +196,7 @@ function resolveBrowserBaseUrl(controlUrl?: string) {
   const resolved = resolveBrowserConfig(cfg.browser);
   if (!resolved.enabled && !controlUrl?.trim()) {
     throw new Error(
-      "Browser control is disabled. Set browser.enabled=true in ~/.clawdis/clawdis.json.",
+      "Browser control is disabled. Set browser.enabled=true in ~/.clawdbot/clawdbot.json.",
     );
   }
   const url = controlUrl?.trim() ? controlUrl.trim() : resolved.controlUrl;

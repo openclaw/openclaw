@@ -9,7 +9,7 @@ read_when:
 The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 - default: `http://<host>:18789/`
-- optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdis`)
+- optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdbot`)
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
@@ -27,7 +27,7 @@ The dashboard settings panel lets you store a token; passwords are not persisted
 - Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
-- Config: view/edit `~/.clawdis/clawdis.json` (`config.get`, `config.set`)
+- Config: view/edit `~/.clawdbot/clawdbot.json` (`config.get`, `config.set`)
 - Config schema + form rendering (`config.schema`); Raw JSON editor remains available
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
 
@@ -38,19 +38,19 @@ The dashboard settings panel lets you store a token; passwords are not persisted
 Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:
 
 ```bash
-clawdis gateway --tailscale serve
+clawdbot gateway --tailscale serve
 ```
 
 Open:
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 By default, the gateway trusts Tailscale identity headers in serve mode. You can still set
-`CLAWDIS_GATEWAY_TOKEN` or `gateway.auth` if you want a shared secret instead.
+`CLAWDBOT_GATEWAY_TOKEN` or `gateway.auth` if you want a shared secret instead.
 
 ### Bind to tailnet + token (legacy)
 
 ```bash
-clawdis gateway --bind tailnet --token "$(openssl rand -hex 32)"
+clawdbot gateway --bind tailnet --token "$(openssl rand -hex 32)"
 ```
 
 Then open:
@@ -70,7 +70,7 @@ pnpm ui:build
 Optional absolute base (when you want fixed asset URLs):
 
 ```bash
-CLAWDIS_CONTROL_UI_BASE_PATH=/clawdis/ pnpm ui:build
+CLAWDBOT_CONTROL_UI_BASE_PATH=/clawdbot/ pnpm ui:build
 ```
 
 For local development (separate dev server):

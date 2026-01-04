@@ -12,7 +12,7 @@ We use TypeBox schemas in `src/gateway/protocol/schema.ts` as the single source 
 ## Current pipeline
 
 - **TypeBox → JSON Schema**: `pnpm protocol:gen` writes `dist/protocol.schema.json` (draft-07) and runs AJV in the server tests.
-- **TypeBox → Swift**: `pnpm protocol:gen:swift` generates `apps/macos/Sources/ClawdisProtocol/GatewayModels.swift`.
+- **TypeBox → Swift**: `pnpm protocol:gen:swift` generates `apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`.
 
 ## Problem
 

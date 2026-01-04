@@ -1,13 +1,13 @@
 ---
 name: slack
-description: Use when you need to control Slack from Clawdis via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.
+description: Use when you need to control Slack from Clawdbot via the slack tool, including reacting to messages or pinning/unpinning items in Slack channels or DMs.
 ---
 
 # Slack Actions
 
 ## Overview
 
-Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for Clawdis.
+Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for Clawdbot.
 
 ## Inputs to collect
 
@@ -56,7 +56,7 @@ Message context lines include `slack message id` and `channel` fields you can re
 {
   "action": "sendMessage",
   "to": "channel:C123",
-  "content": "Hello from Clawdis"
+  "content": "Hello from Clawdbot"
 }
 ```
 

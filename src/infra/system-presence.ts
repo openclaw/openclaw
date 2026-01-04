@@ -57,7 +57,7 @@ function initSelfPresence() {
   const host = os.hostname();
   const ip = resolvePrimaryIPv4() ?? undefined;
   const version =
-    process.env.CLAWDIS_VERSION ?? process.env.npm_package_version ?? "unknown";
+    process.env.CLAWDBOT_VERSION ?? process.env.npm_package_version ?? "unknown";
   const modelIdentifier = (() => {
     const p = os.platform();
     if (p === "darwin") {

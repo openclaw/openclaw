@@ -9,33 +9,33 @@ Last updated: 2025-12-09
 
 ## What it is
 - The always-on process that owns the single Baileys/Telegram connection and the control/event plane.
-- Replaces the legacy `gateway` command. CLI entry point: `clawdis gateway`.
+- Replaces the legacy `gateway` command. CLI entry point: `clawdbot gateway`.
 - Runs until stopped; exits non-zero on fatal errors so the supervisor restarts it.
 
 ## How to run (local)
 ```bash
-pnpm clawdis gateway --port 18789
+pnpm clawdbot gateway --port 18789
 # for full debug/trace logs in stdio:
-pnpm clawdis gateway --port 18789 --verbose
+pnpm clawdbot gateway --port 18789 --verbose
 # if the port is busy, terminate listeners then start:
-pnpm clawdis gateway --force
+pnpm clawdbot gateway --force
 # dev loop (auto-reload on TS changes):
 pnpm gateway:watch
 ```
-- Config hot reload watches `~/.clawdis/clawdis.json` (or `CLAWDIS_CONFIG_PATH`).
+- Config hot reload watches `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`).
   - Default mode: `gateway.reload.mode="hybrid"` (hot-apply safe changes, restart on critical).
   - Hot reload uses in-process restart via **SIGUSR1** when needed.
   - Disable with `gateway.reload.mode="off"`.
 - Binds WebSocket control plane to `127.0.0.1:<port>` (default 18789).
 - The same port also serves HTTP (control UI, hooks, A2UI). Single-port multiplex.
-- Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__clawdis__/canvas/` from `~/clawd/canvas`. Disable with `canvasHost.enabled=false` or `CLAWDIS_SKIP_CANVAS_HOST=1`.
+- Starts a Canvas file server by default on `canvasHost.port` (default `18793`), serving `http://<gateway-host>:18793/__clawdbot__/canvas/` from `~/clawd/canvas`. Disable with `canvasHost.enabled=false` or `CLAWDBOT_SKIP_CANVAS_HOST=1`.
 - Logs to stdout; use launchd/systemd to keep it alive and rotate logs.
 - Pass `--verbose` to mirror debug logging (handshakes, req/res, events) from the log file into stdio when troubleshooting.
 - `--force` uses `lsof` to find listeners on the chosen port, sends SIGTERM, logs what it killed, then starts the gateway (fails fast if `lsof` is missing).
 - If you run under a supervisor (launchd/systemd/mac app child-process mode), a stop/restart typically sends **SIGTERM**; older builds may surface this as `pnpm` `ELIFECYCLE` exit code **143** (SIGTERM), which is a normal shutdown, not a crash.
 - **SIGUSR1** triggers an in-process restart (no external supervisor required). This is what the `gateway` agent tool uses.
-- Optional shared secret: pass `--token <value>` or set `CLAWDIS_GATEWAY_TOKEN` to require clients to send `connect.params.auth.token`.
-- Port precedence: `--port` > `CLAWDIS_GATEWAY_PORT` > `gateway.port` > default `18789`.
+- Optional shared secret: pass `--token <value>` or set `CLAWDBOT_GATEWAY_TOKEN` to require clients to send `connect.params.auth.token`.
+- Port precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
 
 ## Remote access
 - Tailscale/VPN preferred; otherwise SSH tunnel:
@@ -51,15 +51,15 @@ Supported if you isolate state + config and use unique ports.
 
 Checklist per instance:
 - unique `gateway.port`
-- unique `CLAWDIS_CONFIG_PATH`
-- unique `CLAWDIS_STATE_DIR`
+- unique `CLAWDBOT_CONFIG_PATH`
+- unique `CLAWDBOT_STATE_DIR`
 - unique `agent.workspace`
 - separate WhatsApp numbers (if using WA)
 
 Example:
 ```bash
-CLAWDIS_CONFIG_PATH=~/.clawdis/a.json CLAWDIS_STATE_DIR=~/.clawdis-a clawdis gateway --port 19001
-CLAWDIS_CONFIG_PATH=~/.clawdis/b.json CLAWDIS_STATE_DIR=~/.clawdis-b clawdis gateway --port 19002
+CLAWDBOT_CONFIG_PATH=~/.clawdbot/a.json CLAWDBOT_STATE_DIR=~/.clawdbot-a clawdbot gateway --port 19001
+CLAWDBOT_CONFIG_PATH=~/.clawdbot/b.json CLAWDBOT_STATE_DIR=~/.clawdbot-b clawdbot gateway --port 19002
 ```
 
 ## Protocol (operator view)
@@ -72,7 +72,7 @@ CLAWDIS_CONFIG_PATH=~/.clawdis/b.json CLAWDIS_STATE_DIR=~/.clawdis-b clawdis gat
 - `agent` responses are two-stage: first `res` ack `{runId,status:"accepted"}`, then a final `res` `{runId,status:"ok"|"error",summary}` after the run finishes; streamed output arrives as `event:"agent"`.
 
 ## Methods (initial set)
-- `health` — full health snapshot (same shape as `clawdis health --json`).
+- `health` — full health snapshot (same shape as `clawdbot health --json`).
 - `status` — short summary.
 - `system-presence` — current presence list.
 - `system-event` — post a presence/system note (structured).
@@ -99,7 +99,7 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 ## Typing and validation
 - Server validates every inbound frame with AJV against JSON Schema emitted from the protocol definitions.
 - Clients (TS/Swift) consume generated types (TS directly; Swift via the repo’s generator).
-- Types live in `src/gateway/protocol/*.ts`; regenerate schemas/models with `pnpm protocol:gen` (writes `dist/protocol.schema.json`) and `pnpm protocol:gen:swift` (writes `apps/macos/Sources/ClawdisProtocol/GatewayModels.swift`).
+- Types live in `src/gateway/protocol/*.ts`; regenerate schemas/models with `pnpm protocol:gen` (writes `dist/protocol.schema.json`) and `pnpm protocol:gen:swift` (writes `apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`).
 
 ## Connection snapshot
 - `hello-ok` includes a `snapshot` with `presence`, `health`, `stateVersion`, and `uptimeMs` plus `policy {maxPayload,maxBufferedBytes,tickIntervalMs}` so clients can render immediately without extra requests.
@@ -122,34 +122,34 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 
 ## Supervision (macOS example)
 - Use launchd to keep the daemon alive:
-  - Program: path to `clawdis`
+  - Program: path to `clawdbot`
   - Arguments: `gateway`
   - KeepAlive: true
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 
 Bundled mac app:
-- Clawdis.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdis.gateway`.
+- Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
 
 ## Supervision (systemd example)
 ```
 [Unit]
-Description=Clawdis Gateway
+Description=Clawdbot Gateway
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/clawdis gateway --port 18789
+ExecStart=/usr/local/bin/clawdbot gateway --port 18789
 Restart=on-failure
 RestartSec=5
-User=clawdis
-Environment=CLAWDIS_GATEWAY_TOKEN=
-WorkingDirectory=/home/clawdis
+User=clawdbot
+Environment=CLAWDBOT_GATEWAY_TOKEN=
+WorkingDirectory=/home/clawdbot
 
 [Install]
 WantedBy=multi-user.target
 ```
-Enable with `systemctl enable --now clawdis-gateway.service`.
+Enable with `systemctl enable --now clawdbot-gateway.service`.
 
 ## Operational checks
 - Liveness: open WS and send `req:connect` → expect `res` with `payload.type="hello-ok"` (with snapshot).
@@ -163,12 +163,12 @@ Enable with `systemctl enable --now clawdis-gateway.service`.
 - Graceful shutdown: emit `shutdown` event before closing; clients must handle close + reconnect.
 
 ## CLI helpers
-- `clawdis gateway health|status` — request health/status over the Gateway WS.
-- `clawdis gateway send --to <num> --message "hi" [--media-url ...]` — send via Gateway (idempotent).
-- `clawdis gateway agent --message "hi" [--to ...]` — run an agent turn (waits for final by default).
-- `clawdis gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
+- `clawdbot gateway health|status` — request health/status over the Gateway WS.
+- `clawdbot gateway send --to <num> --message "hi" [--media-url ...]` — send via Gateway (idempotent).
+- `clawdbot gateway agent --message "hi" [--to ...]` — run an agent turn (waits for final by default).
+- `clawdbot gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
 - Gateway helper subcommands assume a running gateway on `--url`; they no longer auto-spawn one.
 
 ## Migration guidance
-- Retire uses of `clawdis gateway` and the legacy TCP control port.
+- Retire uses of `clawdbot gateway` and the legacy TCP control port.
 - Update clients to speak the WS protocol with mandatory connect and structured presence.

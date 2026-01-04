@@ -9,8 +9,8 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import type { ClawdisConfig } from "../config/config.js";
-import { CONFIG_PATH_CLAWDIS } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
@@ -29,7 +29,7 @@ export function guardCancel<T>(value: T, runtime: RuntimeEnv): T {
   return value;
 }
 
-export function summarizeExistingConfig(config: ClawdisConfig): string {
+export function summarizeExistingConfig(config: ClawdbotConfig): string {
   const rows: string[] = [];
   if (config.agent?.workspace)
     rows.push(`workspace: ${config.agent.workspace}`);
@@ -64,9 +64,9 @@ export function printWizardHeader(runtime: RuntimeEnv) {
 }
 
 export function applyWizardMetadata(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   params: { command: string; mode: "local" | "remote" },
-): ClawdisConfig {
+): ClawdbotConfig {
   const commit =
     process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
   return {
@@ -145,7 +145,7 @@ export async function handleReset(
   workspaceDir: string,
   runtime: RuntimeEnv,
 ) {
-  await moveToTrash(CONFIG_PATH_CLAWDIS, runtime);
+  await moveToTrash(CONFIG_PATH_CLAWDBOT, runtime);
   if (scope === "config") return;
   await moveToTrash(path.join(CONFIG_DIR, "credentials"), runtime);
   await moveToTrash(resolveSessionTranscriptsDir(), runtime);

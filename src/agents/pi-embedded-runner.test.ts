@@ -12,12 +12,12 @@ describe("buildEmbeddedSandboxInfo", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "session:test",
-      workspaceDir: "/tmp/clawdis-sandbox",
-      containerName: "clawdis-sbx-test",
+      workspaceDir: "/tmp/clawdbot-sandbox",
+      containerName: "clawdbot-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "clawdis-sandbox:bookworm-slim",
-        containerPrefix: "clawdis-sbx-",
+        image: "clawdbot-sandbox:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp"],
@@ -33,13 +33,13 @@ describe("buildEmbeddedSandboxInfo", () => {
       browser: {
         controlUrl: "http://localhost:9222",
         noVncUrl: "http://localhost:6080",
-        containerName: "clawdis-sbx-browser-test",
+        containerName: "clawdbot-sbx-browser-test",
       },
     } satisfies SandboxContext;
 
     expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
       enabled: true,
-      workspaceDir: "/tmp/clawdis-sandbox",
+      workspaceDir: "/tmp/clawdbot-sandbox",
       browserControlUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
     });

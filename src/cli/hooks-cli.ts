@@ -30,7 +30,7 @@ export function registerHooksCli(program: Command) {
 
   gmail
     .command("setup")
-    .description("Configure Gmail watch + Pub/Sub + Clawdis hooks")
+    .description("Configure Gmail watch + Pub/Sub + Clawdbot hooks")
     .requiredOption("--account <email>", "Gmail account to watch")
     .option("--project <id>", "GCP project id (OAuth client owner)")
     .option("--topic <name>", "Pub/Sub topic name", DEFAULT_GMAIL_TOPIC)
@@ -40,8 +40,8 @@ export function registerHooksCli(program: Command) {
       DEFAULT_GMAIL_SUBSCRIPTION,
     )
     .option("--label <label>", "Gmail label to watch", DEFAULT_GMAIL_LABEL)
-    .option("--hook-url <url>", "Clawdis hook URL")
-    .option("--hook-token <token>", "Clawdis hook token")
+    .option("--hook-url <url>", "Clawdbot hook URL")
+    .option("--hook-token <token>", "Clawdbot hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
     .option(
       "--bind <host>",
@@ -90,8 +90,8 @@ export function registerHooksCli(program: Command) {
     .option("--topic <topic>", "Pub/Sub topic path (projects/.../topics/..)")
     .option("--subscription <name>", "Pub/Sub subscription name")
     .option("--label <label>", "Gmail label to watch")
-    .option("--hook-url <url>", "Clawdis hook URL")
-    .option("--hook-token <token>", "Clawdis hook token")
+    .option("--hook-url <url>", "Clawdbot hook URL")
+    .option("--hook-token <token>", "Clawdbot hook token")
     .option("--push-token <token>", "Push token for gog watch serve")
     .option("--bind <host>", "gog watch serve bind host")
     .option("--port <port>", "gog watch serve port")

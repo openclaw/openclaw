@@ -5,7 +5,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { CliDeps } from "../cli/deps.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -23,7 +23,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-cron-"));
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-cron-"));
   const previousHome = process.env.HOME;
   process.env.HOME = base;
   try {
@@ -35,7 +35,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 }
 
 async function writeSessionStore(home: string) {
-  const dir = path.join(home, ".clawdis", "sessions");
+  const dir = path.join(home, ".clawdbot", "sessions");
   await fs.mkdir(dir, { recursive: true });
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(
@@ -60,15 +60,15 @@ async function writeSessionStore(home: string) {
 function makeCfg(
   home: string,
   storePath: string,
-  overrides: Partial<ClawdisConfig> = {},
-): ClawdisConfig {
-  const base: ClawdisConfig = {
+  overrides: Partial<ClawdbotConfig> = {},
+): ClawdbotConfig {
+  const base: ClawdbotConfig = {
     agent: {
       model: "anthropic/claude-opus-4-5",
       workspace: path.join(home, "clawd"),
     },
     session: { store: storePath, mainKey: "main" },
-  } as ClawdisConfig;
+  } as ClawdbotConfig;
   return { ...base, ...overrides };
 }
 

@@ -163,22 +163,22 @@ describe("gateway hot reload", () => {
   let prevSkipGmail: string | undefined;
 
   beforeEach(() => {
-    prevSkipProviders = process.env.CLAWDIS_SKIP_PROVIDERS;
-    prevSkipGmail = process.env.CLAWDIS_SKIP_GMAIL_WATCHER;
-    process.env.CLAWDIS_SKIP_PROVIDERS = "0";
-    delete process.env.CLAWDIS_SKIP_GMAIL_WATCHER;
+    prevSkipProviders = process.env.CLAWDBOT_SKIP_PROVIDERS;
+    prevSkipGmail = process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
+    process.env.CLAWDBOT_SKIP_PROVIDERS = "0";
+    delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
   });
 
   afterEach(() => {
     if (prevSkipProviders === undefined) {
-      delete process.env.CLAWDIS_SKIP_PROVIDERS;
+      delete process.env.CLAWDBOT_SKIP_PROVIDERS;
     } else {
-      process.env.CLAWDIS_SKIP_PROVIDERS = prevSkipProviders;
+      process.env.CLAWDBOT_SKIP_PROVIDERS = prevSkipProviders;
     }
     if (prevSkipGmail === undefined) {
-      delete process.env.CLAWDIS_SKIP_GMAIL_WATCHER;
+      delete process.env.CLAWDBOT_SKIP_GMAIL_WATCHER;
     } else {
-      process.env.CLAWDIS_SKIP_GMAIL_WATCHER = prevSkipGmail;
+      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = prevSkipGmail;
     }
   });
 

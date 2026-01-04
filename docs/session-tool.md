@@ -76,11 +76,11 @@ Behavior:
 - If the run fails: `{ runId, status: "error", error }`.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
-- After the primary run completes, Clawdis runs a **reply-back loop**:
+- After the primary run completes, Clawdbot runs a **reply-back loop**:
   - Round 2+ alternates between requester and target agents.
   - Reply exactly `REPLY_SKIP` to stop the ping‑pong.
   - Max turns is `session.agentToAgent.maxPingPongTurns` (0–5, default 5).
-- Once the loop ends, Clawdis runs the **agent‑to‑agent announce step** (target agent only):
+- Once the loop ends, Clawdbot runs the **agent‑to‑agent announce step** (target agent only):
   - Reply exactly `ANNOUNCE_SKIP` to stay silent.
   - Any other reply is sent to the target channel.
   - Announce step includes the original request + round‑1 reply + latest ping‑pong reply.

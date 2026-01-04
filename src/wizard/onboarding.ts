@@ -33,9 +33,9 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   readConfigFileSnapshot,
   resolveGatewayPort,
   writeConfigFile,
@@ -54,10 +54,10 @@ export async function runOnboardingWizard(
   prompter: WizardPrompter,
 ) {
   printWizardHeader(runtime);
-  await prompter.intro("Clawdis onboarding");
+  await prompter.intro("Clawdbot onboarding");
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: ClawdisConfig = snapshot.valid ? snapshot.config : {};
+  let baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists) {
     const title = snapshot.valid
@@ -109,10 +109,10 @@ export async function runOnboardingWizard(
   const localUrl = `ws://127.0.0.1:${localPort}`;
   const localProbe = await probeGatewayReachable({
     url: localUrl,
-    token: process.env.CLAWDIS_GATEWAY_TOKEN,
+    token: process.env.CLAWDBOT_GATEWAY_TOKEN,
     password:
       baseConfig.gateway?.auth?.password ??
-      process.env.CLAWDIS_GATEWAY_PASSWORD,
+      process.env.CLAWDBOT_GATEWAY_PASSWORD,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl
@@ -150,7 +150,7 @@ export async function runOnboardingWizard(
     let nextConfig = await promptRemoteGatewayConfig(baseConfig, prompter);
     nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
-    runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
     await prompter.outro("Remote gateway configured.");
     return;
   }
@@ -166,7 +166,7 @@ export async function runOnboardingWizard(
     workspaceInput.trim() || DEFAULT_WORKSPACE,
   );
 
-  let nextConfig: ClawdisConfig = {
+  let nextConfig: ClawdbotConfig = {
     ...baseConfig,
     agent: {
       ...baseConfig.agent,
@@ -424,7 +424,7 @@ export async function runOnboardingWizard(
   });
 
   await writeConfigFile(nextConfig);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   await ensureWorkspaceAndSessions(workspaceDir, runtime);
 
   nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
@@ -466,8 +466,8 @@ export async function runOnboardingWizard(
         await resolveGatewayProgramArguments({ port, dev: devMode });
       const environment: Record<string, string | undefined> = {
         PATH: process.env.PATH,
-        CLAWDIS_GATEWAY_TOKEN: gatewayToken,
-        CLAWDIS_LAUNCHD_LABEL:
+        CLAWDBOT_GATEWAY_TOKEN: gatewayToken,
+        CLAWDBOT_LAUNCHD_LABEL:
           process.platform === "darwin"
             ? GATEWAY_LAUNCH_AGENT_LABEL
             : undefined,

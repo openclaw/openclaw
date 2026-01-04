@@ -12,7 +12,7 @@ Status: prototype implemented (internal) · Date: 2025-12-13
 Runbook (how to connect/pair + drive Canvas): `docs/ios/connect.md`
 
 ## Goals
-- Build an **iOS app** that acts as a **remote node** for Clawdis:
+- Build an **iOS app** that acts as a **remote node** for Clawdbot:
   - **Voice trigger** (wake-word / always-listening intent) that forwards transcripts to the Gateway `agent` method.
   - **Canvas** surface that the agent can control: navigate, draw/render, evaluate JS, snapshot.
 - **Dead-simple setup**:
@@ -29,8 +29,8 @@ Non-goals (v1):
 - Perfect App Store compliance; this is **internal-only** initially.
 
 ## Current repo reality (constraints we respect)
-- The Gateway WebSocket server binds to `127.0.0.1:18789` (`src/gateway/server.ts`) with an optional `CLAWDIS_GATEWAY_TOKEN`.
-- The Gateway exposes a Canvas file server (`canvasHost`) on `canvasHost.port` (default `18793`), so nodes can `canvas.navigate` to `http://<lanHost>:18793/__clawdis__/canvas/` and auto-reload on file changes (`docs/configuration.md`).
+- The Gateway WebSocket server binds to `127.0.0.1:18789` (`src/gateway/server.ts`) with an optional `CLAWDBOT_GATEWAY_TOKEN`.
+- The Gateway exposes a Canvas file server (`canvasHost`) on `canvasHost.port` (default `18793`), so nodes can `canvas.navigate` to `http://<lanHost>:18793/__clawdbot__/canvas/` and auto-reload on file changes (`docs/configuration.md`).
 - macOS “Canvas” is controlled via the Gateway node protocol (`canvas.*`), matching iOS/Android (`docs/mac/canvas.md`).
 - Voice wake forwards via `GatewayChannel` to Gateway `agent` (mac app: `VoiceWakeForwarder` → `GatewayConnection.sendAgent`).
 
@@ -50,13 +50,13 @@ Why:
 - **Next:** wrap the bridge in **TLS** and prefer key-pinned or mTLS-like auth after pairing.
 
 ### Pairing
-- Bonjour discovery shows a candidate “Clawdis Bridge” on the LAN.
+- Bonjour discovery shows a candidate “Clawdbot Bridge” on the LAN.
 - First connection:
   1) iOS generates a keypair (Secure Enclave if available).
   2) iOS connects to the bridge and requests pairing.
   3) The bridge forwards the pairing request to the **Gateway** as a *pending request*.
   4) Approval can happen via:
-     - **macOS UI** (Clawdis shows an alert with Approve/Reject/Later, including the node IP), or
+     - **macOS UI** (Clawdbot shows an alert with Approve/Reject/Later, including the node IP), or
      - **Terminal/CLI** (headless flows).
   5) Once approved, the bridge returns a token to iOS; iOS stores it in Keychain.
 - Subsequent connections:
@@ -70,14 +70,14 @@ Key idea:
 
 Desired behavior:
 - If the Swift UI is present: show alert with Approve/Reject/Later.
-- If the Swift UI is not present: `clawdis` CLI can list pending requests and approve/reject.
+- If the Swift UI is not present: `clawdbot` CLI can list pending requests and approve/reject.
 
 See `docs/gateway/pairing.md` for the API/events and storage.
 
 CLI (headless approvals):
-- `clawdis nodes pending`
-- `clawdis nodes approve <requestId>`
-- `clawdis nodes reject <requestId>`
+- `clawdbot nodes pending`
+- `clawdbot nodes approve <requestId>`
+- `clawdbot nodes reject <requestId>`
 
 ### Authorization / scope control (bridge-side ACL)
 The bridge must not be a raw proxy to every gateway method.
@@ -127,7 +127,7 @@ These are values for `node.invoke.command`:
   - `canvas.a2ui.push` with `{ messages: [...] }` (A2UI v0.8 server→client messages)
   - `canvas.a2ui.pushJSONL` with `{ jsonl: "..." }` (legacy alias)
   - `canvas.a2ui.reset`
-  - A2UI is hosted by the Gateway canvas host (`/__clawdis__/a2ui/`) on `canvasHost.port`. Commands fail if the host is unreachable.
+  - A2UI is hosted by the Gateway canvas host (`/__clawdbot__/a2ui/`) on `canvasHost.port`. Commands fail if the host is unreachable.
 
 Result pattern:
 - Request is a standard `req/res` with `ok` / `error`.
@@ -138,7 +138,7 @@ As of 2025-12-13, the Gateway supports `node.invoke` for bridge-connected nodes.
 
 Example: draw a diagonal line on the iOS Canvas:
 ```bash
-clawdis nodes invoke --node ios-node --command canvas.eval --params '{"javaScript":"(() => { const {ctx} = window.__clawdis; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
+clawdbot nodes invoke --node ios-node --command canvas.eval --params '{"javaScript":"(() => { const {ctx} = window.__clawdbot; ctx.clearRect(0,0,innerWidth,innerHeight); ctx.lineWidth=6; ctx.strokeStyle=\"#ff2d55\"; ctx.beginPath(); ctx.moveTo(40,40); ctx.lineTo(innerWidth-40, innerHeight-40); ctx.stroke(); return \"ok\"; })()"}'
 ```
 
 ### Background behavior requirement
@@ -168,9 +168,9 @@ When iOS is backgrounded:
 
 ## Code sharing (macOS + iOS)
 Create/expand SwiftPM targets so both apps share:
-- `ClawdisProtocol` (generated models; platform-neutral)
-- `ClawdisGatewayClient` (shared WS framing + connect/req/res + seq-gap handling)
-- `ClawdisKit` (node/canvas command types + deep links + shared utilities)
+- `ClawdbotProtocol` (generated models; platform-neutral)
+- `ClawdbotGatewayClient` (shared WS framing + connect/req/res + seq-gap handling)
+- `ClawdbotKit` (node/canvas command types + deep links + shared utilities)
 
 macOS continues to own:
 - local Canvas implementation details (custom scheme handler serving on-disk HTML, window/panel presentation)
@@ -187,29 +187,29 @@ Generate the Xcode project:
 ```bash
 cd apps/ios
 xcodegen generate
-open Clawdis.xcodeproj
+open Clawdbot.xcodeproj
 ```
 
 ## Storage plan (private by default)
 ### iOS
 - Canvas/workspace files (persistent, private):
-  - `Application Support/Clawdis/canvas/<sessionKey>/...`
+  - `Application Support/Clawdbot/canvas/<sessionKey>/...`
 - Snapshots / temp exports (evictable):
-  - `Library/Caches/Clawdis/canvas-snapshots/<sessionKey>/...`
+  - `Library/Caches/Clawdbot/canvas-snapshots/<sessionKey>/...`
 - Credentials:
   - Keychain (paired identity + bridge trust anchor)
 
 ### macOS
 - Keep current Canvas root (already implemented):
-  - `~/Library/Application Support/Clawdis/canvas/<session>/...`
+  - `~/Library/Application Support/Clawdbot/canvas/<session>/...`
 - Bridge state:
   - No local pairing store (pairing is gateway-owned).
   - Any local bridge-only state should remain private under Application Support.
 
 ### Gateway (node)
 - Pairing (source of truth):
-  - `~/.clawdis/nodes/paired.json`
-  - `~/.clawdis/nodes/pending.json` (or `pending/*.json` for auditability)
+  - `~/.clawdbot/nodes/paired.json`
+  - `~/.clawdbot/nodes/pending.json` (or `pending/*.json` for auditability)
 
 ## Rollout plan (phased)
 1) **Bridge discovery + pairing (mac + iOS)**

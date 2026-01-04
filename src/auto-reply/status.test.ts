@@ -74,7 +74,7 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers cached prompt tokens from the session log", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-status-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-status-"));
     const previousHome = process.env.HOME;
     process.env.HOME = dir;
     try {
@@ -83,11 +83,11 @@ describe("buildStatusMessage", () => {
         "./status.js"
       );
 
-      const storePath = path.join(dir, ".clawdis", "sessions", "sessions.json");
+      const storePath = path.join(dir, ".clawdbot", "sessions", "sessions.json");
       const sessionId = "sess-1";
       const logPath = path.join(
         dir,
-        ".clawdis",
+        ".clawdbot",
         "sessions",
         `${sessionId}.jsonl`,
       );

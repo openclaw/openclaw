@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import {
   buildGroupDisplayName,
   DEFAULT_IDLE_MINUTES,
@@ -36,7 +36,7 @@ export type SessionInitResult = {
 
 export async function initSessionState(params: {
   ctx: MsgContext;
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
 }): Promise<SessionInitResult> {
   const { ctx, cfg } = params;
   const sessionCfg = cfg.session;

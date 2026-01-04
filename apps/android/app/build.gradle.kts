@@ -6,17 +6,17 @@ plugins {
 }
 
 android {
-  namespace = "com.clawdis.android"
+  namespace = "com.clawdbot.android"
   compileSdk = 36
 
   sourceSets {
     getByName("main") {
-      assets.srcDir(file("../../shared/ClawdisKit/Sources/ClawdisKit/Resources"))
+      assets.srcDir(file("../../shared/ClawdbotKit/Sources/ClawdbotKit/Resources"))
     }
   }
 
   defaultConfig {
-    applicationId = "com.clawdis.android"
+    applicationId = "com.clawdbot.android"
     minSdk = 31
     targetSdk = 36
     versionCode = 1

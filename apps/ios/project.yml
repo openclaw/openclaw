@@ -1,36 +1,36 @@
-name: Clawdis
+name: Clawdbot
 options:
-  bundleIdPrefix: com.clawdis
+  bundleIdPrefix: com.clawdbot
   deploymentTarget:
     iOS: "17.0"
   xcodeVersion: "16.0"
 
 packages:
-  ClawdisKit:
-    path: ../shared/ClawdisKit
+  ClawdbotKit:
+    path: ../shared/ClawdbotKit
   Swabble:
     path: ../../Swabble
 
 schemes:
-  Clawdis:
+  Clawdbot:
     shared: true
     build:
       targets:
-        Clawdis: all
+        Clawdbot: all
     test:
       targets:
-        - ClawdisTests
+        - ClawdbotTests
 
 targets:
-  Clawdis:
+  Clawdbot:
     type: application
     platform: iOS
     sources:
       - path: Sources
     dependencies:
-      - package: ClawdisKit
-      - package: ClawdisKit
-        product: ClawdisChatUI
+      - package: ClawdbotKit
+      - package: ClawdbotKit
+        product: ClawdbotChatUI
       - package: Swabble
         product: SwabbleKit
       - sdk: AppIntents.framework
@@ -65,44 +65,44 @@ targets:
         CODE_SIGN_IDENTITY: "Apple Development"
         CODE_SIGN_STYLE: Manual
         DEVELOPMENT_TEAM: Y5PE65HELJ
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdis.ios
-        PROVISIONING_PROFILE_SPECIFIER: "com.clawdis.ios Development"
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios
+        PROVISIONING_PROFILE_SPECIFIER: "com.clawdbot.ios Development"
         SWIFT_VERSION: "6.0"
     info:
       path: Sources/Info.plist
       properties:
-        CFBundleDisplayName: Clawdis
+        CFBundleDisplayName: Clawdbot
         CFBundleIconName: AppIcon
         UILaunchScreen: {}
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
         UIBackgroundModes:
           - audio
-        NSLocalNetworkUsageDescription: Clawdis discovers and connects to your Clawdis bridge on the local network.
+        NSLocalNetworkUsageDescription: Clawdbot discovers and connects to your Clawdbot bridge on the local network.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoadsInWebContent: true
         NSBonjourServices:
-          - _clawdis-bridge._tcp
-        NSCameraUsageDescription: Clawdis can capture photos or short video clips when requested via the bridge.
-        NSMicrophoneUsageDescription: Clawdis needs microphone access for voice wake.
-        NSSpeechRecognitionUsageDescription: Clawdis uses on-device speech recognition for voice wake.
+          - _clawdbot-bridge._tcp
+        NSCameraUsageDescription: Clawdbot can capture photos or short video clips when requested via the bridge.
+        NSMicrophoneUsageDescription: Clawdbot needs microphone access for voice wake.
+        NSSpeechRecognitionUsageDescription: Clawdbot uses on-device speech recognition for voice wake.
 
-  ClawdisTests:
+  ClawdbotTests:
     type: bundle.unit-test
     platform: iOS
     sources:
       - path: Tests
     dependencies:
-      - target: Clawdis
+      - target: Clawdbot
       - package: Swabble
         product: SwabbleKit
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.clawdis.ios.tests
+        PRODUCT_BUNDLE_IDENTIFIER: com.clawdbot.ios.tests
         SWIFT_VERSION: "6.0"
-        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdis.app/Clawdis"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clawdbot.app/Clawdbot"
         BUNDLE_LOADER: "$(TEST_HOST)"
     info:
       path: Tests/Info.plist
       properties:
-        CFBundleDisplayName: ClawdisTests
+        CFBundleDisplayName: ClawdbotTests

@@ -26,7 +26,7 @@ Add a dedicated settings section (preferably under **Skills** or its own "Browse
   - When off: no browser is launched, and browser tools return "disabled".
 - **Browser control URL** (`default: http://127.0.0.1:18791`)
   - Interpreted as the base URL of the local/remote browser-control server.
-  - If the URL host is not loopback, Clawdis must **not** attempt to launch a local
+  - If the URL host is not loopback, Clawdbot must **not** attempt to launch a local
     browser; it only connects.
 - **CDP URL** (`default: controlUrl + 1`)
   - Base URL for Chrome DevTools Protocol (e.g. `http://127.0.0.1:18792`).
@@ -37,7 +37,7 @@ Add a dedicated settings section (preferably under **Skills** or its own "Browse
     avoid accidentally launching a local browser.
 - **Accent color** (`default: #FF4500`, "lobster-orange")
   - Used to theme the clawd browser profile (best-effort) and to tint UI indicators
-    in Clawdis.
+    in Clawdbot.
 
 Optional (advanced, can be hidden behind Debug initially):
 - **Use headless browser** (`default: off`)
@@ -48,14 +48,14 @@ Optional (advanced, can be hidden behind Debug initially):
 
 ### Port convention
 
-Clawdis already uses:
+Clawdbot already uses:
 - Gateway WebSocket: `18789`
 - Bridge (voice/node): `18790`
 
 For the clawd browser-control server, use "family" ports:
 - Browser control HTTP API: `18791` (bridge + 1)
 - Browser CDP/debugging port: `18792` (control + 1)
-- Canvas host HTTP: `18793` by default, mounted at `/__clawdis__/canvas/`
+- Canvas host HTTP: `18793` by default, mounted at `/__clawdbot__/canvas/`
 
 The user usually only configures the **control URL** (port `18791`). CDP is an
 internal detail.
@@ -65,8 +65,8 @@ internal detail.
 1) **Dedicated user data dir**
    - Never attach to or reuse the user's default Chrome profile.
    - Store clawd browser state under an app-owned directory, e.g.:
-     - `~/Library/Application Support/Clawdis/browser/clawd/` (mac app)
-     - or `~/.clawdis/browser/clawd/` (gateway/CLI)
+     - `~/Library/Application Support/Clawdbot/browser/clawd/` (mac app)
+     - or `~/.clawdbot/browser/clawd/` (gateway/CLI)
 
 2) **Dedicated ports**
    - Never use `9222` (reserved for ad-hoc dev workflows; avoids colliding with
@@ -79,7 +79,7 @@ internal detail.
 
 ## Browser selection (macOS + Linux)
 
-On startup (when enabled + local URL), Clawdis chooses the browser executable
+On startup (when enabled + local URL), Clawdbot chooses the browser executable
 in this order:
 1) **Google Chrome Canary** (if installed)
 2) **Chromium** (if installed)
@@ -150,14 +150,14 @@ Hooks (arming):
 "Closed" means:
 - control server not reachable, or server reports no browser.
 
-Clawdis should treat "open/closed" as a health check (fast path), not by scanning
+Clawdbot should treat "open/closed" as a health check (fast path), not by scanning
 global Chrome processes (avoid false positives).
 
 ## Multi-profile support
 
-Clawdis supports multiple named browser profiles, each with:
+Clawdbot supports multiple named browser profiles, each with:
 - Dedicated CDP port (auto-allocated from 18800-18899) **or** a per-profile CDP URL
-- Persistent user data directory (`~/.clawdis/browser/<name>/user-data/`)
+- Persistent user data directory (`~/.clawdbot/browser/<name>/user-data/`)
 - Unique color for visual distinction
 
 ### Configuration
@@ -224,44 +224,44 @@ The agent should not assume tabs are ephemeral. It should:
 All commands accept `--profile <name>` to target a specific profile (default: `clawd`).
 
 Profile management:
-- `clawdis browser profiles`
-- `clawdis browser create-profile --name work`
-- `clawdis browser create-profile --name remote --cdp-url http://10.0.0.42:9222`
-- `clawdis browser delete-profile --name work`
+- `clawdbot browser profiles`
+- `clawdbot browser create-profile --name work`
+- `clawdbot browser create-profile --name remote --cdp-url http://10.0.0.42:9222`
+- `clawdbot browser delete-profile --name work`
 Basics:
-- `clawdis browser status`
-- `clawdis browser start`
-- `clawdis browser stop`
-- `clawdis browser reset-profile`
-- `clawdis browser tabs`
-- `clawdis browser open https://example.com`
-- `clawdis browser focus abcd1234`
-- `clawdis browser close abcd1234`
+- `clawdbot browser status`
+- `clawdbot browser start`
+- `clawdbot browser stop`
+- `clawdbot browser reset-profile`
+- `clawdbot browser tabs`
+- `clawdbot browser open https://example.com`
+- `clawdbot browser focus abcd1234`
+- `clawdbot browser close abcd1234`
 
 Inspection:
-- `clawdis browser screenshot`
-- `clawdis browser screenshot --full-page`
-- `clawdis browser screenshot --ref 12`
-- `clawdis browser snapshot`
-- `clawdis browser snapshot --format aria --limit 200`
+- `clawdbot browser screenshot`
+- `clawdbot browser screenshot --full-page`
+- `clawdbot browser screenshot --ref 12`
+- `clawdbot browser snapshot`
+- `clawdbot browser snapshot --format aria --limit 200`
 
 Actions:
-- `clawdis browser navigate https://example.com`
-- `clawdis browser resize 1280 720`
-- `clawdis browser click 12 --double`
-- `clawdis browser type 23 "hello" --submit`
-- `clawdis browser press Enter`
-- `clawdis browser hover 44`
-- `clawdis browser drag 10 11`
-- `clawdis browser select 9 OptionA OptionB`
-- `clawdis browser upload /tmp/file.pdf`
-- `clawdis browser fill --fields '[{\"ref\":\"1\",\"value\":\"Ada\"}]'`
-- `clawdis browser dialog --accept`
-- `clawdis browser wait --text "Done"`
-- `clawdis browser evaluate --fn '(el) => el.textContent' --ref 7`
-- `clawdis browser evaluate --fn "document.querySelector('.my-class').click()"`
-- `clawdis browser console --level error`
-- `clawdis browser pdf`
+- `clawdbot browser navigate https://example.com`
+- `clawdbot browser resize 1280 720`
+- `clawdbot browser click 12 --double`
+- `clawdbot browser type 23 "hello" --submit`
+- `clawdbot browser press Enter`
+- `clawdbot browser hover 44`
+- `clawdbot browser drag 10 11`
+- `clawdbot browser select 9 OptionA OptionB`
+- `clawdbot browser upload /tmp/file.pdf`
+- `clawdbot browser fill --fields '[{\"ref\":\"1\",\"value\":\"Ada\"}]'`
+- `clawdbot browser dialog --accept`
+- `clawdbot browser wait --text "Done"`
+- `clawdbot browser evaluate --fn '(el) => el.textContent' --ref 7`
+- `clawdbot browser evaluate --fn "document.querySelector('.my-class').click()"`
+- `clawdbot browser console --level error`
+- `clawdbot browser pdf`
 
 Notes:
 - `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.

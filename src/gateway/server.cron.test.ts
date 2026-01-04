@@ -27,7 +27,7 @@ installGatewayTestHooks();
 
 describe("gateway server cron", () => {
   test("supports cron.add and cron.list", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-cron-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
     await fs.writeFile(
@@ -70,7 +70,7 @@ describe("gateway server cron", () => {
 
   test("writes cron run history to runs/<jobId>.jsonl", async () => {
     const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-gw-cron-log-"),
+      path.join(os.tmpdir(), "clawdbot-gw-cron-log-"),
     );
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
@@ -143,7 +143,7 @@ describe("gateway server cron", () => {
 
   test("writes cron run history to per-job runs/ when store is jobs.json", async () => {
     const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-gw-cron-log-jobs-"),
+      path.join(os.tmpdir(), "clawdbot-gw-cron-log-jobs-"),
     );
     const cronDir = path.join(dir, "cron");
     testState.cronStorePath = path.join(cronDir, "jobs.json");
@@ -216,7 +216,7 @@ describe("gateway server cron", () => {
 
   test("enables cron scheduler by default and runs due jobs automatically", async () => {
     const dir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-gw-cron-default-on-"),
+      path.join(os.tmpdir(), "clawdbot-gw-cron-default-on-"),
     );
     testState.cronStorePath = path.join(dir, "cron", "jobs.json");
     testState.cronEnabled = undefined;

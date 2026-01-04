@@ -1,5 +1,5 @@
 ---
-summary: "Menu bar icon states and animations for Clawdis on macOS"
+summary: "Menu bar icon states and animations for Clawdbot on macOS"
 read_when:
   - Changing menu bar icon behavior
 ---

@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Clawdis</string>
+	<string>Clawdbot</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIconName</key>
@@ -29,20 +29,20 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_clawdis-bridge._tcp</string>
+		<string>_clawdbot-bridge._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Clawdis can capture photos or short video clips when requested via the bridge.</string>
+	<string>Clawdbot can capture photos or short video clips when requested via the bridge.</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Clawdis discovers and connects to your Clawdis bridge on the local network.</string>
+	<string>Clawdbot discovers and connects to your Clawdbot bridge on the local network.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Clawdis uses your location when you allow location sharing.</string>
+	<string>Clawdbot uses your location when you allow location sharing.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>Clawdis can share your location in the background when you enable Always.</string>
+	<string>Clawdbot can share your location in the background when you enable Always.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Clawdis needs microphone access for voice wake.</string>
+	<string>Clawdbot needs microphone access for voice wake.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>Clawdis uses on-device speech recognition for voice wake.</string>
+	<string>Clawdbot uses on-device speech recognition for voice wake.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

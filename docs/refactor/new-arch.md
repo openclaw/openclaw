@@ -12,12 +12,12 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 ---
 
 ## Phase 0 — Foundations
-- **Naming**: CLI subcommand `clawdis gateway`; internal namespace `Gateway`.
+- **Naming**: CLI subcommand `clawdbot gateway`; internal namespace `Gateway`.
 - **Protocol folder**: create `protocol/` for schemas and build artifacts. ✅ `src/gateway/protocol`.
 - **Schema tooling**:
   - Prefer **TypeBox** (or ArkType) as source-of-truth types. ✅ TypeBox in `schema.ts`.
   - `pnpm protocol:gen`: emits JSON Schema (`dist/protocol.schema.json`). ✅
-  - `pnpm protocol:gen:swift`: generates Swift `Codable` models (`apps/macos/Sources/ClawdisProtocol/GatewayModels.swift`). ✅
+  - `pnpm protocol:gen:swift`: generates Swift `Codable` models (`apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`). ✅
   - AJV compile step for server validators. ✅
 - **CI**: add a job that fails if schema or generated Swift is stale. ✅ `pnpm protocol:check` (runs gen + git diff).
 
@@ -32,7 +32,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
   - `close` (standard WS close codes; policy uses 1008 for slow consumer/unauthorized, 1012/1001 for restart)
 - Payload types:
   - `PresenceEntry {host, ip, version, platform?, deviceFamily?, modelIdentifier?, mode, lastInputSeconds?, ts, reason?, tags?[], instanceId?}`
-  - `HealthSnapshot` (match existing `clawdis health --json` fields)
+  - `HealthSnapshot` (match existing `clawdbot health --json` fields)
   - `AgentEvent` (streamed tool/output; `{runId, seq, stream, data, ts}`)
   - `TickEvent {ts}`
   - `ShutdownEvent {reason, restartExpectedMs?}`
@@ -77,7 +77,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 - Dedupe cache: bound TTL (~5m) and max size (~1000 entries); evict oldest first (LRU) to prevent memory growth.
 
 ## Phase 3 — Gateway CLI entrypoint
-- Add `clawdis gateway` command in CLI program:
+- Add `clawdbot gateway` command in CLI program:
   - Reads config (port, WS options).
   - Foreground process; exit non-zero on fatal errors.
   - Flags: `--port`, `--no-tick` (optional), `--log-json` (optional).
@@ -124,7 +124,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
   - Include `policy` in `hello-ok` so clients know the tick interval and buffer limits to tune their expectations.
 
 ## Phase 8 — Cleanup and deprecation
-- Retire `clawdis rpc` as default path; keep only if explicitly requested (documented as legacy).
+- Retire `clawdbot rpc` as default path; keep only if explicitly requested (documented as legacy).
 - Remove reliance on `src/infra/control-channel.ts` for new clients; mark as legacy or delete after migration. ✅ file removed; mac app now uses Gateway WS.
 - Update README, docs (`architecture.md`, `gateway.md`, `webchat.md`) to final shapes; remove `control-api.md` references if obsolete.
 - Presence hygiene:
@@ -152,7 +152,7 @@ Goal: replace legacy gateway/stdin/TCP control with a single WebSocket Gateway, 
 
 ## Phase 10 — Rollout
 - Version bump; release notes: breaking change to control plane (WS only).
-- Ship launchd/systemd templates for `clawdis gateway`.
+- Ship launchd/systemd templates for `clawdbot gateway`.
 - Recommend Tailscale/SSH tunnel for remote access; no additional auth layer assumed in this model.
 
 ---

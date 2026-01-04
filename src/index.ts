@@ -19,7 +19,7 @@ import {
 import { ensureBinary } from "./infra/binaries.js";
 import { normalizeEnv } from "./infra/env.js";
 import { isMainModule } from "./infra/is-main.js";
-import { ensureClawdisCliOnPath } from "./infra/path-env.js";
+import { ensureClawdbotCliOnPath } from "./infra/path-env.js";
 import {
   describePortOwner,
   ensurePortAvailable,
@@ -34,7 +34,7 @@ import { assertProvider, normalizeE164, toWhatsappJid } from "./utils.js";
 
 dotenv.config({ quiet: true });
 normalizeEnv();
-ensureClawdisCliOnPath();
+ensureClawdbotCliOnPath();
 
 // Capture all console output into structured logs while keeping stdout/stderr behavior.
 enableConsoleCapture();
@@ -80,7 +80,7 @@ if (isMain) {
   // These log the error and exit gracefully instead of crashing without trace.
   process.on("unhandledRejection", (reason, _promise) => {
     console.error(
-      "[clawdis] Unhandled promise rejection:",
+      "[clawdbot] Unhandled promise rejection:",
       reason instanceof Error ? (reason.stack ?? reason.message) : reason,
     );
     process.exit(1);
@@ -88,7 +88,7 @@ if (isMain) {
 
   process.on("uncaughtException", (error) => {
     console.error(
-      "[clawdis] Uncaught exception:",
+      "[clawdbot] Uncaught exception:",
       error.stack ?? error.message,
     );
     process.exit(1);
@@ -96,7 +96,7 @@ if (isMain) {
 
   void program.parseAsync(process.argv).catch((err) => {
     console.error(
-      "[clawdis] CLI failed:",
+      "[clawdbot] CLI failed:",
       err instanceof Error ? (err.stack ?? err.message) : err,
     );
     process.exit(1);

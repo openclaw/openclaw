@@ -6,7 +6,7 @@ read_when:
 ---
 # Bonjour / mDNS discovery
 
-Clawdis uses Bonjour (mDNS / DNS-SD) as a **LAN-only convenience** to discover a running Gateway bridge transport. It is best-effort and does **not** replace SSH or Tailnet-based connectivity.
+Clawdbot uses Bonjour (mDNS / DNS-SD) as a **LAN-only convenience** to discover a running Gateway bridge transport. It is best-effort and does **not** replace SSH or Tailnet-based connectivity.
 
 ## Wide-Area Bonjour (Unicast DNS-SD) over Tailscale
 
@@ -15,19 +15,19 @@ If you want iOS node auto-discovery while the Gateway is on another network (e.g
 High level:
 
 1) Run a DNS server on the gateway host (reachable via tailnet IP).
-2) Publish DNS-SD records for `_clawdis-bridge._tcp` in a dedicated zone (example: `clawdis.internal.`).
-3) Configure Tailscale **split DNS** so `clawdis.internal` resolves via that DNS server for clients (including iOS).
+2) Publish DNS-SD records for `_clawdbot-bridge._tcp` in a dedicated zone (example: `clawdbot.internal.`).
+3) Configure Tailscale **split DNS** so `clawdbot.internal` resolves via that DNS server for clients (including iOS).
 
-Clawdis standardizes on the discovery domain `clawdis.internal.` for this mode. iOS/Android nodes browse both `local.` and `clawdis.internal.` automatically (no per-device knob).
+Clawdbot standardizes on the discovery domain `clawdbot.internal.` for this mode. iOS/Android nodes browse both `local.` and `clawdbot.internal.` automatically (no per-device knob).
 
 ### Gateway config (recommended)
 
-On the gateway host (the machine running the Gateway bridge), add to `~/.clawdis/clawdis.json` (JSON5):
+On the gateway host (the machine running the Gateway bridge), add to `~/.clawdbot/clawdbot.json` (JSON5):
 
 ```json5
 {
   bridge: { bind: "tailnet" }, // tailnet-only (recommended)
-  discovery: { wideArea: { enabled: true } } // enables clawdis.internal DNS-SD publishing
+  discovery: { wideArea: { enabled: true } } // enables clawdbot.internal DNS-SD publishing
 }
 ```
 
@@ -36,20 +36,20 @@ On the gateway host (the machine running the Gateway bridge), add to `~/.clawdis
 On the gateway host (macOS), run:
 
 ```bash
-clawdis dns setup --apply
+clawdbot dns setup --apply
 ```
 
 This installs CoreDNS and configures it to:
 - listen on port 53 **only** on the gateway’s Tailscale interface IPs
-- serve the zone `clawdis.internal.` from the gateway-owned zone file `~/.clawdis/dns/clawdis.internal.db`
+- serve the zone `clawdbot.internal.` from the gateway-owned zone file `~/.clawdbot/dns/clawdbot.internal.db`
 
 The Gateway writes/updates that zone file when `discovery.wideArea.enabled` is true.
 
 Validate from any tailnet-connected machine:
 
 ```bash
-dns-sd -B _clawdis-bridge._tcp clawdis.internal.
-dig @<TAILNET_IPV4> -p 53 _clawdis-bridge._tcp.clawdis.internal PTR +short
+dns-sd -B _clawdbot-bridge._tcp clawdbot.internal.
+dig @<TAILNET_IPV4> -p 53 _clawdbot-bridge._tcp.clawdbot.internal PTR +short
 ```
 
 ### Tailscale DNS settings
@@ -57,9 +57,9 @@ dig @<TAILNET_IPV4> -p 53 _clawdis-bridge._tcp.clawdis.internal PTR +short
 In the Tailscale admin console:
 
 - Add a nameserver pointing at the gateway’s tailnet IP (UDP/TCP 53).
-- Add split DNS so the domain `clawdis.internal` uses that nameserver.
+- Add split DNS so the domain `clawdbot.internal` uses that nameserver.
 
-Once clients accept tailnet DNS, iOS nodes can browse `_clawdis-bridge._tcp` in `clawdis.internal.` without multicast.
+Once clients accept tailnet DNS, iOS nodes can browse `_clawdbot-bridge._tcp` in `clawdbot.internal.` without multicast.
 Wide-area beacons also include `tailnetDns` (when available) so the macOS app can auto-fill SSH targets off-LAN.
 
 ### Bridge listener security (recommended)
@@ -68,21 +68,21 @@ The bridge port (default `18790`) is a plain TCP service. By default it binds to
 
 For a tailnet-only setup, bind it to the Tailscale IP instead:
 
-- Set `bridge.bind: "tailnet"` in `~/.clawdis/clawdis.json`.
+- Set `bridge.bind: "tailnet"` in `~/.clawdbot/clawdbot.json`.
 - Restart the Gateway (or restart the macOS menubar app via `./scripts/restart-mac.sh` on that machine).
 
 This keeps the bridge reachable only from devices on your tailnet (while still listening on loopback for local/SSH port-forwards).
 
 ## What advertises
 
-Only the **Node Gateway** (`clawd` / `clawdis gateway`) advertises Bonjour beacons.
+Only the **Node Gateway** (`clawd` / `clawdbot gateway`) advertises Bonjour beacons.
 
 - Implementation: `src/infra/bonjour.ts`
 - Gateway wiring: `src/gateway/server.ts`
 
 ## Service types
 
-- `_clawdis-bridge._tcp` — bridge transport beacon (used by macOS/iOS/Android nodes).
+- `_clawdbot-bridge._tcp` — bridge transport beacon (used by macOS/iOS/Android nodes).
 
 ## TXT keys (non-secret hints)
 
@@ -93,8 +93,8 @@ The Gateway advertises small non-secret hints to make UI flows convenient:
 - `sshPort=<port>` (defaults to 22 when not overridden)
 - `gatewayPort=<port>` (informational; the Gateway WS is typically loopback-only)
 - `bridgePort=<port>` (only when bridge is enabled)
-- `canvasPort=<port>` (only when the canvas host is enabled + reachable; default `18793`; serves `/__clawdis__/canvas/`)
-- `cliPath=<path>` (optional; absolute path to a runnable `clawdis` entrypoint or binary)
+- `canvasPort=<port>` (only when the canvas host is enabled + reachable; default `18793`; serves `/__clawdbot__/canvas/`)
+- `cliPath=<path>` (optional; absolute path to a runnable `clawdbot` entrypoint or binary)
 - `tailnetDns=<magicdns>` (optional hint; auto-detected from Tailscale when available; may be absent)
 
 ## Debugging on macOS
@@ -102,9 +102,9 @@ The Gateway advertises small non-secret hints to make UI flows convenient:
 Useful built-in tools:
 
 - Browse instances:
-  - `dns-sd -B _clawdis-bridge._tcp local.`
+  - `dns-sd -B _clawdbot-bridge._tcp local.`
 - Resolve one instance (replace `<instance>`):
-  - `dns-sd -L "<instance>" _clawdis-bridge._tcp local.`
+  - `dns-sd -L "<instance>" _clawdbot-bridge._tcp local.`
 
 If browsing shows instances but resolving fails, you’re usually hitting a LAN policy / multicast issue.
 
@@ -120,7 +120,7 @@ Look for `bonjour:` lines, especially:
 
 ## Debugging on iOS node
 
-The iOS node app discovers bridges via `NWBrowser` browsing `_clawdis-bridge._tcp`.
+The iOS node app discovers bridges via `NWBrowser` browsing `_clawdbot-bridge._tcp`.
 
 To capture what the browser is doing:
 
@@ -142,16 +142,16 @@ The log includes browser state transitions (`ready`, `waiting`, `failed`, `cance
 Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\\DDD` sequences (e.g. spaces become `\\032`).
 
 - This is normal at the protocol level.
-- UIs should decode for display (iOS uses `BonjourEscapes.decode` in `apps/shared/ClawdisKit`).
+- UIs should decode for display (iOS uses `BonjourEscapes.decode` in `apps/shared/ClawdbotKit`).
 
 ## Disabling / configuration
 
-- `CLAWDIS_DISABLE_BONJOUR=1` disables advertising.
-- `CLAWDIS_BRIDGE_ENABLED=0` disables the bridge listener (and therefore the bridge beacon).
-- `bridge.bind` / `bridge.port` in `~/.clawdis/clawdis.json` control bridge bind/port (preferred).
-- `CLAWDIS_BRIDGE_HOST` / `CLAWDIS_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
-- `CLAWDIS_SSH_PORT` overrides the SSH port advertised in `_clawdis-bridge._tcp`.
-- `CLAWDIS_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in `_clawdis-bridge._tcp`. If unset, the gateway auto-detects Tailscale and publishes the MagicDNS name when possible.
+- `CLAWDBOT_DISABLE_BONJOUR=1` disables advertising.
+- `CLAWDBOT_BRIDGE_ENABLED=0` disables the bridge listener (and therefore the bridge beacon).
+- `bridge.bind` / `bridge.port` in `~/.clawdbot/clawdbot.json` control bridge bind/port (preferred).
+- `CLAWDBOT_BRIDGE_HOST` / `CLAWDBOT_BRIDGE_PORT` still work as a back-compat override when `bridge.bind` / `bridge.port` are not set.
+- `CLAWDBOT_SSH_PORT` overrides the SSH port advertised in `_clawdbot-bridge._tcp`.
+- `CLAWDBOT_TAILNET_DNS` publishes a `tailnetDns` hint (MagicDNS) in `_clawdbot-bridge._tcp`. If unset, the gateway auto-detects Tailscale and publishes the MagicDNS name when possible.
 
 ## Related docs
 

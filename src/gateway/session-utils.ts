@@ -8,7 +8,7 @@ import {
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { type ClawdisConfig, loadConfig } from "../config/config.js";
+import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import {
   buildGroupDisplayName,
   loadSessionStore,
@@ -97,7 +97,7 @@ export function resolveSessionTranscriptCandidates(
     candidates.push(path.join(dir, `${sessionId}.jsonl`));
   }
   candidates.push(
-    path.join(os.homedir(), ".clawdis", "sessions", `${sessionId}.jsonl`),
+    path.join(os.homedir(), ".clawdbot", "sessions", `${sessionId}.jsonl`),
   );
   return candidates;
 }
@@ -180,7 +180,7 @@ export function parseGroupKey(
 }
 
 export function getSessionDefaults(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
 ): GatewaySessionsDefaults {
   const resolved = resolveConfiguredModelRef({
     cfg,
@@ -198,7 +198,7 @@ export function getSessionDefaults(
 }
 
 export function resolveSessionModelRef(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   entry?: SessionEntry,
 ): { provider: string; model: string } {
   const resolved = resolveConfiguredModelRef({
@@ -217,7 +217,7 @@ export function resolveSessionModelRef(
 }
 
 export function listSessionsFromStore(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   storePath: string;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;

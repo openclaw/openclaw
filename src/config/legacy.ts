@@ -15,17 +15,17 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "allowFrom"],
     message:
-      "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdis doctor` to migrate).",
+      "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["routing", "groupChat", "requireMention"],
     message:
-      'routing.groupChat.requireMention was removed; use whatsapp/telegram/imessage groups defaults (e.g. whatsapp.groups."*".requireMention) instead (run `clawdis doctor` to migrate).',
+      'routing.groupChat.requireMention was removed; use whatsapp/telegram/imessage groups defaults (e.g. whatsapp.groups."*".requireMention) instead (run `clawdbot doctor` to migrate).',
   },
   {
     path: ["telegram", "requireMention"],
     message:
-      'telegram.requireMention was removed; use telegram.groups."*".requireMention instead (run `clawdis doctor` to migrate).',
+      'telegram.requireMention was removed; use telegram.groups."*".requireMention instead (run `clawdbot doctor` to migrate).',
   },
 ];
 

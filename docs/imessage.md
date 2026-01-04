@@ -9,13 +9,13 @@ read_when:
 Status: external CLI integration. No daemon.
 
 ## Model
-- Clawdis spawns `imsg rpc` as a child process.
+- Clawdbot spawns `imsg rpc` as a child process.
 - JSON-RPC runs over stdin/stdout (one JSON object per line).
 - Gateway owns the process; no TCP port needed.
 
 ## Requirements
 - macOS with Messages signed in.
-- Full Disk Access for Clawdis + the `imsg` binary (Messages DB access).
+- Full Disk Access for Clawdbot + the `imsg` binary (Messages DB access).
 - Automation permission for Messages when sending.
 
 ## Config
@@ -59,5 +59,5 @@ imsg chats --limit 20
 - Replies go back to the same `chat_id` (group or direct).
 
 ## Troubleshooting
-- `clawdis gateway call providers.status --params '{"probe":true}'`
+- `clawdbot gateway call providers.status --params '{"probe":true}'`
 - Verify `imsg` is on PATH and has access to Messages DB.

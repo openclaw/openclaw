@@ -45,7 +45,7 @@ export async function callGateway<T = unknown>(
       ? typeof remote?.token === "string" && remote.token.trim().length > 0
         ? remote.token.trim()
         : undefined
-      : process.env.CLAWDIS_GATEWAY_TOKEN?.trim() ||
+      : process.env.CLAWDBOT_GATEWAY_TOKEN?.trim() ||
         (typeof authToken === "string" && authToken.trim().length > 0
           ? authToken.trim()
           : undefined));
@@ -53,7 +53,7 @@ export async function callGateway<T = unknown>(
     (typeof opts.password === "string" && opts.password.trim().length > 0
       ? opts.password.trim()
       : undefined) ||
-    process.env.CLAWDIS_GATEWAY_PASSWORD?.trim() ||
+    process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
     (typeof remote?.password === "string" && remote.password.trim().length > 0
       ? remote.password.trim()
       : undefined);
