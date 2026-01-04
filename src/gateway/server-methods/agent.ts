@@ -1,22 +1,22 @@
 import { randomUUID } from "node:crypto";
 
 import { agentCommand } from "../../commands/agent.js";
+import { loadConfig } from "../../config/config.js";
+import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeE164 } from "../../utils.js";
-import { loadConfig } from "../../config/config.js";
-import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { normalizeE164 } from "../../utils.js";
 import {
+  type AgentWaitParams,
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateAgentParams,
   validateAgentWaitParams,
-  type AgentWaitParams,
 } from "../protocol/index.js";
-import { formatForLog } from "../ws-log.js";
 import { loadSessionEntry } from "../session-utils.js";
+import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -67,7 +67,8 @@ export const agentHandlers: GatewayRequestHandlers = {
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
 
     if (requestedSessionKey) {
-      const { cfg, storePath, store, entry } = loadSessionEntry(requestedSessionKey);
+      const { cfg, storePath, store, entry } =
+        loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
@@ -132,13 +133,17 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const lastChannel = sessionEntry?.lastChannel;
     const lastTo =
-      typeof sessionEntry?.lastTo === "string" ? sessionEntry.lastTo.trim() : "";
+      typeof sessionEntry?.lastTo === "string"
+        ? sessionEntry.lastTo.trim()
+        : "";
 
     const resolvedChannel = (() => {
       if (requestedChannel === "last") {
         // WebChat is not a deliverable surface. Treat it as "unset" for routing,
         // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        return lastChannel && lastChannel !== "webchat" ? lastChannel : "whatsapp";
+        return lastChannel && lastChannel !== "webchat"
+          ? lastChannel
+          : "whatsapp";
       }
       if (
         requestedChannel === "whatsapp" ||
@@ -150,7 +155,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       ) {
         return requestedChannel;
       }
-      return lastChannel && lastChannel !== "webchat" ? lastChannel : "whatsapp";
+      return lastChannel && lastChannel !== "webchat"
+        ? lastChannel
+        : "whatsapp";
     })();
 
     const resolvedTo = (() => {

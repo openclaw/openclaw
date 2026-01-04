@@ -1,8 +1,8 @@
-import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   readCronRunLogEntries,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
+import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -102,7 +102,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       id: string;
       patch: Record<string, unknown>;
     };
-    const job = await context.cron.update(p.id, p.patch as unknown as CronJobPatch);
+    const job = await context.cron.update(
+      p.id,
+      p.patch as unknown as CronJobPatch,
+    );
     respond(true, job, undefined);
   },
   "cron.remove": async ({ params, respond, context }) => {

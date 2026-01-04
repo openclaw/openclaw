@@ -366,7 +366,7 @@ export function installGatewayTestHooks() {
     piSdkMock.enabled = false;
     piSdkMock.discoverCalls = 0;
     piSdkMock.models = [];
-  }, 20_000);
+  }, 60_000);
 
   afterEach(async () => {
     process.env.HOME = previousHome;

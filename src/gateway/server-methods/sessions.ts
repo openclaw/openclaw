@@ -423,22 +423,35 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const { storePath, store, entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
     if (!sessionId) {
-      respond(true, { ok: true, key, compacted: false, reason: "no sessionId" }, undefined);
+      respond(
+        true,
+        { ok: true, key, compacted: false, reason: "no sessionId" },
+        undefined,
+      );
       return;
     }
 
-    const filePath = resolveSessionTranscriptCandidates(sessionId, storePath).find(
-      (candidate) => fs.existsSync(candidate),
-    );
+    const filePath = resolveSessionTranscriptCandidates(
+      sessionId,
+      storePath,
+    ).find((candidate) => fs.existsSync(candidate));
     if (!filePath) {
-      respond(true, { ok: true, key, compacted: false, reason: "no transcript" }, undefined);
+      respond(
+        true,
+        { ok: true, key, compacted: false, reason: "no transcript" },
+        undefined,
+      );
       return;
     }
 
     const raw = fs.readFileSync(filePath, "utf-8");
     const lines = raw.split(/\r?\n/).filter((l) => l.trim().length > 0);
     if (lines.length <= maxLines) {
-      respond(true, { ok: true, key, compacted: false, kept: lines.length }, undefined);
+      respond(
+        true,
+        { ok: true, key, compacted: false, kept: lines.length },
+        undefined,
+      );
       return;
     }
 

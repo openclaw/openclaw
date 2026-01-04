@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { agentCommand } from "../../commands/agent.js";
-import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { buildMessageWithAttachments } from "../chat-attachments.js";
 import {
   ErrorCodes,
   errorShape,
@@ -21,7 +22,6 @@ import {
   resolveSessionModelRef,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { buildMessageWithAttachments } from "../chat-attachments.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const chatHandlers: GatewayRequestHandlers = {
@@ -49,7 +49,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
     const max = Math.min(hardMax, requested);
-    const sliced = rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
+    const sliced =
+      rawMessages.length > max ? rawMessages.slice(-max) : rawMessages;
     const capped = capArrayByJsonBytes(
       sliced,
       MAX_CHAT_HISTORY_MESSAGES_BYTES,
@@ -102,7 +103,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "runId does not match sessionKey"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "runId does not match sessionKey",
+        ),
       );
       return;
     }
@@ -123,8 +127,18 @@ export const chatHandlers: GatewayRequestHandlers = {
     context.bridgeSendToSession(sessionKey, "chat", payload);
     respond(true, { ok: true, aborted: true });
   },
-  "chat.send": async ({ params, respond, context, client, isWebchatConnect }) => {
-    if (client && isWebchatConnect(client.connect) && !context.hasConnectedMobileNode()) {
+  "chat.send": async ({
+    params,
+    respond,
+    context,
+    client,
+    isWebchatConnect,
+  }) => {
+    if (
+      client &&
+      isWebchatConnect(client.connect) &&
+      !context.hasConnectedMobileNode()
+    ) {
       respond(
         false,
         undefined,
@@ -220,7 +234,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "send blocked by session policy"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "send blocked by session policy",
+        ),
       );
       return;
     }

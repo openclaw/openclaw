@@ -23,7 +23,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
       const models = await context.loadGatewayModelCatalog();
       respond(true, { models }, undefined);
     } catch (err) {
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+      );
     }
   },
 };

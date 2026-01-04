@@ -1,12 +1,16 @@
+import type { ClawdisConfig } from "../../config/config.js";
+import {
+  loadConfig,
+  readConfigFileSnapshot,
+  writeConfigFile,
+} from "../../config/config.js";
 import { type DiscordProbe, probeDiscord } from "../../discord/probe.js";
 import { type IMessageProbe, probeIMessage } from "../../imessage/probe.js";
-import type { ClawdisConfig } from "../../config/config.js";
-import { loadConfig, readConfigFileSnapshot, writeConfigFile } from "../../config/config.js";
 import { webAuthExists } from "../../providers/web/index.js";
-import { getWebAuthAgeMs, readWebSelfId } from "../../web/session.js";
 import { probeSignal, type SignalProbe } from "../../signal/probe.js";
 import { probeTelegram, type TelegramProbe } from "../../telegram/probe.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
+import { getWebAuthAgeMs, readWebSelfId } from "../../web/session.js";
 import {
   ErrorCodes,
   errorShape,
@@ -35,7 +39,8 @@ export const providersHandlers: GatewayRequestHandlers = {
       typeof timeoutMsRaw === "number" ? Math.max(1000, timeoutMsRaw) : 10_000;
     const cfg = loadConfig();
     const telegramCfg = cfg.telegram;
-    const telegramEnabled = Boolean(telegramCfg) && telegramCfg?.enabled !== false;
+    const telegramEnabled =
+      Boolean(telegramCfg) && telegramCfg?.enabled !== false;
     const { token: telegramToken, source: tokenSource } = telegramEnabled
       ? resolveTelegramToken(cfg)
       : { token: "", source: "none" as const };
@@ -55,9 +60,7 @@ export const providersHandlers: GatewayRequestHandlers = {
     const discordEnvToken = discordEnabled
       ? process.env.DISCORD_BOT_TOKEN?.trim()
       : "";
-    const discordConfigToken = discordEnabled
-      ? discordCfg?.token?.trim()
-      : "";
+    const discordConfigToken = discordEnabled ? discordCfg?.token?.trim() : "";
     const discordToken = discordEnvToken || discordConfigToken || "";
     const discordTokenSource = discordEnvToken
       ? "env"
@@ -203,7 +206,11 @@ export const providersHandlers: GatewayRequestHandlers = {
         delete nextCfg.telegram;
       }
       await writeConfigFile(nextCfg);
-      respond(true, { cleared: hadToken, envToken: Boolean(envToken) }, undefined);
+      respond(
+        true,
+        { cleared: hadToken, envToken: Boolean(envToken) },
+        undefined,
+      );
     } catch (err) {
       respond(
         false,

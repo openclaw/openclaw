@@ -54,7 +54,9 @@ function ensureAgentJobListener() {
         ? (evt.data.endedAt as number)
         : undefined;
     const error =
-      typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      typeof evt.data?.error === "string"
+        ? (evt.data.error as string)
+        : undefined;
     agentRunStarts.delete(evt.runId);
     recordAgentJobSnapshot({
       runId: evt.runId,
@@ -115,7 +117,9 @@ export async function waitForAgentJob(params: {
           ? (evt.data.endedAt as number)
           : undefined;
       const error =
-        typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+        typeof evt.data?.error === "string"
+          ? (evt.data.error as string)
+          : undefined;
       const snapshot: AgentJobSnapshot = {
         runId: evt.runId,
         state: state === "error" ? "error" : "done",

@@ -244,7 +244,11 @@ export const nodeHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      respond(true, { nodeId: updated.nodeId, displayName: updated.displayName }, undefined);
+      respond(
+        true,
+        { nodeId: updated.nodeId, displayName: updated.displayName },
+        undefined,
+      );
     } catch (err) {
       respond(
         false,
@@ -449,7 +453,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
 
     try {
       const paramsJSON =
-        "params" in p && p.params !== undefined ? JSON.stringify(p.params) : null;
+        "params" in p && p.params !== undefined
+          ? JSON.stringify(p.params)
+          : null;
       const res = await context.bridge.invoke({
         nodeId,
         command,

@@ -129,7 +129,7 @@ describe("sessions tools", () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let historyCallCount = 0;
+    let _historyCallCount = 0;
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -165,7 +165,7 @@ describe("sessions tools", () => {
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        historyCallCount += 1;
+        _historyCallCount += 1;
         const text =
           (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
@@ -193,9 +193,7 @@ describe("sessions tools", () => {
     const tool = createClawdisTools({
       agentSessionKey: requesterKey,
       agentSurface: "discord",
-    }).find(
-      (candidate) => candidate.name === "sessions_send",
-    );
+    }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_send tool");
 
@@ -236,8 +234,9 @@ describe("sessions tools", () => {
         (call) =>
           typeof (call.params as { extraSystemPrompt?: string })
             ?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt?.includes("Agent-to-agent message context"),
+          (
+            call.params as { extraSystemPrompt?: string }
+          )?.extraSystemPrompt?.includes("Agent-to-agent message context"),
       ),
     ).toBe(true);
     expect(
@@ -245,8 +244,9 @@ describe("sessions tools", () => {
         (call) =>
           typeof (call.params as { extraSystemPrompt?: string })
             ?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
+          (
+            call.params as { extraSystemPrompt?: string }
+          )?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
       ),
     ).toBe(true);
     expect(
@@ -254,8 +254,9 @@ describe("sessions tools", () => {
         (call) =>
           typeof (call.params as { extraSystemPrompt?: string })
             ?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })
-            ?.extraSystemPrompt?.includes("Agent-to-agent announce step"),
+          (
+            call.params as { extraSystemPrompt?: string }
+          )?.extraSystemPrompt?.includes("Agent-to-agent announce step"),
       ),
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
@@ -285,7 +286,11 @@ describe("sessions tools", () => {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
         const params = request.params as
-          | { message?: string; sessionKey?: string; extraSystemPrompt?: string }
+          | {
+              message?: string;
+              sessionKey?: string;
+              extraSystemPrompt?: string;
+            }
           | undefined;
         let reply = "initial";
         if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
@@ -359,8 +364,9 @@ describe("sessions tools", () => {
         call.method === "agent" &&
         typeof (call.params as { extraSystemPrompt?: string })
           ?.extraSystemPrompt === "string" &&
-        (call.params as { extraSystemPrompt?: string })
-          ?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
+        (
+          call.params as { extraSystemPrompt?: string }
+        )?.extraSystemPrompt?.includes("Agent-to-agent reply step"),
     );
     expect(replySteps).toHaveLength(2);
     expect(sendParams).toMatchObject({

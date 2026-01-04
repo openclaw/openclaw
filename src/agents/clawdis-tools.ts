@@ -2784,7 +2784,9 @@ function buildAgentToAgentReplyContext(params: {
       ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) surface: ${params.targetChannel}.` : undefined,
+    params.targetChannel
+      ? `Agent 2 (target) surface: ${params.targetChannel}.`
+      : undefined,
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
   return lines.join("\n");
@@ -2808,7 +2810,9 @@ function buildAgentToAgentAnnounceContext(params: {
       ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Agent 2 (target) surface: ${params.targetChannel}.` : undefined,
+    params.targetChannel
+      ? `Agent 2 (target) surface: ${params.targetChannel}.`
+      : undefined,
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`
@@ -2892,34 +2896,35 @@ function createSessionsSendTool(opts?: {
       const requesterSurface = opts?.agentSurface;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
-      const resolveAnnounceTarget = async (): Promise<AnnounceTarget | null> => {
-        const parsed = resolveAnnounceTargetFromKey(resolvedKey);
-        if (parsed) return parsed;
-        try {
-          const list = (await callGateway({
-            method: "sessions.list",
-            params: {
-              includeGlobal: true,
-              includeUnknown: true,
-              limit: 200,
-            },
-          })) as { sessions?: Array<Record<string, unknown>> };
-          const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-          const match =
-            sessions.find((entry) => entry?.key === resolvedKey) ??
-            sessions.find((entry) => entry?.key === displayKey);
-          const channel =
-            typeof match?.lastChannel === "string"
-              ? match.lastChannel
-              : undefined;
-          const to =
-            typeof match?.lastTo === "string" ? match.lastTo : undefined;
-          if (channel && to) return { channel, to };
-        } catch {
-          // ignore; fall through to null
-        }
-        return null;
-      };
+      const resolveAnnounceTarget =
+        async (): Promise<AnnounceTarget | null> => {
+          const parsed = resolveAnnounceTargetFromKey(resolvedKey);
+          if (parsed) return parsed;
+          try {
+            const list = (await callGateway({
+              method: "sessions.list",
+              params: {
+                includeGlobal: true,
+                includeUnknown: true,
+                limit: 200,
+              },
+            })) as { sessions?: Array<Record<string, unknown>> };
+            const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+            const match =
+              sessions.find((entry) => entry?.key === resolvedKey) ??
+              sessions.find((entry) => entry?.key === displayKey);
+            const channel =
+              typeof match?.lastChannel === "string"
+                ? match.lastChannel
+                : undefined;
+            const to =
+              typeof match?.lastTo === "string" ? match.lastTo : undefined;
+            if (channel && to) return { channel, to };
+          } catch {
+            // ignore; fall through to null
+          }
+          return null;
+        };
 
       const readLatestAssistantReply = async (
         sessionKeyToRead: string,

@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
-
-import { WizardSession } from "../../wizard/session.js";
 import { defaultRuntime } from "../../runtime.js";
+import { WizardSession } from "../../wizard/session.js";
 import {
   ErrorCodes,
   errorShape,
@@ -39,7 +38,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
     const sessionId = randomUUID();
     const opts = {
       mode: params.mode as "local" | "remote" | undefined,
-      workspace: typeof params.workspace === "string" ? params.workspace : undefined,
+      workspace:
+        typeof params.workspace === "string" ? params.workspace : undefined,
     };
     const session = new WizardSession((prompter) =>
       context.wizardRunner(opts, defaultRuntime, prompter),
