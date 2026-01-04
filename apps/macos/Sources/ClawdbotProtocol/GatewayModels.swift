@@ -3,14 +3,14 @@ import Foundation
 
 public let GATEWAY_PROTOCOL_VERSION = 2
 
-public enum ErrorCode: String, Codable {
+public enum ErrorCode: String, Codable, Sendable {
     case notLinked = "NOT_LINKED"
     case agentTimeout = "AGENT_TIMEOUT"
     case invalidRequest = "INVALID_REQUEST"
     case unavailable = "UNAVAILABLE"
 }
 
-public struct ConnectParams: Codable {
+public struct ConnectParams: Codable, Sendable {
     public let minprotocol: Int
     public let maxprotocol: Int
     public let client: [String: AnyCodable]
@@ -47,7 +47,7 @@ public struct ConnectParams: Codable {
     }
 }
 
-public struct HelloOk: Codable {
+public struct HelloOk: Codable, Sendable {
     public let type: String
     public let _protocol: Int
     public let server: [String: AnyCodable]
@@ -84,7 +84,7 @@ public struct HelloOk: Codable {
     }
 }
 
-public struct RequestFrame: Codable {
+public struct RequestFrame: Codable, Sendable {
     public let type: String
     public let id: String
     public let method: String
@@ -109,7 +109,7 @@ public struct RequestFrame: Codable {
     }
 }
 
-public struct ResponseFrame: Codable {
+public struct ResponseFrame: Codable, Sendable {
     public let type: String
     public let id: String
     public let ok: Bool
@@ -138,7 +138,7 @@ public struct ResponseFrame: Codable {
     }
 }
 
-public struct EventFrame: Codable {
+public struct EventFrame: Codable, Sendable {
     public let type: String
     public let event: String
     public let payload: AnyCodable?
@@ -167,7 +167,7 @@ public struct EventFrame: Codable {
     }
 }
 
-public struct PresenceEntry: Codable {
+public struct PresenceEntry: Codable, Sendable {
     public let host: String?
     public let ip: String?
     public let version: String?
@@ -228,7 +228,7 @@ public struct PresenceEntry: Codable {
     }
 }
 
-public struct StateVersion: Codable {
+public struct StateVersion: Codable, Sendable {
     public let presence: Int
     public let health: Int
 
@@ -245,7 +245,7 @@ public struct StateVersion: Codable {
     }
 }
 
-public struct Snapshot: Codable {
+public struct Snapshot: Codable, Sendable {
     public let presence: [PresenceEntry]
     public let health: AnyCodable
     public let stateversion: StateVersion
@@ -278,7 +278,7 @@ public struct Snapshot: Codable {
     }
 }
 
-public struct ErrorShape: Codable {
+public struct ErrorShape: Codable, Sendable {
     public let code: String
     public let message: String
     public let details: AnyCodable?
@@ -307,7 +307,7 @@ public struct ErrorShape: Codable {
     }
 }
 
-public struct AgentEvent: Codable {
+public struct AgentEvent: Codable, Sendable {
     public let runid: String
     public let seq: Int
     public let stream: String
@@ -336,7 +336,7 @@ public struct AgentEvent: Codable {
     }
 }
 
-public struct SendParams: Codable {
+public struct SendParams: Codable, Sendable {
     public let to: String
     public let message: String
     public let mediaurl: String?
@@ -369,7 +369,7 @@ public struct SendParams: Codable {
     }
 }
 
-public struct AgentParams: Codable {
+public struct AgentParams: Codable, Sendable {
     public let message: String
     public let to: String?
     public let sessionid: String?
@@ -422,7 +422,7 @@ public struct AgentParams: Codable {
     }
 }
 
-public struct AgentWaitParams: Codable {
+public struct AgentWaitParams: Codable, Sendable {
     public let runid: String
     public let afterms: Int?
     public let timeoutms: Int?
@@ -443,7 +443,7 @@ public struct AgentWaitParams: Codable {
     }
 }
 
-public struct WakeParams: Codable {
+public struct WakeParams: Codable, Sendable {
     public let mode: AnyCodable
     public let text: String
 
@@ -460,7 +460,7 @@ public struct WakeParams: Codable {
     }
 }
 
-public struct NodePairRequestParams: Codable {
+public struct NodePairRequestParams: Codable, Sendable {
     public let nodeid: String
     public let displayname: String?
     public let platform: String?
@@ -509,10 +509,10 @@ public struct NodePairRequestParams: Codable {
     }
 }
 
-public struct NodePairListParams: Codable {
+public struct NodePairListParams: Codable, Sendable {
 }
 
-public struct NodePairApproveParams: Codable {
+public struct NodePairApproveParams: Codable, Sendable {
     public let requestid: String
 
     public init(
@@ -525,7 +525,7 @@ public struct NodePairApproveParams: Codable {
     }
 }
 
-public struct NodePairRejectParams: Codable {
+public struct NodePairRejectParams: Codable, Sendable {
     public let requestid: String
 
     public init(
@@ -538,7 +538,7 @@ public struct NodePairRejectParams: Codable {
     }
 }
 
-public struct NodePairVerifyParams: Codable {
+public struct NodePairVerifyParams: Codable, Sendable {
     public let nodeid: String
     public let token: String
 
@@ -555,7 +555,7 @@ public struct NodePairVerifyParams: Codable {
     }
 }
 
-public struct NodeRenameParams: Codable {
+public struct NodeRenameParams: Codable, Sendable {
     public let nodeid: String
     public let displayname: String
 
@@ -572,10 +572,10 @@ public struct NodeRenameParams: Codable {
     }
 }
 
-public struct NodeListParams: Codable {
+public struct NodeListParams: Codable, Sendable {
 }
 
-public struct NodeDescribeParams: Codable {
+public struct NodeDescribeParams: Codable, Sendable {
     public let nodeid: String
 
     public init(
@@ -588,7 +588,7 @@ public struct NodeDescribeParams: Codable {
     }
 }
 
-public struct NodeInvokeParams: Codable {
+public struct NodeInvokeParams: Codable, Sendable {
     public let nodeid: String
     public let command: String
     public let params: AnyCodable?
@@ -617,7 +617,7 @@ public struct NodeInvokeParams: Codable {
     }
 }
 
-public struct SessionsListParams: Codable {
+public struct SessionsListParams: Codable, Sendable {
     public let limit: Int?
     public let activeminutes: Int?
     public let includeglobal: Bool?
@@ -642,7 +642,7 @@ public struct SessionsListParams: Codable {
     }
 }
 
-public struct SessionsPatchParams: Codable {
+public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
@@ -679,7 +679,7 @@ public struct SessionsPatchParams: Codable {
     }
 }
 
-public struct SessionsResetParams: Codable {
+public struct SessionsResetParams: Codable, Sendable {
     public let key: String
 
     public init(
@@ -692,7 +692,7 @@ public struct SessionsResetParams: Codable {
     }
 }
 
-public struct SessionsDeleteParams: Codable {
+public struct SessionsDeleteParams: Codable, Sendable {
     public let key: String
     public let deletetranscript: Bool?
 
@@ -709,7 +709,7 @@ public struct SessionsDeleteParams: Codable {
     }
 }
 
-public struct SessionsCompactParams: Codable {
+public struct SessionsCompactParams: Codable, Sendable {
     public let key: String
     public let maxlines: Int?
 
@@ -726,10 +726,10 @@ public struct SessionsCompactParams: Codable {
     }
 }
 
-public struct ConfigGetParams: Codable {
+public struct ConfigGetParams: Codable, Sendable {
 }
 
-public struct ConfigSetParams: Codable {
+public struct ConfigSetParams: Codable, Sendable {
     public let raw: String
 
     public init(
@@ -742,10 +742,10 @@ public struct ConfigSetParams: Codable {
     }
 }
 
-public struct ConfigSchemaParams: Codable {
+public struct ConfigSchemaParams: Codable, Sendable {
 }
 
-public struct ConfigSchemaResponse: Codable {
+public struct ConfigSchemaResponse: Codable, Sendable {
     public let schema: AnyCodable
     public let uihints: [String: AnyCodable]
     public let version: String
@@ -770,7 +770,7 @@ public struct ConfigSchemaResponse: Codable {
     }
 }
 
-public struct WizardStartParams: Codable {
+public struct WizardStartParams: Codable, Sendable {
     public let mode: AnyCodable?
     public let workspace: String?
 
@@ -787,7 +787,7 @@ public struct WizardStartParams: Codable {
     }
 }
 
-public struct WizardNextParams: Codable {
+public struct WizardNextParams: Codable, Sendable {
     public let sessionid: String
     public let answer: [String: AnyCodable]?
 
@@ -804,7 +804,7 @@ public struct WizardNextParams: Codable {
     }
 }
 
-public struct WizardCancelParams: Codable {
+public struct WizardCancelParams: Codable, Sendable {
     public let sessionid: String
 
     public init(
@@ -817,7 +817,7 @@ public struct WizardCancelParams: Codable {
     }
 }
 
-public struct WizardStatusParams: Codable {
+public struct WizardStatusParams: Codable, Sendable {
     public let sessionid: String
 
     public init(
@@ -830,7 +830,7 @@ public struct WizardStatusParams: Codable {
     }
 }
 
-public struct WizardStep: Codable {
+public struct WizardStep: Codable, Sendable {
     public let id: String
     public let type: AnyCodable
     public let title: String?
@@ -875,7 +875,7 @@ public struct WizardStep: Codable {
     }
 }
 
-public struct WizardNextResult: Codable {
+public struct WizardNextResult: Codable, Sendable {
     public let done: Bool
     public let step: [String: AnyCodable]?
     public let status: AnyCodable?
@@ -900,7 +900,7 @@ public struct WizardNextResult: Codable {
     }
 }
 
-public struct WizardStartResult: Codable {
+public struct WizardStartResult: Codable, Sendable {
     public let sessionid: String
     public let done: Bool
     public let step: [String: AnyCodable]?
@@ -929,7 +929,7 @@ public struct WizardStartResult: Codable {
     }
 }
 
-public struct WizardStatusResult: Codable {
+public struct WizardStatusResult: Codable, Sendable {
     public let status: AnyCodable
     public let error: String?
 
@@ -946,7 +946,7 @@ public struct WizardStatusResult: Codable {
     }
 }
 
-public struct TalkModeParams: Codable {
+public struct TalkModeParams: Codable, Sendable {
     public let enabled: Bool
     public let phase: String?
 
@@ -963,7 +963,7 @@ public struct TalkModeParams: Codable {
     }
 }
 
-public struct ProvidersStatusParams: Codable {
+public struct ProvidersStatusParams: Codable, Sendable {
     public let probe: Bool?
     public let timeoutms: Int?
 
@@ -980,7 +980,7 @@ public struct ProvidersStatusParams: Codable {
     }
 }
 
-public struct WebLoginStartParams: Codable {
+public struct WebLoginStartParams: Codable, Sendable {
     public let force: Bool?
     public let timeoutms: Int?
     public let verbose: Bool?
@@ -1001,7 +1001,7 @@ public struct WebLoginStartParams: Codable {
     }
 }
 
-public struct WebLoginWaitParams: Codable {
+public struct WebLoginWaitParams: Codable, Sendable {
     public let timeoutms: Int?
 
     public init(
@@ -1014,7 +1014,7 @@ public struct WebLoginWaitParams: Codable {
     }
 }
 
-public struct ModelChoice: Codable {
+public struct ModelChoice: Codable, Sendable {
     public let id: String
     public let name: String
     public let provider: String
@@ -1043,10 +1043,10 @@ public struct ModelChoice: Codable {
     }
 }
 
-public struct ModelsListParams: Codable {
+public struct ModelsListParams: Codable, Sendable {
 }
 
-public struct ModelsListResult: Codable {
+public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
 
     public init(
@@ -1059,10 +1059,10 @@ public struct ModelsListResult: Codable {
     }
 }
 
-public struct SkillsStatusParams: Codable {
+public struct SkillsStatusParams: Codable, Sendable {
 }
 
-public struct SkillsInstallParams: Codable {
+public struct SkillsInstallParams: Codable, Sendable {
     public let name: String
     public let installid: String
     public let timeoutms: Int?
@@ -1083,7 +1083,7 @@ public struct SkillsInstallParams: Codable {
     }
 }
 
-public struct SkillsUpdateParams: Codable {
+public struct SkillsUpdateParams: Codable, Sendable {
     public let skillkey: String
     public let enabled: Bool?
     public let apikey: String?
@@ -1108,7 +1108,7 @@ public struct SkillsUpdateParams: Codable {
     }
 }
 
-public struct CronJob: Codable {
+public struct CronJob: Codable, Sendable {
     public let id: String
     public let name: String
     public let description: String?
@@ -1165,7 +1165,7 @@ public struct CronJob: Codable {
     }
 }
 
-public struct CronListParams: Codable {
+public struct CronListParams: Codable, Sendable {
     public let includedisabled: Bool?
 
     public init(
@@ -1178,10 +1178,10 @@ public struct CronListParams: Codable {
     }
 }
 
-public struct CronStatusParams: Codable {
+public struct CronStatusParams: Codable, Sendable {
 }
 
-public struct CronAddParams: Codable {
+public struct CronAddParams: Codable, Sendable {
     public let name: String
     public let description: String?
     public let enabled: Bool?
@@ -1222,7 +1222,7 @@ public struct CronAddParams: Codable {
     }
 }
 
-public struct CronUpdateParams: Codable {
+public struct CronUpdateParams: Codable, Sendable {
     public let id: String
     public let patch: [String: AnyCodable]
 
@@ -1239,7 +1239,7 @@ public struct CronUpdateParams: Codable {
     }
 }
 
-public struct CronRemoveParams: Codable {
+public struct CronRemoveParams: Codable, Sendable {
     public let id: String
 
     public init(
@@ -1252,7 +1252,7 @@ public struct CronRemoveParams: Codable {
     }
 }
 
-public struct CronRunParams: Codable {
+public struct CronRunParams: Codable, Sendable {
     public let id: String
     public let mode: AnyCodable?
 
@@ -1269,7 +1269,7 @@ public struct CronRunParams: Codable {
     }
 }
 
-public struct CronRunsParams: Codable {
+public struct CronRunsParams: Codable, Sendable {
     public let id: String
     public let limit: Int?
 
@@ -1286,7 +1286,7 @@ public struct CronRunsParams: Codable {
     }
 }
 
-public struct CronRunLogEntry: Codable {
+public struct CronRunLogEntry: Codable, Sendable {
     public let ts: Int
     public let jobid: String
     public let action: String
@@ -1331,7 +1331,7 @@ public struct CronRunLogEntry: Codable {
     }
 }
 
-public struct ChatHistoryParams: Codable {
+public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let limit: Int?
 
@@ -1348,7 +1348,7 @@ public struct ChatHistoryParams: Codable {
     }
 }
 
-public struct ChatSendParams: Codable {
+public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
     public let message: String
     public let thinking: String?
@@ -1385,7 +1385,7 @@ public struct ChatSendParams: Codable {
     }
 }
 
-public struct ChatAbortParams: Codable {
+public struct ChatAbortParams: Codable, Sendable {
     public let sessionkey: String
     public let runid: String
 
@@ -1402,7 +1402,7 @@ public struct ChatAbortParams: Codable {
     }
 }
 
-public struct ChatEvent: Codable {
+public struct ChatEvent: Codable, Sendable {
     public let runid: String
     public let sessionkey: String
     public let seq: Int
@@ -1443,7 +1443,7 @@ public struct ChatEvent: Codable {
     }
 }
 
-public struct TickEvent: Codable {
+public struct TickEvent: Codable, Sendable {
     public let ts: Int
 
     public init(
@@ -1456,7 +1456,7 @@ public struct TickEvent: Codable {
     }
 }
 
-public struct ShutdownEvent: Codable {
+public struct ShutdownEvent: Codable, Sendable {
     public let reason: String
     public let restartexpectedms: Int?
 
@@ -1473,7 +1473,7 @@ public struct ShutdownEvent: Codable {
     }
 }
 
-public enum GatewayFrame: Codable {
+public enum GatewayFrame: Codable, Sendable {
     case req(RequestFrame)
     case res(ResponseFrame)
     case event(EventFrame)
