@@ -9,7 +9,10 @@ import {
   startBrowserBridgeServer,
   stopBrowserBridgeServer,
 } from "../browser/bridge-server.js";
-import type { ResolvedBrowserConfig } from "../browser/config.js";
+import {
+  type ResolvedBrowserConfig,
+  resolveProfile,
+} from "../browser/config.js";
 import { DEFAULT_CLAWD_BROWSER_COLOR } from "../browser/constants.js";
 import type { ClawdisConfig } from "../config/config.js";
 import { STATE_DIR_CLAWDIS } from "../config/config.js";
@@ -508,21 +511,23 @@ function buildSandboxBrowserResolvedConfig(params: {
   const controlHost = "127.0.0.1";
   const controlUrl = `http://${controlHost}:${params.controlPort}`;
   const cdpHost = "127.0.0.1";
-  const cdpUrl = `http://${cdpHost}:${params.cdpPort}`;
   return {
     enabled: true,
     controlUrl,
     controlHost,
     controlPort: params.controlPort,
-    cdpUrl,
+    cdpProtocol: "http",
     cdpHost,
-    cdpPort: params.cdpPort,
     cdpIsLoopback: true,
     color: DEFAULT_CLAWD_BROWSER_COLOR,
     executablePath: undefined,
     headless: params.headless,
     noSandbox: false,
     attachOnly: true,
+    defaultProfile: "clawd",
+    profiles: {
+      clawd: { cdpPort: params.cdpPort, color: DEFAULT_CLAWD_BROWSER_COLOR },
+    },
   };
 }
 
@@ -600,10 +605,13 @@ async function ensureSandboxBrowser(params: {
       : null;
 
   const existing = BROWSER_BRIDGES.get(params.sessionKey);
+  const existingProfile = existing
+    ? resolveProfile(existing.bridge.state.resolved, "clawd")
+    : null;
   const shouldReuse =
     existing &&
     existing.containerName === containerName &&
-    existing.bridge.state.resolved.cdpPort === mappedCdp;
+    existingProfile?.cdpPort === mappedCdp;
   if (existing && !shouldReuse) {
     await stopBrowserBridgeServer(existing.bridge.server).catch(
       () => undefined,

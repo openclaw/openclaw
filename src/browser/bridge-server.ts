@@ -30,16 +30,12 @@ export async function startBrowserBridgeServer(params: {
   const state: BrowserServerState = {
     server: null as unknown as Server,
     port,
-    cdpPort: params.resolved.cdpPort,
-    running: null,
     resolved: params.resolved,
+    profiles: new Map(),
   };
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
-    setRunning: (running) => {
-      state.running = running;
-    },
   });
   registerBrowserRoutes(app, ctx);
 

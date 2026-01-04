@@ -24,6 +24,7 @@ export function registerBrowserInspectCommands(
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserScreenshotAction(baseUrl, {
           targetId: targetId?.trim() || undefined,
@@ -31,6 +32,7 @@ export function registerBrowserInspectCommands(
           ref: opts.ref?.trim() || undefined,
           element: opts.element?.trim() || undefined,
           type: opts.type === "jpeg" ? "jpeg" : "png",
+          profile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -57,12 +59,14 @@ export function registerBrowserInspectCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       const format = opts.format === "aria" ? "aria" : "ai";
       try {
         const result = await browserSnapshot(baseUrl, {
           format,
           targetId: opts.targetId?.trim() || undefined,
           limit: Number.isFinite(opts.limit) ? opts.limit : undefined,
+          profile,
         });
 
         if (opts.out) {

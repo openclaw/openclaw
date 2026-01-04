@@ -64,10 +64,12 @@ export function registerBrowserActionInputCommands(
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserNavigate(baseUrl, {
           url,
           targetId: opts.targetId?.trim() || undefined,
+          profile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -89,6 +91,7 @@ export function registerBrowserActionInputCommands(
     .action(async (width: number, height: number, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       if (!Number.isFinite(width) || !Number.isFinite(height)) {
         defaultRuntime.error(danger("width and height must be numbers"));
         defaultRuntime.exit(1);
@@ -100,7 +103,7 @@ export function registerBrowserActionInputCommands(
           width,
           height,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -123,6 +126,7 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       const refValue = typeof ref === "string" ? ref.trim() : "";
       if (!refValue) {
         defaultRuntime.error(danger("ref is required"));
@@ -143,7 +147,7 @@ export function registerBrowserActionInputCommands(
           doubleClick: Boolean(opts.double),
           button: opts.button?.trim() || undefined,
           modifiers,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -167,6 +171,7 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       const refValue = typeof ref === "string" ? ref.trim() : "";
       if (!refValue) {
         defaultRuntime.error(danger("ref is required"));
@@ -181,7 +186,7 @@ export function registerBrowserActionInputCommands(
           submit: Boolean(opts.submit),
           slowly: Boolean(opts.slowly),
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -201,12 +206,13 @@ export function registerBrowserActionInputCommands(
     .action(async (key: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserAct(baseUrl, {
           kind: "press",
           key,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -226,12 +232,13 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserAct(baseUrl, {
           kind: "hover",
           ref,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -252,13 +259,14 @@ export function registerBrowserActionInputCommands(
     .action(async (startRef: string, endRef: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserAct(baseUrl, {
           kind: "drag",
           startRef,
           endRef,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -279,13 +287,14 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string, values: string[], opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserAct(baseUrl, {
           kind: "select",
           ref,
           values,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -313,6 +322,7 @@ export function registerBrowserActionInputCommands(
     .action(async (paths: string[], opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserArmFileChooser(baseUrl, {
           paths,
@@ -323,6 +333,7 @@ export function registerBrowserActionInputCommands(
           timeoutMs: Number.isFinite(opts.timeoutMs)
             ? opts.timeoutMs
             : undefined,
+          profile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -344,6 +355,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const fields = await readFields({
           fields: opts.fields,
@@ -353,7 +365,7 @@ export function registerBrowserActionInputCommands(
           kind: "fill",
           fields,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -380,6 +392,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
         defaultRuntime.error(danger("Specify --accept or --dismiss"));
@@ -394,6 +407,7 @@ export function registerBrowserActionInputCommands(
           timeoutMs: Number.isFinite(opts.timeoutMs)
             ? opts.timeoutMs
             : undefined,
+          profile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -416,6 +430,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserAct(baseUrl, {
           kind: "wait",
@@ -423,7 +438,7 @@ export function registerBrowserActionInputCommands(
           text: opts.text?.trim() || undefined,
           textGone: opts.textGone?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
@@ -444,6 +459,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       if (!opts.fn) {
         defaultRuntime.error(danger("Missing --fn"));
         defaultRuntime.exit(1);
@@ -455,7 +471,7 @@ export function registerBrowserActionInputCommands(
           fn: opts.fn,
           ref: opts.ref?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
-        });
+        }, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;

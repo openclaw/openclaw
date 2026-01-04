@@ -5,6 +5,7 @@ import { resolveBrowserConfig } from "./config.js";
 export type BrowserStatus = {
   enabled: boolean;
   controlUrl: string;
+  profile?: string;
   running: boolean;
   cdpReady?: boolean;
   cdpHttp?: boolean;
@@ -20,6 +21,17 @@ export type BrowserStatus = {
   attachOnly: boolean;
 };
 
+export type ProfileStatus = {
+  name: string;
+  cdpPort: number;
+  cdpUrl: string;
+  color: string;
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+};
+
 export type BrowserResetProfileResult = {
   ok: true;
   moved: boolean;
@@ -31,6 +43,7 @@ export type BrowserTab = {
   targetId: string;
   title: string;
   url: string;
+  wsUrl?: string;
   type?: string;
 };
 
@@ -67,21 +80,47 @@ export function resolveBrowserControlUrl(overrideUrl?: string) {
   return url.replace(/\/$/, "");
 }
 
-export async function browserStatus(baseUrl: string): Promise<BrowserStatus> {
-  return await fetchBrowserJson<BrowserStatus>(`${baseUrl}/`, {
+function buildProfileQuery(profile?: string): string {
+  return profile ? `?profile=${encodeURIComponent(profile)}` : "";
+}
+
+export async function browserStatus(
+  baseUrl: string,
+  opts?: { profile?: string },
+): Promise<BrowserStatus> {
+  const q = buildProfileQuery(opts?.profile);
+  return await fetchBrowserJson<BrowserStatus>(`${baseUrl}/${q}`, {
     timeoutMs: 1500,
   });
 }
 
-export async function browserStart(baseUrl: string): Promise<void> {
-  await fetchBrowserJson(`${baseUrl}/start`, {
+export async function browserProfiles(
+  baseUrl: string,
+): Promise<ProfileStatus[]> {
+  const res = await fetchBrowserJson<{ profiles: ProfileStatus[] }>(
+    `${baseUrl}/profiles`,
+    { timeoutMs: 3000 },
+  );
+  return res.profiles ?? [];
+}
+
+export async function browserStart(
+  baseUrl: string,
+  opts?: { profile?: string },
+): Promise<void> {
+  const q = buildProfileQuery(opts?.profile);
+  await fetchBrowserJson(`${baseUrl}/start${q}`, {
     method: "POST",
     timeoutMs: 15000,
   });
 }
 
-export async function browserStop(baseUrl: string): Promise<void> {
-  await fetchBrowserJson(`${baseUrl}/stop`, {
+export async function browserStop(
+  baseUrl: string,
+  opts?: { profile?: string },
+): Promise<void> {
+  const q = buildProfileQuery(opts?.profile);
+  await fetchBrowserJson(`${baseUrl}/stop${q}`, {
     method: "POST",
     timeoutMs: 15000,
   });
@@ -89,9 +128,11 @@ export async function browserStop(baseUrl: string): Promise<void> {
 
 export async function browserResetProfile(
   baseUrl: string,
+  opts?: { profile?: string },
 ): Promise<BrowserResetProfileResult> {
+  const q = buildProfileQuery(opts?.profile);
   return await fetchBrowserJson<BrowserResetProfileResult>(
-    `${baseUrl}/reset-profile`,
+    `${baseUrl}/reset-profile${q}`,
     {
       method: "POST",
       timeoutMs: 20000,
@@ -99,9 +140,60 @@ export async function browserResetProfile(
   );
 }
 
-export async function browserTabs(baseUrl: string): Promise<BrowserTab[]> {
+export type BrowserCreateProfileResult = {
+  ok: true;
+  profile: string;
+  cdpPort: number;
+  cdpUrl: string;
+  color: string;
+  isRemote: boolean;
+};
+
+export async function browserCreateProfile(
+  baseUrl: string,
+  opts: { name: string; color?: string; cdpUrl?: string },
+): Promise<BrowserCreateProfileResult> {
+  return await fetchBrowserJson<BrowserCreateProfileResult>(
+    `${baseUrl}/profiles/create`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: opts.name,
+        color: opts.color,
+        cdpUrl: opts.cdpUrl,
+      }),
+      timeoutMs: 10000,
+    },
+  );
+}
+
+export type BrowserDeleteProfileResult = {
+  ok: true;
+  profile: string;
+  deleted: boolean;
+};
+
+export async function browserDeleteProfile(
+  baseUrl: string,
+  profile: string,
+): Promise<BrowserDeleteProfileResult> {
+  return await fetchBrowserJson<BrowserDeleteProfileResult>(
+    `${baseUrl}/profiles/${encodeURIComponent(profile)}`,
+    {
+      method: "DELETE",
+      timeoutMs: 20000,
+    },
+  );
+}
+
+export async function browserTabs(
+  baseUrl: string,
+  opts?: { profile?: string },
+): Promise<BrowserTab[]> {
+  const q = buildProfileQuery(opts?.profile);
   const res = await fetchBrowserJson<{ running: boolean; tabs: BrowserTab[] }>(
-    `${baseUrl}/tabs`,
+    `${baseUrl}/tabs${q}`,
     { timeoutMs: 3000 },
   );
   return res.tabs ?? [];
@@ -110,8 +202,10 @@ export async function browserTabs(baseUrl: string): Promise<BrowserTab[]> {
 export async function browserOpenTab(
   baseUrl: string,
   url: string,
+  opts?: { profile?: string },
 ): Promise<BrowserTab> {
-  return await fetchBrowserJson<BrowserTab>(`${baseUrl}/tabs/open`, {
+  const q = buildProfileQuery(opts?.profile);
+  return await fetchBrowserJson<BrowserTab>(`${baseUrl}/tabs/open${q}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
@@ -122,8 +216,10 @@ export async function browserOpenTab(
 export async function browserFocusTab(
   baseUrl: string,
   targetId: string,
+  opts?: { profile?: string },
 ): Promise<void> {
-  await fetchBrowserJson(`${baseUrl}/tabs/focus`, {
+  const q = buildProfileQuery(opts?.profile);
+  await fetchBrowserJson(`${baseUrl}/tabs/focus${q}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ targetId }),
@@ -134,11 +230,16 @@ export async function browserFocusTab(
 export async function browserCloseTab(
   baseUrl: string,
   targetId: string,
+  opts?: { profile?: string },
 ): Promise<void> {
-  await fetchBrowserJson(`${baseUrl}/tabs/${encodeURIComponent(targetId)}`, {
-    method: "DELETE",
-    timeoutMs: 5000,
-  });
+  const q = buildProfileQuery(opts?.profile);
+  await fetchBrowserJson(
+    `${baseUrl}/tabs/${encodeURIComponent(targetId)}${q}`,
+    {
+      method: "DELETE",
+      timeoutMs: 5000,
+    },
+  );
 }
 
 export async function browserSnapshot(
@@ -147,12 +248,14 @@ export async function browserSnapshot(
     format: "aria" | "ai";
     targetId?: string;
     limit?: number;
+    profile?: string;
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
   q.set("format", opts.format);
   if (opts.targetId) q.set("targetId", opts.targetId);
   if (typeof opts.limit === "number") q.set("limit", String(opts.limit));
+  if (opts.profile) q.set("profile", opts.profile);
   return await fetchBrowserJson<SnapshotResult>(
     `${baseUrl}/snapshot?${q.toString()}`,
     {

@@ -20,10 +20,12 @@ export function registerBrowserActionObserveCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserConsoleMessages(baseUrl, {
           level: opts.level?.trim() || undefined,
           targetId: opts.targetId?.trim() || undefined,
+          profile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
@@ -43,9 +45,11 @@ export function registerBrowserActionObserveCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         const result = await browserPdfSave(baseUrl, {
           targetId: opts.targetId?.trim() || undefined,
+          profile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));

@@ -2,8 +2,11 @@ import type { Command } from "commander";
 
 import {
   browserCloseTab,
+  browserCreateProfile,
+  browserDeleteProfile,
   browserFocusTab,
   browserOpenTab,
+  browserProfiles,
   browserResetProfile,
   browserStart,
   browserStatus,
@@ -11,7 +14,7 @@ import {
   browserTabs,
   resolveBrowserControlUrl,
 } from "../browser/client.js";
-import { browserAct } from "../browser/client-actions.js";
+import { browserAct } from "../browser/client-actions-core.js";
 import { danger, info } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
 import type { BrowserParentOpts } from "./browser-cli-shared.js";
@@ -27,13 +30,16 @@ export function registerBrowserManageCommands(
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
-        const status = await browserStatus(baseUrl);
+        const status = await browserStatus(baseUrl, {
+          profile: parent?.profile,
+        });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(status, null, 2));
           return;
         }
         defaultRuntime.log(
           [
+            `profile: ${status.profile ?? "clawd"}`,
             `enabled: ${status.enabled}`,
             `running: ${status.running}`,
             `controlUrl: ${status.controlUrl}`,
@@ -51,18 +57,22 @@ export function registerBrowserManageCommands(
 
   browser
     .command("start")
-    .description("Start the clawd browser (no-op if already running)")
+    .description("Start the browser (no-op if already running)")
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
-        await browserStart(baseUrl);
-        const status = await browserStatus(baseUrl);
+        await browserStart(baseUrl, { profile });
+        const status = await browserStatus(baseUrl, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(status, null, 2));
           return;
         }
-        defaultRuntime.log(info(`🦞 clawd browser running: ${status.running}`));
+        const name = status.profile ?? "clawd";
+        defaultRuntime.log(
+          info(`🦞 browser [${name}] running: ${status.running}`),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -71,18 +81,22 @@ export function registerBrowserManageCommands(
 
   browser
     .command("stop")
-    .description("Stop the clawd browser (best-effort)")
+    .description("Stop the browser (best-effort)")
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
-        await browserStop(baseUrl);
-        const status = await browserStatus(baseUrl);
+        await browserStop(baseUrl, { profile });
+        const status = await browserStatus(baseUrl, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(status, null, 2));
           return;
         }
-        defaultRuntime.log(info(`🦞 clawd browser running: ${status.running}`));
+        const name = status.profile ?? "clawd";
+        defaultRuntime.log(
+          info(`🦞 browser [${name}] running: ${status.running}`),
+        );
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -91,24 +105,23 @@ export function registerBrowserManageCommands(
 
   browser
     .command("reset-profile")
-    .description("Reset clawd browser profile (moves it to Trash)")
+    .description("Reset browser profile (moves it to Trash)")
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
-        const result = await browserResetProfile(baseUrl);
+        const result = await browserResetProfile(baseUrl, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(result, null, 2));
           return;
         }
         if (!result.moved) {
-          defaultRuntime.log(info("🦞 clawd browser profile already missing."));
+          defaultRuntime.log(info(`🦞 browser profile already missing.`));
           return;
         }
         const dest = result.to ?? result.from;
-        defaultRuntime.log(
-          info(`🦞 clawd browser profile moved to Trash (${dest})`),
-        );
+        defaultRuntime.log(info(`🦞 browser profile moved to Trash (${dest})`));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
@@ -121,8 +134,9 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
-        const tabs = await browserTabs(baseUrl);
+        const tabs = await browserTabs(baseUrl, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
           return;
@@ -149,11 +163,12 @@ export function registerBrowserManageCommands(
     .command("open")
     .description("Open a URL in a new tab")
     .argument("<url>", "URL to open")
-    .action(async (url: string, cmd) => {
+    .action(async (url: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
-        const tab = await browserOpenTab(baseUrl, url);
+        const tab = await browserOpenTab(baseUrl, url, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(tab, null, 2));
           return;
@@ -169,11 +184,12 @@ export function registerBrowserManageCommands(
     .command("focus")
     .description("Focus a tab by target id (or unique prefix)")
     .argument("<targetId>", "Target id or unique prefix")
-    .action(async (targetId: string, cmd) => {
+    .action(async (targetId: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
-        await browserFocusTab(baseUrl, targetId);
+        await browserFocusTab(baseUrl, targetId, { profile });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify({ ok: true }, null, 2));
           return;
@@ -189,20 +205,119 @@ export function registerBrowserManageCommands(
     .command("close")
     .description("Close a tab (target id optional)")
     .argument("[targetId]", "Target id or unique prefix (optional)")
-    .action(async (targetId: string | undefined, cmd) => {
+    .action(async (targetId: string | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.profile;
       try {
         if (targetId?.trim()) {
-          await browserCloseTab(baseUrl, targetId.trim());
+          await browserCloseTab(baseUrl, targetId.trim(), { profile });
         } else {
-          await browserAct(baseUrl, { kind: "close" });
+          await browserAct(baseUrl, { kind: "close" }, { profile });
         }
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify({ ok: true }, null, 2));
           return;
         }
         defaultRuntime.log("closed tab");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  // Profile management commands
+  browser
+    .command("profiles")
+    .description("List all browser profiles")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const profiles = await browserProfiles(baseUrl);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify({ profiles }, null, 2));
+          return;
+        }
+        if (profiles.length === 0) {
+          defaultRuntime.log("No profiles configured.");
+          return;
+        }
+        defaultRuntime.log(
+          profiles
+            .map((p) => {
+              const status = p.running ? "running" : "stopped";
+              const tabs = p.running ? ` (${p.tabCount} tabs)` : "";
+              const def = p.isDefault ? " [default]" : "";
+              const loc = p.isRemote
+                ? `cdpUrl: ${p.cdpUrl}`
+                : `port: ${p.cdpPort}`;
+              const remote = p.isRemote ? " [remote]" : "";
+              return `${p.name}: ${status}${tabs}${def}${remote}\n  ${loc}, color: ${p.color}`;
+            })
+            .join("\n"),
+        );
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("create-profile")
+    .description("Create a new browser profile")
+    .requiredOption(
+      "--name <name>",
+      "Profile name (lowercase, numbers, hyphens)",
+    )
+    .option("--color <hex>", "Profile color (hex format, e.g. #0066CC)")
+    .option("--cdp-url <url>", "CDP URL for remote Chrome (http/https)")
+    .action(
+      async (opts: { name: string; color?: string; cdpUrl?: string }, cmd) => {
+        const parent = parentOpts(cmd);
+        const baseUrl = resolveBrowserControlUrl(parent?.url);
+        try {
+          const result = await browserCreateProfile(baseUrl, {
+            name: opts.name,
+            color: opts.color,
+            cdpUrl: opts.cdpUrl,
+          });
+          if (parent?.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const loc = result.isRemote
+            ? `  cdpUrl: ${result.cdpUrl}`
+            : `  port: ${result.cdpPort}`;
+          defaultRuntime.log(
+            info(
+              `🦞 Created profile "${result.profile}"\n${loc}\n  color: ${result.color}`,
+            ),
+          );
+        } catch (err) {
+          defaultRuntime.error(danger(String(err)));
+          defaultRuntime.exit(1);
+        }
+      },
+    );
+
+  browser
+    .command("delete-profile")
+    .description("Delete a browser profile")
+    .requiredOption("--name <name>", "Profile name to delete")
+    .action(async (opts: { name: string }, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      try {
+        const result = await browserDeleteProfile(baseUrl, opts.name);
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        const msg = result.deleted
+          ? `🦞 Deleted profile "${result.profile}" (user data removed)`
+          : `🦞 Deleted profile "${result.profile}" (no user data found)`;
+        defaultRuntime.log(info(msg));
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

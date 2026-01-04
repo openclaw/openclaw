@@ -47,9 +47,23 @@ Core actions:
 - `act` (UI actions: click/type/press/hover/drag/select/fill/resize/wait/evaluate)
 - `navigate`, `console`, `pdf`, `upload`, `dialog`
 
+Profile management:
+- `profiles` — list all browser profiles with status
+- `create-profile` — create new profile with auto-allocated port (or `cdpUrl`)
+- `delete-profile` — stop browser, delete user data, remove from config (local only)
+- `reset-profile` — kill orphan process on profile's port (local only)
+
+Common parameters:
+- `controlUrl` (defaults from config)
+- `profile` (optional; defaults to `browser.defaultProfile`)
 Notes:
 - Requires `browser.enabled=true` in `~/.clawdis/clawdis.json`.
 - Uses `browser.controlUrl` unless `controlUrl` is passed explicitly.
+- All actions accept optional `profile` parameter for multi-instance support.
+- When `profile` is omitted, uses `browser.defaultProfile` (defaults to "clawd").
+- Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
+- Port range: 18800-18899 (~100 profiles max).
+- Remote profiles are attach-only (no start/stop/reset).
 - `snapshot` defaults to `ai`; use `aria` for the accessibility tree.
 - `act` requires `ref` from `snapshot --format ai`; use `evaluate` for rare CSS selector needs.
 - Avoid `act` → `wait` by default; use it only in exceptional cases (no reliable UI state to wait on).
