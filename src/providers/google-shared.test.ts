@@ -1,5 +1,8 @@
-import { convertTools } from "@mariozechner/pi-ai/dist/providers/google-shared.js";
-import type { Tool } from "@mariozechner/pi-ai/dist/types.js";
+import {
+  convertMessages,
+  convertTools,
+} from "@mariozechner/pi-ai/dist/providers/google-shared.js";
+import type { Context, Model, Tool } from "@mariozechner/pi-ai/dist/types.js";
 import { describe, expect, it } from "vitest";
 
 const asRecord = (value: unknown): Record<string, unknown> => {
@@ -9,9 +12,47 @@ const asRecord = (value: unknown): Record<string, unknown> => {
   return value as Record<string, unknown>;
 };
 
+const makeModel = (id: string): Model<"google-generative-ai"> =>
+  ({
+    id,
+    name: id,
+    api: "google-generative-ai",
+    provider: "google",
+    baseUrl: "https://example.invalid",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+  }) as Model<"google-generative-ai">;
+
 describe("google-shared convertTools", () => {
+  it("adds type:object when properties/required exist but type is missing", () => {
+    const tools = [
+      {
+        name: "noType",
+        description: "Tool with properties but no type",
+        parameters: {
+          properties: {
+            action: { type: "string" },
+          },
+          required: ["action"],
+        },
+      },
+    ] as unknown as Tool[];
+
+    const converted = convertTools(tools);
+    const params = asRecord(
+      converted?.[0]?.functionDeclarations?.[0]?.parameters,
+    );
+
+    expect(params.type).toBe("object");
+    expect(params.properties).toBeDefined();
+    expect(params.required).toEqual(["action"]);
+  });
+
   it("strips unsupported JSON Schema keywords", () => {
-    const tools: Tool[] = [
+    const tools = [
       {
         name: "example",
         description: "Example tool",
@@ -40,7 +81,7 @@ describe("google-shared convertTools", () => {
           required: ["mode"],
         },
       },
-    ];
+    ] as unknown as Tool[];
 
     const converted = convertTools(tools);
     const params = asRecord(
@@ -61,7 +102,7 @@ describe("google-shared convertTools", () => {
   });
 
   it("keeps supported schema fields", () => {
-    const tools: Tool[] = [
+    const tools = [
       {
         name: "settings",
         description: "Settings tool",
@@ -83,7 +124,7 @@ describe("google-shared convertTools", () => {
           required: ["config"],
         },
       },
-    ];
+    ] as unknown as Tool[];
 
     const converted = convertTools(tools);
     const params = asRecord(
@@ -102,5 +143,80 @@ describe("google-shared convertTools", () => {
     expect(items.type).toBe("string");
     expect(config.required).toEqual(["retries"]);
     expect(params.required).toEqual(["config"]);
+  });
+});
+
+describe("google-shared convertMessages", () => {
+  it("skips thinking blocks for Gemini to avoid mimicry", () => {
+    const model = makeModel("gemini-1.5-pro");
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "hidden",
+              thinkingSignature: "sig",
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "gemini-1.5-pro",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    expect(contents).toHaveLength(0);
+  });
+
+  it("keeps thought signatures for Claude models", () => {
+    const model = makeModel("claude-3-opus");
+    const context = {
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "thinking",
+              thinking: "structured",
+              thinkingSignature: "sig",
+            },
+          ],
+          api: "google-generative-ai",
+          provider: "google",
+          model: "claude-3-opus",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: 0,
+        },
+      ],
+    } as unknown as Context;
+
+    const contents = convertMessages(model, context);
+    const parts = contents?.[0]?.parts ?? [];
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      thought: true,
+      thoughtSignature: "sig",
+    });
   });
 });
