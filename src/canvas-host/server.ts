@@ -29,6 +29,11 @@ export type CanvasHostOpts = {
   allowInTests?: boolean;
 };
 
+export type CanvasHostServerOpts = CanvasHostOpts & {
+  handler?: CanvasHostHandler;
+  ownsHandler?: boolean;
+};
+
 export type CanvasHostServer = {
   port: number;
   rootDir: string;
@@ -255,6 +260,7 @@ export async function createCanvasHostHandler(
     debounce.unref?.();
   };
 
+  let watcherClosed = false;
   const watcher = chokidar.watch(rootReal, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
@@ -264,6 +270,12 @@ export async function createCanvasHostHandler(
     ],
   });
   watcher.on("all", () => scheduleReload());
+  watcher.on("error", (err) => {
+    if (watcherClosed) return;
+    watcherClosed = true;
+    opts.runtime.error(`canvasHost watcher error: ${String(err)}`);
+    void watcher.close().catch(() => {});
+  });
 
   const handleUpgrade = (
     req: IncomingMessage,
@@ -361,6 +373,7 @@ export async function createCanvasHostHandler(
     handleUpgrade,
     close: async () => {
       if (debounce) clearTimeout(debounce);
+      watcherClosed = true;
       await watcher.close().catch(() => {});
       await new Promise<void>((resolve) => wss.close(() => resolve()));
     },
@@ -368,18 +381,21 @@ export async function createCanvasHostHandler(
 }
 
 export async function startCanvasHost(
-  opts: CanvasHostOpts,
+  opts: CanvasHostServerOpts,
 ): Promise<CanvasHostServer> {
   if (isDisabledByEnv() && opts.allowInTests !== true) {
     return { port: 0, rootDir: "", close: async () => {} };
   }
 
-  const handler = await createCanvasHostHandler({
-    runtime: opts.runtime,
-    rootDir: opts.rootDir,
-    basePath: CANVAS_HOST_PATH,
-    allowInTests: opts.allowInTests,
-  });
+  const handler =
+    opts.handler ??
+    (await createCanvasHostHandler({
+      runtime: opts.runtime,
+      rootDir: opts.rootDir,
+      basePath: CANVAS_HOST_PATH,
+      allowInTests: opts.allowInTests,
+    }));
+  const ownsHandler = opts.ownsHandler ?? opts.handler === undefined;
 
   const bindHost = opts.listenHost?.trim() || "0.0.0.0";
   const server: Server = http.createServer((req, res) => {
@@ -430,7 +446,7 @@ export async function startCanvasHost(
     port: boundPort,
     rootDir: handler.rootDir,
     close: async () => {
-      await handler.close();
+      if (ownsHandler) await handler.close();
       await new Promise<void>((resolve, reject) =>
         server.close((err) => (err ? reject(err) : resolve())),
       );
