@@ -18,6 +18,7 @@
 
 ### Fixes
 - Doctor migrates legacy Clawdis config/service installs and normalizes sandbox Docker names.
+- Doctor checks sandbox image availability and offers to build or fall back to legacy images.
 - Presence beacons keep node lists fresh; Instances view stays accurate.
 - Block streaming/chunking reliability (Telegram/Discord ordering, fewer duplicates).
 - WhatsApp GIF playback for MP4-based GIFs.

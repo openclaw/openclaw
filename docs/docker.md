@@ -141,6 +141,21 @@ scripts/sandbox-setup.sh
 
 This builds `clawdbot-sandbox:bookworm-slim` using `Dockerfile.sandbox`.
 
+### Sandbox common image (optional)
+If you want a sandbox image with common build tooling (Node, Go, Rust, etc.), build the common image:
+
+```bash
+scripts/sandbox-common-setup.sh
+```
+
+This builds `clawdbot-sandbox-common:bookworm-slim`. To use it:
+
+```json5
+{
+  agent: { sandbox: { docker: { image: "clawdbot-sandbox-common:bookworm-slim" } } }
+}
+```
+
 ### Sandbox browser image
 
 To run the browser tool inside the sandbox, build the browser image:

@@ -12,7 +12,12 @@ read_when:
 - Runs a health check and offers to restart the gateway if it looks unhealthy.
 - Prints a skills status summary (eligible/missing/blocked).
 - Detects deprecated config keys and offers to migrate them.
+- Migrates legacy `~/.clawdis/clawdis.json` when no Clawdbot config exists.
+- Checks sandbox Docker images when sandboxing is enabled (offers to build or switch to legacy names).
 - Detects legacy Clawdis services (launchd/systemd/schtasks) and offers to migrate them.
+
+## Legacy config file migration
+If `~/.clawdis/clawdis.json` exists and `~/.clawdbot/clawdbot.json` does not, doctor will migrate the file and normalize old paths/image names.
 
 ## Legacy config migrations
 When the config contains deprecated keys, other commands will refuse to run and ask you to run `clawdbot doctor`.
