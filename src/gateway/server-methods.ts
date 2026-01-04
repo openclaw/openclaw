@@ -2930,6 +2930,7 @@ export async function handleGatewayRequest(
         thinking?: string;
         deliver?: boolean;
         channel?: string;
+        lane?: string;
         idempotencyKey: string;
         timeout?: number;
       };
@@ -3118,6 +3119,7 @@ export async function handleGatewayRequest(
           timeout: params.timeout?.toString(),
           bestEffortDeliver,
           surface: "VoiceWake",
+          lane: params.lane,
         },
         defaultRuntime,
         deps,

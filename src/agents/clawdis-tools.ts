@@ -2748,6 +2748,7 @@ function createSessionsSendTool(): AnyAgentTool {
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
+        lane: "nested",
       };
 
       if (timeoutSeconds === 0) {

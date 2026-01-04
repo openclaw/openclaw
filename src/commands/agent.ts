@@ -60,6 +60,7 @@ type AgentCommandOpts = {
   provider?: string; // delivery provider (whatsapp|telegram|...)
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
+  lane?: string;
 };
 
 type SessionResolution = {
@@ -383,6 +384,7 @@ export async function agentCommand(
       verboseLevel: resolvedVerboseLevel,
       timeoutMs,
       runId: sessionId,
+      lane: opts.lane,
       abortSignal: opts.abortSignal,
       onAgentEvent: (evt) => {
         emitAgentEvent({

@@ -183,6 +183,9 @@ describe("sessions tools", () => {
       (call) => call.method === "chat.history",
     );
     expect(agentCalls).toHaveLength(2);
+    for (const call of agentCalls) {
+      expect(call.params).toMatchObject({ lane: "nested" });
+    }
     expect(waitCalls).toHaveLength(1);
     expect(historyOnlyCalls).toHaveLength(1);
     expect(waitCalls[0]?.params).toMatchObject({ afterMs: 1234 });
