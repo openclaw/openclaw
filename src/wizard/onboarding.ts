@@ -14,7 +14,9 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
+  detectBrowserOpenSupport,
   ensureWorkspaceAndSessions,
+  formatControlUiSshHint,
   handleReset,
   openUrl,
   printWizardHeader,
@@ -522,21 +524,43 @@ export async function runOnboardingWizard(
     "Control UI",
   );
 
-  const wantsOpen = await prompter.confirm({
-    message: "Open Control UI now?",
-    initialValue: true,
-  });
-  if (wantsOpen) {
-    const links = resolveControlUiLinks({
-      bind,
-      port,
-      basePath: baseConfig.gateway?.controlUi?.basePath,
+  const browserSupport = await detectBrowserOpenSupport();
+  if (!browserSupport.ok) {
+    await prompter.note(
+      formatControlUiSshHint({
+        port,
+        basePath: baseConfig.gateway?.controlUi?.basePath,
+        token: authMode === "token" ? gatewayToken : undefined,
+      }),
+      "Open Control UI",
+    );
+  } else {
+    const wantsOpen = await prompter.confirm({
+      message: "Open Control UI now?",
+      initialValue: true,
     });
-    const tokenParam =
-      authMode === "token" && gatewayToken
-        ? `?token=${encodeURIComponent(gatewayToken)}`
-        : "";
-    await openUrl(`${links.httpUrl}${tokenParam}`);
+    if (wantsOpen) {
+      const links = resolveControlUiLinks({
+        bind,
+        port,
+        basePath: baseConfig.gateway?.controlUi?.basePath,
+      });
+      const tokenParam =
+        authMode === "token" && gatewayToken
+          ? `?token=${encodeURIComponent(gatewayToken)}`
+          : "";
+      const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
+      if (!opened) {
+        await prompter.note(
+          formatControlUiSshHint({
+            port,
+            basePath: baseConfig.gateway?.controlUi?.basePath,
+            token: authMode === "token" ? gatewayToken : undefined,
+          }),
+          "Open Control UI",
+        );
+      }
+    }
   }
 
   await prompter.outro("Onboarding complete.");

@@ -83,6 +83,7 @@ It does **not** install or change anything on the remote host.
 
 9) **Finish**
    - Summary + next steps, including iOS/Android/macOS apps for extra features.
+   - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
 
 ## Remote mode
 

@@ -83,18 +83,126 @@ export function applyWizardMetadata(
   };
 }
 
-export async function openUrl(url: string): Promise<void> {
+type BrowserOpenSupport = {
+  ok: boolean;
+  reason?: string;
+  command?: string;
+};
+
+let wslCached: boolean | null = null;
+
+async function isWSL(): Promise<boolean> {
+  if (wslCached !== null) return wslCached;
+  if (process.platform !== "linux") {
+    wslCached = false;
+    return wslCached;
+  }
+  if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
+    wslCached = true;
+    return wslCached;
+  }
+  try {
+    const release = (await fs.readFile("/proc/version", "utf8")).toLowerCase();
+    wslCached = release.includes("microsoft") || release.includes("wsl");
+  } catch {
+    wslCached = false;
+  }
+  return wslCached;
+}
+
+type BrowserOpenCommand = {
+  argv: string[] | null;
+  reason?: string;
+  command?: string;
+};
+
+async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
-  const command =
-    platform === "darwin"
-      ? ["open", url]
-      : platform === "win32"
-        ? ["cmd", "/c", "start", "", url]
-        : ["xdg-open", url];
+  const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  const isSsh =
+    Boolean(process.env.SSH_CLIENT) ||
+    Boolean(process.env.SSH_TTY) ||
+    Boolean(process.env.SSH_CONNECTION);
+
+  if (isSsh && !hasDisplay && platform !== "win32") {
+    return { argv: null, reason: "ssh-no-display" };
+  }
+
+  if (platform === "win32") {
+    return { argv: ["cmd", "/c", "start", ""], command: "cmd" };
+  }
+
+  if (platform === "darwin") {
+    const hasOpen = await detectBinary("open");
+    return hasOpen
+      ? { argv: ["open"], command: "open" }
+      : { argv: null, reason: "missing-open" };
+  }
+
+  if (platform === "linux") {
+    const wsl = await isWSL();
+    if (!hasDisplay && !wsl) {
+      return { argv: null, reason: "no-display" };
+    }
+    if (wsl) {
+      const hasWslview = await detectBinary("wslview");
+      if (hasWslview) return { argv: ["wslview"], command: "wslview" };
+      if (!hasDisplay) return { argv: null, reason: "wsl-no-wslview" };
+    }
+    const hasXdgOpen = await detectBinary("xdg-open");
+    return hasXdgOpen
+      ? { argv: ["xdg-open"], command: "xdg-open" }
+      : { argv: null, reason: "missing-xdg-open" };
+  }
+
+  return { argv: null, reason: "unsupported-platform" };
+}
+
+export async function detectBrowserOpenSupport(): Promise<BrowserOpenSupport> {
+  const resolved = await resolveBrowserOpenCommand();
+  if (!resolved.argv) return { ok: false, reason: resolved.reason };
+  return { ok: true, command: resolved.command };
+}
+
+export function formatControlUiSshHint(params: {
+  port: number;
+  basePath?: string;
+  token?: string;
+}): string {
+  const basePath = normalizeControlUiBasePath(params.basePath);
+  const uiPath = basePath ? `${basePath}/` : "/";
+  const localUrl = `http://localhost:${params.port}${uiPath}`;
+  const tokenParam = params.token ? `?token=${encodeURIComponent(params.token)}` : "";
+  const authedUrl = params.token ? `${localUrl}${tokenParam}` : undefined;
+  const sshTarget = resolveSshTargetHint();
+  return [
+    "No GUI detected. Open from your computer:",
+    `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
+    "Then open:",
+    localUrl,
+    authedUrl,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function resolveSshTargetHint(): string {
+  const user = process.env.USER || process.env.LOGNAME || "user";
+  const conn = process.env.SSH_CONNECTION?.trim().split(/\s+/);
+  const host = conn?.[2] ?? "<host>";
+  return `${user}@${host}`;
+}
+
+export async function openUrl(url: string): Promise<boolean> {
+  const resolved = await resolveBrowserOpenCommand();
+  if (!resolved.argv) return false;
+  const command = [...resolved.argv, url];
   try {
     await runCommandWithTimeout(command, { timeoutMs: 5_000 });
+    return true;
   } catch {
     // ignore; we still print the URL for manual open
+    return false;
   }
 }
 
