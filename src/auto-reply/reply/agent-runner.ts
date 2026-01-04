@@ -30,12 +30,14 @@ import {
   type QueueSettings,
   scheduleFollowupDrain,
 } from "./queue.js";
+import { extractAudioTag } from "./audio-tags.js";
 import {
   applyReplyTagsToPayload,
   applyReplyThreading,
   filterMessagingToolDuplicates,
   isRenderablePayload,
 } from "./reply-payloads.js";
+import { extractReplyToTag } from "./reply-tags.js";
 import {
   createReplyToModeFilter,
   resolveReplyToMode,
@@ -334,16 +336,18 @@ export async function runReplyAgent(params: {
                       sessionCtx.MessageSid,
                     );
                     if (!isRenderablePayload(taggedPayload)) return;
+                    const audioTagResult = extractAudioTag(taggedPayload.text);
+                    const cleaned = audioTagResult.cleaned || undefined;
                     const hasMedia =
                       Boolean(taggedPayload.mediaUrl) ||
                       (taggedPayload.mediaUrls?.length ?? 0) > 0;
-                    if (
-                      taggedPayload.text?.trim() === SILENT_REPLY_TOKEN &&
-                      !hasMedia
-                    )
+                    if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia)
                       return;
-                    const blockPayload: ReplyPayload =
-                      applyReplyToMode(taggedPayload);
+                    const blockPayload: ReplyPayload = applyReplyToMode({
+                      ...taggedPayload,
+                      text: cleaned,
+                      audioAsVoice: audioTagResult.audioAsVoice,
+                    });
                     const payloadKey = buildPayloadKey(blockPayload);
                     if (
                       streamedPayloadKeys.has(payloadKey) ||
@@ -519,7 +523,16 @@ export async function runReplyAgent(params: {
       payloads: sanitizedPayloads,
       applyReplyToMode,
       currentMessageId: sessionCtx.MessageSid,
-    });
+    })
+      .map((payload) => {
+        const audioTagResult = extractAudioTag(payload.text);
+        return {
+          ...payload,
+          text: audioTagResult.cleaned ? audioTagResult.cleaned : undefined,
+          audioAsVoice: audioTagResult.audioAsVoice,
+        };
+      })
+      .filter(isRenderablePayload);
 
     // Drop final payloads if block streaming is enabled and we already streamed
     // block replies. Tool-sent duplicates are filtered below.
