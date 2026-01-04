@@ -557,7 +557,10 @@ export function subscribeEmbeddedPiSession(params: {
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
-          if (!addedDuringMessage && text) assistantTexts.push(text);
+          if (!addedDuringMessage && text) {
+            const last = assistantTexts.at(-1);
+            if (!last || last !== text) assistantTexts.push(text);
+          }
           assistantTextBaseline = assistantTexts.length;
 
           if (

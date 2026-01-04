@@ -231,6 +231,33 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
 
+  it("does not duplicate assistantTexts when message_end repeats", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+  });
+
   it("does not append when text_end content is a prefix of deltas", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
