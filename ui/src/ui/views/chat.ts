@@ -1,6 +1,8 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 
 import type { SessionsListResult } from "../types";
+import { toSanitizedMarkdownHtml } from "../markdown";
 import { resolveToolDisplay, formatToolDetail } from "../tool-display";
 
 export type ChatProps = {
@@ -178,13 +180,19 @@ function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
   const extractedText = extractText(message);
   const contentText = typeof m.content === "string" ? m.content : null;
   const fallback = hasToolCards ? null : JSON.stringify(message, null, 2);
-  const text = !isToolResult
-    ? extractedText?.trim()
-      ? extractedText
-      : contentText?.trim()
-        ? contentText
-        : fallback
-    : null;
+
+  const display =
+    !isToolResult && extractedText?.trim()
+      ? { kind: "text" as const, value: extractedText }
+      : !isToolResult && contentText?.trim()
+        ? { kind: "text" as const, value: contentText }
+        : !isToolResult && fallback
+          ? { kind: "json" as const, value: fallback }
+          : null;
+  const markdown =
+    display?.kind === "json"
+      ? ["```json", display.value, "```"].join("\n")
+      : display?.value ?? null;
 
   const timestamp =
     typeof m.timestamp === "number" ? new Date(m.timestamp).toLocaleTimeString() : "";
@@ -194,7 +202,9 @@ function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
     <div class="chat-line ${klass}">
       <div class="chat-msg">
         <div class="chat-bubble ${opts?.streaming ? "streaming" : ""}">
-          ${text ? html`<div class="chat-text">${text}</div>` : nothing}
+          ${markdown
+            ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+            : nothing}
           ${toolCards.map((card) => renderToolCard(card))}
         </div>
         <div class="chat-stamp mono">

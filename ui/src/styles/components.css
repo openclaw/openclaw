@@ -569,10 +569,106 @@
 }
 
 .chat-text {
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
   color: var(--chat-text);
+  line-height: 1.5;
+}
+
+.chat-text :where(p, ul, ol, pre, blockquote, table) {
+  margin: 0;
+}
+
+.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote, p + table) {
+  margin-top: 0.75em;
+}
+
+.chat-text :where(ul, ol) {
+  padding-left: 1.1em;
+}
+
+.chat-text :where(li + li) {
+  margin-top: 0.25em;
+}
+
+.chat-text :where(a) {
+  color: var(--accent);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
+.chat-text :where(a:hover) {
+  text-decoration-thickness: 3px;
+}
+
+.chat-text :where(blockquote) {
+  border-left: 2px solid rgba(255, 255, 255, 0.14);
+  padding-left: 12px;
+  color: var(--muted);
+}
+
+:root[data-theme="light"] .chat-text :where(blockquote) {
+  border-left-color: rgba(16, 24, 40, 0.16);
+}
+
+.chat-text :where(hr) {
+  border: 0;
+  border-top: 1px solid var(--border);
+  opacity: 0.6;
+  margin: 0.9em 0;
+}
+
+.chat-text :where(code) {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+}
+
+.chat-text :where(:not(pre) > code) {
+  padding: 0.15em 0.35em;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme="light"] .chat-text :where(:not(pre) > code) {
+  background: rgba(16, 24, 40, 0.05);
+}
+
+.chat-text :where(pre) {
+  margin-top: 0.75em;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.22);
+  overflow: auto;
+}
+
+:root[data-theme="light"] .chat-text :where(pre) {
+  background: rgba(16, 24, 40, 0.04);
+}
+
+.chat-text :where(pre code) {
+  font-size: 12px;
+  white-space: pre;
+}
+
+.chat-text :where(table) {
+  margin-top: 0.75em;
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+
+.chat-text :where(th, td) {
+  border: 1px solid var(--border);
+  padding: 6px 8px;
+  vertical-align: top;
+}
+
+.chat-text :where(th) {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--muted);
 }
 
 .chat-tool-card {

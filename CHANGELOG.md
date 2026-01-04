@@ -13,6 +13,11 @@
 - Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
 
+## 2026.1.4-1
+
+### Fixes
+- Control UI: render Markdown in chat messages (sanitized).
+
 
 ## 2026.1.4
 
