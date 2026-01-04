@@ -391,6 +391,7 @@ export function renderApp(state: AppViewState) {
               connected: state.connected,
               canSend: state.connected,
               disabledReason: chatDisabledReason,
+              error: state.lastError,
               sessions: state.sessionsResult,
               onRefresh: () => {
                 state.resetToolStream();

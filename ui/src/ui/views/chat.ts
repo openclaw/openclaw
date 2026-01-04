@@ -15,6 +15,7 @@ export type ChatProps = {
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
+  error: string | null;
   sessions: SessionsListResult | null;
   onRefresh: () => void;
   onDraftChange: (next: string) => void;
@@ -66,6 +67,10 @@ export function renderChat(props: ChatProps) {
         ? html`<div class="callout" style="margin-top: 12px;">
             ${props.disabledReason}
           </div>`
+        : nothing}
+
+      ${props.error
+        ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
         : nothing}
 
       <div class="chat-thread" role="log" aria-live="polite">

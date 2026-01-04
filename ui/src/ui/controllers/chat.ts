@@ -41,10 +41,20 @@ export async function loadChatHistory(state: ChatState) {
   }
 }
 
-export async function sendChat(state: ChatState) {
-  if (!state.client || !state.connected) return;
+export async function sendChat(state: ChatState): Promise<boolean> {
+  if (!state.client || !state.connected) return false;
   const msg = state.chatMessage.trim();
-  if (!msg) return;
+  if (!msg) return false;
+
+  const now = Date.now();
+  state.chatMessages = [
+    ...state.chatMessages,
+    {
+      role: "user",
+      content: [{ type: "text", text: msg }],
+      timestamp: now,
+    },
+  ];
 
   state.chatSending = true;
   state.chatMessage = "";
@@ -59,11 +69,22 @@ export async function sendChat(state: ChatState) {
       deliver: false,
       idempotencyKey: runId,
     });
+    return true;
   } catch (err) {
+    const error = String(err);
     state.chatRunId = null;
     state.chatStream = null;
     state.chatMessage = msg;
-    state.lastError = String(err);
+    state.lastError = error;
+    state.chatMessages = [
+      ...state.chatMessages,
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Error: " + error }],
+        timestamp: Date.now(),
+      },
+    ];
+    return false;
   } finally {
     state.chatSending = false;
   }
