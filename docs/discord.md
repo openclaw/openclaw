@@ -35,6 +35,110 @@ Note: Discord does not provide a simple username → id lookup without extra gui
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
 Note: Guild context `[from:]` lines include `author.tag` + `id` to make ping-ready replies easy.
 
+## How to create your own bot
+
+This is the “Discord Developer Portal” setup for running Clawdbot in a server (guild) channel like `#help`.
+
+### 1) Create the Discord app + bot user
+1. Discord Developer Portal → **Applications** → **New Application**
+2. In your app:
+   - **Bot** → **Add Bot**
+   - Copy the **Bot Token** (this is what you put in `DISCORD_BOT_TOKEN`)
+
+### 2) Enable the gateway intents Clawdbot needs
+Discord blocks “privileged intents” unless you explicitly enable them.
+
+In **Bot** → **Privileged Gateway Intents**, enable:
+- **Message Content Intent** (required to read message text in most guilds; without it you’ll see “Used disallowed intents” or the bot will connect but not react to messages)
+- **Server Members Intent** (recommended; required for some member/user lookups and allowlist matching in guilds)
+
+You usually do **not** need **Presence Intent**.
+
+### 3) Generate an invite URL (OAuth2 URL Generator)
+In your app: **OAuth2** → **URL Generator**
+
+**Scopes**
+- ✅ `bot`
+- ✅ `applications.commands` (only if you want slash commands; otherwise leave unchecked)
+
+**Bot Permissions** (minimal baseline)
+- ✅ View Channels
+- ✅ Send Messages
+- ✅ Read Message History
+- ✅ Embed Links
+- ✅ Attach Files
+- ✅ Add Reactions (optional but recommended)
+- ✅ Use External Emojis / Stickers (optional; only if you want them)
+
+Avoid **Administrator** unless you’re debugging and fully trust the bot.
+
+Copy the generated URL, open it, pick your server, and install the bot.
+
+### 4) Get the ids (guild/user/channel)
+Discord uses numeric ids everywhere; Clawdbot config prefers ids.
+
+1. Discord (desktop/web) → **User Settings** → **Advanced** → enable **Developer Mode**
+2. Right-click:
+   - Server name → **Copy Server ID** (guild id)
+   - Channel (e.g. `#help`) → **Copy Channel ID**
+   - Your user → **Copy User ID**
+
+### 5) Configure Clawdbot
+
+#### Token
+Set the bot token via env var (recommended on servers):
+- `DISCORD_BOT_TOKEN=...`
+
+Or via config:
+
+```json5
+{
+  discord: {
+    enabled: true,
+    token: "YOUR_BOT_TOKEN"
+  }
+}
+```
+
+#### Allowlist + channel routing
+Example “single server, only allow me, only allow #help”:
+
+```json5
+{
+  discord: {
+    enabled: true,
+    dm: { enabled: false },
+    guilds: {
+      "YOUR_GUILD_ID": {
+        users: ["YOUR_USER_ID"],
+        requireMention: true,
+        channels: {
+          help: { allow: true, requireMention: true }
+        }
+      }
+    }
+  }
+}
+```
+
+Notes:
+- `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
+- If `channels` is present, any channel not listed is denied by default.
+
+### 6) Verify it works
+1. Start the gateway.
+2. In your server channel, send: `@Krill hello` (or whatever your bot name is).
+3. If nothing happens: check **Troubleshooting** below.
+
+### Troubleshooting
+- **“Used disallowed intents”**: enable **Message Content Intent** (and likely **Server Members Intent**) in the Developer Portal, then restart the gateway.
+- **Bot connects but never replies in a guild channel**:
+  - Missing **Message Content Intent**, or
+  - The bot lacks channel permissions (View/Send/Read History), or
+  - Your config requires mentions and you didn’t mention it, or
+  - Your guild/channel allowlist denies the channel/user.
+- **DMs don’t work**: `discord.dm.enabled` may be `false` or `discord.dm.allowFrom` doesn’t include you.
+
 ## Capabilities & limits
 - DMs and guild text channels (threads are treated as separate channels; voice not supported).
 - Typing indicators sent best-effort; message chunking honors Discord’s 2k character limit.
