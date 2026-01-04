@@ -25,6 +25,7 @@
 - Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
 
 ### Fixes
+- macOS: improve Swift 6 strict concurrency compatibility (#166) — thanks @Nachx639.
 - CI: fix lint ordering after merge cleanup (#156) — thanks @steipete.
 - CI: consolidate checks to avoid redundant installs (#144) — thanks @thewilloftheshadow.
 - WhatsApp: support `gifPlayback` for MP4 GIF sends via CLI/gateway.
