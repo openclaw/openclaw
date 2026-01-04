@@ -151,6 +151,7 @@ struct GeneralSettings: View {
     private func requestLocationAuthorization(mode: ClawdbotLocationMode) async -> Bool {
         guard mode != .off else { return true }
         let status = CLLocationManager().authorizationStatus
+        // Note: macOS only supports authorizedAlways, not authorizedWhenInUse (iOS only)
         if status == .authorizedAlways {
             return true
         }

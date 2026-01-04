@@ -140,6 +140,7 @@ enum PermissionManager {
     private static func ensureLocation(interactive: Bool) async -> Bool {
         let status = CLLocationManager().authorizationStatus
         switch status {
+        // Note: macOS only supports authorizedAlways, not authorizedWhenInUse (iOS only)
         case .authorizedAlways:
             return true
         case .notDetermined:
@@ -201,6 +202,7 @@ enum PermissionManager {
 
             case .location:
                 let status = CLLocationManager().authorizationStatus
+                // Note: macOS only supports authorizedAlways
                 results[cap] = status == .authorizedAlways
             }
         }
