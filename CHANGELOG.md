@@ -18,6 +18,7 @@
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
 - Browser: add multi-profile browser control with per-profile remote CDP URLs — thanks @jamesgroat.
 - Skills: add blogwatcher skill for RSS/Atom monitoring — thanks @Hyaxia.
+- Skills: add Notion API skill — thanks @scald.
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
@@ -62,7 +63,6 @@
 - Dependencies: bump pi-mono packages to 0.32.3.
 
 ### Docs
-- Skills: add Notion API skill — thanks @scald.
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.
 - Skills: clarify bear-notes token + callback usage (#120) — thanks @tylerwince.
 - Skills: document Discord `sendMessage` media attachments and `to` format clarification.

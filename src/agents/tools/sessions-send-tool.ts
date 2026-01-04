@@ -1,0 +1,403 @@
+import crypto from "node:crypto";
+
+import { Type } from "@sinclair/typebox";
+
+import { loadConfig } from "../../config/config.js";
+import { callGateway } from "../../gateway/call.js";
+import type { AnyAgentTool } from "./common.js";
+import { jsonResult, readStringParam } from "./common.js";
+import {
+  extractAssistantText,
+  resolveDisplaySessionKey,
+  resolveInternalSessionKey,
+  resolveMainSessionAlias,
+  stripToolMessages,
+} from "./sessions-helpers.js";
+import {
+  type AnnounceTarget,
+  buildAgentToAgentAnnounceContext,
+  buildAgentToAgentMessageContext,
+  buildAgentToAgentReplyContext,
+  isAnnounceSkip,
+  isReplySkip,
+  resolveAnnounceTargetFromKey,
+  resolvePingPongTurns,
+} from "./sessions-send-helpers.js";
+
+const SessionsSendToolSchema = Type.Object({
+  sessionKey: Type.String(),
+  message: Type.String(),
+  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+});
+
+export function createSessionsSendTool(opts?: {
+  agentSessionKey?: string;
+  agentSurface?: string;
+}): AnyAgentTool {
+  return {
+    label: "Session Send",
+    name: "sessions_send",
+    description: "Send a message into another session.",
+    parameters: SessionsSendToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const sessionKey = readStringParam(params, "sessionKey", {
+        required: true,
+      });
+      const message = readStringParam(params, "message", { required: true });
+      const cfg = loadConfig();
+      const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const resolvedKey = resolveInternalSessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+      const timeoutSeconds =
+        typeof params.timeoutSeconds === "number" &&
+        Number.isFinite(params.timeoutSeconds)
+          ? Math.max(0, Math.floor(params.timeoutSeconds))
+          : 30;
+      const timeoutMs = timeoutSeconds * 1000;
+      const announceTimeoutMs = timeoutSeconds === 0 ? 30_000 : timeoutMs;
+      const idempotencyKey = crypto.randomUUID();
+      let runId: string = idempotencyKey;
+      const displayKey = resolveDisplaySessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+      const agentMessageContext = buildAgentToAgentMessageContext({
+        requesterSessionKey: opts?.agentSessionKey,
+        requesterSurface: opts?.agentSurface,
+        targetSessionKey: displayKey,
+      });
+      const sendParams = {
+        message,
+        sessionKey: resolvedKey,
+        idempotencyKey,
+        deliver: false,
+        lane: "nested",
+        extraSystemPrompt: agentMessageContext,
+      };
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterSurface = opts?.agentSurface;
+      const maxPingPongTurns = resolvePingPongTurns(cfg);
+
+      const resolveAnnounceTarget =
+        async (): Promise<AnnounceTarget | null> => {
+          const parsed = resolveAnnounceTargetFromKey(resolvedKey);
+          if (parsed) return parsed;
+          try {
+            const list = (await callGateway({
+              method: "sessions.list",
+              params: {
+                includeGlobal: true,
+                includeUnknown: true,
+                limit: 200,
+              },
+            })) as { sessions?: Array<Record<string, unknown>> };
+            const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+            const match =
+              sessions.find((entry) => entry?.key === resolvedKey) ??
+              sessions.find((entry) => entry?.key === displayKey);
+            const channel =
+              typeof match?.lastChannel === "string"
+                ? match.lastChannel
+                : undefined;
+            const to =
+              typeof match?.lastTo === "string" ? match.lastTo : undefined;
+            if (channel && to) return { channel, to };
+          } catch {
+            // ignore; fall through to null
+          }
+          return null;
+        };
+
+      const readLatestAssistantReply = async (
+        sessionKeyToRead: string,
+      ): Promise<string | undefined> => {
+        const history = (await callGateway({
+          method: "chat.history",
+          params: { sessionKey: sessionKeyToRead, limit: 50 },
+        })) as { messages?: unknown[] };
+        const filtered = stripToolMessages(
+          Array.isArray(history?.messages) ? history.messages : [],
+        );
+        const last =
+          filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+        return last ? extractAssistantText(last) : undefined;
+      };
+
+      const runAgentStep = async (step: {
+        sessionKey: string;
+        message: string;
+        extraSystemPrompt: string;
+        timeoutMs: number;
+      }): Promise<string | undefined> => {
+        const stepIdem = crypto.randomUUID();
+        const response = (await callGateway({
+          method: "agent",
+          params: {
+            message: step.message,
+            sessionKey: step.sessionKey,
+            idempotencyKey: stepIdem,
+            deliver: false,
+            lane: "nested",
+            extraSystemPrompt: step.extraSystemPrompt,
+          },
+          timeoutMs: 10_000,
+        })) as { runId?: string; acceptedAt?: number };
+        const stepRunId =
+          typeof response?.runId === "string" && response.runId
+            ? response.runId
+            : stepIdem;
+        const stepAcceptedAt =
+          typeof response?.acceptedAt === "number"
+            ? response.acceptedAt
+            : undefined;
+        const stepWaitMs = Math.min(step.timeoutMs, 60_000);
+        const wait = (await callGateway({
+          method: "agent.wait",
+          params: {
+            runId: stepRunId,
+            afterMs: stepAcceptedAt,
+            timeoutMs: stepWaitMs,
+          },
+          timeoutMs: stepWaitMs + 2000,
+        })) as { status?: string };
+        if (wait?.status !== "ok") return undefined;
+        return readLatestAssistantReply(step.sessionKey);
+      };
+
+      const runAgentToAgentFlow = async (
+        roundOneReply?: string,
+        runInfo?: { runId: string; acceptedAt?: number },
+      ) => {
+        try {
+          let primaryReply = roundOneReply;
+          let latestReply = roundOneReply;
+          if (!primaryReply && runInfo?.runId) {
+            const waitMs = Math.min(announceTimeoutMs, 60_000);
+            const wait = (await callGateway({
+              method: "agent.wait",
+              params: {
+                runId: runInfo.runId,
+                afterMs: runInfo.acceptedAt,
+                timeoutMs: waitMs,
+              },
+              timeoutMs: waitMs + 2000,
+            })) as { status?: string };
+            if (wait?.status === "ok") {
+              primaryReply = await readLatestAssistantReply(resolvedKey);
+              latestReply = primaryReply;
+            }
+          }
+          if (!latestReply) return;
+          const announceTarget = await resolveAnnounceTarget();
+          const targetChannel = announceTarget?.channel ?? "unknown";
+          if (
+            maxPingPongTurns > 0 &&
+            requesterSessionKey &&
+            requesterSessionKey !== resolvedKey
+          ) {
+            let currentSessionKey = requesterSessionKey;
+            let nextSessionKey = resolvedKey;
+            let incomingMessage = latestReply;
+            for (let turn = 1; turn <= maxPingPongTurns; turn += 1) {
+              const currentRole =
+                currentSessionKey === requesterSessionKey
+                  ? "requester"
+                  : "target";
+              const replyPrompt = buildAgentToAgentReplyContext({
+                requesterSessionKey,
+                requesterSurface,
+                targetSessionKey: displayKey,
+                targetChannel,
+                currentRole,
+                turn,
+                maxTurns: maxPingPongTurns,
+              });
+              const replyText = await runAgentStep({
+                sessionKey: currentSessionKey,
+                message: incomingMessage,
+                extraSystemPrompt: replyPrompt,
+                timeoutMs: announceTimeoutMs,
+              });
+              if (!replyText || isReplySkip(replyText)) {
+                break;
+              }
+              latestReply = replyText;
+              incomingMessage = replyText;
+              const swap = currentSessionKey;
+              currentSessionKey = nextSessionKey;
+              nextSessionKey = swap;
+            }
+          }
+          const announcePrompt = buildAgentToAgentAnnounceContext({
+            requesterSessionKey,
+            requesterSurface,
+            targetSessionKey: displayKey,
+            targetChannel,
+            originalMessage: message,
+            roundOneReply: primaryReply,
+            latestReply,
+          });
+          const announceReply = await runAgentStep({
+            sessionKey: resolvedKey,
+            message: "Agent-to-agent announce step.",
+            extraSystemPrompt: announcePrompt,
+            timeoutMs: announceTimeoutMs,
+          });
+          if (
+            announceTarget &&
+            announceReply &&
+            announceReply.trim() &&
+            !isAnnounceSkip(announceReply)
+          ) {
+            await callGateway({
+              method: "send",
+              params: {
+                to: announceTarget.to,
+                message: announceReply.trim(),
+                provider: announceTarget.channel,
+                idempotencyKey: crypto.randomUUID(),
+              },
+              timeoutMs: 10_000,
+            });
+          }
+        } catch {
+          // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
+        }
+      };
+
+      if (timeoutSeconds === 0) {
+        try {
+          const response = (await callGateway({
+            method: "agent",
+            params: sendParams,
+            timeoutMs: 10_000,
+          })) as { runId?: string; acceptedAt?: number };
+          const acceptedAt =
+            typeof response?.acceptedAt === "number"
+              ? response.acceptedAt
+              : undefined;
+          if (typeof response?.runId === "string" && response.runId) {
+            runId = response.runId;
+          }
+          void runAgentToAgentFlow(undefined, { runId, acceptedAt });
+          return jsonResult({
+            runId,
+            status: "accepted",
+            sessionKey: displayKey,
+          });
+        } catch (err) {
+          const messageText =
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : "error";
+          return jsonResult({
+            runId,
+            status: "error",
+            error: messageText,
+            sessionKey: displayKey,
+          });
+        }
+      }
+
+      let acceptedAt: number | undefined;
+      try {
+        const response = (await callGateway({
+          method: "agent",
+          params: sendParams,
+          timeoutMs: 10_000,
+        })) as { runId?: string; acceptedAt?: number };
+        if (typeof response?.runId === "string" && response.runId) {
+          runId = response.runId;
+        }
+        if (typeof response?.acceptedAt === "number") {
+          acceptedAt = response.acceptedAt;
+        }
+      } catch (err) {
+        const messageText =
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "error";
+        return jsonResult({
+          runId,
+          status: "error",
+          error: messageText,
+          sessionKey: displayKey,
+        });
+      }
+
+      let waitStatus: string | undefined;
+      let waitError: string | undefined;
+      try {
+        const wait = (await callGateway({
+          method: "agent.wait",
+          params: {
+            runId,
+            afterMs: acceptedAt,
+            timeoutMs,
+          },
+          timeoutMs: timeoutMs + 2000,
+        })) as { status?: string; error?: string };
+        waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
+        waitError = typeof wait?.error === "string" ? wait.error : undefined;
+      } catch (err) {
+        const messageText =
+          err instanceof Error
+            ? err.message
+            : typeof err === "string"
+              ? err
+              : "error";
+        return jsonResult({
+          runId,
+          status: messageText.includes("gateway timeout") ? "timeout" : "error",
+          error: messageText,
+          sessionKey: displayKey,
+        });
+      }
+
+      if (waitStatus === "timeout") {
+        return jsonResult({
+          runId,
+          status: "timeout",
+          error: waitError,
+          sessionKey: displayKey,
+        });
+      }
+      if (waitStatus === "error") {
+        return jsonResult({
+          runId,
+          status: "error",
+          error: waitError ?? "agent error",
+          sessionKey: displayKey,
+        });
+      }
+
+      const history = (await callGateway({
+        method: "chat.history",
+        params: { sessionKey: resolvedKey, limit: 50 },
+      })) as { messages?: unknown[] };
+      const filtered = stripToolMessages(
+        Array.isArray(history?.messages) ? history.messages : [],
+      );
+      const last =
+        filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+      const reply = last ? extractAssistantText(last) : undefined;
+      void runAgentToAgentFlow(reply ?? undefined);
+
+      return jsonResult({
+        runId,
+        status: "ok",
+        reply,
+        sessionKey: displayKey,
+      });
+    },
+  };
+}

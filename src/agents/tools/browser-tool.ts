@@ -1,0 +1,397 @@
+import { Type } from "@sinclair/typebox";
+
+import {
+  browserCloseTab,
+  browserFocusTab,
+  browserOpenTab,
+  browserSnapshot,
+  browserStart,
+  browserStatus,
+  browserStop,
+  browserTabs,
+} from "../../browser/client.js";
+import {
+  browserAct,
+  browserArmDialog,
+  browserArmFileChooser,
+  browserConsoleMessages,
+  browserNavigate,
+  browserPdfSave,
+  browserScreenshotAction,
+} from "../../browser/client-actions.js";
+import { resolveBrowserConfig } from "../../browser/config.js";
+import { loadConfig } from "../../config/config.js";
+import {
+  type AnyAgentTool,
+  imageResultFromFile,
+  jsonResult,
+  readStringParam,
+} from "./common.js";
+
+const BrowserActSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("click"),
+    ref: Type.String(),
+    targetId: Type.Optional(Type.String()),
+    doubleClick: Type.Optional(Type.Boolean()),
+    button: Type.Optional(Type.String()),
+    modifiers: Type.Optional(Type.Array(Type.String())),
+  }),
+  Type.Object({
+    kind: Type.Literal("type"),
+    ref: Type.String(),
+    text: Type.String(),
+    targetId: Type.Optional(Type.String()),
+    submit: Type.Optional(Type.Boolean()),
+    slowly: Type.Optional(Type.Boolean()),
+  }),
+  Type.Object({
+    kind: Type.Literal("press"),
+    key: Type.String(),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("hover"),
+    ref: Type.String(),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("drag"),
+    startRef: Type.String(),
+    endRef: Type.String(),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("select"),
+    ref: Type.String(),
+    values: Type.Array(Type.String()),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("fill"),
+    fields: Type.Array(Type.Record(Type.String(), Type.Unknown())),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("resize"),
+    width: Type.Number(),
+    height: Type.Number(),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("wait"),
+    timeMs: Type.Optional(Type.Number()),
+    text: Type.Optional(Type.String()),
+    textGone: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("evaluate"),
+    fn: Type.String(),
+    ref: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    kind: Type.Literal("close"),
+    targetId: Type.Optional(Type.String()),
+  }),
+]);
+
+const BrowserToolSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal("status"),
+    controlUrl: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("start"),
+    controlUrl: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("stop"),
+    controlUrl: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("tabs"),
+    controlUrl: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("open"),
+    controlUrl: Type.Optional(Type.String()),
+    targetUrl: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("focus"),
+    controlUrl: Type.Optional(Type.String()),
+    targetId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("close"),
+    controlUrl: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("snapshot"),
+    controlUrl: Type.Optional(Type.String()),
+    format: Type.Optional(
+      Type.Union([Type.Literal("aria"), Type.Literal("ai")]),
+    ),
+    targetId: Type.Optional(Type.String()),
+    limit: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("screenshot"),
+    controlUrl: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+    fullPage: Type.Optional(Type.Boolean()),
+    ref: Type.Optional(Type.String()),
+    element: Type.Optional(Type.String()),
+    type: Type.Optional(
+      Type.Union([Type.Literal("png"), Type.Literal("jpeg")]),
+    ),
+  }),
+  Type.Object({
+    action: Type.Literal("navigate"),
+    controlUrl: Type.Optional(Type.String()),
+    targetUrl: Type.String(),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("console"),
+    controlUrl: Type.Optional(Type.String()),
+    level: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("pdf"),
+    controlUrl: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("upload"),
+    controlUrl: Type.Optional(Type.String()),
+    paths: Type.Array(Type.String()),
+    ref: Type.Optional(Type.String()),
+    inputRef: Type.Optional(Type.String()),
+    element: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("dialog"),
+    controlUrl: Type.Optional(Type.String()),
+    accept: Type.Boolean(),
+    promptText: Type.Optional(Type.String()),
+    targetId: Type.Optional(Type.String()),
+    timeoutMs: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("act"),
+    controlUrl: Type.Optional(Type.String()),
+    request: BrowserActSchema,
+  }),
+]);
+
+function resolveBrowserBaseUrl(controlUrl?: string) {
+  const cfg = loadConfig();
+  const resolved = resolveBrowserConfig(cfg.browser);
+  if (!resolved.enabled && !controlUrl?.trim()) {
+    throw new Error(
+      "Browser control is disabled. Set browser.enabled=true in ~/.clawdis/clawdis.json.",
+    );
+  }
+  const url = controlUrl?.trim() ? controlUrl.trim() : resolved.controlUrl;
+  return url.replace(/\/$/, "");
+}
+
+export function createBrowserTool(opts?: {
+  defaultControlUrl?: string;
+}): AnyAgentTool {
+  return {
+    label: "Browser",
+    name: "browser",
+    description:
+      "Control clawd's dedicated browser (status/start/stop/tabs/open/snapshot/screenshot/actions). Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+    parameters: BrowserToolSchema,
+    execute: async (_toolCallId, args) => {
+      const params = args as Record<string, unknown>;
+      const action = readStringParam(params, "action", { required: true });
+      const controlUrl = readStringParam(params, "controlUrl");
+      const baseUrl = resolveBrowserBaseUrl(
+        controlUrl ?? opts?.defaultControlUrl,
+      );
+
+      switch (action) {
+        case "status":
+          return jsonResult(await browserStatus(baseUrl));
+        case "start":
+          await browserStart(baseUrl);
+          return jsonResult(await browserStatus(baseUrl));
+        case "stop":
+          await browserStop(baseUrl);
+          return jsonResult(await browserStatus(baseUrl));
+        case "tabs":
+          return jsonResult({ tabs: await browserTabs(baseUrl) });
+        case "open": {
+          const targetUrl = readStringParam(params, "targetUrl", {
+            required: true,
+          });
+          return jsonResult(await browserOpenTab(baseUrl, targetUrl));
+        }
+        case "focus": {
+          const targetId = readStringParam(params, "targetId", {
+            required: true,
+          });
+          await browserFocusTab(baseUrl, targetId);
+          return jsonResult({ ok: true });
+        }
+        case "close": {
+          const targetId = readStringParam(params, "targetId");
+          if (targetId) await browserCloseTab(baseUrl, targetId);
+          else await browserAct(baseUrl, { kind: "close" });
+          return jsonResult({ ok: true });
+        }
+        case "snapshot": {
+          const format =
+            params.format === "ai" || params.format === "aria"
+              ? (params.format as "ai" | "aria")
+              : "ai";
+          const targetId =
+            typeof params.targetId === "string"
+              ? params.targetId.trim()
+              : undefined;
+          const limit =
+            typeof params.limit === "number" && Number.isFinite(params.limit)
+              ? params.limit
+              : undefined;
+          const snapshot = await browserSnapshot(baseUrl, {
+            format,
+            targetId,
+            limit,
+          });
+          if (snapshot.format === "ai") {
+            return {
+              content: [{ type: "text", text: snapshot.snapshot }],
+              details: snapshot,
+            };
+          }
+          return jsonResult(snapshot);
+        }
+        case "screenshot": {
+          const targetId = readStringParam(params, "targetId");
+          const fullPage = Boolean(params.fullPage);
+          const ref = readStringParam(params, "ref");
+          const element = readStringParam(params, "element");
+          const type = params.type === "jpeg" ? "jpeg" : "png";
+          const result = await browserScreenshotAction(baseUrl, {
+            targetId,
+            fullPage,
+            ref,
+            element,
+            type,
+          });
+          return await imageResultFromFile({
+            label: "browser:screenshot",
+            path: result.path,
+            details: result,
+          });
+        }
+        case "navigate": {
+          const targetUrl = readStringParam(params, "targetUrl", {
+            required: true,
+          });
+          const targetId = readStringParam(params, "targetId");
+          return jsonResult(
+            await browserNavigate(baseUrl, { url: targetUrl, targetId }),
+          );
+        }
+        case "console": {
+          const level =
+            typeof params.level === "string" ? params.level.trim() : undefined;
+          const targetId =
+            typeof params.targetId === "string"
+              ? params.targetId.trim()
+              : undefined;
+          return jsonResult(
+            await browserConsoleMessages(baseUrl, { level, targetId }),
+          );
+        }
+        case "pdf": {
+          const targetId =
+            typeof params.targetId === "string"
+              ? params.targetId.trim()
+              : undefined;
+          const result = await browserPdfSave(baseUrl, { targetId });
+          return {
+            content: [{ type: "text", text: `FILE:${result.path}` }],
+            details: result,
+          };
+        }
+        case "upload": {
+          const paths = Array.isArray(params.paths)
+            ? params.paths.map((p) => String(p))
+            : [];
+          if (paths.length === 0) throw new Error("paths required");
+          const ref = readStringParam(params, "ref");
+          const inputRef = readStringParam(params, "inputRef");
+          const element = readStringParam(params, "element");
+          const targetId =
+            typeof params.targetId === "string"
+              ? params.targetId.trim()
+              : undefined;
+          const timeoutMs =
+            typeof params.timeoutMs === "number" &&
+            Number.isFinite(params.timeoutMs)
+              ? params.timeoutMs
+              : undefined;
+          return jsonResult(
+            await browserArmFileChooser(baseUrl, {
+              paths,
+              ref,
+              inputRef,
+              element,
+              targetId,
+              timeoutMs,
+            }),
+          );
+        }
+        case "dialog": {
+          const accept = Boolean(params.accept);
+          const promptText =
+            typeof params.promptText === "string"
+              ? params.promptText
+              : undefined;
+          const targetId =
+            typeof params.targetId === "string"
+              ? params.targetId.trim()
+              : undefined;
+          const timeoutMs =
+            typeof params.timeoutMs === "number" &&
+            Number.isFinite(params.timeoutMs)
+              ? params.timeoutMs
+              : undefined;
+          return jsonResult(
+            await browserArmDialog(baseUrl, {
+              accept,
+              promptText,
+              targetId,
+              timeoutMs,
+            }),
+          );
+        }
+        case "act": {
+          const request = params.request as Record<string, unknown> | undefined;
+          if (!request || typeof request !== "object") {
+            throw new Error("request required");
+          }
+          const result = await browserAct(
+            baseUrl,
+            request as Parameters<typeof browserAct>[1],
+          );
+          return jsonResult(result);
+        }
+        default:
+          throw new Error(`Unknown action: ${action}`);
+      }
+    },
+  };
+}
