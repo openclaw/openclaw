@@ -1,8 +1,8 @@
-import bolt from "@slack/bolt";
 import type {
   SlackCommandMiddlewareArgs,
   SlackEventMiddlewareArgs,
 } from "@slack/bolt";
+import bolt from "@slack/bolt";
 
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
