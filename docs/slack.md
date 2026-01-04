@@ -108,13 +108,13 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     },
     "reactionNotifications": "own",
     "reactionAllowlist": ["U123"],
-   "actions": {
-     "reactions": true,
-     "messages": true,
-     "pins": true,
-     "memberInfo": true,
-     "emojiList": true
-   },
+    "actions": {
+      "reactions": true,
+      "messages": true,
+      "pins": true,
+      "memberInfo": true,
+      "emojiList": true
+    },
     "slashCommand": {
       "enabled": true,
       "name": "clawd",

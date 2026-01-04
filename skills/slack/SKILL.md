@@ -14,7 +14,6 @@ Use `slack` to react, manage pins, send/edit/delete messages, and fetch member i
 - `channelId` and `messageId` (Slack message timestamp, e.g. `1712023032.1234`).
 - For reactions, an `emoji` (Unicode or `:name:`).
 - For message sends, a `to` target (`channel:<id>` or `user:<id>`) and `content`.
-- For searches, a `query` (optionally `channelIds` or `channelNames`).
 
 Message context lines include `slack message id` and `channel` fields you can reuse directly.
 
