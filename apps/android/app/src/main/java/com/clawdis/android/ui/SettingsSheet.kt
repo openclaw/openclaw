@@ -163,6 +163,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val smsPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       smsPermissionGranted = granted
+      viewModel.refreshBridgeHello()
     }
 
   fun setCameraEnabledChecked(checked: Boolean) {

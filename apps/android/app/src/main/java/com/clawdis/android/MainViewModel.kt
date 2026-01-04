@@ -118,6 +118,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setTalkEnabled(enabled)
   }
 
+  fun refreshBridgeHello() {
+    runtime.refreshBridgeHello()
+  }
+
   fun connect(endpoint: BridgeEndpoint) {
     runtime.connect(endpoint)
   }

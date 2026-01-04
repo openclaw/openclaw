@@ -75,6 +75,13 @@ class BridgeSession(
     }
   }
 
+  suspend fun updateHello(hello: Hello) {
+    val target = desired ?: return
+    desired = target.first to hello
+    val conn = currentConnection ?: return
+    conn.sendJson(buildHelloJson(hello))
+  }
+
   fun disconnect() {
     desired = null
     // Unblock connectOnce() read loop. Coroutine cancellation alone won't interrupt BufferedReader.readLine().
@@ -196,20 +203,7 @@ class BridgeSession(
       currentConnection = conn
 
       try {
-        conn.sendJson(
-          buildJsonObject {
-            put("type", JsonPrimitive("hello"))
-            put("nodeId", JsonPrimitive(hello.nodeId))
-            hello.displayName?.let { put("displayName", JsonPrimitive(it)) }
-            hello.token?.let { put("token", JsonPrimitive(it)) }
-            hello.platform?.let { put("platform", JsonPrimitive(it)) }
-            hello.version?.let { put("version", JsonPrimitive(it)) }
-            hello.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
-            hello.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
-            hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
-            hello.commands?.let { put("commands", JsonArray(it.map(::JsonPrimitive))) }
-          },
-        )
+        conn.sendJson(buildHelloJson(hello))
 
         val firstLine = reader.readLine() ?: throw IllegalStateException("bridge closed connection")
         val first = json.parseToJsonElement(firstLine).asObjectOrNull()
@@ -305,6 +299,20 @@ class BridgeSession(
         pending.clear()
         conn.closeQuietly()
       }
+    }
+
+  private fun buildHelloJson(hello: Hello): JsonObject =
+    buildJsonObject {
+      put("type", JsonPrimitive("hello"))
+      put("nodeId", JsonPrimitive(hello.nodeId))
+      hello.displayName?.let { put("displayName", JsonPrimitive(it)) }
+      hello.token?.let { put("token", JsonPrimitive(it)) }
+      hello.platform?.let { put("platform", JsonPrimitive(it)) }
+      hello.version?.let { put("version", JsonPrimitive(it)) }
+      hello.deviceFamily?.let { put("deviceFamily", JsonPrimitive(it)) }
+      hello.modelIdentifier?.let { put("modelIdentifier", JsonPrimitive(it)) }
+      hello.caps?.let { put("caps", JsonArray(it.map(::JsonPrimitive))) }
+      hello.commands?.let { put("commands", JsonArray(it.map(::JsonPrimitive))) }
     }
 
   private fun normalizeCanvasHostUrl(raw: String?, endpoint: BridgeEndpoint): String? {
