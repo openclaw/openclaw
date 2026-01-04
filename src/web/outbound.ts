@@ -67,13 +67,7 @@ export async function sendMessageWhatsApp(
       ? { gifPlayback: true }
       : undefined;
     const result = sendOptions
-      ? await active.sendMessage(
-          to,
-          text,
-          mediaBuffer,
-          mediaType,
-          sendOptions,
-        )
+      ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
     const messageId =
       (result as { messageId?: string })?.messageId ?? "unknown";

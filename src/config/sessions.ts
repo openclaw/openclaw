@@ -103,9 +103,9 @@ export function resolveStorePath(store?: string) {
   return path.resolve(store);
 }
 
-export function resolveMainSessionKey(
-  cfg?: { session?: { scope?: SessionScope; mainKey?: string } },
-): string {
+export function resolveMainSessionKey(cfg?: {
+  session?: { scope?: SessionScope; mainKey?: string };
+}): string {
   if (cfg?.session?.scope === "global") return "global";
   return "main";
 }

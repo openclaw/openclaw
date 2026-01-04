@@ -1777,8 +1777,10 @@ function applySessionDefaults(cfg: ClawdisConfig): ClawdisConfig {
   if (!session || session.mainKey === undefined) return cfg;
 
   const trimmed = session.mainKey.trim();
-  const next: ClawdisConfig = { ...cfg, session: { ...session } };
-  next.session.mainKey = "main";
+  const next: ClawdisConfig = {
+    ...cfg,
+    session: { ...session, mainKey: "main" },
+  };
 
   if (trimmed && trimmed !== "main" && !warnedMainKeyOverride) {
     warnedMainKeyOverride = true;
