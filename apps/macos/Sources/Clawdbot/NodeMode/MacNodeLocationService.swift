@@ -11,6 +11,9 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    private struct UncheckedSendable<T>: @unchecked Sendable {
+        let value: T
+    }
 
     override init() {
         super.init()
@@ -68,15 +71,15 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
             return try await operation()
         }
 
-        return try await withThrowingTaskGroup(of: T.self) { group in
-            group.addTask { try await operation() }
+        return try await withThrowingTaskGroup(of: UncheckedSendable<T>.self) { group in
+            group.addTask { try await UncheckedSendable(value: operation()) }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
                 throw Error.timeout
             }
             let result = try await group.next()!
             group.cancelAll()
-            return result
+            return result.value
         }
     }
 
