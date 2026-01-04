@@ -1,0 +1,125 @@
+import crypto from "node:crypto";
+
+import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
+import type { ClawdisConfig } from "../../config/config.js";
+import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { buildProviderSummary } from "../../infra/provider-summary.js";
+import { drainSystemEvents } from "../../infra/system-events.js";
+
+export async function prependSystemEvents(params: {
+  cfg: ClawdisConfig;
+  isMainSession: boolean;
+  isNewSession: boolean;
+  prefixedBodyBase: string;
+}): Promise<string> {
+  if (!params.isMainSession) return params.prefixedBodyBase;
+
+  const compactSystemEvent = (line: string): string | null => {
+    const trimmed = line.trim();
+    if (!trimmed) return null;
+    const lower = trimmed.toLowerCase();
+    if (lower.includes("reason periodic")) return null;
+    if (lower.includes("heartbeat")) return null;
+    if (trimmed.startsWith("Node:")) {
+      return trimmed.replace(/ · last input [^·]+/i, "").trim();
+    }
+    return trimmed;
+  };
+
+  const systemLines: string[] = [];
+  const queued = drainSystemEvents();
+  systemLines.push(
+    ...queued.map(compactSystemEvent).filter((v): v is string => Boolean(v)),
+  );
+  if (params.isNewSession) {
+    const summary = await buildProviderSummary(params.cfg);
+    if (summary.length > 0) systemLines.unshift(...summary);
+  }
+  if (systemLines.length === 0) return params.prefixedBodyBase;
+
+  const block = systemLines.map((l) => `System: ${l}`).join("\n");
+  return `${block}\n\n${params.prefixedBodyBase}`;
+}
+
+export async function ensureSkillSnapshot(params: {
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  sessionId?: string;
+  isFirstTurnInSession: boolean;
+  workspaceDir: string;
+  cfg: ClawdisConfig;
+}): Promise<{
+  sessionEntry?: SessionEntry;
+  skillsSnapshot?: SessionEntry["skillsSnapshot"];
+  systemSent: boolean;
+}> {
+  const {
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    sessionId,
+    isFirstTurnInSession,
+    workspaceDir,
+    cfg,
+  } = params;
+
+  let nextEntry = sessionEntry;
+  let systemSent = sessionEntry?.systemSent ?? false;
+
+  if (isFirstTurnInSession && sessionStore && sessionKey) {
+    const current = nextEntry ??
+      sessionStore[sessionKey] ?? {
+        sessionId: sessionId ?? crypto.randomUUID(),
+        updatedAt: Date.now(),
+      };
+    const skillSnapshot =
+      isFirstTurnInSession || !current.skillsSnapshot
+        ? buildWorkspaceSkillSnapshot(workspaceDir, { config: cfg })
+        : current.skillsSnapshot;
+    nextEntry = {
+      ...current,
+      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
+      updatedAt: Date.now(),
+      systemSent: true,
+      skillsSnapshot: skillSnapshot,
+    };
+    sessionStore[sessionKey] = nextEntry;
+    if (storePath) {
+      await saveSessionStore(storePath, sessionStore);
+    }
+    systemSent = true;
+  }
+
+  const skillsSnapshot =
+    nextEntry?.skillsSnapshot ??
+    (isFirstTurnInSession
+      ? undefined
+      : buildWorkspaceSkillSnapshot(workspaceDir, { config: cfg }));
+  if (
+    skillsSnapshot &&
+    sessionStore &&
+    sessionKey &&
+    !isFirstTurnInSession &&
+    !nextEntry?.skillsSnapshot
+  ) {
+    const current = nextEntry ?? {
+      sessionId: sessionId ?? crypto.randomUUID(),
+      updatedAt: Date.now(),
+    };
+    nextEntry = {
+      ...current,
+      sessionId: sessionId ?? current.sessionId ?? crypto.randomUUID(),
+      updatedAt: Date.now(),
+      skillsSnapshot,
+    };
+    sessionStore[sessionKey] = nextEntry;
+    if (storePath) {
+      await saveSessionStore(storePath, sessionStore);
+    }
+  }
+
+  return { sessionEntry: nextEntry, skillsSnapshot, systemSent };
+}
