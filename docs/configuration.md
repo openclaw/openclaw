@@ -442,10 +442,10 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 
 `agent.elevated` controls elevated (host) bash access:
 - `enabled`: allow elevated mode (default true)
-- `allowFrom`: per-surface allowlists (required to enable; empty = disabled)
+- `allowFrom`: per-surface allowlists (empty = disabled)
   - `whatsapp`: E.164 numbers
   - `telegram`: chat ids or usernames
-  - `discord`: user ids or usernames
+  - `discord`: user ids or usernames (falls back to `discord.dm.allowFrom` if omitted)
   - `signal`: E.164 numbers
   - `imessage`: handles/chat ids
   - `webchat`: session ids or usernames

@@ -222,6 +222,112 @@ describe("trigger handling", () => {
     });
   });
 
+  it("rejects elevated inline directive for unapproved sender", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /elevated on now",
+          From: "+2000",
+          To: "+2000",
+          Surface: "whatsapp",
+          SenderE164: "+2000",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("elevated is not available right now.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to discord dm allowFrom for elevated approval", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+        },
+        discord: {
+          dm: {
+            allowFrom: ["steipete"],
+          },
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "discord:123",
+          To: "user:123",
+          Surface: "discord",
+          SenderName: "steipete",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode enabled");
+
+      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const store = JSON.parse(storeRaw) as Record<
+        string,
+        { elevatedLevel?: string }
+      >;
+      expect(store.main?.elevatedLevel).toBe("on");
+    });
+  });
+
+  it("treats explicit discord elevated allowlist as override", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { discord: [] },
+          },
+        },
+        discord: {
+          dm: {
+            allowFrom: ["steipete"],
+          },
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "discord:123",
+          To: "user:123",
+          Surface: "discord",
+          SenderName: "steipete",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("elevated is not available right now.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("returns a context overflow fallback when the embedded agent throws", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockRejectedValue(

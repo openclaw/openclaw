@@ -98,14 +98,20 @@ function stripSenderPrefix(value?: string) {
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   surface: string,
+  discordFallback?: Array<string | number>,
 ): Array<string | number> | undefined {
   switch (surface) {
     case "whatsapp":
       return allowFrom?.whatsapp;
     case "telegram":
       return allowFrom?.telegram;
-    case "discord":
-      return allowFrom?.discord;
+    case "discord": {
+      const hasExplicit = Boolean(
+        allowFrom && Object.prototype.hasOwnProperty.call(allowFrom, "discord"),
+      );
+      if (hasExplicit) return allowFrom?.discord;
+      return discordFallback;
+    }
     case "signal":
       return allowFrom?.signal;
     case "imessage":
@@ -121,8 +127,13 @@ function isApprovedElevatedSender(params: {
   surface: string;
   ctx: MsgContext;
   allowFrom?: AgentElevatedAllowFromConfig;
+  discordFallback?: Array<string | number>;
 }): boolean {
-  const rawAllow = resolveElevatedAllowList(params.allowFrom, params.surface);
+  const rawAllow = resolveElevatedAllowList(
+    params.allowFrom,
+    params.surface,
+    params.discordFallback,
+  );
   if (!rawAllow || rawAllow.length === 0) return false;
 
   const allowTokens = rawAllow
@@ -250,6 +261,8 @@ export async function getReplyFromConfig(
     ctx.Surface?.trim().toLowerCase() ??
     "";
   const elevatedConfig = agentCfg?.elevated;
+  const discordElevatedFallback =
+    surfaceKey === "discord" ? cfg.discord?.dm?.allowFrom : undefined;
   const elevatedEnabled = elevatedConfig?.enabled !== false;
   const elevatedAllowed =
     elevatedEnabled &&
@@ -259,6 +272,7 @@ export async function getReplyFromConfig(
           surface: surfaceKey,
           ctx,
           allowFrom: elevatedConfig?.allowFrom,
+          discordFallback: discordElevatedFallback,
         }),
     );
   if (
