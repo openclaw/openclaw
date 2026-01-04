@@ -340,6 +340,7 @@ public struct SendParams: Codable {
     public let to: String
     public let message: String
     public let mediaurl: String?
+    public let gifplayback: Bool?
     public let provider: String?
     public let idempotencykey: String
 
@@ -347,12 +348,14 @@ public struct SendParams: Codable {
         to: String,
         message: String,
         mediaurl: String?,
+        gifplayback: Bool?,
         provider: String?,
         idempotencykey: String
     ) {
         self.to = to
         self.message = message
         self.mediaurl = mediaurl
+        self.gifplayback = gifplayback
         self.provider = provider
         self.idempotencykey = idempotencykey
     }
@@ -360,6 +363,7 @@ public struct SendParams: Codable {
         case to
         case message
         case mediaurl = "mediaUrl"
+        case gifplayback = "gifPlayback"
         case provider
         case idempotencykey = "idempotencyKey"
     }
@@ -407,6 +411,27 @@ public struct AgentParams: Codable {
         case channel
         case timeout
         case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct AgentWaitParams: Codable {
+    public let runid: String
+    public let afterms: Int?
+    public let timeoutms: Int?
+
+    public init(
+        runid: String,
+        afterms: Int?,
+        timeoutms: Int?
+    ) {
+        self.runid = runid
+        self.afterms = afterms
+        self.timeoutms = timeoutms
+    }
+    private enum CodingKeys: String, CodingKey {
+        case runid = "runId"
+        case afterms = "afterMs"
+        case timeoutms = "timeoutMs"
     }
 }
 
@@ -614,6 +639,7 @@ public struct SessionsPatchParams: Codable {
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
     public let model: AnyCodable?
+    public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
     public init(
@@ -621,12 +647,14 @@ public struct SessionsPatchParams: Codable {
         thinkinglevel: AnyCodable?,
         verboselevel: AnyCodable?,
         model: AnyCodable?,
+        sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?
     ) {
         self.key = key
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
         self.model = model
+        self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
     private enum CodingKeys: String, CodingKey {
@@ -634,6 +662,7 @@ public struct SessionsPatchParams: Codable {
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
         case model
+        case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
 }
