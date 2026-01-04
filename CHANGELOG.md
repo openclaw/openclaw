@@ -2,6 +2,12 @@
 
 **Why this looks different:** the project was renamed from **Clawdis → Clawdbot**. To make the transition clear, releases now use **date-based versions** (`YYYY.M.D`) and the changelog is **compressed** into milestone summaries. Full detail still lives in git history and the docs.
 
+## Unreleased
+
+### Fixes
+- Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
+
+
 ## 2026.1.4
 
 ### Highlights
