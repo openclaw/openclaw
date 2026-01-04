@@ -517,4 +517,80 @@ describe("gateway server agent", () => {
     ws.close();
     await server.close();
   });
+
+  test("agent.wait resolves after job completes", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const waitP = rpcReq(ws, "agent.wait", {
+      runId: "run-wait-1",
+      afterMs: 100,
+      timeoutMs: 1000,
+    });
+
+    setTimeout(() => {
+      emitAgentEvent({
+        runId: "run-wait-1",
+        stream: "job",
+        data: { state: "done", startedAt: 200, endedAt: 210 },
+      });
+    }, 10);
+
+    const res = await waitP;
+    expect(res.ok).toBe(true);
+    expect(res.payload.status).toBe("ok");
+    expect(res.payload.startedAt).toBe(200);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent.wait ignores jobs before afterMs", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const waitP = rpcReq(ws, "agent.wait", {
+      runId: "run-wait-2",
+      afterMs: 500,
+      timeoutMs: 1000,
+    });
+
+    setTimeout(() => {
+      emitAgentEvent({
+        runId: "run-wait-2",
+        stream: "job",
+        data: { state: "done", startedAt: 200, endedAt: 220 },
+      });
+    }, 10);
+    setTimeout(() => {
+      emitAgentEvent({
+        runId: "run-wait-2",
+        stream: "job",
+        data: { state: "done", startedAt: 700, endedAt: 710 },
+      });
+    }, 20);
+
+    const res = await waitP;
+    expect(res.ok).toBe(true);
+    expect(res.payload.status).toBe("ok");
+    expect(res.payload.startedAt).toBe(700);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent.wait times out when no job completes", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent.wait", {
+      runId: "run-wait-3",
+      timeoutMs: 20,
+    });
+    expect(res.ok).toBe(true);
+    expect(res.payload.status).toBe("timeout");
+
+    ws.close();
+    await server.close();
+  });
 });

@@ -123,17 +123,29 @@ describe("sessions tools", () => {
 
   it("sessions_send supports fire-and-forget and wait", async () => {
     callGatewayMock.mockReset();
-    const calls: Array<{ method?: string; expectFinal?: boolean }> = [];
+    const calls: Array<{ method?: string; params?: unknown }> = [];
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; expectFinal?: boolean };
+      const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "agent") {
-        return { runId: "run-1", status: "accepted" };
+        return { runId: "run-1", status: "accepted", acceptedAt: 1234 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
         return {
           messages: [
-            { role: "assistant", content: [{ type: "text", text: "done" }] },
+            {
+              role: "assistant",
+              content: [
+                {
+                  type: "text",
+                  text: "done",
+                },
+              ],
+              timestamp: 20,
+            },
           ],
         };
       }
@@ -156,7 +168,7 @@ describe("sessions tools", () => {
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
       message: "wait",
-      timeoutSeconds: 5,
+      timeoutSeconds: 1,
     });
     const waited = await waitPromise;
     expect(waited.details).toMatchObject({
@@ -166,7 +178,13 @@ describe("sessions tools", () => {
     });
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls[0]?.expectFinal).toBeUndefined();
-    expect(agentCalls[1]?.expectFinal).toBe(true);
+    const waitCalls = calls.filter((call) => call.method === "agent.wait");
+    const historyOnlyCalls = calls.filter(
+      (call) => call.method === "chat.history",
+    );
+    expect(agentCalls).toHaveLength(2);
+    expect(waitCalls).toHaveLength(1);
+    expect(historyOnlyCalls).toHaveLength(1);
+    expect(waitCalls[0]?.params).toMatchObject({ afterMs: 1234 });
   });
 });

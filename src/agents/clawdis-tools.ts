@@ -1536,7 +1536,8 @@ function createNodesTool(): AnyAgentTool {
           const node = readStringParam(params, "node", { required: true });
           const nodeId = await resolveNodeId(gatewayOpts, node);
           const maxAgeMs =
-            typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
+            typeof params.maxAgeMs === "number" &&
+            Number.isFinite(params.maxAgeMs)
               ? params.maxAgeMs
               : undefined;
           const desiredAccuracy =
@@ -2736,7 +2737,7 @@ function createSessionsSendTool(): AnyAgentTool {
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 30;
       const idempotencyKey = crypto.randomUUID();
-      let runId = idempotencyKey;
+      let runId: string = idempotencyKey;
       const displayKey = resolveDisplaySessionKey({
         key: sessionKey,
         alias,
@@ -2776,43 +2777,69 @@ function createSessionsSendTool(): AnyAgentTool {
         }
       }
 
+      let acceptedAt: number | undefined;
       try {
         const response = (await callGateway({
           method: "agent",
           params: sendParams,
-          expectFinal: true,
-          timeoutMs: timeoutSeconds * 1000,
-        })) as { runId?: string; status?: string };
+          timeoutMs: 10_000,
+        })) as { runId?: string; acceptedAt?: number };
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;
+        }
+        if (typeof response?.acceptedAt === "number") {
+          acceptedAt = response.acceptedAt;
         }
       } catch (err) {
         const message =
           err instanceof Error ? err.message : String(err ?? "error");
-        if (message.includes("gateway timeout")) {
-          try {
-            const cached = (await callGateway({
-              method: "agent",
-              params: sendParams,
-              timeoutMs: 5_000,
-            })) as { runId?: string };
-            if (typeof cached?.runId === "string" && cached.runId) {
-              runId = cached.runId;
-            }
-          } catch {
-            /* ignore */
-          }
-          return jsonResult({
-            runId,
-            status: "timeout",
-            error: message,
-            sessionKey: displayKey,
-          });
-        }
         return jsonResult({
           runId,
           status: "error",
           error: message,
+          sessionKey: displayKey,
+        });
+      }
+
+      const timeoutMs = timeoutSeconds * 1000;
+      let waitStatus: string | undefined;
+      let waitError: string | undefined;
+      try {
+        const wait = (await callGateway({
+          method: "agent.wait",
+          params: {
+            runId,
+            afterMs: acceptedAt,
+            timeoutMs,
+          },
+          timeoutMs: timeoutMs + 2000,
+        })) as { status?: string; error?: string };
+        waitStatus = typeof wait?.status === "string" ? wait.status : undefined;
+        waitError = typeof wait?.error === "string" ? wait.error : undefined;
+      } catch (err) {
+        const message =
+          err instanceof Error ? err.message : String(err ?? "error");
+        return jsonResult({
+          runId,
+          status: message.includes("gateway timeout") ? "timeout" : "error",
+          error: message,
+          sessionKey: displayKey,
+        });
+      }
+
+      if (waitStatus === "timeout") {
+        return jsonResult({
+          runId,
+          status: "timeout",
+          error: waitError,
+          sessionKey: displayKey,
+        });
+      }
+      if (waitStatus === "error") {
+        return jsonResult({
+          runId,
+          status: "error",
+          error: waitError ?? "agent error",
           sessionKey: displayKey,
         });
       }
