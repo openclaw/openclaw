@@ -98,14 +98,25 @@ class NodeForegroundService : Service() {
   }
 
   private fun buildNotification(title: String, text: String): Notification {
+    val launchIntent = Intent(this, MainActivity::class.java).apply {
+      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+    }
+    val launchPending = PendingIntent.getActivity(
+      this, 1, launchIntent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
+
     val stopIntent = Intent(this, NodeForegroundService::class.java).setAction(ACTION_STOP)
-    val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-    val stopPending = PendingIntent.getService(this, 2, stopIntent, flags)
+    val stopPending = PendingIntent.getService(
+      this, 2, stopIntent,
+      PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+    )
 
     return NotificationCompat.Builder(this, CHANNEL_ID)
       .setSmallIcon(R.mipmap.ic_launcher)
       .setContentTitle(title)
       .setContentText(text)
+      .setContentIntent(launchPending)
       .setOngoing(true)
       .setOnlyAlertOnce(true)
       .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
