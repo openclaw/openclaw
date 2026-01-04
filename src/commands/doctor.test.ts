@@ -7,6 +7,30 @@ const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
 }));
 
+const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
+  path: "/tmp/clawdis.json",
+  exists: false,
+  raw: null,
+  parsed: {},
+  valid: true,
+  config: {},
+  issues: [],
+  legacyIssues: [],
+});
+const createConfigIO = vi.fn(() => ({
+  readConfigFileSnapshot: legacyReadConfigFileSnapshot,
+}));
+
+const findLegacyGatewayServices = vi.fn().mockResolvedValue([]);
+const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]);
+const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
+  programArguments: ["node", "cli", "gateway-daemon", "--port", "18789"],
+});
+const serviceInstall = vi.fn().mockResolvedValue(undefined);
+const serviceIsLoaded = vi.fn().mockResolvedValue(false);
+const serviceRestart = vi.fn().mockResolvedValue(undefined);
+const serviceUninstall = vi.fn().mockResolvedValue(undefined);
+
 vi.mock("@clack/prompts", () => ({
   confirm: vi.fn().mockResolvedValue(true),
   intro: vi.fn(),
@@ -20,9 +44,32 @@ vi.mock("../agents/skills-status.js", () => ({
 
 vi.mock("../config/config.js", () => ({
   CONFIG_PATH_CLAWDBOT: "/tmp/clawdbot.json",
+  createConfigIO,
   readConfigFileSnapshot,
   writeConfigFile,
   migrateLegacyConfig,
+}));
+
+vi.mock("../daemon/legacy.js", () => ({
+  findLegacyGatewayServices,
+  uninstallLegacyGatewayServices,
+}));
+
+vi.mock("../daemon/program-args.js", () => ({
+  resolveGatewayProgramArguments,
+}));
+
+vi.mock("../daemon/service.js", () => ({
+  resolveGatewayService: () => ({
+    label: "LaunchAgent",
+    loadedText: "loaded",
+    notLoadedText: "not loaded",
+    install: serviceInstall,
+    uninstall: serviceUninstall,
+    restart: serviceRestart,
+    isLoaded: serviceIsLoaded,
+    readCommand: vi.fn(),
+  }),
 }));
 
 vi.mock("../runtime.js", () => ({
@@ -97,5 +144,162 @@ describe("doctor", () => {
       "+15555550123",
     ]);
     expect(written.routing).toBeUndefined();
+  });
+
+  it("migrates legacy Clawdis services", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {},
+      issues: [],
+      legacyIssues: [],
+    });
+
+    findLegacyGatewayServices.mockResolvedValueOnce([
+      {
+        platform: "darwin",
+        label: "com.clawdis.gateway",
+        detail: "loaded",
+      },
+    ]);
+    serviceIsLoaded.mockResolvedValueOnce(false);
+    serviceInstall.mockClear();
+
+    const { doctorCommand } = await import("./doctor.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await doctorCommand(runtime);
+
+    expect(uninstallLegacyGatewayServices).toHaveBeenCalledTimes(1);
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+  });
+
+  it("migrates legacy config file", async () => {
+    readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        path: "/tmp/clawdbot.json",
+        exists: false,
+        raw: null,
+        parsed: {},
+        valid: true,
+        config: {},
+        issues: [],
+        legacyIssues: [],
+      })
+      .mockResolvedValueOnce({
+        path: "/tmp/clawdbot.json",
+        exists: true,
+        raw: "{}",
+        parsed: {
+          gateway: { mode: "local", bind: "loopback" },
+          agent: {
+            workspace: "/Users/steipete/clawdbot",
+            sandbox: {
+              workspaceRoot: "/Users/steipete/clawdbot/sandboxes",
+              docker: {
+                image: "clawdbot-sandbox",
+                containerPrefix: "clawdbot-sbx",
+              },
+            },
+          },
+        },
+        valid: true,
+        config: {
+          gateway: { mode: "local", bind: "loopback" },
+          agent: {
+            workspace: "/Users/steipete/clawdbot",
+            sandbox: {
+              workspaceRoot: "/Users/steipete/clawdbot/sandboxes",
+              docker: {
+                image: "clawdbot-sandbox",
+                containerPrefix: "clawdbot-sbx",
+              },
+            },
+          },
+        },
+        issues: [],
+        legacyIssues: [],
+      });
+
+    legacyReadConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/Users/steipete/.clawdis/clawdis.json",
+      exists: true,
+      raw: "{}",
+      parsed: {
+        gateway: { mode: "local", bind: "loopback" },
+        agent: {
+          workspace: "/Users/steipete/clawd",
+          sandbox: {
+            workspaceRoot: "/Users/steipete/clawd/sandboxes",
+            docker: {
+              image: "clawdis-sandbox",
+              containerPrefix: "clawdis-sbx",
+            },
+          },
+        },
+      },
+      valid: true,
+      config: {
+        gateway: { mode: "local", bind: "loopback" },
+        agent: {
+          workspace: "/Users/steipete/clawd",
+          sandbox: {
+            workspaceRoot: "/Users/steipete/clawd/sandboxes",
+            docker: {
+              image: "clawdis-sandbox",
+              containerPrefix: "clawdis-sbx",
+            },
+          },
+        },
+      },
+      issues: [],
+      legacyIssues: [],
+    });
+
+    migrateLegacyConfig.mockReturnValueOnce({
+      config: {
+        gateway: { mode: "local", bind: "loopback" },
+        agent: {
+          workspace: "/Users/steipete/clawd",
+          sandbox: {
+            workspaceRoot: "/Users/steipete/clawd/sandboxes",
+            docker: {
+              image: "clawdis-sandbox",
+              containerPrefix: "clawdis-sbx",
+            },
+          },
+        },
+      },
+      changes: [],
+    });
+
+    const { doctorCommand } = await import("./doctor.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await doctorCommand(runtime);
+
+    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    const agent = written.agent as Record<string, unknown>;
+    const sandbox = agent.sandbox as Record<string, unknown>;
+    const docker = sandbox.docker as Record<string, unknown>;
+
+    expect(agent.workspace).toBe("/Users/steipete/clawdbot");
+    expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawdbot/sandboxes");
+    expect(docker.image).toBe("clawdbot-sandbox");
+    expect(docker.containerPrefix).toBe("clawdbot-sbx");
   });
 });
