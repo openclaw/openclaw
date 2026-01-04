@@ -508,6 +508,20 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
 
+`agent.tools` configures a global tool allow/deny policy (deny wins).
+This is applied even when the Docker sandbox is **off**.
+
+Example (disable browser/canvas everywhere):
+```json5
+{
+  agent: {
+    tools: {
+      deny: ["browser", "canvas"]
+    }
+  }
+}
+```
+
 `agent.elevated` controls elevated (host) bash access:
 - `enabled`: allow elevated mode (default true)
 - `allowFrom`: per-surface allowlists (empty = disabled)
