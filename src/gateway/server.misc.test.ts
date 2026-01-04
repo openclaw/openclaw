@@ -18,8 +18,8 @@ installGatewayTestHooks();
 
 describe("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
-    const prevToken = process.env.CLAWDIS_GATEWAY_TOKEN;
-    process.env.CLAWDIS_GATEWAY_TOKEN = "secret";
+    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
     testTailnetIPv4.value = "100.64.0.1";
     testState.gatewayBind = "lan";
     const canvasPort = await getFreePort();
@@ -41,9 +41,9 @@ describe("gateway server misc", () => {
     ws.close();
     await server.close();
     if (prevToken === undefined) {
-      delete process.env.CLAWDIS_GATEWAY_TOKEN;
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     } else {
-      process.env.CLAWDIS_GATEWAY_TOKEN = prevToken;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
     }
   });
 

@@ -37,5 +37,5 @@ export function canvasSnapshotTempPath(opts: {
   const tmpDir = opts.tmpDir ?? os.tmpdir();
   const id = opts.id ?? randomUUID();
   const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(tmpDir, `clawdis-canvas-snapshot-${id}${ext}`);
+  return path.join(tmpDir, `clawdbot-canvas-snapshot-${id}${ext}`);
 }

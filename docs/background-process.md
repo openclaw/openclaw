@@ -7,7 +7,7 @@ read_when:
 
 # Background Bash + Process Tool
 
-Clawdis runs shell commands through the `bash` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
+Clawdbot runs shell commands through the `bash` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
 
 ## bash tool
 

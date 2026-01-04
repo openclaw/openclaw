@@ -11,7 +11,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { extractModelDirective } from "../model.js";
@@ -134,7 +134,7 @@ export function isDirectiveOnly(params: {
   directives: InlineDirectives;
   cleanedBody: string;
   ctx: MsgContext;
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   isGroup: boolean;
 }): boolean {
   const { directives, cleanedBody, ctx, cfg, isGroup } = params;
@@ -436,7 +436,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg: ClawdisConfig["agent"] | undefined;
+  agentCfg: ClawdbotConfig["agent"] | undefined;
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
   const {
     directives,
@@ -551,7 +551,7 @@ export async function persistInlineDirectives(params: {
   };
 }
 
-export function resolveDefaultModel(params: { cfg: ClawdisConfig }): {
+export function resolveDefaultModel(params: { cfg: ClawdbotConfig }): {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;

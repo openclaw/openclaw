@@ -1,7 +1,7 @@
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import {
@@ -112,7 +112,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     entries[p.skillKey] = current;
     skills.entries = entries;
-    const nextConfig: ClawdisConfig = {
+    const nextConfig: ClawdbotConfig = {
       ...cfg,
       skills,
     };

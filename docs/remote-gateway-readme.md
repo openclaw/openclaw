@@ -1,6 +1,6 @@
-# Running Clawdis.app with a Remote Gateway
+# Running Clawdbot.app with a Remote Gateway
 
-Clawdis.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
+Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows you how to set it up.
 
 ## Overview
 
@@ -8,7 +8,7 @@ Clawdis.app uses SSH tunneling to connect to a remote gateway. This guide shows 
 ┌─────────────────────────────────────────────────────────────┐
 │                          MacBook                              │
 │                                                              │
-│  Clawdis.app ──► ws://127.0.0.1:18789 (local port)           │
+│  Clawdbot.app ──► ws://127.0.0.1:18789 (local port)           │
 │                     │                                        │
 │                     ▼                                        │
 │  SSH Tunnel ────────────────────────────────────────────────│
@@ -51,7 +51,7 @@ ssh-copy-id -i ~/.ssh/id_rsa <REMOTE_USER>@<REMOTE_IP>
 ### Step 3: Set Gateway Token
 
 ```bash
-launchctl setenv CLAWDIS_GATEWAY_TOKEN "<your-token>"
+launchctl setenv CLAWDBOT_GATEWAY_TOKEN "<your-token>"
 ```
 
 ### Step 4: Start SSH Tunnel
@@ -60,11 +60,11 @@ launchctl setenv CLAWDIS_GATEWAY_TOKEN "<your-token>"
 ssh -N remote-gateway &
 ```
 
-### Step 5: Restart Clawdis.app
+### Step 5: Restart Clawdbot.app
 
 ```bash
-killall Clawdis
-open /path/to/Clawdis.app
+killall Clawdbot
+open /path/to/Clawdbot.app
 ```
 
 The app will now connect to the remote gateway through the SSH tunnel.
@@ -77,7 +77,7 @@ To have the SSH tunnel start automatically when you log in, create a Launch Agen
 
 ### Create the PLIST file
 
-Save this as `~/Library/LaunchAgents/com.clawdis.ssh-tunnel.plist`:
+Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -85,7 +85,7 @@ Save this as `~/Library/LaunchAgents/com.clawdis.ssh-tunnel.plist`:
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.clawdis.ssh-tunnel</string>
+    <string>com.clawdbot.ssh-tunnel</string>
     <key>ProgramArguments</key>
     <array>
         <string>/usr/bin/ssh</string>
@@ -103,7 +103,7 @@ Save this as `~/Library/LaunchAgents/com.clawdis.ssh-tunnel.plist`:
 ### Load the Launch Agent
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.clawdis.ssh-tunnel.plist
+launchctl load ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
 ```
 
 The tunnel will now:
@@ -125,13 +125,13 @@ lsof -i :18789
 **Restart the tunnel:**
 
 ```bash
-launchctl restart com.clawdis.ssh-tunnel
+launchctl restart com.clawdbot.ssh-tunnel
 ```
 
 **Stop the tunnel:**
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.clawdis.ssh-tunnel.plist
+launchctl unload ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
 ```
 
 ---
@@ -145,4 +145,4 @@ launchctl unload ~/Library/LaunchAgents/com.clawdis.ssh-tunnel.plist
 | `KeepAlive` | Automatically restarts tunnel if it crashes |
 | `RunAtLoad` | Starts tunnel when the agent loads |
 
-Clawdis.app connects to `ws://127.0.0.1:18789` on your MacBook. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
+Clawdbot.app connects to `ws://127.0.0.1:18789` on your MacBook. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.

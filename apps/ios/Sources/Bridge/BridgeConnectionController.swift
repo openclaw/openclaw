@@ -1,4 +1,4 @@
-import ClawdisKit
+import ClawdbotKit
 import Darwin
 import Foundation
 import Network
@@ -99,7 +99,7 @@ final class BridgeConnectionController {
         guard !instanceId.isEmpty else { return }
 
         let token = KeychainStore.loadString(
-            service: "com.clawdis.bridge",
+            service: "com.clawdbot.bridge",
             account: self.keychainAccount(instanceId: instanceId))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !token.isEmpty else { return }
@@ -189,7 +189,7 @@ final class BridgeConnectionController {
                 if !refreshed.isEmpty, refreshed != token {
                     _ = KeychainStore.saveString(
                         refreshed,
-                        service: "com.clawdis.bridge",
+                        service: "com.clawdbot.bridge",
                         account: self.keychainAccount(instanceId: instanceId))
                 }
                 appModel.connectToBridge(endpoint: endpoint, hello: self.makeHello(token: resolvedToken))
@@ -217,46 +217,46 @@ final class BridgeConnectionController {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [ClawdisCapability.canvas.rawValue, ClawdisCapability.screen.rawValue]
+        var caps = [ClawdbotCapability.canvas.rawValue, ClawdbotCapability.screen.rawValue]
 
         // Default-on: if the key doesn't exist yet, treat it as enabled.
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(ClawdisCapability.camera.rawValue) }
+        if cameraEnabled { caps.append(ClawdbotCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(ClawdisCapability.voiceWake.rawValue) }
+        if voiceWakeEnabled { caps.append(ClawdbotCapability.voiceWake.rawValue) }
 
         let locationModeRaw = UserDefaults.standard.string(forKey: "location.enabledMode") ?? "off"
-        let locationMode = ClawdisLocationMode(rawValue: locationModeRaw) ?? .off
-        if locationMode != .off { caps.append(ClawdisCapability.location.rawValue) }
+        let locationMode = ClawdbotLocationMode(rawValue: locationModeRaw) ?? .off
+        if locationMode != .off { caps.append(ClawdbotCapability.location.rawValue) }
 
         return caps
     }
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            ClawdisCanvasCommand.present.rawValue,
-            ClawdisCanvasCommand.hide.rawValue,
-            ClawdisCanvasCommand.navigate.rawValue,
-            ClawdisCanvasCommand.evalJS.rawValue,
-            ClawdisCanvasCommand.snapshot.rawValue,
-            ClawdisCanvasA2UICommand.push.rawValue,
-            ClawdisCanvasA2UICommand.pushJSONL.rawValue,
-            ClawdisCanvasA2UICommand.reset.rawValue,
-            ClawdisScreenCommand.record.rawValue,
+            ClawdbotCanvasCommand.present.rawValue,
+            ClawdbotCanvasCommand.hide.rawValue,
+            ClawdbotCanvasCommand.navigate.rawValue,
+            ClawdbotCanvasCommand.evalJS.rawValue,
+            ClawdbotCanvasCommand.snapshot.rawValue,
+            ClawdbotCanvasA2UICommand.push.rawValue,
+            ClawdbotCanvasA2UICommand.pushJSONL.rawValue,
+            ClawdbotCanvasA2UICommand.reset.rawValue,
+            ClawdbotScreenCommand.record.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
-        if caps.contains(ClawdisCapability.camera.rawValue) {
-            commands.append(ClawdisCameraCommand.list.rawValue)
-            commands.append(ClawdisCameraCommand.snap.rawValue)
-            commands.append(ClawdisCameraCommand.clip.rawValue)
+        if caps.contains(ClawdbotCapability.camera.rawValue) {
+            commands.append(ClawdbotCameraCommand.list.rawValue)
+            commands.append(ClawdbotCameraCommand.snap.rawValue)
+            commands.append(ClawdbotCameraCommand.clip.rawValue)
         }
-        if caps.contains(ClawdisCapability.location.rawValue) {
-            commands.append(ClawdisLocationCommand.get.rawValue)
+        if caps.contains(ClawdbotCapability.location.rawValue) {
+            commands.append(ClawdbotLocationCommand.get.rawValue)
         }
 
         return commands

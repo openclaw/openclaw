@@ -1,6 +1,6 @@
 import Testing
 import WebKit
-@testable import Clawdis
+@testable import Clawdbot
 
 @Suite struct ScreenControllerTests {
     @Test @MainActor func canvasModeConfiguresWebViewForTouch() {

@@ -78,7 +78,7 @@ describe("gateway SIGTERM", () => {
   it("exits 0 on SIGTERM", { timeout: 90_000 }, async () => {
     const port = await getFreePort();
     const stateDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdis-gateway-test-"),
+      path.join(os.tmpdir(), "clawdbot-gateway-test-"),
     );
     const out: string[] = [];
     const err: string[] = [];
@@ -100,14 +100,14 @@ describe("gateway SIGTERM", () => {
         cwd: process.cwd(),
         env: {
           ...process.env,
-          CLAWDIS_STATE_DIR: stateDir,
-          CLAWDIS_CONFIG_PATH: path.join(stateDir, "clawdis.json"),
-          CLAWDIS_SKIP_PROVIDERS: "1",
-          CLAWDIS_SKIP_BROWSER_CONTROL_SERVER: "1",
-          CLAWDIS_SKIP_CANVAS_HOST: "1",
+          CLAWDBOT_STATE_DIR: stateDir,
+          CLAWDBOT_CONFIG_PATH: path.join(stateDir, "clawdbot.json"),
+          CLAWDBOT_SKIP_PROVIDERS: "1",
+          CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
+          CLAWDBOT_SKIP_CANVAS_HOST: "1",
           // Avoid port collisions with other test processes that may also start a bridge server.
-          CLAWDIS_BRIDGE_HOST: "127.0.0.1",
-          CLAWDIS_BRIDGE_PORT: "0",
+          CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
+          CLAWDBOT_BRIDGE_PORT: "0",
         },
         stdio: ["ignore", "pipe", "pipe"],
       },

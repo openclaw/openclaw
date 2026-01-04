@@ -1,13 +1,13 @@
 ---
 name: discord
-description: Use when you need to control Discord from Clawdis via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
+description: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
 ---
 
 # Discord Actions
 
 ## Overview
 
-Use `discord` to manage messages, reactions, threads, polls, and moderation. You can disable groups via `discord.actions.*` (defaults to enabled, except roles/moderation). The tool uses the bot token configured for Clawdis.
+Use `discord` to manage messages, reactions, threads, polls, and moderation. You can disable groups via `discord.actions.*` (defaults to enabled, except roles/moderation). The tool uses the bot token configured for Clawdbot.
 
 ## Inputs to collect
 
@@ -81,8 +81,8 @@ Message context lines include `discord message id` and `channel` fields you can 
 {
   "action": "stickerUpload",
   "guildId": "999",
-  "name": "clawdis_wave",
-  "description": "Clawdis waving hello",
+  "name": "clawdbot_wave",
+  "description": "Clawdbot waving hello",
   "tags": "👋",
   "mediaUrl": "file:///tmp/wave.png"
 }
@@ -150,7 +150,7 @@ Use `discord.actions.*` to disable action groups:
 {
   "action": "sendMessage",
   "to": "channel:123",
-  "content": "Hello from Clawdis"
+  "content": "Hello from Clawdbot"
 }
 ```
 

@@ -34,10 +34,10 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 **Tip:** The number only needs to receive one verification SMS. After that, WhatsApp Web sessions persist via `creds.json`.
 
 ## Login + credentials
-- Login command: `clawdis login` (QR via Linked Devices).
-- Credentials stored in `~/.clawdis/credentials/creds.json`.
+- Login command: `clawdbot login` (QR via Linked Devices).
+- Credentials stored in `~/.clawdbot/credentials/creds.json`.
 - Backup copy at `creds.json.bak` (restored on corruption).
-- Logout: `clawdis logout` deletes creds and session store.
+- Logout: `clawdbot logout` deletes creds and session store.
 - Logged-out socket => error instructs re-link.
 
 ## Inbound flow (DM + group)
@@ -93,7 +93,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
   - Caption only on first media item.
   - Media fetch supports HTTP(S) and local paths.
   - Animated GIFs: WhatsApp expects MP4 with `gifPlayback: true` for inline looping.
-    - CLI: `clawdis send --media <mp4> --gif-playback`
+    - CLI: `clawdbot send --media <mp4> --gif-playback`
     - Gateway: `send` params include `gifPlayback: true`
 
 ## Media limits + optimization
@@ -133,7 +133,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
-- Log file: `/tmp/clawdis/clawdis-YYYY-MM-DD.log` (configurable).
+- Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
 - Troubleshooting guide: `docs/refactor/web-gateway-troubleshooting.md`.
 
 ## Tests

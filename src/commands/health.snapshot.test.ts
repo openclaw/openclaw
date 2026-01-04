@@ -104,7 +104,7 @@ describe("getHealthSnapshot", () => {
   });
 
   it("treats telegram.tokenFile as configured", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-health-"));
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
     fs.writeFileSync(tokenFile, "t-file\n", "utf-8");
     testConfig = { telegram: { tokenFile } };

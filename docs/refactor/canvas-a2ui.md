@@ -41,11 +41,11 @@ Add A2UI HTML/JS to the Gateway Canvas host (standalone HTTP server on
 `canvasHost.port`), e.g.:
 
 ```
-/__clawdis__/a2ui/           -> index.html
-/__clawdis__/a2ui/a2ui.bundle.js -> bundled A2UI runtime
+/__clawdbot__/a2ui/           -> index.html
+/__clawdbot__/a2ui/a2ui.bundle.js -> bundled A2UI runtime
 ```
 
-Serve Canvas files at `/__clawdis__/canvas/` and A2UI at `/__clawdis__/a2ui/`.
+Serve Canvas files at `/__clawdbot__/canvas/` and A2UI at `/__clawdbot__/a2ui/`.
 Use the shared Canvas host handler (`src/canvas-host/server.ts`) to serve these
 assets and inject the action bridge + live reload if desired.
 
@@ -57,11 +57,11 @@ so nodes don’t need to guess.
 
 ### Navigation path
 Before applying A2UI:
-- Navigate to `${canvasHostUrl}/__clawdis__/a2ui/`.
+- Navigate to `${canvasHostUrl}/__clawdbot__/a2ui/`.
 
 ### Remove bundled shells
 Remove all fallback logic that serves A2UI from local bundles:
-- macOS: remove custom-scheme fallback for `/__clawdis__/a2ui/`
+- macOS: remove custom-scheme fallback for `/__clawdbot__/a2ui/`
 - iOS/Android: remove packaged A2UI assets and "default scaffold" assumptions
 
 ### Error behavior
@@ -76,14 +76,14 @@ If `canvasHostUrl` is missing or unreachable:
 ## Implementation plan
 1) Gateway
    - Add A2UI assets under `src/canvas-host/`.
-   - Serve them at `/__clawdis__/a2ui/` (align with existing naming).
-   - Serve Canvas files at `/__clawdis__/canvas/` on `canvasHost.port`.
+   - Serve them at `/__clawdbot__/a2ui/` (align with existing naming).
+   - Serve Canvas files at `/__clawdbot__/canvas/` on `canvasHost.port`.
    - Expose `canvasHostUrl` in handshake + bridge hello payloads.
 2) Node runtimes
    - Update `canvas.a2ui.*` to navigate to `canvasHostUrl`.
    - Remove custom-scheme A2UI fallback and bundled assets.
 3) Tests
-   - TS: verify `/__clawdis__/a2ui/` responds with HTML + JS.
+   - TS: verify `/__clawdbot__/a2ui/` responds with HTML + JS.
    - Node: verify A2UI fails when host is unreachable and succeeds when reachable.
 4) Docs
    - Update `docs/mac/canvas.md`, `docs/ios/spec.md`, `docs/android/connect.md`

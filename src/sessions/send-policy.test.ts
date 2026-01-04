@@ -1,18 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveSendPolicy } from "./send-policy.js";
 
 describe("resolveSendPolicy", () => {
   it("defaults to allow", () => {
-    const cfg = {} as ClawdisConfig;
+    const cfg = {} as ClawdbotConfig;
     expect(resolveSendPolicy({ cfg })).toBe("allow");
   });
 
   it("entry override wins", () => {
     const cfg = {
       session: { sendPolicy: { default: "allow" } },
-    } as ClawdisConfig;
+    } as ClawdbotConfig;
     const entry: SessionEntry = {
       sessionId: "s",
       updatedAt: 0,
@@ -34,7 +34,7 @@ describe("resolveSendPolicy", () => {
           ],
         },
       },
-    } as ClawdisConfig;
+    } as ClawdbotConfig;
     const entry: SessionEntry = {
       sessionId: "s",
       updatedAt: 0,
@@ -54,7 +54,7 @@ describe("resolveSendPolicy", () => {
           rules: [{ action: "deny", match: { keyPrefix: "cron:" } }],
         },
       },
-    } as ClawdisConfig;
+    } as ClawdbotConfig;
     expect(resolveSendPolicy({ cfg, sessionKey: "cron:job-1" })).toBe("deny");
   });
 });

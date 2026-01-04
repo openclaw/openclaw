@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
@@ -66,7 +66,7 @@ export type SkillStatusReport = {
 };
 
 function resolveSkillKey(entry: SkillEntry): string {
-  return entry.clawdis?.skillKey ?? entry.skill.name;
+  return entry.clawdbot?.skillKey ?? entry.skill.name;
 }
 
 function selectPreferredInstallSpec(
@@ -95,7 +95,7 @@ function normalizeInstallOptions(
   entry: SkillEntry,
   prefs: SkillsInstallPreferences,
 ): SkillInstallOption[] {
-  const install = entry.clawdis?.install ?? [];
+  const install = entry.clawdbot?.install ?? [];
   if (install.length === 0) return [];
   const preferred = selectPreferredInstallSpec(install, prefs);
   if (!preferred) return [];
@@ -131,7 +131,7 @@ function normalizeInstallOptions(
 
 function buildSkillStatus(
   entry: SkillEntry,
-  config?: ClawdisConfig,
+  config?: ClawdbotConfig,
   prefs?: SkillsInstallPreferences,
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
@@ -139,19 +139,19 @@ function buildSkillStatus(
   const disabled = skillConfig?.enabled === false;
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
-  const always = entry.clawdis?.always === true;
-  const emoji = entry.clawdis?.emoji ?? entry.frontmatter.emoji;
+  const always = entry.clawdbot?.always === true;
+  const emoji = entry.clawdbot?.emoji ?? entry.frontmatter.emoji;
   const homepageRaw =
-    entry.clawdis?.homepage ??
+    entry.clawdbot?.homepage ??
     entry.frontmatter.homepage ??
     entry.frontmatter.website ??
     entry.frontmatter.url;
   const homepage = homepageRaw?.trim() ? homepageRaw.trim() : undefined;
 
-  const requiredBins = entry.clawdis?.requires?.bins ?? [];
-  const requiredEnv = entry.clawdis?.requires?.env ?? [];
-  const requiredConfig = entry.clawdis?.requires?.config ?? [];
-  const requiredOs = entry.clawdis?.os ?? [];
+  const requiredBins = entry.clawdbot?.requires?.bins ?? [];
+  const requiredEnv = entry.clawdbot?.requires?.env ?? [];
+  const requiredConfig = entry.clawdbot?.requires?.config ?? [];
+  const requiredOs = entry.clawdbot?.os ?? [];
 
   const missingBins = requiredBins.filter((bin) => !hasBinary(bin));
   const missingOs =
@@ -163,7 +163,7 @@ function buildSkillStatus(
   for (const envName of requiredEnv) {
     if (process.env[envName]) continue;
     if (skillConfig?.env?.[envName]) continue;
-    if (skillConfig?.apiKey && entry.clawdis?.primaryEnv === envName) {
+    if (skillConfig?.apiKey && entry.clawdbot?.primaryEnv === envName) {
       continue;
     }
     missingEnv.push(envName);
@@ -204,7 +204,7 @@ function buildSkillStatus(
     filePath: entry.skill.filePath,
     baseDir: entry.skill.baseDir,
     skillKey,
-    primaryEnv: entry.clawdis?.primaryEnv,
+    primaryEnv: entry.clawdbot?.primaryEnv,
     emoji,
     homepage,
     always,
@@ -229,7 +229,7 @@ function buildSkillStatus(
 export function buildWorkspaceSkillStatus(
   workspaceDir: string,
   opts?: {
-    config?: ClawdisConfig;
+    config?: ClawdbotConfig;
     managedSkillsDir?: string;
     entries?: SkillEntry[];
   },

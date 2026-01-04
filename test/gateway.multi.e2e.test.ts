@@ -100,11 +100,11 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
   const bridgePort = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
   const homeDir = await fs.mkdtemp(
-    path.join(os.tmpdir(), `clawdis-e2e-${name}-`),
+    path.join(os.tmpdir(), `clawdbot-e2e-${name}-`),
   );
-  const configDir = path.join(homeDir, ".clawdis");
+  const configDir = path.join(homeDir, ".clawdbot");
   await fs.mkdir(configDir, { recursive: true });
-  const configPath = path.join(configDir, "clawdis.json");
+  const configPath = path.join(configDir, "clawdbot.json");
   const config = {
     gateway: { port },
     hooks: { enabled: true, token: hookToken, path: "/hooks" },
@@ -135,16 +135,16 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
         env: {
           ...process.env,
           HOME: homeDir,
-          CLAWDIS_CONFIG_PATH: configPath,
-          CLAWDIS_STATE_DIR: path.join(homeDir, ".clawdis", "state"),
-          CLAWDIS_GATEWAY_TOKEN: "",
-          CLAWDIS_GATEWAY_PASSWORD: "",
-          CLAWDIS_SKIP_PROVIDERS: "1",
-          CLAWDIS_SKIP_BROWSER_CONTROL_SERVER: "1",
-          CLAWDIS_SKIP_CANVAS_HOST: "1",
-          CLAWDIS_ENABLE_BRIDGE_IN_TESTS: "1",
-          CLAWDIS_BRIDGE_HOST: "127.0.0.1",
-          CLAWDIS_BRIDGE_PORT: String(bridgePort),
+          CLAWDBOT_CONFIG_PATH: configPath,
+          CLAWDBOT_STATE_DIR: path.join(homeDir, ".clawdbot", "state"),
+          CLAWDBOT_GATEWAY_TOKEN: "",
+          CLAWDBOT_GATEWAY_PASSWORD: "",
+          CLAWDBOT_SKIP_PROVIDERS: "1",
+          CLAWDBOT_SKIP_BROWSER_CONTROL_SERVER: "1",
+          CLAWDBOT_SKIP_CANVAS_HOST: "1",
+          CLAWDBOT_ENABLE_BRIDGE_IN_TESTS: "1",
+          CLAWDBOT_BRIDGE_HOST: "127.0.0.1",
+          CLAWDBOT_BRIDGE_PORT: String(bridgePort),
         },
         stdio: ["ignore", "pipe", "pipe"],
       },
@@ -375,7 +375,7 @@ const pairNode = async (inst: GatewayInstance, nodeId: string) => {
     version: "1.0.0",
   });
 
-  const baseDir = path.join(inst.homeDir, ".clawdis");
+  const baseDir = path.join(inst.homeDir, ".clawdbot");
   const requestId = await waitForPairRequest(baseDir, nodeId);
   const approved = await approveNodePairing(requestId, baseDir);
   expect(approved).toBeTruthy();
@@ -414,14 +414,14 @@ describe("gateway multi-instance e2e", () => {
 
       const [healthA, healthB] = (await Promise.all([
         runCliJson(["health", "--json", "--timeout", "10000"], {
-          CLAWDIS_GATEWAY_PORT: String(gwA.port),
-          CLAWDIS_GATEWAY_TOKEN: "",
-          CLAWDIS_GATEWAY_PASSWORD: "",
+          CLAWDBOT_GATEWAY_PORT: String(gwA.port),
+          CLAWDBOT_GATEWAY_TOKEN: "",
+          CLAWDBOT_GATEWAY_PASSWORD: "",
         }),
         runCliJson(["health", "--json", "--timeout", "10000"], {
-          CLAWDIS_GATEWAY_PORT: String(gwB.port),
-          CLAWDIS_GATEWAY_TOKEN: "",
-          CLAWDIS_GATEWAY_PASSWORD: "",
+          CLAWDBOT_GATEWAY_PORT: String(gwB.port),
+          CLAWDBOT_GATEWAY_TOKEN: "",
+          CLAWDBOT_GATEWAY_PASSWORD: "",
         }),
       ])) as [HealthPayload, HealthPayload];
       expect(healthA.ok).toBe(true);
@@ -449,15 +449,15 @@ describe("gateway multi-instance e2e", () => {
         runCliJson(
           ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwA.port}`],
           {
-            CLAWDIS_GATEWAY_TOKEN: "",
-            CLAWDIS_GATEWAY_PASSWORD: "",
+            CLAWDBOT_GATEWAY_TOKEN: "",
+            CLAWDBOT_GATEWAY_PASSWORD: "",
           },
         ),
         runCliJson(
           ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwB.port}`],
           {
-            CLAWDIS_GATEWAY_TOKEN: "",
-            CLAWDIS_GATEWAY_PASSWORD: "",
+            CLAWDBOT_GATEWAY_TOKEN: "",
+            CLAWDBOT_GATEWAY_PASSWORD: "",
           },
         ),
       ])) as [NodeListPayload, NodeListPayload];

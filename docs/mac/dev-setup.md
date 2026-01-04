@@ -1,11 +1,11 @@
 ---
-summary: "Setup guide for developers working on the Clawdis macOS app"
+summary: "Setup guide for developers working on the Clawdbot macOS app"
 read_when:
   - Setting up the macOS development environment
 ---
 # macOS Developer Setup
 
-This guide covers the necessary steps to build and run the Clawdis macOS application from source.
+This guide covers the necessary steps to build and run the Clawdbot macOS application from source.
 
 ## Prerequisites
 
@@ -20,7 +20,7 @@ Before building the app, ensure you have the following installed:
 
 ## 1. Initialize Submodules
 
-Clawdis depends on several submodules (like `Peekaboo`). You must initialize these recursively:
+Clawdbot depends on several submodules (like `Peekaboo`). You must initialize these recursively:
 
 ```bash
 git submodule update --init --recursive
@@ -36,7 +36,7 @@ pnpm install
 
 ## 3. Build and Package the App
 
-To build the macOS app and package it into `dist/Clawdis.app`, run:
+To build the macOS app and package it into `dist/Clawdbot.app`, run:
 
 ```bash
 ./scripts/package-mac-app.sh
@@ -48,16 +48,16 @@ If you don't have an Apple Developer ID certificate, the script will automatical
 
 ## 4. Install the CLI Helper
 
-The macOS app requires a symlink named `clawdis` in `/usr/local/bin` or `/opt/homebrew/bin` to manage background tasks.
+The macOS app requires a symlink named `clawdbot` in `/usr/local/bin` or `/opt/homebrew/bin` to manage background tasks.
 
 **To install it:**
-1.  Open the Clawdis app.
+1.  Open the Clawdbot app.
 2.  Go to the **General** settings tab.
 3.  Click **"Install CLI helper"** (requires administrator privileges).
 
 Alternatively, you can manually link it from your Admin account:
 ```bash
-sudo ln -sf "/Users/$(whoami)/clawdis/dist/Clawdis.app/Contents/Resources/Relay/clawdis" /usr/local/bin/clawdis
+sudo ln -sf "/Users/$(whoami)/clawdbot/dist/Clawdbot.app/Contents/Resources/Relay/clawdbot" /usr/local/bin/clawdbot
 ```
 
 ## Troubleshooting
@@ -68,7 +68,7 @@ If the app crashes when you try to allow **Speech Recognition** or **Microphone*
 **Fix:**
 1. Reset the TCC permissions:
    ```bash
-   tccutil reset All com.clawdis.mac.debug
+   tccutil reset All com.clawdbot.mac.debug
    ```
 2. If that fails, change the `BUNDLE_ID` temporarily in `scripts/package-mac-app.sh` to force a "clean slate" from macOS.
 
@@ -78,4 +78,4 @@ If the gateway status stays on "Starting...", check if a zombie process is holdi
 ```bash
 lsof -nP -i :18789
 ```
-Kill any existing `node` or `clawdis` processes listening on that port and restart the app.
+Kill any existing `node` or `clawdbot` processes listening on that port and restart the app.

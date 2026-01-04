@@ -1,9 +1,9 @@
 import { applyLegacyMigrations } from "./legacy.js";
-import type { ClawdisConfig } from "./types.js";
+import type { ClawdbotConfig } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 
 export function migrateLegacyConfig(raw: unknown): {
-  config: ClawdisConfig | null;
+  config: ClawdbotConfig | null;
   changes: string[];
 } {
   const { next, changes } = applyLegacyMigrations(raw);

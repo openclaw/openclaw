@@ -133,5 +133,5 @@ export function shortenHomeInString(input: string): string {
   return input.split(home).join("~");
 }
 
-// Fixed configuration root; legacy ~/.clawdis is no longer used.
-export const CONFIG_DIR = path.join(os.homedir(), ".clawdis");
+// Fixed configuration root; legacy ~/.clawdbot is no longer used.
+export const CONFIG_DIR = path.join(os.homedir(), ".clawdbot");

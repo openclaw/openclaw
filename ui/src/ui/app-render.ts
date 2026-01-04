@@ -198,7 +198,7 @@ export function renderApp(state: AppViewState) {
     <div class="shell">
       <header class="topbar">
         <div class="brand">
-          <div class="brand-title">Clawdis Control</div>
+          <div class="brand-title">Clawdbot Control</div>
           <div class="brand-sub">Gateway dashboard</div>
         </div>
         <div class="topbar-status">

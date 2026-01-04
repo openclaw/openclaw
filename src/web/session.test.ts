@@ -111,7 +111,7 @@ describe("web session", () => {
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {
-    const credsSuffix = path.join(".clawdis", "credentials", "creds.json");
+    const credsSuffix = path.join(".clawdbot", "credentials", "creds.json");
 
     const copySpy = vi
       .spyOn(fsSync, "copyFileSync")
@@ -191,8 +191,8 @@ describe("web session", () => {
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
-    const credsSuffix = path.join(".clawdis", "credentials", "creds.json");
-    const backupSuffix = path.join(".clawdis", "credentials", "creds.json.bak");
+    const credsSuffix = path.join(".clawdbot", "credentials", "creds.json");
+    const backupSuffix = path.join(".clawdbot", "credentials", "creds.json.bak");
 
     const copySpy = vi
       .spyOn(fsSync, "copyFileSync")

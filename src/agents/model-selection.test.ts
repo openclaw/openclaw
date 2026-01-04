@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveConfiguredModelRef } from "./model-selection.js";
 
@@ -8,7 +8,7 @@ describe("resolveConfiguredModelRef", () => {
   it("parses provider/model from agent.model", () => {
     const cfg = {
       agent: { model: "openai/gpt-4.1-mini" },
-    } satisfies ClawdisConfig;
+    } satisfies ClawdbotConfig;
 
     const resolved = resolveConfiguredModelRef({
       cfg,
@@ -22,7 +22,7 @@ describe("resolveConfiguredModelRef", () => {
   it("falls back to anthropic when agent.model omits provider", () => {
     const cfg = {
       agent: { model: "claude-opus-4-5" },
-    } satisfies ClawdisConfig;
+    } satisfies ClawdbotConfig;
 
     const resolved = resolveConfiguredModelRef({
       cfg,
@@ -37,7 +37,7 @@ describe("resolveConfiguredModelRef", () => {
   });
 
   it("falls back to defaults when agent.model is missing", () => {
-    const cfg = {} satisfies ClawdisConfig;
+    const cfg = {} satisfies ClawdbotConfig;
 
     const resolved = resolveConfiguredModelRef({
       cfg,
@@ -59,7 +59,7 @@ describe("resolveConfiguredModelRef", () => {
           Opus: "anthropic/claude-opus-4-5",
         },
       },
-    } satisfies ClawdisConfig;
+    } satisfies ClawdbotConfig;
 
     const resolved = resolveConfiguredModelRef({
       cfg,

@@ -21,7 +21,7 @@ describe("gateway server models + voicewake", () => {
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 15_000 },
     async () => {
-      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+      const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
       const prevHome = process.env.HOME;
       process.env.HOME = homeDir;
 
@@ -60,7 +60,7 @@ describe("gateway server models + voicewake", () => {
 
       const onDisk = JSON.parse(
         await fs.readFile(
-          path.join(homeDir, ".clawdis", "settings", "voicewake.json"),
+          path.join(homeDir, ".clawdbot", "settings", "voicewake.json"),
           "utf8",
         ),
       ) as { triggers?: unknown; updatedAtMs?: unknown };
@@ -79,7 +79,7 @@ describe("gateway server models + voicewake", () => {
   );
 
   test("pushes voicewake.changed to nodes on connect and on updates", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 

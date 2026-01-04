@@ -1,5 +1,5 @@
 ---
-summary: "Terminal UI (TUI) for Clawdis via the Gateway"
+summary: "Terminal UI (TUI) for Clawdbot via the Gateway"
 read_when:
   - You want a terminal UI that connects to the Gateway from any machine
   - You are debugging the TUI client or Gateway chat stream
@@ -15,12 +15,12 @@ Updated: 2026-01-03
 
 ## Run
 ```bash
-clawdis tui
+clawdbot tui
 ```
 
 ### Remote
 ```bash
-clawdis tui --url ws://127.0.0.1:18789 --token <gateway-token>
+clawdbot tui --url ws://127.0.0.1:18789 --token <gateway-token>
 ```
 Use SSH tunneling or Tailscale to reach the Gateway WS.
 

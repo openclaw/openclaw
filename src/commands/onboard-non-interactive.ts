@@ -1,8 +1,8 @@
 import path from "node:path";
 
 import {
-  type ClawdisConfig,
-  CONFIG_PATH_CLAWDIS,
+  type ClawdbotConfig,
+  CONFIG_PATH_CLAWDBOT,
   readConfigFileSnapshot,
   resolveGatewayPort,
   writeConfigFile,
@@ -32,7 +32,7 @@ export async function runNonInteractiveOnboarding(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const snapshot = await readConfigFileSnapshot();
-  const baseConfig: ClawdisConfig = snapshot.valid ? snapshot.config : {};
+  const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
   const mode: OnboardMode = opts.mode ?? "local";
 
   if (mode === "remote") {
@@ -43,7 +43,7 @@ export async function runNonInteractiveOnboarding(
       return;
     }
 
-    let nextConfig: ClawdisConfig = {
+    let nextConfig: ClawdbotConfig = {
       ...baseConfig,
       gateway: {
         ...baseConfig.gateway,
@@ -56,7 +56,7 @@ export async function runNonInteractiveOnboarding(
     };
     nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
     await writeConfigFile(nextConfig);
-    runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
 
     const payload = {
       mode,
@@ -76,7 +76,7 @@ export async function runNonInteractiveOnboarding(
     (opts.workspace ?? baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE).trim(),
   );
 
-  let nextConfig: ClawdisConfig = {
+  let nextConfig: ClawdbotConfig = {
     ...baseConfig,
     agent: {
       ...baseConfig.agent,
@@ -200,7 +200,7 @@ export async function runNonInteractiveOnboarding(
 
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   await ensureWorkspaceAndSessions(workspaceDir, runtime);
 
   if (opts.installDaemon) {
@@ -212,8 +212,8 @@ export async function runNonInteractiveOnboarding(
       await resolveGatewayProgramArguments({ port, dev: devMode });
     const environment: Record<string, string | undefined> = {
       PATH: process.env.PATH,
-      CLAWDIS_GATEWAY_TOKEN: gatewayToken,
-      CLAWDIS_LAUNCHD_LABEL:
+      CLAWDBOT_GATEWAY_TOKEN: gatewayToken,
+      CLAWDBOT_LAUNCHD_LABEL:
         process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
     };
     await service.install({

@@ -49,7 +49,7 @@ type NodePairingStateFile = {
 const PENDING_TTL_MS = 5 * 60 * 1000;
 
 function defaultBaseDir() {
-  return path.join(os.homedir(), ".clawdis");
+  return path.join(os.homedir(), ".clawdbot");
 }
 
 function resolvePaths(baseDir?: string) {

@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Reset Clawdis like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
+# Reset Clawdbot like Trimmy: kill running instances, rebuild, repackage, relaunch, verify.
 
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_BUNDLE="${CLAWDIS_APP_BUNDLE:-}"
-APP_PROCESS_PATTERN="Clawdis.app/Contents/MacOS/Clawdis"
-DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Clawdis"
-LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Clawdis"
-RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Clawdis"
-LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.clawdis.mac.plist"
+APP_BUNDLE="${CLAWDBOT_APP_BUNDLE:-}"
+APP_PROCESS_PATTERN="Clawdbot.app/Contents/MacOS/Clawdbot"
+DEBUG_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/debug/Clawdbot"
+LOCAL_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build-local/debug/Clawdbot"
+RELEASE_PROCESS_PATTERN="${ROOT_DIR}/apps/macos/.build/release/Clawdbot"
+LAUNCH_AGENT="${HOME}/Library/LaunchAgents/com.clawdbot.mac.plist"
 LOCK_KEY="$(printf '%s' "${ROOT_DIR}" | shasum -a 256 | cut -c1-8)"
-LOCK_DIR="${TMPDIR:-/tmp}/clawdis-restart-${LOCK_KEY}"
+LOCK_DIR="${TMPDIR:-/tmp}/clawdbot-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
 WAIT_FOR_LOCK=0
-LOG_PATH="${CLAWDIS_RESTART_LOG:-/tmp/clawdis-restart.log}"
+LOG_PATH="${CLAWDBOT_RESTART_LOG:-/tmp/clawdbot-restart.log}"
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -84,18 +84,18 @@ log "==> Log: ${LOG_PATH}"
 
 acquire_lock
 
-kill_all_clawdis() {
+kill_all_clawdbot() {
   for _ in {1..10}; do
     pkill -f "${APP_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${DEBUG_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${LOCAL_PROCESS_PATTERN}" 2>/dev/null || true
     pkill -f "${RELEASE_PROCESS_PATTERN}" 2>/dev/null || true
-    pkill -x "Clawdis" 2>/dev/null || true
+    pkill -x "Clawdbot" 2>/dev/null || true
     if ! pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${DEBUG_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${LOCAL_PROCESS_PATTERN}" >/dev/null 2>&1 \
        && ! pgrep -f "${RELEASE_PROCESS_PATTERN}" >/dev/null 2>&1 \
-       && ! pgrep -x "Clawdis" >/dev/null 2>&1; then
+       && ! pgrep -x "Clawdbot" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.3
@@ -103,12 +103,12 @@ kill_all_clawdis() {
 }
 
 stop_launch_agent() {
-  launchctl bootout gui/"$UID"/com.clawdis.mac 2>/dev/null || true
+  launchctl bootout gui/"$UID"/com.clawdbot.mac 2>/dev/null || true
 }
 
 # 1) Kill all running instances first.
-log "==> Killing existing Clawdis instances"
-kill_all_clawdis
+log "==> Killing existing Clawdbot instances"
+kill_all_clawdbot
 stop_launch_agent
 
 # Bundle Gateway-hosted Canvas A2UI assets.
@@ -116,7 +116,7 @@ run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bun
 
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
-run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Clawdis"
+run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Clawdbot"
 
 # 3) Package app (default to bundling the embedded gateway + CLI).
 run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} SKIP_GATEWAY_PACKAGE=${SKIP_GATEWAY_PACKAGE:-0} '${ROOT_DIR}/scripts/package-mac-app.sh'"
@@ -126,20 +126,20 @@ choose_app_bundle() {
     return 0
   fi
 
-  if [[ -d "/Applications/Clawdis.app" ]]; then
-    APP_BUNDLE="/Applications/Clawdis.app"
+  if [[ -d "/Applications/Clawdbot.app" ]]; then
+    APP_BUNDLE="/Applications/Clawdbot.app"
     return 0
   fi
 
-  if [[ -d "${ROOT_DIR}/dist/Clawdis.app" ]]; then
-    APP_BUNDLE="${ROOT_DIR}/dist/Clawdis.app"
+  if [[ -d "${ROOT_DIR}/dist/Clawdbot.app" ]]; then
+    APP_BUNDLE="${ROOT_DIR}/dist/Clawdbot.app"
     if [[ ! -d "${APP_BUNDLE}/Contents/Frameworks/Sparkle.framework" ]]; then
-      fail "dist/Clawdis.app missing Sparkle after packaging"
+      fail "dist/Clawdbot.app missing Sparkle after packaging"
     fi
     return 0
   fi
 
-  fail "App bundle not found. Set CLAWDIS_APP_BUNDLE to your installed Clawdis.app"
+  fail "App bundle not found. Set CLAWDBOT_APP_BUNDLE to your installed Clawdbot.app"
 }
 
 choose_app_bundle
@@ -159,7 +159,7 @@ run_step "launch app" env -i \
 # 5) Verify the app is alive.
 sleep 1.5
 if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
-  log "OK: Clawdis is running."
+  log "OK: Clawdbot is running."
 else
   fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."
 fi

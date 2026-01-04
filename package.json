@@ -1,11 +1,11 @@
 {
-  "name": "clawdis",
+  "name": "clawdbot",
   "version": "2.0.0-beta5",
   "description": "WhatsApp gateway CLI (Baileys web) with Pi RPC agent",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "clawdis": "dist/index.js"
+    "clawdbot": "dist/index.js"
   },
   "files": [
     "dist/agents/**",
@@ -46,14 +46,14 @@
     "ui:dev": "pnpm -C ui dev",
     "ui:build": "pnpm -C ui build",
     "start": "tsx src/index.ts",
-    "clawdis": "tsx src/index.ts",
+    "clawdbot": "tsx src/index.ts",
     "gateway:watch": "tsx watch --clear-screen=false --include 'src/**/*.ts' src/index.ts gateway --force",
-    "clawdis:rpc": "tsx src/index.ts agent --mode rpc --json",
+    "clawdbot:rpc": "tsx src/index.ts agent --mode rpc --json",
     "lint": "biome check src test && oxlint --type-aware src test --ignore-pattern src/canvas-host/a2ui/a2ui.bundle.js",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:fix": "biome check --write --unsafe src && biome format --write src",
     "format": "biome format src",
-    "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdisKit/Sources",
+    "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
     "format:fix": "biome format src --write",
     "test": "vitest",
     "test:force": "tsx scripts/test-force.ts",
@@ -61,7 +61,7 @@
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
-    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdisProtocol/GatewayModels.swift",
+    "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
     "canvas:a2ui:bundle": "bash scripts/bundle-a2ui.sh"
   },
   "keywords": [],
@@ -172,7 +172,7 @@
       "apps/macos/.build/**",
       "**/vendor/**",
       "apps/macos/.build/**",
-      "dist/Clawdis.app/**"
+      "dist/Clawdbot.app/**"
     ]
   }
 }

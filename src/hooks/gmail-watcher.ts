@@ -7,7 +7,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { hasBinary } from "../agents/skills.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -104,7 +104,7 @@ export type GmailWatcherStartResult = {
  * Called automatically by the gateway if hooks.gmail is configured.
  */
 export async function startGmailWatcher(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
 ): Promise<GmailWatcherStartResult> {
   // Check if gmail hooks are configured
   if (!cfg.hooks?.enabled) {

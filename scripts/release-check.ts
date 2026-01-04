@@ -6,7 +6,7 @@ type PackFile = { path: string };
 type PackResult = { files?: PackFile[] };
 
 const requiredPaths = ["dist/discord/send.js", "dist/hooks/gmail.js"];
-const forbiddenPrefixes = ["dist/Clawdis.app/"];
+const forbiddenPrefixes = ["dist/Clawdbot.app/"];
 
 function runPackDry(): PackResult[] {
   const raw = execSync("npm pack --dry-run --json", {

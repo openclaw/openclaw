@@ -6,7 +6,7 @@
 set -euo pipefail
 
 # Configuration
-SUBSYSTEM="com.clawdis"
+SUBSYSTEM="com.clawdbot"
 DEFAULT_LEVEL="info"
 
 # Colors for output
@@ -48,17 +48,17 @@ SHOW_HELP=false
 # Function to show usage
 show_usage() {
     cat << EOF
-clawlog - Clawdis Logging Utility
+clawlog - Clawdbot Logging Utility
 
 USAGE:
     vtlog [OPTIONS]
 
 DESCRIPTION:
-    View Clawdis logs with full details (bypasses Apple's privacy redaction).
+    View Clawdbot logs with full details (bypasses Apple's privacy redaction).
     Requires sudo access configured for /usr/bin/log command.
 
 LOG FLOW ARCHITECTURE:
-    Clawdis logs flow through the macOS unified log (subsystem: com.clawdis).
+    Clawdbot logs flow through the macOS unified log (subsystem: com.clawdbot).
 
 LOG CATEGORIES (examples):
     • voicewake           - Voice wake detection/test harness

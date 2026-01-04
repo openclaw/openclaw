@@ -1,6 +1,6 @@
 import fs from "node:fs";
 
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 
 export type TelegramTokenSource = "env" | "tokenFile" | "config" | "none";
 
@@ -15,7 +15,7 @@ type ResolveTelegramTokenOpts = {
 };
 
 export function resolveTelegramToken(
-  cfg?: ClawdisConfig,
+  cfg?: ClawdbotConfig,
   opts: ResolveTelegramTokenOpts = {},
 ): TelegramTokenResolution {
   const envToken = (opts.envToken ?? process.env.TELEGRAM_BOT_TOKEN)?.trim();

@@ -1,14 +1,14 @@
 ---
-summary: "All configuration options for ~/.clawdis/clawdis.json with examples"
+summary: "All configuration options for ~/.clawdbot/clawdbot.json with examples"
 read_when:
   - Adding or modifying config fields
 ---
 <!-- {% raw %} -->
 # Configuration 🔧
 
-CLAWDIS reads an optional **JSON5** config from `~/.clawdis/clawdis.json` (comments + trailing commas allowed).
+CLAWDBOT reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (comments + trailing commas allowed).
 
-If the file is missing, CLAWDIS uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
+If the file is missing, CLAWDBOT uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
 - control group mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `routing.groupChat`)
 - customize message prefixes (`messages`)
@@ -64,7 +64,7 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
 
 Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
 
-If set, CLAWDIS derives defaults (only when you haven’t set them explicitly):
+If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
 - `messages.responsePrefix` from `identity.emoji`
 - `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
 
@@ -92,8 +92,8 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 
 ### `logging`
 
-- Default log file: `/tmp/clawdis/clawdis-YYYY-MM-DD.log`
-- If you want a stable path, set `logging.file` to `/tmp/clawdis/clawdis.log`.
+- Default log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log`
+- If you want a stable path, set `logging.file` to `/tmp/clawdbot/clawdbot.log`.
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
@@ -102,7 +102,7 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 {
   logging: {
     level: "info",
-    file: "/tmp/clawdis/clawdis.log",
+    file: "/tmp/clawdbot/clawdbot.log",
     consoleLevel: "info",
     consoleStyle: "pretty"
   }
@@ -208,7 +208,7 @@ Set `web.enabled: false` to keep it off by default.
 
 ### `telegram` (bot transport)
 
-Clawdis starts Telegram only when a `telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `telegram.botToken`.
+Clawdbot starts Telegram only when a `telegram` config section exists. The bot token is resolved from `TELEGRAM_BOT_TOKEN` or `telegram.botToken`.
 Set `telegram.enabled: false` to disable automatic startup.
 
 ```json5
@@ -284,7 +284,7 @@ Configure the Discord bot by setting the bot token and optional gating:
 }
 ```
 
-Clawdis starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
+Clawdbot starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
 Reaction notification modes:
 - `off`: no reaction events.
@@ -333,7 +333,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 }
 ```
 
-Clawdis starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
 
 Reaction notification modes:
 - `off`: no reaction events.
@@ -351,7 +351,7 @@ Slack action groups (gate `slack` tool actions):
 | emojiList | enabled | Custom emoji list |
 ### `imessage` (imsg CLI)
 
-Clawdis spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
+Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
 
 ```json5
 {
@@ -395,7 +395,7 @@ Controls inbound/outbound prefixes and timestamps.
 ```json5
 {
   messages: {
-    messagePrefix: "[clawdis]",
+    messagePrefix: "[clawdbot]",
     responsePrefix: "🦞",
     timestampPrefix: "Europe/London"
   }
@@ -479,7 +479,7 @@ Block streaming:
 
 `agent.model` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
 If `modelAliases` is configured, you may also use the alias key (e.g. `Opus`).
-If you omit the provider, CLAWDIS currently assumes `anthropic` as a temporary
+If you omit the provider, CLAWDBOT currently assumes `anthropic` as a temporary
 deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
@@ -534,10 +534,11 @@ non-main sessions so they cannot access your host system.
 Defaults (if enabled):
 - one container per session
 - Debian bookworm-slim based image
-- workspace per session under `~/.clawdis/sandboxes`
+- workspace per session under `~/.clawdbot/sandboxes`
 - auto-prune: idle > 24h OR age > 7d
 - tools: allow only `bash`, `process`, `read`, `write`, `edit` (deny wins)
 - optional sandboxed browser (Chromium + CDP, noVNC observer)
+- hardening knobs: `network`, `user`, `pidsLimit`, `memory`, `cpus`, `ulimits`, `seccompProfile`, `apparmorProfile`
 
 ```json5
 {
@@ -545,23 +546,35 @@ Defaults (if enabled):
     sandbox: {
       mode: "non-main", // off | non-main | all
       perSession: true,
-      workspaceRoot: "~/.clawdis/sandboxes",
+      workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
-        image: "clawdis-sandbox:bookworm-slim",
-        containerPrefix: "clawdis-sbx-",
+        image: "clawdbot-sandbox:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: ["/tmp", "/var/tmp", "/run"],
-        network: "bridge",
+        network: "none",
         user: "1000:1000",
         capDrop: ["ALL"],
         env: { LANG: "C.UTF-8" },
-        setupCommand: "apt-get update && apt-get install -y git curl jq"
+        setupCommand: "apt-get update && apt-get install -y git curl jq",
+        pidsLimit: 256,
+        memory: "1g",
+        memorySwap: "2g",
+        cpus: 1,
+        ulimits: {
+          nofile: { soft: 1024, hard: 2048 },
+          nproc: 256
+        },
+        seccompProfile: "/path/to/seccomp.json",
+        apparmorProfile: "clawdbot-sandbox",
+        dns: ["1.1.1.1", "8.8.8.8"],
+        extraHosts: ["internal.service:10.0.0.5"]
       },
       browser: {
         enabled: false,
-        image: "clawdis-sandbox-browser:bookworm-slim",
-        containerPrefix: "clawdis-sbx-browser-",
+        image: "clawdbot-sandbox-browser:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-browser-",
         cdpPort: 9222,
         vncPort: 5900,
         noVncPort: 6080,
@@ -586,6 +599,9 @@ Build the default sandbox image once with:
 scripts/sandbox-setup.sh
 ```
 
+Note: sandbox containers default to `network: "none"`; set `agent.sandbox.docker.network`
+to `"bridge"` (or your custom network) if the agent needs outbound access.
+
 Build the optional browser image with:
 ```bash
 scripts/sandbox-browser-setup.sh
@@ -599,13 +615,13 @@ URL is injected per session.
 
 ### `models` (custom providers + base URLs)
 
-Clawdis uses the **pi-coding-agent** model catalog. You can add custom providers
+Clawdbot uses the **pi-coding-agent** model catalog. You can add custom providers
 (LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
-`~/.clawdis/agent/models.json` or by defining the same schema inside your
-Clawdis config under `models.providers`.
+`~/.clawdbot/agent/models.json` or by defining the same schema inside your
+Clawdbot config under `models.providers`.
 
-When `models.providers` is present, Clawdis writes/merges a `models.json` into
-`~/.clawdis/agent/` on startup:
+When `models.providers` is present, Clawdbot writes/merges a `models.json` into
+`~/.clawdbot/agent/` on startup:
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
 
@@ -689,7 +705,7 @@ Notes:
 - Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`,
   `google-generative-ai`
 - Use `authHeader: true` + `headers` for custom auth needs.
-- Override the agent config root with `CLAWDIS_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
+- Override the agent config root with `CLAWDBOT_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
   if you want `models.json` stored elsewhere.
 
 ### `session`
@@ -702,7 +718,7 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     scope: "per-sender",
     idleMinutes: 60,
     resetTriggers: ["/new", "/reset"],
-    store: "~/.clawdis/sessions/sessions.json",
+    store: "~/.clawdbot/sessions/sessions.json",
     // mainKey is ignored; primary key is fixed to "main"
     agentToAgent: {
       // Max ping-pong reply turns between requester/target (0–5).
@@ -726,7 +742,7 @@ Fields:
 ### `skills` (skills config)
 
 Controls bundled allowlist, install preferences, extra skill folders, and per-skill
-overrides. Applies to **bundled** skills and `~/.clawdis/skills` (workspace skills
+overrides. Applies to **bundled** skills and `~/.clawdbot/skills` (workspace skills
 still win on name conflicts).
 
 Fields:
@@ -774,7 +790,7 @@ Example:
 
 ### `browser` (clawd-managed Chrome)
 
-Clawdis can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
+Clawdbot can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
 Profiles can point at a **remote** Chrome via `profiles.<name>.cdpUrl`. Remote
 profiles are attach-only (start/stop/reset are disabled).
 
@@ -786,7 +802,7 @@ Defaults:
 - control URL: `http://127.0.0.1:18791` (CDP uses `18792`)
 - CDP URL: `http://127.0.0.1:18792` (control URL + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
-- Note: the control server is started by the running gateway (Clawdis.app menubar, or `clawdis gateway`).
+- Note: the control server is started by the running gateway (Clawdbot.app menubar, or `clawdbot gateway`).
 
 ```json5
 {
@@ -839,7 +855,7 @@ Defaults:
     mode: "local", // or "remote"
     port: 18789, // WS + HTTP multiplex
     bind: "loopback",
-    // controlUi: { enabled: true, basePath: "/clawdis" }
+    // controlUi: { enabled: true, basePath: "/clawdbot" }
     // auth: { mode: "token", token: "your-token" } // token is for multi-machine CLI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
   }
@@ -848,19 +864,19 @@ Defaults:
 
 Control UI base path:
 - `gateway.controlUi.basePath` sets the URL prefix where the Control UI is served.
-- Examples: `"/ui"`, `"/clawdis"`, `"/apps/clawdis"`.
+- Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
 
 Notes:
-- `clawdis gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
+- `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
-- Precedence: `--port` > `CLAWDIS_GATEWAY_PORT` > `gateway.port` > default `18789`.
+- Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
 
 Auth and Tailscale:
 - `gateway.auth.mode` sets the handshake requirements (`token` or `password`).
 - `gateway.auth.token` stores the shared token for token auth (used by the CLI on the same machine).
 - When `gateway.auth.mode` is set, only that method is accepted (plus optional Tailscale headers).
-- `gateway.auth.password` can be set here, or via `CLAWDIS_GATEWAY_PASSWORD` (recommended).
+- `gateway.auth.password` can be set here, or via `CLAWDBOT_GATEWAY_PASSWORD` (recommended).
 - `gateway.auth.allowTailscale` controls whether Tailscale identity headers can satisfy auth.
 - `gateway.tailscale.mode: "serve"` uses Tailscale Serve (tailnet only, loopback bind).
 - `gateway.tailscale.mode: "funnel"` exposes the dashboard publicly; requires auth.
@@ -872,7 +888,7 @@ Remote client defaults (CLI):
 - `gateway.remote.password` supplies the password for remote calls (leave unset for no auth).
 
 macOS app behavior:
-- Clawdis.app watches `~/.clawdis/clawdis.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
+- Clawdbot.app watches `~/.clawdbot/clawdbot.json` and switches modes live when `gateway.mode` or `gateway.remote.url` changes.
 - If `gateway.mode` is unset but `gateway.remote.url` is set, the macOS app treats it as remote mode.
 - When you change connection mode in the macOS app, it writes `gateway.mode` (and `gateway.remote.url` in remote mode) back to the config file.
 
@@ -891,7 +907,7 @@ macOS app behavior:
 
 ### `gateway.reload` (Config hot reload)
 
-The Gateway watches `~/.clawdis/clawdis.json` (or `CLAWDIS_CONFIG_PATH`) and applies changes automatically.
+The Gateway watches `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`) and applies changes automatically.
 
 Modes:
 - `hybrid` (default): hot-apply safe changes; restart the Gateway for critical changes.
@@ -913,7 +929,7 @@ Modes:
 #### Hot reload matrix (files + impact)
 
 Files watched:
-- `~/.clawdis/clawdis.json` (or `CLAWDIS_CONFIG_PATH`)
+- `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`)
 
 Hot-applied (no full gateway restart):
 - `hooks` (webhook auth/path/mappings) + `hooks.gmail` (Gmail watcher restarted)
@@ -934,16 +950,16 @@ Requires full Gateway restart:
 ### Multi-instance isolation
 
 To run multiple gateways on one host, isolate per-instance state + config and use unique ports:
-- `CLAWDIS_CONFIG_PATH` (per-instance config)
-- `CLAWDIS_STATE_DIR` (sessions/creds/logs)
+- `CLAWDBOT_CONFIG_PATH` (per-instance config)
+- `CLAWDBOT_STATE_DIR` (sessions/creds/logs)
 - `agent.workspace` (memories)
 - `gateway.port` (unique per instance)
 
 Example:
 ```bash
-CLAWDIS_CONFIG_PATH=~/.clawdis/a.json \
-CLAWDIS_STATE_DIR=~/.clawdis-a \
-clawdis gateway --port 19001
+CLAWDBOT_CONFIG_PATH=~/.clawdbot/a.json \
+CLAWDBOT_STATE_DIR=~/.clawdbot-a \
+clawdbot gateway --port 19001
 ```
 
 ### `hooks` (Gateway webhooks)
@@ -962,7 +978,7 @@ Defaults:
     token: "shared-secret",
     path: "/hooks",
     presets: ["gmail"],
-    transformsDir: "~/.clawdis/hooks",
+    transformsDir: "~/.clawdbot/hooks",
     mappings: [
       {
         match: { path: "gmail" },
@@ -980,7 +996,7 @@ Defaults:
 
 Requests must include the hook token:
 - `Authorization: Bearer <token>` **or**
-- `x-clawdis-token: <token>` **or**
+- `x-clawdbot-token: <token>` **or**
 - `?token=<token>`
 
 Endpoints:
@@ -996,7 +1012,7 @@ Mapping notes:
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
 
-Gmail helper config (used by `clawdis hooks gmail setup` / `run`):
+Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
 
 ```json5
 {
@@ -1020,11 +1036,11 @@ Gmail helper config (used by `clawdis hooks gmail setup` / `run`):
 Gateway auto-start:
 - If `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts
   `gog gmail watch serve` on boot and auto-renews the watch.
-- Set `CLAWDIS_SKIP_GMAIL_WATCHER=1` to disable the auto-start (for manual runs).
+- Set `CLAWDBOT_SKIP_GMAIL_WATCHER=1` to disable the auto-start (for manual runs).
 - Avoid running a separate `gog gmail watch serve` alongside the Gateway; it will
   fail with `listen tcp 127.0.0.1:8788: bind: address already in use`.
 
-Note: when `tailscale.mode` is on, Clawdis defaults `serve.path` to `/` so
+Note: when `tailscale.mode` is on, Clawdbot defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).
 
 ### `canvasHost` (LAN/tailnet Canvas file server + live reload)
@@ -1038,9 +1054,9 @@ The server listens on the **bridge bind host** (LAN or Tailnet) so nodes can rea
 The server:
 - serves files under `canvasHost.root`
 - injects a tiny live-reload client into served HTML
-- watches the directory and broadcasts reloads over a WebSocket endpoint at `/__clawdis/ws`
+- watches the directory and broadcasts reloads over a WebSocket endpoint at `/__clawdbot/ws`
 - auto-creates a starter `index.html` when the directory is empty (so you see something immediately)
-- also serves A2UI at `/__clawdis__/a2ui/` and is advertised to nodes as `canvasHostUrl`
+- also serves A2UI at `/__clawdbot__/a2ui/` and is advertised to nodes as `canvasHostUrl`
   (always used by nodes for Canvas/A2UI)
 
 Disable live reload (and file watching) if the directory is large or you hit `EMFILE`:
@@ -1058,7 +1074,7 @@ Disable live reload (and file watching) if the directory is large or you hit `EM
 
 Disable with:
 - config: `canvasHost: { enabled: false }`
-- env: `CLAWDIS_SKIP_CANVAS_HOST=1`
+- env: `CLAWDBOT_SKIP_CANVAS_HOST=1`
 
 ### `bridge` (node bridge server)
 
@@ -1087,16 +1103,16 @@ Bind modes:
 
 ### `discovery.wideArea` (Wide-Area Bonjour / unicast DNS‑SD)
 
-When enabled, the Gateway writes a unicast DNS-SD zone for `_clawdis-bridge._tcp` under `~/.clawdis/dns/` using the standard discovery domain `clawdis.internal.`
+When enabled, the Gateway writes a unicast DNS-SD zone for `_clawdbot-bridge._tcp` under `~/.clawdbot/dns/` using the standard discovery domain `clawdbot.internal.`
 
 To make iOS/Android discover across networks (Vienna ⇄ London), pair this with:
-- a DNS server on the gateway host serving `clawdis.internal.` (CoreDNS is recommended)
-- Tailscale **split DNS** so clients resolve `clawdis.internal` via that server
+- a DNS server on the gateway host serving `clawdbot.internal.` (CoreDNS is recommended)
+- Tailscale **split DNS** so clients resolve `clawdbot.internal` via that server
 
 One-time setup helper (gateway host):
 
 ```bash
-clawdis dns setup --apply
+clawdbot dns setup --apply
 ```
 
 ```json5

@@ -1,12 +1,12 @@
 import { applyIdentityDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
-import type { ClawdisConfig, ConfigValidationIssue } from "./types.js";
-import { ClawdisSchema } from "./zod-schema.js";
+import type { ClawdbotConfig, ConfigValidationIssue } from "./types.js";
+import { ClawdbotSchema } from "./zod-schema.js";
 
 export function validateConfigObject(
   raw: unknown,
 ):
-  | { ok: true; config: ClawdisConfig }
+  | { ok: true; config: ClawdbotConfig }
   | { ok: false; issues: ConfigValidationIssue[] } {
   const legacyIssues = findLegacyConfigIssues(raw);
   if (legacyIssues.length > 0) {
@@ -18,7 +18,7 @@ export function validateConfigObject(
       })),
     };
   }
-  const validated = ClawdisSchema.safeParse(raw);
+  const validated = ClawdbotSchema.safeParse(raw);
   if (!validated.success) {
     return {
       ok: false,
@@ -31,7 +31,7 @@ export function validateConfigObject(
   return {
     ok: true,
     config: applySessionDefaults(
-      applyIdentityDefaults(validated.data as ClawdisConfig),
+      applyIdentityDefaults(validated.data as ClawdbotConfig),
     ),
   };
 }

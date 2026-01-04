@@ -6,7 +6,7 @@ import { ensureAgentWorkspace } from "./workspace.js";
 
 describe("ensureAgentWorkspace", () => {
   it("creates directory and bootstrap files when missing", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-ws-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
     const nested = path.join(dir, "nested");
     const result = await ensureAgentWorkspace({
       dir: nested,
@@ -30,7 +30,7 @@ describe("ensureAgentWorkspace", () => {
   });
 
   it("does not overwrite existing AGENTS.md", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-ws-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
     const agentsPath = path.join(dir, "AGENTS.md");
     await fs.writeFile(agentsPath, "custom", "utf-8");
     await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });

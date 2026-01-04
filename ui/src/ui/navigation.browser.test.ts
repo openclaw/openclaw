@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { ClawdisApp } from "./app";
+import { ClawdbotApp } from "./app";
 
-const originalConnect = ClawdisApp.prototype.connect;
+const originalConnect = ClawdbotApp.prototype.connect;
 
 function mountApp(pathname: string) {
   window.history.replaceState({}, "", pathname);
-  const app = document.createElement("clawdis-app") as ClawdisApp;
+  const app = document.createElement("clawdbot-app") as ClawdbotApp;
   document.body.append(app);
   return app;
 }
@@ -18,16 +18,16 @@ function nextFrame() {
 }
 
 beforeEach(() => {
-  ClawdisApp.prototype.connect = () => {
+  ClawdbotApp.prototype.connect = () => {
     // no-op: avoid real gateway WS connections in browser tests
   };
-  window.__CLAWDIS_CONTROL_UI_BASE_PATH__ = undefined;
+  window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
-  ClawdisApp.prototype.connect = originalConnect;
-  window.__CLAWDIS_CONTROL_UI_BASE_PATH__ = undefined;
+  ClawdbotApp.prototype.connect = originalConnect;
+  window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
   document.body.innerHTML = "";
 });
 
@@ -50,22 +50,22 @@ describe("control UI routing", () => {
   });
 
   it("infers nested base paths", async () => {
-    const app = mountApp("/apps/clawdis/cron");
+    const app = mountApp("/apps/clawdbot/cron");
     await app.updateComplete;
 
-    expect(app.basePath).toBe("/apps/clawdis");
+    expect(app.basePath).toBe("/apps/clawdbot");
     expect(app.tab).toBe("cron");
-    expect(window.location.pathname).toBe("/apps/clawdis/cron");
+    expect(window.location.pathname).toBe("/apps/clawdbot/cron");
   });
 
   it("honors explicit base path overrides", async () => {
-    window.__CLAWDIS_CONTROL_UI_BASE_PATH__ = "/clawdis";
-    const app = mountApp("/clawdis/sessions");
+    window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = "/clawdbot";
+    const app = mountApp("/clawdbot/sessions");
     await app.updateComplete;
 
-    expect(app.basePath).toBe("/clawdis");
+    expect(app.basePath).toBe("/clawdbot");
     expect(app.tab).toBe("sessions");
-    expect(window.location.pathname).toBe("/clawdis/sessions");
+    expect(window.location.pathname).toBe("/clawdbot/sessions");
   });
 
   it("updates the URL when clicking nav items", async () => {

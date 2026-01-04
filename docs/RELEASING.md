@@ -13,7 +13,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 1) **Version & metadata**
 - [ ] Bump `package.json` version (e.g., `1.1.0`).
 - [ ] Update CLI/version strings: `src/cli/program.ts` and the Baileys user agent in `src/provider-web.ts`.
-- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to `dist/index.js` for `clawdis`.
+- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to `dist/index.js` for `clawdbot`.
 - [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
 
 2) **Build & artifacts**
@@ -38,27 +38,27 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 - [ ] Keep the app zip (and optional dSYM zip) ready to attach to the GitHub release.
 - [ ] Follow `docs/mac/release.md` for the exact commands and required env vars.
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
-  - If notarizing, use the `clawdis-notary` keychain profile created from App Store Connect API env vars (see `docs/mac/release.md`).
+  - If notarizing, use the `clawdbot-notary` keychain profile created from App Store Connect API env vars (see `docs/mac/release.md`).
 
 6) **Publish (npm)**
 - [ ] Confirm git status is clean; commit and push as needed.
 - [ ] `npm login` (verify 2FA) if needed.
 - [ ] `npm publish --access public` (use `--tag beta` for pre-releases).
-- [ ] Verify the registry: `npm view clawdis version` and `npx -y clawdis@X.Y.Z --version` (or `--help`).
+- [ ] Verify the registry: `npm view clawdbot version` and `npx -y clawdbot@X.Y.Z --version` (or `--help`).
 
 ### Troubleshooting (notes from 2.0.0-beta2 release)
-- **npm pack/publish hangs or produces huge tarball**: the macOS app bundle in `dist/Clawdis.app` (and release zips) get swept into the package. Fix by whitelisting publish contents via `package.json` `files` (include dist subdirs, docs, skills; exclude app bundles). Confirm with `npm pack --dry-run` that `dist/Clawdis.app` is not listed.
+- **npm pack/publish hangs or produces huge tarball**: the macOS app bundle in `dist/Clawdbot.app` (and release zips) get swept into the package. Fix by whitelisting publish contents via `package.json` `files` (include dist subdirs, docs, skills; exclude app bundles). Confirm with `npm pack --dry-run` that `dist/Clawdbot.app` is not listed.
 - **npm auth web loop for dist-tags**: use legacy auth to get an OTP prompt:
-  - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add clawdis@X.Y.Z latest`
+  - `NPM_CONFIG_AUTH_TYPE=legacy npm dist-tag add clawdbot@X.Y.Z latest`
 - **`npx` verification fails with `ECOMPROMISED: Lock compromised`**: retry with a fresh cache:
-  - `NPM_CONFIG_CACHE=/tmp/npm-cache-$(date +%s) npx -y clawdis@X.Y.Z --version`
+  - `NPM_CONFIG_CACHE=/tmp/npm-cache-$(date +%s) npx -y clawdbot@X.Y.Z --version`
 - **Tag needs repointing after a late fix**: force-update and push the tag, then ensure the GitHub release assets still match:
   - `git tag -f vX.Y.Z && git push -f origin vX.Y.Z`
 
 7) **GitHub release + appcast**
 - [ ] Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z` (or `git push --tags`).
-- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `clawdis X.Y.Z`** (not just the tag); body should inline the product-facing bullets from the changelog (no bare links) **and must not repeat the title inside the body**.
-- [ ] Attach artifacts: `npm pack` tarball (optional), `Clawdis-X.Y.Z.zip`, and `Clawdis-X.Y.Z.dSYM.zip` (if generated).
+- [ ] Create/refresh the GitHub release for `vX.Y.Z` with **title `clawdbot X.Y.Z`** (not just the tag); body should inline the product-facing bullets from the changelog (no bare links) **and must not repeat the title inside the body**.
+- [ ] Attach artifacts: `npm pack` tarball (optional), `Clawdbot-X.Y.Z.zip`, and `Clawdbot-X.Y.Z.dSYM.zip` (if generated).
 - [ ] Commit the updated `appcast.xml` and push it (Sparkle feeds from main).
-- [ ] From a clean temp directory (no `package.json`), run `npx -y clawdis@X.Y.Z send --help` to confirm install/CLI entrypoints work.
+- [ ] From a clean temp directory (no `package.json`), run `npx -y clawdbot@X.Y.Z send --help` to confirm install/CLI entrypoints work.
 - [ ] Announce/share release notes.

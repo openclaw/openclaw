@@ -1,4 +1,4 @@
-title: "CLAWDIS Docs"
+title: "CLAWDBOT Docs"
 description: "A TypeScript/Node gateway + macOS/iOS companions for WhatsApp (web) and Telegram (bot)."
 markdown: kramdown
 highlighter: rouge
@@ -35,7 +35,7 @@ nav:
   - title: "WebChat"
     url: "/webchat.html"
   - title: "macOS App"
-    url: "/clawdis-mac.html"
+    url: "/clawdbot-mac.html"
   - title: "iOS Node"
     url: "/ios/connect.html"
   - title: "Telegram"

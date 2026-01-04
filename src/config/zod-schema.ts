@@ -273,7 +273,7 @@ const HooksGmailSchema = z
   })
   .optional();
 
-export const ClawdisSchema = z.object({
+export const ClawdbotSchema = z.object({
   identity: z
     .object({
       name: z.string().optional(),
@@ -444,6 +444,27 @@ export const ClawdisSchema = z.object({
               capDrop: z.array(z.string()).optional(),
               env: z.record(z.string(), z.string()).optional(),
               setupCommand: z.string().optional(),
+              pidsLimit: z.number().int().positive().optional(),
+              memory: z.union([z.string(), z.number()]).optional(),
+              memorySwap: z.union([z.string(), z.number()]).optional(),
+              cpus: z.number().positive().optional(),
+              ulimits: z
+                .record(
+                  z.string(),
+                  z.union([
+                    z.string(),
+                    z.number(),
+                    z.object({
+                      soft: z.number().int().nonnegative().optional(),
+                      hard: z.number().int().nonnegative().optional(),
+                    }),
+                  ]),
+                )
+                .optional(),
+              seccompProfile: z.string().optional(),
+              apparmorProfile: z.string().optional(),
+              dns: z.array(z.string()).optional(),
+              extraHosts: z.array(z.string()).optional(),
             })
             .optional(),
           browser: z

@@ -1,13 +1,13 @@
 ---
-summary: "End-to-end guide for running Clawdis as a personal assistant with safety cautions"
+summary: "End-to-end guide for running Clawdbot as a personal assistant with safety cautions"
 read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
 ---
 <!-- {% raw %} -->
-# Building a personal assistant with CLAWDIS (Clawd-style)
+# Building a personal assistant with CLAWDBOT (Clawd-style)
 
-CLAWDIS is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
+CLAWDBOT is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
 
 ## ⚠️ Safety first
 
@@ -24,7 +24,7 @@ Start conservative:
 ## Prerequisites
 
 - Node **22+**
-- CLAWDIS available on PATH (recommended during development: from source + global link)
+- CLAWDBOT available on PATH (recommended during development: from source + global link)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 From source (recommended while the npm package is still settling):
@@ -49,28 +49,28 @@ Your Phone (personal)          Second Phone (assistant)
                                        ▼
                               ┌─────────────────┐
                               │  Your Mac       │
-                              │  (clawdis)      │
+                              │  (clawdbot)      │
                               │    Pi agent     │
                               └─────────────────┘
 ```
 
-If you link your personal WhatsApp to CLAWDIS, every message to you becomes “agent input”. That’s rarely what you want.
+If you link your personal WhatsApp to CLAWDBOT, every message to you becomes “agent input”. That’s rarely what you want.
 
 ## 5-minute quick start
 
 1) Pair WhatsApp Web (shows QR; scan with the assistant phone):
 
 ```bash
-clawdis login
+clawdbot login
 ```
 
 2) Start the Gateway (leave it running):
 
 ```bash
-clawdis gateway --port 18789
+clawdbot gateway --port 18789
 ```
 
-3) Put a minimal config in `~/.clawdis/clawdis.json`:
+3) Put a minimal config in `~/.clawdbot/clawdbot.json`:
 
 ```json5
 {
@@ -86,12 +86,12 @@ Now message the assistant number from your allowlisted phone.
 
 Clawd reads operating instructions and “memory” from its workspace directory.
 
-By default, Clawdis uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`) automatically on setup/first agent run.
+By default, Clawdbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`) automatically on setup/first agent run.
 
 Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up.
 
 ```bash
-clawdis setup
+clawdbot setup
 ```
 
 Optional: choose a different workspace with `agent.workspace` (supports `~`).
@@ -106,7 +106,7 @@ Optional: choose a different workspace with `agent.workspace` (supports `~`).
 
 ## The config that turns it into “an assistant”
 
-CLAWDIS defaults to a good assistant setup, but you’ll usually want to tune:
+CLAWDBOT defaults to a good assistant setup, but you’ll usually want to tune:
 - persona/instructions in `SOUL.md`
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
@@ -145,15 +145,15 @@ Example:
 
 ## Sessions and memory
 
-- Session files: `~/.clawdis/sessions/{{SessionId}}.jsonl`
-- Session metadata (token usage, last route, etc): `~/.clawdis/sessions/sessions.json` (legacy: `~/.clawdis/sessions.json`)
+- Session files: `~/.clawdbot/sessions/{{SessionId}}.jsonl`
+- Session metadata (token usage, last route, etc): `~/.clawdbot/sessions/sessions.json` (legacy: `~/.clawdbot/sessions.json`)
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, the agent replies with a short hello to confirm the reset.
 
 ## Heartbeats (proactive mode)
 
-When `agent.heartbeat.every` is set to a positive interval, CLAWDIS periodically runs a heartbeat prompt (default: `HEARTBEAT`).
+When `agent.heartbeat.every` is set to a positive interval, CLAWDBOT periodically runs a heartbeat prompt (default: `HEARTBEAT`).
 
-- If the agent replies with `HEARTBEAT_OK` (exact token), CLAWDIS suppresses outbound delivery for that heartbeat.
+- If the agent replies with `HEARTBEAT_OK` (exact token), CLAWDBOT suppresses outbound delivery for that heartbeat.
 
 ```json5
 {
@@ -177,23 +177,23 @@ Here’s the screenshot.
 MEDIA:/tmp/screenshot.png
 ```
 
-CLAWDIS extracts these and sends them as media alongside the text.
+CLAWDBOT extracts these and sends them as media alongside the text.
 
 ## Operations checklist
 
 ```bash
-clawdis status          # local status (creds, sessions, queued events)
-clawdis status --deep   # also probes the running Gateway (WA connect + Telegram)
-clawdis health --json   # gateway health snapshot (WS)
+clawdbot status          # local status (creds, sessions, queued events)
+clawdbot status --deep   # also probes the running Gateway (WA connect + Telegram)
+clawdbot health --json   # gateway health snapshot (WS)
 ```
 
-Logs live under `/tmp/clawdis/` (default: `clawdis-YYYY-MM-DD.log`).
+Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 
 ## Next steps
 
 - WebChat: [WebChat](./webchat.md)
 - Gateway ops: [Gateway runbook](./gateway.md)
 - Cron + wakeups: [Cron + wakeups](./cron.md)
-- macOS menu bar companion: [Clawdis macOS app](./clawdis-mac.md)
+- macOS menu bar companion: [Clawdbot macOS app](./clawdbot-mac.md)
 - Security: [Security](./security.md)
 <!-- {% endraw %} -->

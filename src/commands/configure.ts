@@ -11,9 +11,9 @@ import {
   text,
 } from "@clack/prompts";
 import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   readConfigFileSnapshot,
   resolveGatewayPort,
   writeConfigFile,
@@ -66,10 +66,10 @@ type ConfigureWizardParams = {
 };
 
 async function promptGatewayConfig(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   runtime: RuntimeEnv,
 ): Promise<{
-  config: ClawdisConfig;
+  config: ClawdbotConfig;
   port: number;
   token?: string;
 }> {
@@ -221,9 +221,9 @@ async function promptGatewayConfig(
 }
 
 async function promptAuthConfig(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   runtime: RuntimeEnv,
-): Promise<ClawdisConfig> {
+): Promise<ClawdbotConfig> {
   const authChoice = guardCancel(
     await select({
       message: "Model/auth choice",
@@ -399,8 +399,8 @@ async function maybeInstallDaemon(params: {
     await resolveGatewayProgramArguments({ port: params.port, dev: devMode });
   const environment: Record<string, string | undefined> = {
     PATH: process.env.PATH,
-    CLAWDIS_GATEWAY_TOKEN: params.gatewayToken,
-    CLAWDIS_LAUNCHD_LABEL:
+    CLAWDBOT_GATEWAY_TOKEN: params.gatewayToken,
+    CLAWDBOT_LAUNCHD_LABEL:
       process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
   };
   await service.install({
@@ -418,12 +418,12 @@ export async function runConfigureWizard(
 ) {
   printWizardHeader(runtime);
   intro(
-    opts.command === "update" ? "Clawdis update wizard" : "Clawdis configure",
+    opts.command === "update" ? "Clawdbot update wizard" : "Clawdbot configure",
   );
   const prompter = createClackPrompter();
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: ClawdisConfig = snapshot.valid ? snapshot.config : {};
+  let baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists) {
     const title = snapshot.valid
@@ -453,10 +453,10 @@ export async function runConfigureWizard(
   const localUrl = "ws://127.0.0.1:18789";
   const localProbe = await probeGatewayReachable({
     url: localUrl,
-    token: process.env.CLAWDIS_GATEWAY_TOKEN,
+    token: process.env.CLAWDBOT_GATEWAY_TOKEN,
     password:
       baseConfig.gateway?.auth?.password ??
-      process.env.CLAWDIS_GATEWAY_PASSWORD,
+      process.env.CLAWDBOT_GATEWAY_PASSWORD,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl
@@ -498,7 +498,7 @@ export async function runConfigureWizard(
       mode,
     });
     await writeConfigFile(remoteConfig);
-    runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
     outro("Remote gateway configured.");
     return;
   }
@@ -583,7 +583,7 @@ export async function runConfigureWizard(
     mode,
   });
   await writeConfigFile(nextConfig);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDIS}`);
+  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
 
   if (selected.includes("daemon")) {
     if (!selected.includes("gateway")) {

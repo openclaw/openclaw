@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 
 import { buildWorkspaceSkillSnapshot } from "../../agents/skills.js";
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { buildProviderSummary } from "../../infra/provider-summary.js";
 import { drainSystemEvents } from "../../infra/system-events.js";
 
 export async function prependSystemEvents(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   isMainSession: boolean;
   isNewSession: boolean;
   prefixedBodyBase: string;
@@ -49,7 +49,7 @@ export async function ensureSkillSnapshot(params: {
   sessionId?: string;
   isFirstTurnInSession: boolean;
   workspaceDir: string;
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];

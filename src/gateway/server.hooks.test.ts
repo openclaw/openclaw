@@ -103,7 +103,7 @@ describe("gateway server hooks", () => {
     await server.close();
   });
 
-  test("hooks wake accepts x-clawdis-token header", async () => {
+  test("hooks wake accepts x-clawdbot-token header", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
     const port = await getFreePort();
     const server = await startGatewayServer(port);
@@ -111,7 +111,7 @@ describe("gateway server hooks", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-clawdis-token": "hook-secret",
+        "x-clawdbot-token": "hook-secret",
       },
       body: JSON.stringify({ text: "Header auth" }),
     });

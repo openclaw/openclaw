@@ -1,6 +1,6 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "./directives.js";
@@ -28,7 +28,7 @@ export type FollowupRun = {
     surface?: string;
     sessionFile: string;
     workspaceDir: string;
-    config: ClawdisConfig;
+    config: ClawdbotConfig;
     skillsSnapshot?: SkillSnapshot;
     provider: string;
     model: string;
@@ -435,7 +435,7 @@ function defaultQueueModeForSurface(surface?: string): QueueMode {
   return "collect";
 }
 export function resolveQueueSettings(params: {
-  cfg: ClawdisConfig;
+  cfg: ClawdbotConfig;
   surface?: string;
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;

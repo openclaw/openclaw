@@ -1283,11 +1283,11 @@ async function ensureSlashCommand(
     if (hasCommand) return;
     await appCommands.create({
       name: slashCommand.name,
-      description: "Ask Clawdis a question",
+      description: "Ask Clawdbot a question",
       options: [
         {
           name: "prompt",
-          description: "What should Clawdis help with?",
+          description: "What should Clawdbot help with?",
           type: ApplicationCommandOptionType.String,
           required: true,
         },

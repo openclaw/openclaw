@@ -2,7 +2,7 @@
 // unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
 // the chunk so messages are only split when they truly exceed the limit.
 
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 
 export type TextChunkSurface =
   | "whatsapp"
@@ -24,7 +24,7 @@ const DEFAULT_CHUNK_LIMIT_BY_SURFACE: Record<TextChunkSurface, number> = {
 };
 
 export function resolveTextChunkLimit(
-  cfg: ClawdisConfig | undefined,
+  cfg: ClawdbotConfig | undefined,
   surface?: TextChunkSurface,
 ): number {
   const surfaceOverride = (() => {

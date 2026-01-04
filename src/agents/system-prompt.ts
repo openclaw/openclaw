@@ -58,7 +58,7 @@ export function buildAgentSystemPromptAppend(params: {
   if (runtimeInfo?.model) runtimeLines.push(`Model: ${runtimeInfo.model}`);
 
   const lines = [
-    "You are Clawd, a personal assistant running inside Clawdis.",
+    "You are Clawd, a personal assistant running inside Clawdbot.",
     "",
     "## Tooling",
     "Pi lists the standard tools above. This runtime enables:",
@@ -101,11 +101,11 @@ export function buildAgentSystemPromptAppend(params: {
     ownerLine ?? "",
     ownerLine ? "" : "",
     "## Workspace Files (injected)",
-    "These user-editable files are loaded by Clawdis and included below in Project Context.",
+    "These user-editable files are loaded by Clawdbot and included below in Project Context.",
     "",
     "## Messaging Safety",
     "Never send streaming/partial replies to external messaging surfaces; only final replies should be delivered there.",
-    "Clawdis handles message transport automatically; respond normally and your reply will be delivered to the current chat.",
+    "Clawdbot handles message transport automatically; respond normally and your reply will be delivered to the current chat.",
     "",
     "## Reply Tags",
     "To request a native reply/quote on supported surfaces, include one tag in your reply:",
@@ -126,7 +126,7 @@ export function buildAgentSystemPromptAppend(params: {
     "## Heartbeats",
     'If you receive a heartbeat poll (a user message containing just "HEARTBEAT"), and there is nothing that needs attention, reply exactly:',
     "HEARTBEAT_OK",
-    'Clawdis treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
+    'Clawdbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
     'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
     "",
     "## Runtime",

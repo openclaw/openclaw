@@ -14,8 +14,8 @@ import {
   resolveProfile,
 } from "../browser/config.js";
 import { DEFAULT_CLAWD_BROWSER_COLOR } from "../browser/constants.js";
-import type { ClawdisConfig } from "../config/config.js";
-import { STATE_DIR_CLAWDIS } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
+import { STATE_DIR_CLAWDBOT } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -56,6 +56,18 @@ export type SandboxDockerConfig = {
   capDrop: string[];
   env?: Record<string, string>;
   setupCommand?: string;
+  pidsLimit?: number;
+  memory?: string | number;
+  memorySwap?: string | number;
+  cpus?: number;
+  ulimits?: Record<
+    string,
+    string | number | { soft?: number; hard?: number }
+  >;
+  seccompProfile?: string;
+  apparmorProfile?: string;
+  dns?: string[];
+  extraHosts?: string[];
 };
 
 export type SandboxPruneConfig = {
@@ -92,11 +104,11 @@ export type SandboxContext = {
 
 const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(
   os.homedir(),
-  ".clawdis",
+  ".clawdbot",
   "sandboxes",
 );
-const DEFAULT_SANDBOX_IMAGE = "clawdis-sandbox:bookworm-slim";
-const DEFAULT_SANDBOX_CONTAINER_PREFIX = "clawdis-sbx-";
+const DEFAULT_SANDBOX_IMAGE = "clawdbot-sandbox:bookworm-slim";
+const DEFAULT_SANDBOX_CONTAINER_PREFIX = "clawdbot-sbx-";
 const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
@@ -109,13 +121,13 @@ const DEFAULT_TOOL_DENY = [
   "discord",
   "gateway",
 ];
-const DEFAULT_SANDBOX_BROWSER_IMAGE = "clawdis-sandbox-browser:bookworm-slim";
-const DEFAULT_SANDBOX_BROWSER_PREFIX = "clawdis-sbx-browser-";
+const DEFAULT_SANDBOX_BROWSER_IMAGE = "clawdbot-sandbox-browser:bookworm-slim";
+const DEFAULT_SANDBOX_BROWSER_PREFIX = "clawdbot-sbx-browser-";
 const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
 
-const SANDBOX_STATE_DIR = path.join(STATE_DIR_CLAWDIS, "sandbox");
+const SANDBOX_STATE_DIR = path.join(STATE_DIR_CLAWDBOT, "sandbox");
 const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
 const SANDBOX_BROWSER_REGISTRY_PATH = path.join(
   SANDBOX_STATE_DIR,
@@ -170,7 +182,7 @@ function isToolAllowed(policy: SandboxToolPolicy, name: string) {
   return allow.includes(name.toLowerCase());
 }
 
-function defaultSandboxConfig(cfg?: ClawdisConfig): SandboxConfig {
+function defaultSandboxConfig(cfg?: ClawdbotConfig): SandboxConfig {
   const agent = cfg?.agent?.sandbox;
   return {
     mode: agent?.mode ?? "off",
@@ -183,11 +195,20 @@ function defaultSandboxConfig(cfg?: ClawdisConfig): SandboxConfig {
       workdir: agent?.docker?.workdir ?? DEFAULT_SANDBOX_WORKDIR,
       readOnlyRoot: agent?.docker?.readOnlyRoot ?? true,
       tmpfs: agent?.docker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
-      network: agent?.docker?.network ?? "bridge",
+      network: agent?.docker?.network ?? "none",
       user: agent?.docker?.user,
       capDrop: agent?.docker?.capDrop ?? ["ALL"],
       env: agent?.docker?.env ?? { LANG: "C.UTF-8" },
       setupCommand: agent?.docker?.setupCommand,
+      pidsLimit: agent?.docker?.pidsLimit,
+      memory: agent?.docker?.memory,
+      memorySwap: agent?.docker?.memorySwap,
+      cpus: agent?.docker?.cpus,
+      ulimits: agent?.docker?.ulimits,
+      seccompProfile: agent?.docker?.seccompProfile,
+      apparmorProfile: agent?.docker?.apparmorProfile,
+      dns: agent?.docker?.dns,
+      extraHosts: agent?.docker?.extraHosts,
     },
     browser: {
       enabled: agent?.browser?.enabled ?? false,
@@ -428,6 +449,88 @@ async function ensureSandboxWorkspace(workspaceDir: string, seedFrom?: string) {
   await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
 }
 
+function normalizeDockerLimit(value?: string | number) {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? String(value) : undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function formatUlimitValue(
+  name: string,
+  value: string | number | { soft?: number; hard?: number },
+) {
+  if (!name.trim()) return null;
+  if (typeof value === "number" || typeof value === "string") {
+    const raw = String(value).trim();
+    return raw ? `${name}=${raw}` : null;
+  }
+  const soft =
+    typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
+  const hard =
+    typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
+  if (soft === undefined && hard === undefined) return null;
+  if (soft === undefined) return `${name}=${hard}`;
+  if (hard === undefined) return `${name}=${soft}`;
+  return `${name}=${soft}:${hard}`;
+}
+
+export function buildSandboxCreateArgs(params: {
+  name: string;
+  cfg: SandboxDockerConfig;
+  sessionKey: string;
+  createdAtMs?: number;
+  labels?: Record<string, string>;
+}) {
+  const createdAtMs = params.createdAtMs ?? Date.now();
+  const args = ["create", "--name", params.name];
+  args.push("--label", "clawdbot.sandbox=1");
+  args.push("--label", `clawdbot.sessionKey=${params.sessionKey}`);
+  args.push("--label", `clawdbot.createdAtMs=${createdAtMs}`);
+  for (const [key, value] of Object.entries(params.labels ?? {})) {
+    if (key && value) args.push("--label", `${key}=${value}`);
+  }
+  if (params.cfg.readOnlyRoot) args.push("--read-only");
+  for (const entry of params.cfg.tmpfs) {
+    args.push("--tmpfs", entry);
+  }
+  if (params.cfg.network) args.push("--network", params.cfg.network);
+  if (params.cfg.user) args.push("--user", params.cfg.user);
+  for (const cap of params.cfg.capDrop) {
+    args.push("--cap-drop", cap);
+  }
+  args.push("--security-opt", "no-new-privileges");
+  if (params.cfg.seccompProfile) {
+    args.push("--security-opt", `seccomp=${params.cfg.seccompProfile}`);
+  }
+  if (params.cfg.apparmorProfile) {
+    args.push("--security-opt", `apparmor=${params.cfg.apparmorProfile}`);
+  }
+  for (const entry of params.cfg.dns ?? []) {
+    if (entry.trim()) args.push("--dns", entry);
+  }
+  for (const entry of params.cfg.extraHosts ?? []) {
+    if (entry.trim()) args.push("--add-host", entry);
+  }
+  if (typeof params.cfg.pidsLimit === "number" && params.cfg.pidsLimit > 0) {
+    args.push("--pids-limit", String(params.cfg.pidsLimit));
+  }
+  const memory = normalizeDockerLimit(params.cfg.memory);
+  if (memory) args.push("--memory", memory);
+  const memorySwap = normalizeDockerLimit(params.cfg.memorySwap);
+  if (memorySwap) args.push("--memory-swap", memorySwap);
+  if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
+    args.push("--cpus", String(params.cfg.cpus));
+  }
+  for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
+    const formatted = formatUlimitValue(name, value);
+    if (formatted) args.push("--ulimit", formatted);
+  }
+  return args;
+}
+
 async function createSandboxContainer(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -437,20 +540,11 @@ async function createSandboxContainer(params: {
   const { name, cfg, workspaceDir, sessionKey } = params;
   await ensureDockerImage(cfg.image);
 
-  const args = ["create", "--name", name];
-  args.push("--label", "clawdis.sandbox=1");
-  args.push("--label", `clawdis.sessionKey=${sessionKey}`);
-  args.push("--label", `clawdis.createdAtMs=${Date.now()}`);
-  if (cfg.readOnlyRoot) args.push("--read-only");
-  for (const entry of cfg.tmpfs) {
-    args.push("--tmpfs", entry);
-  }
-  if (cfg.network) args.push("--network", cfg.network);
-  if (cfg.user) args.push("--user", cfg.user);
-  for (const cap of cfg.capDrop) {
-    args.push("--cap-drop", cap);
-  }
-  args.push("--security-opt", "no-new-privileges");
+  const args = buildSandboxCreateArgs({
+    name,
+    cfg,
+    sessionKey,
+  });
   args.push("--workdir", cfg.workdir);
   args.push("-v", `${workspaceDir}:${cfg.workdir}`);
   args.push(cfg.image, "sleep", "infinity");
@@ -547,22 +641,12 @@ async function ensureSandboxBrowser(params: {
   const state = await dockerContainerState(containerName);
   if (!state.exists) {
     await ensureSandboxBrowserImage(params.cfg.browser.image);
-    const args = ["create", "--name", containerName];
-    args.push("--label", "clawdis.sandbox=1");
-    args.push("--label", "clawdis.sandboxBrowser=1");
-    args.push("--label", `clawdis.sessionKey=${params.sessionKey}`);
-    args.push("--label", `clawdis.createdAtMs=${Date.now()}`);
-    if (params.cfg.docker.readOnlyRoot) args.push("--read-only");
-    for (const entry of params.cfg.docker.tmpfs) {
-      args.push("--tmpfs", entry);
-    }
-    if (params.cfg.docker.network)
-      args.push("--network", params.cfg.docker.network);
-    if (params.cfg.docker.user) args.push("--user", params.cfg.docker.user);
-    for (const cap of params.cfg.docker.capDrop) {
-      args.push("--cap-drop", cap);
-    }
-    args.push("--security-opt", "no-new-privileges");
+    const args = buildSandboxCreateArgs({
+      name: containerName,
+      cfg: params.cfg.docker,
+      sessionKey: params.sessionKey,
+      labels: { "clawdbot.sandboxBrowser": "1" },
+    });
     args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}`);
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (params.cfg.browser.enableNoVnc && !params.cfg.browser.headless) {
@@ -570,19 +654,19 @@ async function ensureSandboxBrowser(params: {
     }
     args.push(
       "-e",
-      `CLAWDIS_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`,
+      `CLAWDBOT_BROWSER_HEADLESS=${params.cfg.browser.headless ? "1" : "0"}`,
     );
     args.push(
       "-e",
-      `CLAWDIS_BROWSER_ENABLE_NOVNC=${
+      `CLAWDBOT_BROWSER_ENABLE_NOVNC=${
         params.cfg.browser.enableNoVnc ? "1" : "0"
       }`,
     );
-    args.push("-e", `CLAWDIS_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
-    args.push("-e", `CLAWDIS_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
+    args.push("-e", `CLAWDBOT_BROWSER_CDP_PORT=${params.cfg.browser.cdpPort}`);
+    args.push("-e", `CLAWDBOT_BROWSER_VNC_PORT=${params.cfg.browser.vncPort}`);
     args.push(
       "-e",
-      `CLAWDIS_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`,
+      `CLAWDBOT_BROWSER_NOVNC_PORT=${params.cfg.browser.noVncPort}`,
     );
     args.push(params.cfg.browser.image);
     await execDocker(args);
@@ -739,7 +823,7 @@ async function maybePruneSandboxes(cfg: SandboxConfig) {
 }
 
 export async function resolveSandboxContext(params: {
-  config?: ClawdisConfig;
+  config?: ClawdbotConfig;
   sessionKey?: string;
   workspaceDir?: string;
 }): Promise<SandboxContext | null> {

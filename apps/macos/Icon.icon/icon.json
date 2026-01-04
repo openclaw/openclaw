@@ -6,8 +6,8 @@
     {
       "layers" : [
         {
-          "image-name" : "clawdis-mac.png",
-          "name" : "clawdis-mac",
+          "image-name" : "clawdbot-mac.png",
+          "name" : "clawdbot-mac",
           "position" : {
             "scale" : 1.07,
             "translation-in-points" : [

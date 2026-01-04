@@ -6,7 +6,7 @@ read_when:
 ---
 # Skills Config
 
-All skills-related configuration lives under `skills` in `~/.clawdis/clawdis.json`.
+All skills-related configuration lives under `skills` in `~/.clawdbot/clawdbot.json`.
 
 ```json5
 {
@@ -54,5 +54,5 @@ Per-skill fields:
 ## Notes
 
 - Keys under `entries` map to the skill name by default. If a skill defines
-  `metadata.clawdis.skillKey`, use that key instead.
+  `metadata.clawdbot.skillKey`, use that key instead.
 - Changes to skills are picked up on the next new session.

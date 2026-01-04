@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APP_BUNDLE="${1:-dist/Clawdis.app}"
+APP_BUNDLE="${1:-dist/Clawdbot.app}"
 IDENTITY="${SIGN_IDENTITY:-}"
 TIMESTAMP_MODE="${CODESIGN_TIMESTAMP:-auto}"
-ENT_TMP_BASE=$(mktemp -t clawdis-entitlements-base.XXXXXX)
-ENT_TMP_APP=$(mktemp -t clawdis-entitlements-app.XXXXXX)
-ENT_TMP_APP_BASE=$(mktemp -t clawdis-entitlements-app-base.XXXXXX)
-ENT_TMP_BUN=$(mktemp -t clawdis-entitlements-bun.XXXXXX)
+ENT_TMP_BASE=$(mktemp -t clawdbot-entitlements-base.XXXXXX)
+ENT_TMP_APP=$(mktemp -t clawdbot-entitlements-app.XXXXXX)
+ENT_TMP_APP_BASE=$(mktemp -t clawdbot-entitlements-app-base.XXXXXX)
+ENT_TMP_BUN=$(mktemp -t clawdbot-entitlements-bun.XXXXXX)
 
 if [ ! -d "$APP_BUNDLE" ]; then
   echo "App bundle not found: $APP_BUNDLE" >&2
@@ -206,8 +206,8 @@ sign_plain_item() {
 }
 
 # Sign main binary
-if [ -f "$APP_BUNDLE/Contents/MacOS/Clawdis" ]; then
-  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Clawdis" "$APP_ENTITLEMENTS"
+if [ -f "$APP_BUNDLE/Contents/MacOS/Clawdbot" ]; then
+  echo "Signing main binary"; sign_item "$APP_BUNDLE/Contents/MacOS/Clawdbot" "$APP_ENTITLEMENTS"
 fi
 
 # Sign bundled gateway payload (native addons, libvips dylibs)
@@ -215,8 +215,8 @@ if [ -d "$APP_BUNDLE/Contents/Resources/Relay" ]; then
   find "$APP_BUNDLE/Contents/Resources/Relay" -type f \( -name "*.node" -o -name "*.dylib" \) -print0 | while IFS= read -r -d '' f; do
     echo "Signing gateway payload: $f"; sign_item "$f" "$ENT_TMP_BASE"
   done
-  if [ -f "$APP_BUNDLE/Contents/Resources/Relay/clawdis" ]; then
-    echo "Signing embedded relay"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/clawdis" "$ENT_TMP_BUN"
+  if [ -f "$APP_BUNDLE/Contents/Resources/Relay/clawdbot" ]; then
+    echo "Signing embedded relay"; sign_item "$APP_BUNDLE/Contents/Resources/Relay/clawdbot" "$ENT_TMP_BUN"
   fi
 fi
 

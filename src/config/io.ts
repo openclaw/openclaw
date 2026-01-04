@@ -11,17 +11,17 @@ import {
 } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   resolveConfigPath,
   resolveStateDir,
 } from "./paths.js";
 import type {
-  ClawdisConfig,
+  ClawdbotConfig,
   ConfigFileSnapshot,
   LegacyConfigIssue,
 } from "./types.js";
 import { validateConfigObject } from "./validation.js";
-import { ClawdisSchema } from "./zod-schema.js";
+import { ClawdbotSchema } from "./zod-schema.js";
 
 export type ParseConfigJson5Result =
   | { ok: true; parsed: unknown }
@@ -67,13 +67,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
 
-  function loadConfig(): ClawdisConfig {
+  function loadConfig(): ClawdbotConfig {
     try {
       if (!deps.fs.existsSync(configPath)) return {};
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
       if (typeof parsed !== "object" || parsed === null) return {};
-      const validated = ClawdisSchema.safeParse(parsed);
+      const validated = ClawdbotSchema.safeParse(parsed);
       if (!validated.success) {
         deps.logger.error("Invalid config:");
         for (const iss of validated.error.issues) {
@@ -82,7 +82,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       return applySessionDefaults(
-        applyIdentityDefaults(validated.data as ClawdisConfig),
+        applyIdentityDefaults(validated.data as ClawdbotConfig),
       );
     } catch (err) {
       deps.logger.error(`Failed to read config at ${configPath}`, err);
@@ -165,7 +165,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
   }
 
-  async function writeConfigFile(cfg: ClawdisConfig) {
+  async function writeConfigFile(cfg: ClawdbotConfig) {
     await deps.fs.promises.mkdir(path.dirname(configPath), {
       recursive: true,
     });
@@ -181,7 +181,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   };
 }
 
-const defaultIO = createConfigIO({ configPath: CONFIG_PATH_CLAWDIS });
+const defaultIO = createConfigIO({ configPath: CONFIG_PATH_CLAWDBOT });
 
 export const loadConfig = defaultIO.loadConfig;
 export const readConfigFileSnapshot = defaultIO.readConfigFileSnapshot;

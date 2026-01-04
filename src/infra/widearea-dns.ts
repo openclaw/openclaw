@@ -4,8 +4,8 @@ import path from "node:path";
 
 import { CONFIG_DIR, ensureDir } from "../utils.js";
 
-export const WIDE_AREA_DISCOVERY_DOMAIN = "clawdis.internal.";
-export const WIDE_AREA_ZONE_FILENAME = "clawdis.internal.db";
+export const WIDE_AREA_DISCOVERY_DOMAIN = "clawdbot.internal.";
+export const WIDE_AREA_ZONE_FILENAME = "clawdbot.internal.db";
 
 export function getWideAreaZonePath(): string {
   return path.join(CONFIG_DIR, "dns", WIDE_AREA_ZONE_FILENAME);
@@ -54,7 +54,7 @@ function extractSerial(zoneText: string): number | null {
 }
 
 function extractContentHash(zoneText: string): string | null {
-  const match = zoneText.match(/^\s*;\s*clawdis-content-hash:\s*(\S+)\s*$/m);
+  const match = zoneText.match(/^\s*;\s*clawdbot-content-hash:\s*(\S+)\s*$/m);
   return match?.[1] ?? null;
 }
 
@@ -79,11 +79,11 @@ export type WideAreaBridgeZoneOpts = {
 };
 
 function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
-  const hostname = os.hostname().split(".")[0] ?? "clawdis";
-  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "clawdis");
+  const hostname = os.hostname().split(".")[0] ?? "clawdbot";
+  const hostLabel = dnsLabel(opts.hostLabel ?? hostname, "clawdbot");
   const instanceLabel = dnsLabel(
     opts.instanceLabel ?? `${hostname}-bridge`,
-    "clawdis-bridge",
+    "clawdbot-bridge",
   );
 
   const txt = [
@@ -109,13 +109,13 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
   }
 
   records.push(
-    `_clawdis-bridge._tcp IN PTR ${instanceLabel}._clawdis-bridge._tcp`,
+    `_clawdbot-bridge._tcp IN PTR ${instanceLabel}._clawdbot-bridge._tcp`,
   );
   records.push(
-    `${instanceLabel}._clawdis-bridge._tcp IN SRV 0 0 ${opts.bridgePort} ${hostLabel}`,
+    `${instanceLabel}._clawdbot-bridge._tcp IN SRV 0 0 ${opts.bridgePort} ${hostLabel}`,
   );
   records.push(
-    `${instanceLabel}._clawdis-bridge._tcp IN TXT ${txt.map(txtQuote).join(" ")}`,
+    `${instanceLabel}._clawdbot-bridge._tcp IN TXT ${txt.map(txtQuote).join(" ")}`,
   );
 
   const contentBody = `${records.join("\n")}\n`;
@@ -128,7 +128,7 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
     .join("\n")}\n`;
   const contentHash = computeContentHash(hashBody);
 
-  return `; clawdis-content-hash: ${contentHash}\n${contentBody}`;
+  return `; clawdbot-content-hash: ${contentHash}\n${contentBody}`;
 }
 
 export function renderWideAreaBridgeZoneText(

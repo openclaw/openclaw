@@ -21,7 +21,7 @@ import { CONFIG_DIR, ensureDir, jidToE164 } from "../utils.js";
 import { VERSION } from "../version.js";
 
 export function resolveWebAuthDir() {
-  return path.join(os.homedir(), ".clawdis", "credentials");
+  return path.join(os.homedir(), ".clawdbot", "credentials");
 }
 
 function resolveWebCredsPath() {
@@ -143,7 +143,7 @@ export async function createWaSocket(
     version,
     logger,
     printQRInTerminal: false,
-    browser: ["clawdis", "cli", VERSION],
+    browser: ["clawdbot", "cli", VERSION],
     syncFullHistory: false,
     markOnlineOnConnect: false,
   });
@@ -165,7 +165,7 @@ export async function createWaSocket(
           const status = getStatusCode(lastDisconnect?.error);
           if (status === DisconnectReason.loggedOut) {
             console.error(
-              danger("WhatsApp session logged out. Run: clawdis login"),
+              danger("WhatsApp session logged out. Run: clawdbot login"),
             );
           }
         }
@@ -413,7 +413,7 @@ export async function pickProvider(pref: Provider | "auto"): Promise<Provider> {
   const hasWeb = await webAuthExists();
   if (!hasWeb) {
     throw new Error(
-      "No WhatsApp Web session found. Run `clawdis login --verbose` to link.",
+      "No WhatsApp Web session found. Run `clawdbot login --verbose` to link.",
     );
   }
   return choice;

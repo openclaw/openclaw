@@ -23,7 +23,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import * as configModule from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { agentCommand } from "./agent.js";
@@ -39,7 +39,7 @@ const runtime: RuntimeEnv = {
 const configSpy = vi.spyOn(configModule, "loadConfig");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-agent-"));
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-agent-"));
   const previousHome = process.env.HOME;
   process.env.HOME = base;
   try {
@@ -53,9 +53,9 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 function mockConfig(
   home: string,
   storePath: string,
-  routingOverrides?: Partial<NonNullable<ClawdisConfig["routing"]>>,
-  agentOverrides?: Partial<NonNullable<ClawdisConfig["agent"]>>,
-  telegramOverrides?: Partial<NonNullable<ClawdisConfig["telegram"]>>,
+  routingOverrides?: Partial<NonNullable<ClawdbotConfig["routing"]>>,
+  agentOverrides?: Partial<NonNullable<ClawdbotConfig["agent"]>>,
+  telegramOverrides?: Partial<NonNullable<ClawdbotConfig["telegram"]>>,
 ) {
   configSpy.mockReturnValue({
     agent: {

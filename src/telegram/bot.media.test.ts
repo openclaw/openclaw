@@ -89,7 +89,7 @@ describe("telegram inbound media", () => {
         photo: [{ file_id: "fid" }],
         date: 1736380800, // 2025-01-09T00:00:00Z
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ file_path: "photos/1.jpg" }),
     });
 
@@ -145,7 +145,7 @@ describe("telegram inbound media", () => {
         chat: { id: 1234, type: "private" },
         photo: [{ file_id: "fid" }],
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ file_path: "photos/2.jpg" }),
     });
 
@@ -191,7 +191,7 @@ describe("telegram inbound media", () => {
         chat: { id: 1234, type: "private" },
         photo: [{ file_id: "fid" }],
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({}),
     });
 

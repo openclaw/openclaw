@@ -110,7 +110,7 @@ export class GatewayBrowserClient {
       minProtocol: 2,
       maxProtocol: 2,
       client: {
-        name: this.opts.clientName ?? "clawdis-control-ui",
+        name: this.opts.clientName ?? "clawdbot-control-ui",
         version: this.opts.clientVersion ?? "dev",
         platform: this.opts.platform ?? navigator.platform ?? "web",
         mode: this.opts.mode ?? "webchat",

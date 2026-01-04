@@ -17,7 +17,7 @@ describe("web logout", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-logout-"));
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-logout-"));
     vi.spyOn(os, "homedir").mockReturnValue(tmpDir);
     vi.resetModules();
     vi.doMock("../utils.js", async () => {
@@ -25,7 +25,7 @@ describe("web logout", () => {
         await vi.importActual<typeof import("../utils.js")>("../utils.js");
       return {
         ...actual,
-        CONFIG_DIR: path.join(tmpDir, ".clawdis"),
+        CONFIG_DIR: path.join(tmpDir, ".clawdbot"),
       };
     });
   });
@@ -45,12 +45,12 @@ describe("web logout", () => {
     "deletes cached credentials when present",
     { timeout: 15_000 },
     async () => {
-      const credsDir = path.join(tmpDir, ".clawdis", "credentials");
+      const credsDir = path.join(tmpDir, ".clawdbot", "credentials");
       fs.mkdirSync(credsDir, { recursive: true });
       fs.writeFileSync(path.join(credsDir, "creds.json"), "{}");
       const sessionsPath = path.join(
         tmpDir,
-        ".clawdis",
+        ".clawdbot",
         "sessions",
         "sessions.json",
       );

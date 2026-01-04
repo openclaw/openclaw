@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadConfig,
   readConfigFileSnapshot,
@@ -250,7 +250,7 @@ export const providersHandlers: GatewayRequestHandlers = {
       if (nextTelegram) {
         delete nextTelegram.botToken;
       }
-      const nextCfg = { ...cfg } as ClawdisConfig;
+      const nextCfg = { ...cfg } as ClawdbotConfig;
       if (nextTelegram && Object.keys(nextTelegram).length > 0) {
         nextCfg.telegram = nextTelegram;
       } else {

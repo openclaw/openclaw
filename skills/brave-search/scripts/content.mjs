@@ -7,7 +7,7 @@ function usage() {
 
 export async function fetchAsMarkdown(url) {
   const resp = await fetch(url, {
-    headers: { "User-Agent": "clawdis-brave-search/1.0" },
+    headers: { "User-Agent": "clawdbot-brave-search/1.0" },
   });
   const html = await resp.text();
 

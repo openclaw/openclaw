@@ -69,26 +69,26 @@ These are conceptual method names; wire them into `src/gateway/protocol/schema.t
 
 ## CLI flows
 CLI must be able to fully operate without any GUI:
-- `clawdis nodes pending`
-- `clawdis nodes approve <requestId>`
-- `clawdis nodes reject <requestId>`
-- `clawdis nodes status` (paired nodes + connection status/capabilities)
+- `clawdbot nodes pending`
+- `clawdbot nodes approve <requestId>`
+- `clawdbot nodes reject <requestId>`
+- `clawdbot nodes status` (paired nodes + connection status/capabilities)
 
 Optional interactive helper:
-- `clawdis nodes watch` (subscribe to `node.pair.requested` and prompt in-place)
+- `clawdbot nodes watch` (subscribe to `node.pair.requested` and prompt in-place)
 
 Implementation pointers:
 - CLI commands: `src/cli/nodes-cli.ts`
 - Gateway handlers + events: `src/gateway/server.ts`
-- Pairing store: `src/infra/node-pairing.ts` (under `~/.clawdis/nodes/`)
-- Optional macOS UI prompt (frontend only): `apps/macos/Sources/Clawdis/NodePairingApprovalPrompter.swift`
+- Pairing store: `src/infra/node-pairing.ts` (under `~/.clawdbot/nodes/`)
+- Optional macOS UI prompt (frontend only): `apps/macos/Sources/Clawdbot/NodePairingApprovalPrompter.swift`
   - Push-first: listens to `node.pair.requested`/`node.pair.resolved`, does a `node.pair.list` on startup/reconnect,
     and only runs a slow safety poll while a request is pending/visible.
 
 ## Storage (private, local)
-Gateway stores the authoritative state under `~/.clawdis/`:
-- `~/.clawdis/nodes/paired.json`
-- `~/.clawdis/nodes/pending.json` (or `~/.clawdis/nodes/pending/*.json`)
+Gateway stores the authoritative state under `~/.clawdbot/`:
+- `~/.clawdbot/nodes/paired.json`
+- `~/.clawdbot/nodes/pending.json` (or `~/.clawdbot/nodes/pending/*.json`)
 
 Notes:
 - Tokens are secrets. Treat `paired.json` as sensitive.

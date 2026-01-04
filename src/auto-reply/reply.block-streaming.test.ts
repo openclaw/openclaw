@@ -22,7 +22,7 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-stream-"));
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-stream-"));
   const previousHome = process.env.HOME;
   process.env.HOME = base;
   try {

@@ -20,12 +20,12 @@ import {
 import { createDefaultDeps } from "../cli/deps.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   isNixMode,
   loadConfig,
   migrateLegacyConfig,
   readConfigFileSnapshot,
-  STATE_DIR_CLAWDIS,
+  STATE_DIR_CLAWDBOT,
   writeConfigFile,
 } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
@@ -49,7 +49,7 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
-import { ensureClawdisCliOnPath } from "../infra/path-env.js";
+import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   listSystemPresence,
@@ -131,7 +131,7 @@ import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
 import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
-ensureClawdisCliOnPath();
+ensureClawdbotCliOnPath();
 
 const log = createSubsystemLogger("gateway");
 const logCanvas = log.child("canvas");
@@ -329,8 +329,8 @@ function buildSnapshot(): Snapshot {
     stateVersion: { presence: presenceVersion, health: healthVersion },
     uptimeMs,
     // Surface resolved paths so UIs can display the true config location.
-    configPath: CONFIG_PATH_CLAWDIS,
-    stateDir: STATE_DIR_CLAWDIS,
+    configPath: CONFIG_PATH_CLAWDBOT,
+    stateDir: STATE_DIR_CLAWDBOT,
   };
 }
 
@@ -367,7 +367,7 @@ export async function startGatewayServer(
     );
     if (!migrated) {
       throw new Error(
-        'Legacy config entries detected but auto-migration failed. Run "clawdis doctor" to migrate.',
+        'Legacy config entries detected but auto-migration failed. Run "clawdbot doctor" to migrate.',
       );
     }
     await writeConfigFile(migrated);
@@ -407,9 +407,9 @@ export async function startGatewayServer(
   };
   const tailscaleMode = tailscaleConfig.mode ?? "off";
   const token =
-    authConfig.token ?? process.env.CLAWDIS_GATEWAY_TOKEN ?? undefined;
+    authConfig.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
   const password =
-    authConfig.password ?? process.env.CLAWDIS_GATEWAY_PASSWORD ?? undefined;
+    authConfig.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
   const authMode: ResolvedGatewayAuth["mode"] =
     authConfig.mode ?? (password ? "password" : token ? "token" : "none");
   const allowTailscale =
@@ -423,12 +423,12 @@ export async function startGatewayServer(
   };
   let hooksConfig = resolveHooksConfig(cfgAtStart);
   const canvasHostEnabled =
-    process.env.CLAWDIS_SKIP_CANVAS_HOST !== "1" &&
+    process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" &&
     cfgAtStart.canvasHost?.enabled !== false;
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
-      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or CLAWDIS_GATEWAY_PASSWORD)",
+      "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or CLAWDBOT_GATEWAY_PASSWORD)",
     );
   }
   if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
@@ -438,7 +438,7 @@ export async function startGatewayServer(
   }
   if (!isLoopbackHost(bindHost) && authMode === "none") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth or CLAWDIS_GATEWAY_TOKEN)`,
+      `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth or CLAWDBOT_GATEWAY_TOKEN)`,
     );
   }
 
@@ -672,7 +672,7 @@ export async function startGatewayServer(
   const buildCronService = (cfg: ReturnType<typeof loadConfig>) => {
     const storePath = resolveCronStorePath(cfg.cron?.store);
     const cronEnabled =
-      process.env.CLAWDIS_SKIP_CRON !== "1" && cfg.cron?.enabled !== false;
+      process.env.CLAWDBOT_SKIP_CRON !== "1" && cfg.cron?.enabled !== false;
     const cron = new CronService({
       storePath,
       cronEnabled,
@@ -807,7 +807,7 @@ export async function startGatewayServer(
   const bridgeEnabled = (() => {
     if (cfgAtStart.bridge?.enabled !== undefined)
       return cfgAtStart.bridge.enabled === true;
-    return process.env.CLAWDIS_BRIDGE_ENABLED !== "0";
+    return process.env.CLAWDBOT_BRIDGE_ENABLED !== "0";
   })();
 
   const bridgePort = (() => {
@@ -817,8 +817,8 @@ export async function startGatewayServer(
     ) {
       return cfgAtStart.bridge.port;
     }
-    if (process.env.CLAWDIS_BRIDGE_PORT !== undefined) {
-      const parsed = Number.parseInt(process.env.CLAWDIS_BRIDGE_PORT, 10);
+    if (process.env.CLAWDBOT_BRIDGE_PORT !== undefined) {
+      const parsed = Number.parseInt(process.env.CLAWDBOT_BRIDGE_PORT, 10);
       return Number.isFinite(parsed) && parsed > 0 ? parsed : 18790;
     }
     return 18790;
@@ -827,7 +827,7 @@ export async function startGatewayServer(
   const bridgeHost = (() => {
     // Back-compat: allow an env var override when no bind policy is configured.
     if (cfgAtStart.bridge?.bind === undefined) {
-      const env = process.env.CLAWDIS_BRIDGE_HOST?.trim();
+      const env = process.env.CLAWDBOT_BRIDGE_HOST?.trim();
       if (env) return env;
     }
 
@@ -1059,7 +1059,7 @@ export async function startGatewayServer(
   const tailnetDns = await resolveTailnetDnsHint();
 
   try {
-    const sshPortEnv = process.env.CLAWDIS_SSH_PORT?.trim();
+    const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
     const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
     const sshPort =
       Number.isFinite(sshPortParsed) && sshPortParsed > 0
@@ -1392,7 +1392,7 @@ export async function startGatewayServer(
             protocol: PROTOCOL_VERSION,
             server: {
               version:
-                process.env.CLAWDIS_VERSION ??
+                process.env.CLAWDBOT_VERSION ??
                 process.env.npm_package_version ??
                 "dev",
               commit: process.env.GIT_COMMIT,
@@ -1594,7 +1594,7 @@ export async function startGatewayServer(
   }
 
   // Start Gmail watcher if configured (hooks.gmail.account).
-  if (process.env.CLAWDIS_SKIP_GMAIL_WATCHER !== "1") {
+  if (process.env.CLAWDBOT_SKIP_GMAIL_WATCHER !== "1") {
     try {
       const gmailResult = await startGmailWatcher(cfgAtStart);
       if (gmailResult.started) {
@@ -1612,15 +1612,15 @@ export async function startGatewayServer(
   }
 
   // Launch configured providers (WhatsApp Web, Discord, Slack, Telegram) so gateway replies via the
-  // surface the message came from. Tests can opt out via CLAWDIS_SKIP_PROVIDERS.
-  if (process.env.CLAWDIS_SKIP_PROVIDERS !== "1") {
+  // surface the message came from. Tests can opt out via CLAWDBOT_SKIP_PROVIDERS.
+  if (process.env.CLAWDBOT_SKIP_PROVIDERS !== "1") {
     try {
       await startProviders();
     } catch (err) {
       logProviders.error(`provider startup failed: ${String(err)}`);
     }
   } else {
-    logProviders.info("skipping provider start (CLAWDIS_SKIP_PROVIDERS=1)");
+    logProviders.info("skipping provider start (CLAWDBOT_SKIP_PROVIDERS=1)");
   }
 
   const applyHotReload = async (
@@ -1663,7 +1663,7 @@ export async function startGatewayServer(
 
     if (plan.restartGmailWatcher) {
       await stopGmailWatcher().catch(() => {});
-      if (process.env.CLAWDIS_SKIP_GMAIL_WATCHER !== "1") {
+      if (process.env.CLAWDBOT_SKIP_GMAIL_WATCHER !== "1") {
         try {
           const gmailResult = await startGmailWatcher(nextConfig);
           if (gmailResult.started) {
@@ -1680,15 +1680,15 @@ export async function startGatewayServer(
         }
       } else {
         logHooks.info(
-          "skipping gmail watcher restart (CLAWDIS_SKIP_GMAIL_WATCHER=1)",
+          "skipping gmail watcher restart (CLAWDBOT_SKIP_GMAIL_WATCHER=1)",
         );
       }
     }
 
     if (plan.restartProviders.size > 0) {
-      if (process.env.CLAWDIS_SKIP_PROVIDERS === "1") {
+      if (process.env.CLAWDBOT_SKIP_PROVIDERS === "1") {
         logProviders.info(
-          "skipping provider reload (CLAWDIS_SKIP_PROVIDERS=1)",
+          "skipping provider reload (CLAWDBOT_SKIP_PROVIDERS=1)",
         );
       } else {
         const restartProvider = async (
@@ -1780,7 +1780,7 @@ export async function startGatewayServer(
       warn: (msg) => logReload.warn(msg),
       error: (msg) => logReload.error(msg),
     },
-    watchPath: CONFIG_PATH_CLAWDIS,
+    watchPath: CONFIG_PATH_CLAWDBOT,
   });
 
   return {

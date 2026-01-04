@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 
 export function stripStructuralPrefixes(text: string): string {
@@ -18,7 +18,7 @@ export function stripStructuralPrefixes(text: string): string {
 export function stripMentions(
   text: string,
   ctx: MsgContext,
-  cfg: ClawdisConfig | undefined,
+  cfg: ClawdbotConfig | undefined,
 ): string {
   let result = text;
   const patterns = cfg?.routing?.groupChat?.mentionPatterns ?? [];

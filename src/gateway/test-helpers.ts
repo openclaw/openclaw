@@ -161,7 +161,7 @@ vi.mock("../config/config.js", async () => {
     "../config/config.js",
   );
   const resolveConfigPath = () =>
-    path.join(os.homedir(), ".clawdis", "clawdis.json");
+    path.join(os.homedir(), ".clawdbot", "clawdbot.json");
 
   const readConfigFileSnapshot = async () => {
     if (testState.legacyIssues.length > 0) {
@@ -230,8 +230,8 @@ vi.mock("../config/config.js", async () => {
 
   return {
     ...actual,
-    CONFIG_PATH_CLAWDIS: resolveConfigPath(),
-    STATE_DIR_CLAWDIS: path.dirname(resolveConfigPath()),
+    CONFIG_PATH_CLAWDBOT: resolveConfigPath(),
+    STATE_DIR_CLAWDBOT: path.dirname(resolveConfigPath()),
     get isNixMode() {
       return testIsNixMode.value;
     },
@@ -325,7 +325,7 @@ vi.mock("../commands/agent.js", () => ({
   agentCommand,
 }));
 
-process.env.CLAWDIS_SKIP_PROVIDERS = "1";
+process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
 
 let previousHome: string | undefined;
 let tempHome: string | undefined;
@@ -334,7 +334,7 @@ export function installGatewayTestHooks() {
   beforeEach(async () => {
     previousHome = process.env.HOME;
     tempHome = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdis-gateway-home-"),
+      path.join(os.tmpdir(), "clawdbot-gateway-home-"),
     );
     process.env.HOME = tempHome;
     sessionStoreSaveDelayMs.value = 0;
@@ -440,11 +440,11 @@ export async function startServerWithClient(
   opts?: GatewayServerOptions,
 ) {
   const port = await getFreePort();
-  const prev = process.env.CLAWDIS_GATEWAY_TOKEN;
+  const prev = process.env.CLAWDBOT_GATEWAY_TOKEN;
   if (token === undefined) {
-    delete process.env.CLAWDIS_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   } else {
-    process.env.CLAWDIS_GATEWAY_TOKEN = token;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = token;
   }
   const server = await startGatewayServer(port, opts);
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);

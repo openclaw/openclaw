@@ -1,4 +1,4 @@
-import ClawdisKit
+import ClawdbotKit
 import Network
 import Observation
 import SwiftUI
@@ -23,7 +23,7 @@ struct SettingsTab: View {
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
-    @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = ClawdisLocationMode.off.rawValue
+    @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = ClawdbotLocationMode.off.rawValue
     @AppStorage("location.preciseEnabled") private var locationPreciseEnabled: Bool = true
     @AppStorage("screen.preventSleep") private var preventSleep: Bool = true
     @AppStorage("bridge.preferredStableID") private var preferredBridgeStableID: String = ""
@@ -36,7 +36,7 @@ struct SettingsTab: View {
     @State private var connectStatus = ConnectStatusStore()
     @State private var connectingBridgeID: String?
     @State private var localIPAddress: String?
-    @State private var lastLocationModeRaw: String = ClawdisLocationMode.off.rawValue
+    @State private var lastLocationModeRaw: String = ClawdbotLocationMode.off.rawValue
 
     var body: some View {
         NavigationStack {
@@ -186,9 +186,9 @@ struct SettingsTab: View {
 
                 Section("Location") {
                     Picker("Location Access", selection: self.$locationEnabledModeRaw) {
-                        Text("Off").tag(ClawdisLocationMode.off.rawValue)
-                        Text("While Using").tag(ClawdisLocationMode.whileUsing.rawValue)
-                        Text("Always").tag(ClawdisLocationMode.always.rawValue)
+                        Text("Off").tag(ClawdbotLocationMode.off.rawValue)
+                        Text("While Using").tag(ClawdbotLocationMode.whileUsing.rawValue)
+                        Text("Always").tag(ClawdbotLocationMode.always.rawValue)
                     }
                     .pickerStyle(.segmented)
 
@@ -202,7 +202,7 @@ struct SettingsTab: View {
 
                 Section("Screen") {
                     Toggle("Prevent Sleep", isOn: self.$preventSleep)
-                    Text("Keeps the screen awake while Clawdis is open.")
+                    Text("Keeps the screen awake while Clawdbot is open.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
@@ -233,7 +233,7 @@ struct SettingsTab: View {
             .onChange(of: self.locationEnabledModeRaw) { _, newValue in
                 let previous = self.lastLocationModeRaw
                 self.lastLocationModeRaw = newValue
-                guard let mode = ClawdisLocationMode(rawValue: newValue) else { return }
+                guard let mode = ClawdbotLocationMode(rawValue: newValue) else { return }
                 Task {
                     let granted = await self.appModel.requestLocationPermissions(mode: mode)
                     if !granted {
@@ -312,8 +312,8 @@ struct SettingsTab: View {
         return "iOS \(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
     }
 
-    private var locationMode: ClawdisLocationMode {
-        ClawdisLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
+    private var locationMode: ClawdbotLocationMode {
+        ClawdbotLocationMode(rawValue: self.locationEnabledModeRaw) ?? .off
     }
 
     private func appVersion() -> String {
@@ -342,38 +342,38 @@ struct SettingsTab: View {
     }
 
     private func currentCaps() -> [String] {
-        var caps = [ClawdisCapability.canvas.rawValue, ClawdisCapability.screen.rawValue]
+        var caps = [ClawdbotCapability.canvas.rawValue, ClawdbotCapability.screen.rawValue]
 
         let cameraEnabled =
             UserDefaults.standard.object(forKey: "camera.enabled") == nil
                 ? true
                 : UserDefaults.standard.bool(forKey: "camera.enabled")
-        if cameraEnabled { caps.append(ClawdisCapability.camera.rawValue) }
+        if cameraEnabled { caps.append(ClawdbotCapability.camera.rawValue) }
 
         let voiceWakeEnabled = UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey)
-        if voiceWakeEnabled { caps.append(ClawdisCapability.voiceWake.rawValue) }
+        if voiceWakeEnabled { caps.append(ClawdbotCapability.voiceWake.rawValue) }
 
         return caps
     }
 
     private func currentCommands() -> [String] {
         var commands: [String] = [
-            ClawdisCanvasCommand.present.rawValue,
-            ClawdisCanvasCommand.hide.rawValue,
-            ClawdisCanvasCommand.navigate.rawValue,
-            ClawdisCanvasCommand.evalJS.rawValue,
-            ClawdisCanvasCommand.snapshot.rawValue,
-            ClawdisCanvasA2UICommand.push.rawValue,
-            ClawdisCanvasA2UICommand.pushJSONL.rawValue,
-            ClawdisCanvasA2UICommand.reset.rawValue,
-            ClawdisScreenCommand.record.rawValue,
+            ClawdbotCanvasCommand.present.rawValue,
+            ClawdbotCanvasCommand.hide.rawValue,
+            ClawdbotCanvasCommand.navigate.rawValue,
+            ClawdbotCanvasCommand.evalJS.rawValue,
+            ClawdbotCanvasCommand.snapshot.rawValue,
+            ClawdbotCanvasA2UICommand.push.rawValue,
+            ClawdbotCanvasA2UICommand.pushJSONL.rawValue,
+            ClawdbotCanvasA2UICommand.reset.rawValue,
+            ClawdbotScreenCommand.record.rawValue,
         ]
 
         let caps = Set(self.currentCaps())
-        if caps.contains(ClawdisCapability.camera.rawValue) {
-            commands.append(ClawdisCameraCommand.list.rawValue)
-            commands.append(ClawdisCameraCommand.snap.rawValue)
-            commands.append(ClawdisCameraCommand.clip.rawValue)
+        if caps.contains(ClawdbotCapability.camera.rawValue) {
+            commands.append(ClawdbotCameraCommand.list.rawValue)
+            commands.append(ClawdbotCameraCommand.snap.rawValue)
+            commands.append(ClawdbotCameraCommand.clip.rawValue)
         }
 
         return commands
@@ -391,7 +391,7 @@ struct SettingsTab: View {
         do {
             let statusStore = self.connectStatus
             let existing = KeychainStore.loadString(
-                service: "com.clawdis.bridge",
+                service: "com.clawdbot.bridge",
                 account: self.keychainAccount())
             let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
                 existing :
@@ -419,7 +419,7 @@ struct SettingsTab: View {
             if !token.isEmpty, token != existingToken {
                 _ = KeychainStore.saveString(
                     token,
-                    service: "com.clawdis.bridge",
+                    service: "com.clawdbot.bridge",
                     account: self.keychainAccount())
             }
 
@@ -465,7 +465,7 @@ struct SettingsTab: View {
         do {
             let statusStore = self.connectStatus
             let existing = KeychainStore.loadString(
-                service: "com.clawdis.bridge",
+                service: "com.clawdbot.bridge",
                 account: self.keychainAccount())
             let existingToken = (existing?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ?
                 existing :
@@ -493,7 +493,7 @@ struct SettingsTab: View {
             if !token.isEmpty, token != existingToken {
                 _ = KeychainStore.saveString(
                     token,
-                    service: "com.clawdis.bridge",
+                    service: "com.clawdbot.bridge",
                     account: self.keychainAccount())
             }
 

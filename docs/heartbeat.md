@@ -11,15 +11,15 @@ surface anything that needs attention without spamming the user.
 ## Prompt contract
 - Heartbeat body defaults to `HEARTBEAT` (configurable via `agent.heartbeat.prompt`).
 - If nothing needs attention, the model should reply **exactly** `HEARTBEAT_OK`.
-- During heartbeat runs, Clawdis treats `HEARTBEAT_OK` as an ack when it appears at
-  the **start or end** of the reply. Clawdis strips the token and discards the
+- During heartbeat runs, Clawdbot treats `HEARTBEAT_OK` as an ack when it appears at
+  the **start or end** of the reply. Clawdbot strips the token and discards the
   reply if the remaining content is **≤ 30 characters**.
 - If `HEARTBEAT_OK` is in the **middle** of a reply, it is not treated specially.
 - For alerts, do **not** include `HEARTBEAT_OK`; return only the alert text.
 
 ### Stray `HEARTBEAT_OK` outside heartbeats
 If the model accidentally includes `HEARTBEAT_OK` at the start or end of a
-normal (non-heartbeat) reply, Clawdis strips the token and logs a verbose
+normal (non-heartbeat) reply, Clawdbot strips the token and logs a verbose
 message. If the reply is only `HEARTBEAT_OK`, it is dropped.
 
 ## Config

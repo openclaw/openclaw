@@ -1,5 +1,5 @@
 import {
-  CONFIG_PATH_CLAWDIS,
+  CONFIG_PATH_CLAWDBOT,
   parseConfigJson5,
   readConfigFileSnapshot,
   validateConfigObject,
@@ -96,7 +96,7 @@ export const configHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        path: CONFIG_PATH_CLAWDIS,
+        path: CONFIG_PATH_CLAWDBOT,
         config: validated.config,
       },
       undefined,

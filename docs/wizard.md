@@ -7,20 +7,20 @@ read_when:
 
 # Onboarding Wizard (CLI)
 
-The onboarding wizard is the **recommended** way to set up Clawdis on any OS.
+The onboarding wizard is the **recommended** way to set up Clawdbot on any OS.
 It configures a local Gateway or a remote Gateway connection, plus providers, skills,
 and workspace defaults in one guided flow.
 
 Primary entrypoint:
 
 ```bash
-clawdis onboard
+clawdbot onboard
 ```
 
 Follow‑up reconfiguration:
 
 ```bash
-clawdis configure
+clawdbot configure
 ```
 
 ## What the wizard does
@@ -40,7 +40,7 @@ It does **not** install or change anything on the remote host.
 ## Flow details (local)
 
 1) **Existing config detection**
-   - If `~/.clawdis/clawdis.json` exists, choose **Keep / Modify / Reset**.
+   - If `~/.clawdbot/clawdbot.json` exists, choose **Keep / Modify / Reset**.
    - Reset uses `trash` (never `rm`) and offers scopes:
      - Config only
      - Config + credentials + sessions
@@ -74,7 +74,7 @@ It does **not** install or change anything on the remote host.
    - Windows: Scheduled Task
 
 7) **Health check**
-   - Starts the Gateway (if needed) and runs `clawdis health`.
+   - Starts the Gateway (if needed) and runs `clawdbot health`.
 
 8) **Skills (recommended)**
    - Reads the available skills and checks requirements.
@@ -104,7 +104,7 @@ Notes:
 Use `--non-interactive` to automate or script onboarding:
 
 ```bash
-clawdis onboard --non-interactive \
+clawdbot onboard --non-interactive \
   --mode local \
   --auth-choice apiKey \
   --anthropic-api-key "$ANTHROPIC_API_KEY" \
@@ -124,7 +124,7 @@ Clients (macOS app, Control UI) can render steps without re‑implementing onboa
 
 The wizard can install `signal-cli` from GitHub releases:
 - Downloads the appropriate release asset.
-- Stores it under `~/.clawdis/tools/signal-cli/<version>/`.
+- Stores it under `~/.clawdbot/tools/signal-cli/<version>/`.
 - Writes `signal.cliPath` to your config.
 
 Notes:
@@ -134,7 +134,7 @@ Notes:
 
 ## What the wizard writes
 
-Typical fields in `~/.clawdis/clawdis.json`:
+Typical fields in `~/.clawdbot/clawdbot.json`:
 - `agent.workspace`
 - `agent.model` / `models.providers` (if Minimax chosen)
 - `gateway.*` (mode, bind, auth, tailscale)
@@ -146,8 +146,8 @@ Typical fields in `~/.clawdis/clawdis.json`:
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
 
-WhatsApp credentials go to `~/.clawdis/credentials/`.
-Sessions are stored under `~/.clawdis/sessions/`.
+WhatsApp credentials go to `~/.clawdbot/credentials/`.
+Sessions are stored under `~/.clawdbot/sessions/`.
 
 ## Related docs
 

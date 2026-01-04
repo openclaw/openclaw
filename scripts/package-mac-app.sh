@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and bundle Clawdis into a minimal .app we can open.
-# Outputs to dist/Clawdis.app
+# Build and bundle Clawdbot into a minimal .app we can open.
+# Outputs to dist/Clawdbot.app
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_ROOT="$ROOT_DIR/dist/Clawdis.app"
+APP_ROOT="$ROOT_DIR/dist/Clawdbot.app"
 BUILD_ROOT="$ROOT_DIR/apps/macos/.build"
-PRODUCT="Clawdis"
-BUNDLE_ID="${BUNDLE_ID:-com.clawdis.mac.debug}"
+PRODUCT="Clawdbot"
+BUNDLE_ID="${BUNDLE_ID:-com.clawdbot.mac.debug}"
 PKG_VERSION="$(cd "$ROOT_DIR" && node -p "require('./package.json').version" 2>/dev/null || echo "0.0.0")"
 BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -20,7 +20,7 @@ BUILD_ARCHS_VALUE="${BUILD_ARCHS:-arm64 x86_64}"
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
-SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml}"
+SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml}"
 AUTO_CHECKS=true
 if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
@@ -107,7 +107,7 @@ merge_framework_machos() {
 build_relay_binary() {
   local arch="$1"
   local out="$2"
-  local define_arg="__CLAWDIS_VERSION__=\\\"$PKG_VERSION\\\""
+  local define_arg="__CLAWDBOT_VERSION__=\\\"$PKG_VERSION\\\""
   local bun_bin="bun"
   local -a cmd=("$bun_bin" build "$ROOT_DIR/dist/macos/relay.js" --compile --bytecode --outfile "$out" -e electron --define "$define_arg")
   if [[ "$arch" == "x86_64" ]]; then
@@ -167,7 +167,7 @@ mkdir -p "$APP_ROOT/Contents/Resources/Relay"
 mkdir -p "$APP_ROOT/Contents/Frameworks"
 
 echo "📄 Copying Info.plist template"
-INFO_PLIST_SRC="$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/Info.plist"
+INFO_PLIST_SRC="$ROOT_DIR/apps/macos/Sources/Clawdbot/Resources/Info.plist"
 if [ ! -f "$INFO_PLIST_SRC" ]; then
   echo "ERROR: Info.plist template missing at $INFO_PLIST_SRC" >&2
   exit 1
@@ -176,8 +176,8 @@ cp "$INFO_PLIST_SRC" "$APP_ROOT/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier ${BUNDLE_ID}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${APP_VERSION}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${APP_BUILD}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :ClawdisBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
-/usr/libexec/PlistBuddy -c "Set :ClawdisGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :ClawdbotBuildTimestamp ${BUILD_TS}" "$APP_ROOT/Contents/Info.plist" || true
+/usr/libexec/PlistBuddy -c "Set :ClawdbotGitCommit ${GIT_COMMIT}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :SUFeedURL ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" \
   || /usr/libexec/PlistBuddy -c "Add :SUFeedURL string ${SPARKLE_FEED_URL}" "$APP_ROOT/Contents/Info.plist" || true
 /usr/libexec/PlistBuddy -c "Set :SUPublicEDKey ${SPARKLE_PUBLIC_ED_KEY}" "$APP_ROOT/Contents/Info.plist" \
@@ -189,17 +189,17 @@ else
 fi
 
 echo "🚚 Copying binary"
-cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/Clawdis"
+cp "$BIN_PRIMARY" "$APP_ROOT/Contents/MacOS/Clawdbot"
 if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
   BIN_INPUTS=()
   for arch in "${BUILD_ARCHS[@]}"; do
     BIN_INPUTS+=("$(bin_for_arch "$arch")")
   done
-  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/Clawdis"
+  /usr/bin/lipo -create "${BIN_INPUTS[@]}" -output "$APP_ROOT/Contents/MacOS/Clawdbot"
 fi
-chmod +x "$APP_ROOT/Contents/MacOS/Clawdis"
+chmod +x "$APP_ROOT/Contents/MacOS/Clawdbot"
 # SwiftPM outputs ad-hoc signed binaries; strip the signature before install_name_tool to avoid warnings.
-/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/Clawdis" 2>/dev/null || true
+/usr/bin/codesign --remove-signature "$APP_ROOT/Contents/MacOS/Clawdbot" 2>/dev/null || true
 
 SPARKLE_FRAMEWORK_PRIMARY="$(sparkle_framework_for_arch "$PRIMARY_ARCH")"
 if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
@@ -219,11 +219,11 @@ if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
 fi
 
 echo "🖼  Copying app icon"
-cp "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/Clawdis.icns" "$APP_ROOT/Contents/Resources/Clawdis.icns"
+cp "$ROOT_DIR/apps/macos/Sources/Clawdbot/Resources/Clawdbot.icns" "$APP_ROOT/Contents/Resources/Clawdbot.icns"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
-cp -R "$ROOT_DIR/apps/macos/Sources/Clawdis/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
+cp -R "$ROOT_DIR/apps/macos/Sources/Clawdbot/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
 
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
@@ -235,19 +235,19 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
 
   echo "🧰 Building bundled relay (bun --compile)"
   mkdir -p "$RELAY_DIR"
-  RELAY_OUT="$RELAY_DIR/clawdis"
+  RELAY_OUT="$RELAY_DIR/clawdbot"
   RELAY_BUILD_DIR="$RELAY_DIR/.relay-build"
   rm -rf "$RELAY_BUILD_DIR"
   mkdir -p "$RELAY_BUILD_DIR"
   for arch in "${BUILD_ARCHS[@]}"; do
-    RELAY_ARCH_OUT="$RELAY_BUILD_DIR/clawdis-$arch"
+    RELAY_ARCH_OUT="$RELAY_BUILD_DIR/clawdbot-$arch"
     build_relay_binary "$arch" "$RELAY_ARCH_OUT"
     chmod +x "$RELAY_ARCH_OUT"
   done
   if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-    /usr/bin/lipo -create "$RELAY_BUILD_DIR"/clawdis-* -output "$RELAY_OUT"
+    /usr/bin/lipo -create "$RELAY_BUILD_DIR"/clawdbot-* -output "$RELAY_OUT"
   else
-    cp "$RELAY_BUILD_DIR/clawdis-${BUILD_ARCHS[0]}" "$RELAY_OUT"
+    cp "$RELAY_BUILD_DIR/clawdbot-${BUILD_ARCHS[0]}" "$RELAY_OUT"
   fi
   rm -rf "$RELAY_BUILD_DIR"
 
@@ -266,7 +266,7 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
   echo "📄 Writing embedded runtime package.json (Pi compatibility)"
   cat > "$RELAY_DIR/package.json" <<JSON
 {
-  "name": "clawdis-embedded",
+  "name": "clawdbot-embedded",
   "version": "$PKG_VERSION",
   "piConfig": {
     "name": "pi",
@@ -290,8 +290,8 @@ else
   echo "🧰 Skipping gateway payload packaging (SKIP_GATEWAY_PACKAGE=1)"
 fi
 
-echo "⏹  Stopping any running Clawdis"
-killall -q Clawdis 2>/dev/null || true
+echo "⏹  Stopping any running Clawdbot"
+killall -q Clawdbot 2>/dev/null || true
 
 echo "🔏 Signing bundle (auto-selects signing identity if SIGN_IDENTITY is unset)"
 "$ROOT_DIR/scripts/codesign-mac-app.sh" "$APP_ROOT"

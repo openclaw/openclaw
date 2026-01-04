@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 
@@ -7,7 +7,7 @@ function normalizeKey(value?: string) {
   return trimmed ? trimmed : undefined;
 }
 
-export function resolveMainSessionAlias(cfg: ClawdisConfig) {
+export function resolveMainSessionAlias(cfg: ClawdbotConfig) {
   const mainKey = normalizeKey(cfg.session?.mainKey) ?? "main";
   const scope = cfg.session?.scope ?? "per-sender";
   const alias = scope === "global" ? "global" : mainKey;

@@ -1,4 +1,4 @@
-const KEY = "clawdis.control.settings.v1";
+const KEY = "clawdbot.control.settings.v1";
 
 import type { ThemeMode } from "./theme";
 

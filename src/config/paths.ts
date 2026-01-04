@@ -1,10 +1,10 @@
 import os from "node:os";
 import path from "node:path";
 
-import type { ClawdisConfig } from "./types.js";
+import type { ClawdbotConfig } from "./types.js";
 
 /**
- * Nix mode detection: When CLAWDIS_NIX_MODE=1, the gateway is running under Nix.
+ * Nix mode detection: When CLAWDBOT_NIX_MODE=1, the gateway is running under Nix.
  * In this mode:
  * - No auto-install flows should be attempted
  * - Missing dependencies should produce actionable Nix-specific error messages
@@ -13,50 +13,50 @@ import type { ClawdisConfig } from "./types.js";
 export function resolveIsNixMode(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  return env.CLAWDIS_NIX_MODE === "1";
+  return env.CLAWDBOT_NIX_MODE === "1";
 }
 
 export const isNixMode = resolveIsNixMode();
 
 /**
  * State directory for mutable data (sessions, logs, caches).
- * Can be overridden via CLAWDIS_STATE_DIR environment variable.
- * Default: ~/.clawdis
+ * Can be overridden via CLAWDBOT_STATE_DIR environment variable.
+ * Default: ~/.clawdbot
  */
 export function resolveStateDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  const override = env.CLAWDIS_STATE_DIR?.trim();
+  const override = env.CLAWDBOT_STATE_DIR?.trim();
   if (override) return override;
-  return path.join(homedir(), ".clawdis");
+  return path.join(homedir(), ".clawdbot");
 }
 
-export const STATE_DIR_CLAWDIS = resolveStateDir();
+export const STATE_DIR_CLAWDBOT = resolveStateDir();
 
 /**
  * Config file path (JSON5).
- * Can be overridden via CLAWDIS_CONFIG_PATH environment variable.
- * Default: ~/.clawdis/clawdis.json (or $CLAWDIS_STATE_DIR/clawdis.json)
+ * Can be overridden via CLAWDBOT_CONFIG_PATH environment variable.
+ * Default: ~/.clawdbot/clawdbot.json (or $CLAWDBOT_STATE_DIR/clawdbot.json)
  */
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
   stateDir: string = resolveStateDir(env, os.homedir),
 ): string {
-  const override = env.CLAWDIS_CONFIG_PATH?.trim();
+  const override = env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) return override;
-  return path.join(stateDir, "clawdis.json");
+  return path.join(stateDir, "clawdbot.json");
 }
 
-export const CONFIG_PATH_CLAWDIS = resolveConfigPath();
+export const CONFIG_PATH_CLAWDBOT = resolveConfigPath();
 
 export const DEFAULT_GATEWAY_PORT = 18789;
 
 export function resolveGatewayPort(
-  cfg?: ClawdisConfig,
+  cfg?: ClawdbotConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): number {
-  const envRaw = env.CLAWDIS_GATEWAY_PORT?.trim();
+  const envRaw = env.CLAWDBOT_GATEWAY_PORT?.trim();
   if (envRaw) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed) && parsed > 0) return parsed;

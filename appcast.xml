@@ -1,15 +1,15 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>Clawdis</title>
+        <title>Clawdbot</title>
         <item>
             <title>2.0.0-beta5</title>
             <pubDate>Sat, 03 Jan 2026 07:15:16 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
             <sparkle:version>2765</sparkle:version>
             <sparkle:shortVersionString>2.0.0-beta5</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdis 2.0.0-beta5</h2>
+            <description><![CDATA[<h2>Clawdbot 2.0.0-beta5</h2>
 <h3>Fixed</h3>
 <ul>
 <li>Media: preserve GIF animation when uploading to Discord/other providers (skip JPEG optimization for image/gif).</li>
@@ -30,8 +30,8 @@
 <li>Sessions: group keys now use <code>surface:group:<id></code> / <code>surface:channel:<id></code>; legacy <code>group:*</code> keys migrate on next message; <code>groupdm</code> keys are no longer recognized.</li>
 <li>Discord: remove legacy <code>discord.allowFrom</code>, <code>discord.guildAllowFrom</code>, and <code>discord.requireMention</code>; use <code>discord.dm</code> + <code>discord.guilds</code>.</li>
 <li>Providers: Discord/Telegram no longer auto-start from env tokens alone; add <code>discord: { enabled: true }</code> / <code>telegram: { enabled: true }</code> to your config when using <code>DISCORD_BOT_TOKEN</code> / <code>TELEGRAM_BOT_TOKEN</code>.</li>
-<li>Config: remove <code>routing.allowFrom</code>; use <code>whatsapp.allowFrom</code> instead (run <code>clawdis doctor</code> to migrate).</li>
-<li>Config: remove <code>routing.groupChat.requireMention</code> + <code>telegram.requireMention</code>; use <code>whatsapp.groups</code>, <code>imessage.groups</code>, and <code>telegram.groups</code> defaults instead (run <code>clawdis doctor</code> to migrate).</li>
+<li>Config: remove <code>routing.allowFrom</code>; use <code>whatsapp.allowFrom</code> instead (run <code>clawdbot doctor</code> to migrate).</li>
+<li>Config: remove <code>routing.groupChat.requireMention</code> + <code>telegram.requireMention</code>; use <code>whatsapp.groups</code>, <code>imessage.groups</code>, and <code>telegram.groups</code> defaults instead (run <code>clawdbot doctor</code> to migrate).</li>
 </ul>
 <h3>Features</h3>
 <ul>
@@ -40,7 +40,7 @@
 <li>Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.</li>
 <li>Auto-reply: expand queue modes (steer/followup/collect/steer-backlog) with debounce/cap/drop options and followup backlog handling.</li>
 <li>UI: add optional <code>ui.seamColor</code> accent to tint the Talk Mode side bubble (macOS/iOS/Android).</li>
-<li>Nix mode: opt-in declarative config + read-only settings UI when <code>CLAWDIS_NIX_MODE=1</code> (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).</li>
+<li>Nix mode: opt-in declarative config + read-only settings UI when <code>CLAWDBOT_NIX_MODE=1</code> (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).</li>
 <li>CLI: add Google Antigravity OAuth auth option for Claude Opus 4.5/Gemini 3 (#88) — thanks @mukhtharcm.</li>
 <li>Agent runtime: accept legacy <code>Z_AI_API_KEY</code> for Z.AI provider auth (maps to <code>ZAI_API_KEY</code>).</li>
 <li>Groups: add per-group mention gating defaults/overrides for Telegram/WhatsApp/iMessage via <code>*.groups</code> with <code>"*"</code> defaults; Discord now supports <code>discord.guilds."*"</code> as a default.</li>
@@ -50,7 +50,7 @@
 <li>iMessage: add imsg JSON-RPC integration (stdio), chat_id routing, and group chat support.</li>
 <li>Chat UI: add recent-session dropdown switcher (main first) in macOS/iOS/Android + Control UI.</li>
 <li>UI: add Discord/Signal/iMessage connection panels in macOS + Control UI (thanks @thewilloftheshadow).</li>
-<li>Discord: allow agent-triggered reactions via <code>clawdis_discord</code> when enabled, and surface message ids in context.</li>
+<li>Discord: allow agent-triggered reactions via <code>clawdbot_discord</code> when enabled, and surface message ids in context.</li>
 <li>Discord: revamp guild routing config with per-guild/channel rules and slugged display names; add optional group DM support (default off).</li>
 <li>Discord: remove legacy guild/channel ignore lists in favor of per-guild allowlists (and proposed per-guild ignore lists).</li>
 <li>Skills: add Trello skill for board/list/card management (thanks @clawd).</li>
@@ -62,7 +62,7 @@
 <li>CLI: add <code>configure</code>, <code>doctor</code>, and <code>update</code> wizards for ongoing setup, health checks, and modernization.</li>
 <li>CLI: add Signal CLI auto-install from GitHub releases in the wizard and persist wizard run metadata in config.</li>
 <li>CLI: add remote gateway client config (gateway.remote.*) with Bonjour-assisted discovery.</li>
-<li>CLI: enhance <code>clawdis tui</code> with model/session pickers, tool cards, and slash commands (local or remote).</li>
+<li>CLI: enhance <code>clawdbot tui</code> with model/session pickers, tool cards, and slash commands (local or remote).</li>
 <li>Gateway: allow <code>sessions.patch</code> to set per-session model overrides (used by the TUI <code>/model</code> flow).</li>
 <li>Skills: allow <code>bun</code> as a node manager for skill installs.</li>
 <li>Skills: add <code>things-mac</code> (Things 3 CLI) for read/search plus add/update via URL scheme.</li>
@@ -87,7 +87,7 @@
 <li>Chat UI: add extra top padding before the first message bubble in Web Chat (macOS/iOS/Android).</li>
 <li>Control UI: refine Web Chat session selector styling (chevron spacing + background).</li>
 <li>WebChat: stream live updates for sessions even when runs start outside the chat UI.</li>
-<li>Gateway CLI: read <code>CLAWDIS_GATEWAY_PASSWORD</code> from environment in <code>callGateway()</code> — allows <code>doctor</code>/<code>health</code> commands to auth without explicit <code>--password</code> flag.</li>
+<li>Gateway CLI: read <code>CLAWDBOT_GATEWAY_PASSWORD</code> from environment in <code>callGateway()</code> — allows <code>doctor</code>/<code>health</code> commands to auth without explicit <code>--password</code> flag.</li>
 <li>Gateway: add password auth support for remote gateway connections (thanks @jeffersonwarrior).</li>
 <li>Auto-reply: strip stray leading/trailing <code>HEARTBEAT_OK</code> from normal replies; drop short (≤ 30 chars) heartbeat acks.</li>
 <li>WhatsApp auto-reply: default to self-only when no config is present.</li>
@@ -137,7 +137,7 @@
 <li>Docs: clarify self-chat mode and group mention gating config (#111) — thanks @rafaelreis-r.</li>
 <li>Browser tools: <code>upload</code> supports auto-click refs, direct <code>inputRef</code>/<code>element</code> file inputs, and emits input/change after <code>setFiles</code> so JS-heavy sites pick up attachments.</li>
 <li>Browser tools: harden CDP readiness (HTTP + WS), retry CDP connects, and auto-restart the clawd browser when the socket handshake stalls.</li>
-<li>Browser CLI: add <code>clawdis browser reset-profile</code> to move the clawd profile to Trash when it gets wedged.</li>
+<li>Browser CLI: add <code>clawdbot browser reset-profile</code> to move the clawd profile to Trash when it gets wedged.</li>
 <li>Signal: fix daemon startup race (wait for <code>/api/v1/check</code>) and normalize JSON-RPC <code>version</code> probe parsing.</li>
 <li>Docs/Signal: clarify bot-number vs personal-account setup (self-chat loop protection) and add a quickstart config snippet.</li>
 <li>Docs: refresh the CLI wizard guide and highlight onboarding in the README.</li>
@@ -201,12 +201,12 @@
 <li>macOS menu: top status line now shows pending node pairing approvals (incl. repairs).</li>
 <li>CLI: avoid spurious gateway close errors after successful request/response cycles.</li>
 <li>Agent runtime: clamp tool-result images to the 5MB Anthropic limit to avoid hard request rejections.</li>
-<li>Agent runtime: write v2 session headers so Pi session branching stays in the Clawdis sessions dir.</li>
+<li>Agent runtime: write v2 session headers so Pi session branching stays in the Clawdbot sessions dir.</li>
 <li>Tests: add Swift Testing coverage for camera errors and Kotest coverage for Android bridge endpoints.</li>
 </ul>
-<p><a href="https://github.com/steipete/clawdis/blob/main/CHANGELOG.md">View full changelog</a></p>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta5/Clawdis-2.0.0-beta5.zip" length="145432870" type="application/octet-stream" sparkle:edSignature="qKPcmSx2pAaIYz9NqFp0TY63KrcDlpctUHnNpRs6Q60qQqBWtQycLIhhvhxmGnHupaiEXJfspb/Ad9RgODIzAw=="/>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2.0.0-beta5/Clawdbot-2.0.0-beta5.zip" length="145432870" type="application/octet-stream" sparkle:edSignature="qKPcmSx2pAaIYz9NqFp0TY63KrcDlpctUHnNpRs6Q60qQqBWtQycLIhhvhxmGnHupaiEXJfspb/Ad9RgODIzAw=="/>
         </item>
     </channel>
 </rss>

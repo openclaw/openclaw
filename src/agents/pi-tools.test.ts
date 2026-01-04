@@ -4,11 +4,11 @@ import path from "node:path";
 
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { createClawdisCodingTools } from "./pi-tools.js";
+import { createClawdbotCodingTools } from "./pi-tools.js";
 
-describe("createClawdisCodingTools", () => {
+describe("createClawdbotCodingTools", () => {
   it("merges properties for union tool schemas", () => {
-    const tools = createClawdisCodingTools();
+    const tools = createClawdbotCodingTools();
     const browser = tools.find((tool) => tool.name === "browser");
     expect(browser).toBeDefined();
     const parameters = browser?.parameters as {
@@ -24,7 +24,7 @@ describe("createClawdisCodingTools", () => {
   });
 
   it("preserves union action values in merged schema", () => {
-    const tools = createClawdisCodingTools();
+    const tools = createClawdbotCodingTools();
     const toolNames = ["browser", "canvas", "nodes", "cron", "gateway"];
 
     for (const name of toolNames) {
@@ -75,33 +75,33 @@ describe("createClawdisCodingTools", () => {
   });
 
   it("includes bash and process tools", () => {
-    const tools = createClawdisCodingTools();
+    const tools = createClawdbotCodingTools();
     expect(tools.some((tool) => tool.name === "bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "process")).toBe(true);
   });
 
   it("scopes discord tool to discord surface", () => {
-    const other = createClawdisCodingTools({ surface: "whatsapp" });
+    const other = createClawdbotCodingTools({ surface: "whatsapp" });
     expect(other.some((tool) => tool.name === "discord")).toBe(false);
 
-    const discord = createClawdisCodingTools({ surface: "discord" });
+    const discord = createClawdbotCodingTools({ surface: "discord" });
     expect(discord.some((tool) => tool.name === "discord")).toBe(true);
   });
 
   it("scopes slack tool to slack surface", () => {
-    const other = createClawdisCodingTools({ surface: "whatsapp" });
+    const other = createClawdbotCodingTools({ surface: "whatsapp" });
     expect(other.some((tool) => tool.name === "slack")).toBe(false);
 
-    const slack = createClawdisCodingTools({ surface: "slack" });
+    const slack = createClawdbotCodingTools({ surface: "slack" });
     expect(slack.some((tool) => tool.name === "slack")).toBe(true);
   });
 
   it("keeps read tool image metadata intact", async () => {
-    const tools = createClawdisCodingTools();
+    const tools = createClawdbotCodingTools();
     const readTool = tools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-read-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-read-"));
     try {
       const imagePath = path.join(tmpDir, "sample.png");
       const png = await sharp({
@@ -137,14 +137,14 @@ describe("createClawdisCodingTools", () => {
   });
 
   it("returns text content without image blocks for text files", async () => {
-    const tools = createClawdisCodingTools();
+    const tools = createClawdbotCodingTools();
     const readTool = tools.find((tool) => tool.name === "read");
     expect(readTool).toBeDefined();
 
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-read-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-read-"));
     try {
       const textPath = path.join(tmpDir, "sample.txt");
-      const contents = "Hello from clawdis read tool.";
+      const contents = "Hello from clawdbot read tool.";
       await fs.writeFile(textPath, contents, "utf8");
 
       const result = await readTool?.execute("tool-2", {
@@ -171,12 +171,12 @@ describe("createClawdisCodingTools", () => {
     const sandbox = {
       enabled: true,
       sessionKey: "sandbox:test",
-      workspaceDir: path.join(os.tmpdir(), "clawdis-sandbox"),
-      containerName: "clawdis-sbx-test",
+      workspaceDir: path.join(os.tmpdir(), "clawdbot-sandbox"),
+      containerName: "clawdbot-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
-        image: "clawdis-sandbox:bookworm-slim",
-        containerPrefix: "clawdis-sbx-",
+        image: "clawdbot-sandbox:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-",
         workdir: "/workspace",
         readOnlyRoot: true,
         tmpfs: [],
@@ -190,7 +190,7 @@ describe("createClawdisCodingTools", () => {
         deny: ["browser"],
       },
     };
-    const tools = createClawdisCodingTools({ sandbox });
+    const tools = createClawdbotCodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "read")).toBe(false);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);

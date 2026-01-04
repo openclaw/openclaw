@@ -32,7 +32,7 @@ function makeResult(text: string) {
 }
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-queue-"));
+  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-queue-"));
   const previousHome = process.env.HOME;
   process.env.HOME = base;
   try {

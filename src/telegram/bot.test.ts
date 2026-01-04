@@ -90,7 +90,7 @@ describe("createTelegramBot", () => {
       };
       await handler({
         message,
-        me: { username: "clawdis_bot" },
+        me: { username: "clawdbot_bot" },
         getFile: async () => ({ download: async () => new Uint8Array() }),
       });
 
@@ -115,7 +115,7 @@ describe("createTelegramBot", () => {
     ) => Promise<void>;
     await handler({
       message: { chat: { id: 42, type: "private" }, text: "hi" },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -146,7 +146,7 @@ describe("createTelegramBot", () => {
           from: { first_name: "Ada" },
         },
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -179,7 +179,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -212,7 +212,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -247,7 +247,7 @@ describe("createTelegramBot", () => {
         date: 1736380800,
         message_id: 101,
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -278,7 +278,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -311,7 +311,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 
@@ -341,7 +341,7 @@ describe("createTelegramBot", () => {
         text: "hello",
         date: 1736380800,
       },
-      me: { username: "clawdis_bot" },
+      me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
     });
 

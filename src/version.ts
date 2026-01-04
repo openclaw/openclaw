@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 
-declare const __CLAWDIS_VERSION__: string | undefined;
+declare const __CLAWDBOT_VERSION__: string | undefined;
 
 function readVersionFromPackageJson(): string | null {
   try {
@@ -12,11 +12,11 @@ function readVersionFromPackageJson(): string | null {
   }
 }
 
-// Single source of truth for the current clawdis version.
+// Single source of truth for the current clawdbot version.
 // - Embedded/bundled builds: injected define or env var.
 // - Dev/npm builds: package.json.
 export const VERSION =
-  (typeof __CLAWDIS_VERSION__ === "string" && __CLAWDIS_VERSION__) ||
-  process.env.CLAWDIS_BUNDLED_VERSION ||
+  (typeof __CLAWDBOT_VERSION__ === "string" && __CLAWDBOT_VERSION__) ||
+  process.env.CLAWDBOT_BUNDLED_VERSION ||
   readVersionFromPackageJson() ||
   "0.0.0";

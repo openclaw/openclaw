@@ -4,11 +4,11 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { resolveTelegramToken } from "./token.js";
 
 function withTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "clawdis-telegram-token-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-telegram-token-"));
 }
 
 describe("resolveTelegramToken", () => {
@@ -18,7 +18,7 @@ describe("resolveTelegramToken", () => {
 
   it("prefers env token over config", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
-    const cfg = { telegram: { botToken: "cfg-token" } } as ClawdisConfig;
+    const cfg = { telegram: { botToken: "cfg-token" } } as ClawdbotConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("env-token");
     expect(res.source).toBe("env");
@@ -29,7 +29,7 @@ describe("resolveTelegramToken", () => {
     const dir = withTempDir();
     const tokenFile = path.join(dir, "token.txt");
     fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-    const cfg = { telegram: { tokenFile } } as ClawdisConfig;
+    const cfg = { telegram: { tokenFile } } as ClawdbotConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("file-token");
     expect(res.source).toBe("tokenFile");
@@ -38,7 +38,7 @@ describe("resolveTelegramToken", () => {
 
   it("falls back to config token when no env or tokenFile", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const cfg = { telegram: { botToken: "cfg-token" } } as ClawdisConfig;
+    const cfg = { telegram: { botToken: "cfg-token" } } as ClawdbotConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("cfg-token");
     expect(res.source).toBe("config");
@@ -50,7 +50,7 @@ describe("resolveTelegramToken", () => {
     const tokenFile = path.join(dir, "missing-token.txt");
     const cfg = {
       telegram: { tokenFile, botToken: "cfg-token" },
-    } as ClawdisConfig;
+    } as ClawdbotConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("");
     expect(res.source).toBe("none");

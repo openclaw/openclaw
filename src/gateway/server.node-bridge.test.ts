@@ -37,7 +37,7 @@ installGatewayTestHooks();
 
 describe("gateway server node/bridge", () => {
   test("supports gateway-owned node pairing methods and events", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 
@@ -149,7 +149,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("routes node.invoke to the node bridge", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 
@@ -198,7 +198,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("routes camera.list invoke to the node bridge", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 
@@ -245,7 +245,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("node.describe returns supported invoke commands for paired nodes", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 
@@ -303,7 +303,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("node.describe works for connected unpaired nodes (caps + commands)", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 
@@ -363,7 +363,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("node.list includes connected unpaired nodes with capabilities + commands", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
 
@@ -470,7 +470,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("emits presence updates for bridge connect/disconnect", async () => {
-    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-home-"));
+    const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-home-"));
     const prevHome = process.env.HOME;
     process.env.HOME = homeDir;
     try {
@@ -539,7 +539,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("bridge RPC chat.history returns session messages", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -598,7 +598,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("bridge RPC sessions.list returns session rows", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -646,7 +646,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("bridge chat events are pushed to subscribed nodes", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -723,7 +723,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("bridge voice transcript defaults to main session", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -771,7 +771,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("bridge voice transcript triggers chat events for webchat clients", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,
@@ -862,7 +862,7 @@ describe("gateway server node/bridge", () => {
   });
 
   test("bridge chat.abort cancels while saving the session store", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       testState.sessionStorePath,

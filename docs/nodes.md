@@ -10,7 +10,7 @@ read_when:
 
 A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`.
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdis nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdbot nodes …` works against this Mac).
 
 ## Pairing + status
 
@@ -19,12 +19,12 @@ Pairing is gateway-owned and approval-based. See `docs/gateway/pairing.md` for t
 Quick CLI:
 
 ```bash
-clawdis nodes pending
-clawdis nodes approve <requestId>
-clawdis nodes reject <requestId>
-clawdis nodes status
-clawdis nodes describe --node <idOrNameOrIp>
-clawdis nodes rename --node <idOrNameOrIp> --name "Kitchen iPad"
+clawdbot nodes pending
+clawdbot nodes approve <requestId>
+clawdbot nodes reject <requestId>
+clawdbot nodes status
+clawdbot nodes describe --node <idOrNameOrIp>
+clawdbot nodes rename --node <idOrNameOrIp> --name "Kitchen iPad"
 ```
 
 Notes:
@@ -35,7 +35,7 @@ Notes:
 Low-level (raw RPC):
 
 ```bash
-clawdis nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
+clawdbot nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"javaScript":"location.href"}'
 ```
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
@@ -47,15 +47,15 @@ If the node is showing the Canvas (WebView), `canvas.snapshot` returns `{ format
 CLI helper (writes to a temp file and prints `MEDIA:<path>`):
 
 ```bash
-clawdis nodes canvas snapshot --node <idOrNameOrIp> --format png
-clawdis nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
+clawdbot nodes canvas snapshot --node <idOrNameOrIp> --format png
+clawdbot nodes canvas snapshot --node <idOrNameOrIp> --format jpg --max-width 1200 --quality 0.9
 ```
 
 Simple shortcut (auto-picks a single connected node if possible):
 
 ```bash
-clawdis canvas snapshot --format png
-clawdis canvas snapshot --format jpg --max-width 1200 --quality 0.9
+clawdbot canvas snapshot --format png
+clawdbot canvas snapshot --format jpg --max-width 1200 --quality 0.9
 ```
 
 ## Photos + videos (node camera)
@@ -63,15 +63,15 @@ clawdis canvas snapshot --format jpg --max-width 1200 --quality 0.9
 Photos (`jpg`):
 
 ```bash
-clawdis nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
-clawdis nodes camera snap --node <idOrNameOrIp> --facing front
+clawdbot nodes camera snap --node <idOrNameOrIp>            # default: both facings (2 MEDIA lines)
+clawdbot nodes camera snap --node <idOrNameOrIp> --facing front
 ```
 
 Video clips (`mp4`):
 
 ```bash
-clawdis nodes camera clip --node <idOrNameOrIp> --duration 10s
-clawdis nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
+clawdbot nodes camera clip --node <idOrNameOrIp> --duration 10s
+clawdbot nodes camera clip --node <idOrNameOrIp> --duration 3000 --no-audio
 ```
 
 Notes:
@@ -84,8 +84,8 @@ Notes:
 Nodes expose `screen.record` (mp4). Example:
 
 ```bash
-clawdis nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
-clawdis nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
+clawdbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10
+clawdbot nodes screen record --node <idOrNameOrIp> --duration 10s --fps 10 --no-audio
 ```
 
 Notes:
@@ -101,8 +101,8 @@ Nodes expose `location.get` when Location is enabled in settings.
 CLI helper:
 
 ```bash
-clawdis nodes location get --node <idOrNameOrIp>
-clawdis nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
+clawdbot nodes location get --node <idOrNameOrIp>
+clawdbot nodes location get --node <idOrNameOrIp> --accuracy precise --max-age 15000 --location-timeout 10000
 ```
 
 Notes:
@@ -117,7 +117,7 @@ Android nodes can expose `sms.send` when the user grants **SMS** permission and 
 Low-level invoke:
 
 ```bash
-clawdis nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from Clawdis"}'
+clawdbot nodes invoke --node <idOrNameOrIp> --command sms.send --params '{"to":"+15555550123","message":"Hello from Clawdbot"}'
 ```
 
 Notes:
@@ -131,8 +131,8 @@ The macOS node exposes `system.run` and `system.notify`.
 Examples:
 
 ```bash
-clawdis nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
-clawdis nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+clawdbot nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
+clawdbot nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
 ```
 
 Notes:
@@ -145,7 +145,7 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 
 ## Mac node mode
 
-- The macOS menubar app connects to the Gateway bridge as a node (so `clawdis nodes …` works against this Mac).
+- The macOS menubar app connects to the Gateway bridge as a node (so `clawdbot nodes …` works against this Mac).
 - In remote mode, the app opens an SSH tunnel for the bridge port and connects to `localhost`.
 
 ## Where to look in code
@@ -154,4 +154,4 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 - Canvas snapshot decoding/temp paths: `src/cli/nodes-canvas.ts`
 - Duration parsing for CLI: `src/cli/parse-duration.ts`
 - iOS node commands: `apps/ios/Sources/Model/NodeAppModel.swift`
-- Android node commands: `apps/android/app/src/main/java/com/steipete/clawdis/node/node/*`
+- Android node commands: `apps/android/app/src/main/java/com/clawdbot/android/node/*`

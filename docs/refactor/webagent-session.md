@@ -31,7 +31,7 @@ Context: web chat currently lives in a WKWebView that loads the pi-web bundle. S
 - Remove reliance on session file snapshots and `/rpc`.
 
 ## Persistence
-- Keep passing `--session <.../.clawdis/sessions/{{SessionId}}.jsonl>` to Pi so it continues writing JSONL. The WS history reader uses the same file; no new store introduced.
+- Keep passing `--session <.../.clawdbot/sessions/{{SessionId}}.jsonl>` to Pi so it continues writing JSONL. The WS history reader uses the same file; no new store introduced.
 
 ## Docs to update when shipping
 - `docs/webchat.md` (WS-only flow, methods/events, health gate, tunnel WS port).

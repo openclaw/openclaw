@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
   type HookMappingResolved,
   resolveHookMappings,
@@ -17,7 +17,7 @@ export type HooksConfigResolved = {
 };
 
 export function resolveHooksConfig(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
 ): HooksConfigResolved | null {
   if (cfg.hooks?.enabled !== true) return null;
   const token = cfg.hooks?.token?.trim();
@@ -57,8 +57,8 @@ export function extractHookToken(
     if (token) return token;
   }
   const headerToken =
-    typeof req.headers["x-clawdis-token"] === "string"
-      ? req.headers["x-clawdis-token"].trim()
+    typeof req.headers["x-clawdbot-token"] === "string"
+      ? req.headers["x-clawdbot-token"].trim()
       : "";
   if (headerToken) return headerToken;
   const queryToken = url.searchParams.get("token");

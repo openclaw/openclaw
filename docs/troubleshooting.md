@@ -1,11 +1,11 @@
 ---
-summary: "Quick troubleshooting guide for common Clawdis failures"
+summary: "Quick troubleshooting guide for common Clawdbot failures"
 read_when:
   - Investigating runtime issues or failures
 ---
 # Troubleshooting 🔧
 
-When your CLAWDIS misbehaves, here's how to fix it.
+When your CLAWDBOT misbehaves, here's how to fix it.
 
 ## Common Issues
 
@@ -24,18 +24,18 @@ The agent was interrupted mid-response.
 
 **Check 1:** Is the sender in `whatsapp.allowFrom`?
 ```bash
-cat ~/.clawdis/clawdis.json | jq '.whatsapp.allowFrom'
+cat ~/.clawdbot/clawdbot.json | jq '.whatsapp.allowFrom'
 ```
 
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must match mentionPatterns or explicit mentions; defaults live in whatsapp.groups
-cat ~/.clawdis/clawdis.json | jq '.routing.groupChat, .whatsapp.groups'
+cat ~/.clawdbot/clawdbot.json | jq '.routing.groupChat, .whatsapp.groups'
 ```
 
 **Check 3:** Check the logs
 ```bash
-tail -f "$(ls -t /tmp/clawdis/clawdis-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
+tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
 ```
 
 ### Image + Mention Not Working
@@ -50,7 +50,7 @@ Known issue: When you send an image with ONLY a mention (no other text), WhatsAp
 
 **Check 1:** Is the session file there?
 ```bash
-ls -la ~/.clawdis/sessions/
+ls -la ~/.clawdbot/sessions/
 ```
 
 **Check 2:** Is `idleMinutes` too short?
@@ -82,26 +82,26 @@ Or use the `process` tool to background long commands.
 
 ```bash
 # Check local status (creds, sessions, queued events)
-clawdis status
+clawdbot status
 # Probe the running gateway + providers (WA connect + Telegram + Discord APIs)
-clawdis status --deep
+clawdbot status --deep
 
 # View recent connection events
-tail -100 /tmp/clawdis/clawdis-*.log | grep "connection\\|disconnect\\|logout"
+tail -100 /tmp/clawdbot/clawdbot-*.log | grep "connection\\|disconnect\\|logout"
 ```
 
 **Fix:** Usually reconnects automatically once the Gateway is running. If you’re stuck, restart the Gateway process (however you supervise it), or run it manually with verbose output:
 
 ```bash
-clawdis gateway --verbose
+clawdbot gateway --verbose
 ```
 
 If you’re logged out / unlinked:
 
 ```bash
-clawdis logout
-rm -rf ~/.clawdis/credentials # if logout can't cleanly remove everything
-clawdis login --verbose       # re-scan QR
+clawdbot logout
+rm -rf ~/.clawdbot/credentials # if logout can't cleanly remove everything
+clawdbot login --verbose       # re-scan QR
 ```
 
 ### Media Send Failing
@@ -118,12 +118,12 @@ ls -la /path/to/your/image.jpg
 
 **Check 3:** Check media logs
 ```bash
-grep "media\\|fetch\\|download" "$(ls -t /tmp/clawdis/clawdis-*.log | head -1)" | tail -20
+grep "media\\|fetch\\|download" "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)" | tail -20
 ```
 
 ### High Memory Usage
 
-CLAWDIS keeps conversation history in memory.
+CLAWDBOT keeps conversation history in memory.
 
 **Fix:** Restart periodically or set session limits:
 ```json
@@ -142,7 +142,7 @@ If the app disappears or shows "Abort trap 6" when you click "Allow" on a privac
 
 **Fix 1: Reset TCC Cache**
 ```bash
-tccutil reset All com.clawdis.mac.debug
+tccutil reset All com.clawdbot.mac.debug
 ```
 
 **Fix 2: Force New Bundle ID**
@@ -169,33 +169,33 @@ Get verbose logging:
 
 ```bash
 # Turn on trace logging in config:
-#   ~/.clawdis/clawdis.json -> { logging: { level: "trace" } }
+#   ~/.clawdbot/clawdbot.json -> { logging: { level: "trace" } }
 #
 # Then run verbose commands to mirror debug output to stdout:
-clawdis gateway --verbose
-clawdis login --verbose
+clawdbot gateway --verbose
+clawdbot login --verbose
 ```
 
 ## Log Locations
 
 | Log | Location |
 |-----|----------|
-| Main logs (default) | `/tmp/clawdis/clawdis-YYYY-MM-DD.log` |
-| Session files | `~/.clawdis/sessions/` |
-| Media cache | `~/.clawdis/media/` |
-| Credentials | `~/.clawdis/credentials/` |
+| Main logs (default) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` |
+| Session files | `~/.clawdbot/sessions/` |
+| Media cache | `~/.clawdbot/media/` |
+| Credentials | `~/.clawdbot/credentials/` |
 
 ## Health Check
 
 ```bash
 # Is the gateway reachable?
-clawdis health --json
+clawdbot health --json
 
 # Is something listening on the default port?
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 
 # Recent activity
-tail -20 /tmp/clawdis/clawdis-*.log
+tail -20 /tmp/clawdbot/clawdbot-*.log
 ```
 
 ## Reset Everything
@@ -203,19 +203,19 @@ tail -20 /tmp/clawdis/clawdis-*.log
 Nuclear option:
 
 ```bash
-rm -rf ~/.clawdis
-clawdis login         # re-pair WhatsApp
-clawdis gateway        # start the Gateway again
+rm -rf ~/.clawdbot
+clawdbot login         # re-pair WhatsApp
+clawdbot gateway        # start the Gateway again
 ```
 
 ⚠️ This loses all sessions and requires re-pairing WhatsApp.
 
 ## Getting Help
 
-1. Check logs first: `/tmp/clawdis/` (default: `clawdis-YYYY-MM-DD.log`, or your configured `logging.file`)
+1. Check logs first: `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`, or your configured `logging.file`)
 2. Search existing issues on GitHub
 3. Open a new issue with:
-   - CLAWDIS version
+   - CLAWDBOT version
    - Relevant log snippets
    - Steps to reproduce
    - Your config (redact secrets!)

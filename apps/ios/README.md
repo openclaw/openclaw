@@ -1,4 +1,4 @@
-# Clawdis (iOS)
+# Clawdbot (iOS)
 
 Internal-only SwiftUI app scaffold.
 
@@ -11,11 +11,11 @@ brew install swiftformat swiftlint
 ```bash
 cd apps/ios
 xcodegen generate
-open Clawdis.xcodeproj
+open Clawdbot.xcodeproj
 ```
 
 ## Shared packages
-- `../shared/ClawdisKit` — shared types/constants used by iOS (and later macOS bridge + gateway routing).
+- `../shared/ClawdbotKit` — shared types/constants used by iOS (and later macOS bridge + gateway routing).
 
 ## fastlane
 ```bash

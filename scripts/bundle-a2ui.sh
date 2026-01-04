@@ -8,7 +8,7 @@ INPUT_PATHS=(
   "$ROOT_DIR/package.json"
   "$ROOT_DIR/pnpm-lock.yaml"
   "$ROOT_DIR/vendor/a2ui/renderers/lit"
-  "$ROOT_DIR/apps/shared/ClawdisKit/Tools/CanvasA2UI"
+  "$ROOT_DIR/apps/shared/ClawdbotKit/Tools/CanvasA2UI"
 )
 
 collect_files() {
@@ -40,6 +40,6 @@ if [[ -f "$HASH_FILE" ]]; then
 fi
 
 pnpm -s exec tsc -p vendor/a2ui/renderers/lit/tsconfig.json
-rolldown -c apps/shared/ClawdisKit/Tools/CanvasA2UI/rolldown.config.mjs
+rolldown -c apps/shared/ClawdbotKit/Tools/CanvasA2UI/rolldown.config.mjs
 
 echo "$current_hash" > "$HASH_FILE"

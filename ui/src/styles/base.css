@@ -155,7 +155,7 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-clawdis-app {
+clawdbot-app {
   display: block;
   position: relative;
   z-index: 1;

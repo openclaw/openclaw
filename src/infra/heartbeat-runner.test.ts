@@ -4,7 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatIntervalMs,
@@ -42,7 +42,7 @@ describe("resolveHeartbeatPrompt", () => {
   });
 
   it("uses a trimmed override when configured", () => {
-    const cfg: ClawdisConfig = {
+    const cfg: ClawdbotConfig = {
       agent: { heartbeat: { prompt: "  ping  " } },
     };
     expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
@@ -56,7 +56,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   };
 
   it("respects target none", () => {
-    const cfg: ClawdisConfig = {
+    const cfg: ClawdbotConfig = {
       agent: { heartbeat: { target: "none" } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
@@ -66,7 +66,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("uses last route by default", () => {
-    const cfg: ClawdisConfig = {};
+    const cfg: ClawdbotConfig = {};
     const entry = {
       ...baseEntry,
       lastChannel: "whatsapp" as const,
@@ -79,7 +79,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("skips when last route is webchat", () => {
-    const cfg: ClawdisConfig = {};
+    const cfg: ClawdbotConfig = {};
     const entry = {
       ...baseEntry,
       lastChannel: "webchat" as const,
@@ -92,7 +92,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("applies allowFrom fallback for WhatsApp targets", () => {
-    const cfg: ClawdisConfig = {
+    const cfg: ClawdbotConfig = {
       agent: { heartbeat: { target: "whatsapp", to: "+1999" } },
       whatsapp: { allowFrom: ["+1555", "+1666"] },
     };
@@ -109,7 +109,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
   });
 
   it("keeps explicit telegram targets", () => {
-    const cfg: ClawdisConfig = {
+    const cfg: ClawdbotConfig = {
       agent: { heartbeat: { target: "telegram", to: "123" } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
@@ -121,7 +121,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
 describe("runHeartbeatOnce", () => {
   it("uses the last non-empty payload for delivery", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
@@ -141,7 +141,7 @@ describe("runHeartbeatOnce", () => {
         ),
       );
 
-      const cfg: ClawdisConfig = {
+      const cfg: ClawdbotConfig = {
         agent: {
           heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
         },
@@ -182,7 +182,7 @@ describe("runHeartbeatOnce", () => {
   });
 
   it("skips WhatsApp delivery when not linked or running", async () => {
-    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-hb-"));
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-hb-"));
     const storePath = path.join(tmpDir, "sessions.json");
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
@@ -202,7 +202,7 @@ describe("runHeartbeatOnce", () => {
         ),
       );
 
-      const cfg: ClawdisConfig = {
+      const cfg: ClawdbotConfig = {
         agent: {
           heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
         },

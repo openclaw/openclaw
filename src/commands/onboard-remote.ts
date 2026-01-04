@@ -1,4 +1,4 @@
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -25,9 +25,9 @@ function ensureWsUrl(value: string): string {
 }
 
 export async function promptRemoteGatewayConfig(
-  cfg: ClawdisConfig,
+  cfg: ClawdbotConfig,
   prompter: WizardPrompter,
-): Promise<ClawdisConfig> {
+): Promise<ClawdbotConfig> {
   let selectedBeacon: GatewayBonjourBeacon | null = null;
   let suggestedUrl = cfg.gateway?.remote?.url ?? DEFAULT_GATEWAY_URL;
 

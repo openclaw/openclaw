@@ -10,7 +10,7 @@ beforeEach(() => {
 
 describe("resolvePythonExecutablePath", () => {
   it("resolves a working python path and caches the result", async () => {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdis-python-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-python-"));
     const originalPath = process.env.PATH;
     try {
       const realPython = path.join(tmp, "python-real");

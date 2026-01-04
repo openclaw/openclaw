@@ -12,7 +12,7 @@ describe("system-presence", () => {
     const instanceIdLower = instanceIdUpper.toLowerCase();
 
     upsertPresence(instanceIdUpper, {
-      host: "clawdis",
+      host: "clawdbot",
       mode: "app",
       instanceId: instanceIdUpper,
       reason: "connect",

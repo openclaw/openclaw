@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "./constants.js";
 
 const execFileAsync = promisify(execFile);
-const LEGACY_GATEWAY_LAUNCH_AGENT_LABEL = "com.steipete.clawdis.gateway";
+const LEGACY_GATEWAY_LAUNCH_AGENT_LABEL = "com.steipete.clawdbot.gateway";
 
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
@@ -46,7 +46,7 @@ export function resolveGatewayLogPaths(
   stderrPath: string;
 } {
   const home = resolveHomeDir(env);
-  const logDir = path.join(home, ".clawdis", "logs");
+  const logDir = path.join(home, ".clawdbot", "logs");
   return {
     logDir,
     stdoutPath: path.join(logDir, "gateway.log"),

@@ -49,7 +49,7 @@ export function screenRecordTempPath(opts: {
   const tmpDir = opts.tmpDir ?? os.tmpdir();
   const id = opts.id ?? randomUUID();
   const ext = opts.ext.startsWith(".") ? opts.ext : `.${opts.ext}`;
-  return path.join(tmpDir, `clawdis-screen-record-${id}${ext}`);
+  return path.join(tmpDir, `clawdbot-screen-record-${id}${ext}`);
 }
 
 export async function writeScreenRecordToFile(

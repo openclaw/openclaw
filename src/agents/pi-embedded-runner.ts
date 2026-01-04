@@ -24,7 +24,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
-import type { ClawdisConfig } from "../config/config.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -33,10 +33,10 @@ import {
   enqueueCommandInLane,
 } from "../process/command-queue.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
-import { resolveClawdisAgentDir } from "./agent-paths.js";
+import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { ensureClawdisModelsJson } from "./models-config.js";
+import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
   ensureSessionHeader,
@@ -48,7 +48,7 @@ import {
   subscribeEmbeddedPiSession,
 } from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
-import { createClawdisCodingTools } from "./pi-tools.js";
+import { createClawdbotCodingTools } from "./pi-tools.js";
 import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
@@ -139,9 +139,9 @@ export function buildEmbeddedSandboxInfo(
   };
 }
 
-function resolveClawdisOAuthPath(): string {
+function resolveClawdbotOAuthPath(): string {
   const overrideDir =
-    process.env.CLAWDIS_OAUTH_DIR?.trim() || DEFAULT_OAUTH_DIR;
+    process.env.CLAWDBOT_OAUTH_DIR?.trim() || DEFAULT_OAUTH_DIR;
   return path.join(resolveUserPath(overrideDir), OAUTH_FILENAME);
 }
 
@@ -212,7 +212,7 @@ function importLegacyOAuthIfNeeded(destPath: string): void {
 function ensureOAuthStorage(): void {
   if (oauthStorageConfigured) return;
   oauthStorageConfigured = true;
-  const oauthPath = resolveClawdisOAuthPath();
+  const oauthPath = resolveClawdbotOAuthPath();
   importLegacyOAuthIfNeeded(oauthPath);
 }
 
@@ -298,7 +298,7 @@ export function resolveEmbeddedSessionLane(key: string) {
 }
 
 function mapThinkingLevel(level?: ThinkLevel): ThinkingLevel {
-  // pi-agent-core supports "xhigh" too; Clawdis doesn't surface it for now.
+  // pi-agent-core supports "xhigh" too; Clawdbot doesn't surface it for now.
   if (!level) return "off";
   return level;
 }
@@ -313,7 +313,7 @@ function resolveModel(
   authStorage: ReturnType<typeof discoverAuthStorage>;
   modelRegistry: ReturnType<typeof discoverModels>;
 } {
-  const resolvedAgentDir = agentDir ?? resolveClawdisAgentDir();
+  const resolvedAgentDir = agentDir ?? resolveClawdbotAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
@@ -341,7 +341,7 @@ async function getApiKeyForModel(
   const envKey = getEnvApiKey(model.provider);
   if (envKey) return envKey;
   if (isOAuthProvider(model.provider)) {
-    const oauthPath = resolveClawdisOAuthPath();
+    const oauthPath = resolveClawdbotOAuthPath();
     const storage = loadOAuthStorageAt(oauthPath);
     if (storage) {
       try {
@@ -384,7 +384,7 @@ export async function runEmbeddedPiAgent(params: {
   surface?: string;
   sessionFile: string;
   workspaceDir: string;
-  config?: ClawdisConfig;
+  config?: ClawdbotConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   provider?: string;
@@ -436,8 +436,8 @@ export async function runEmbeddedPiAgent(params: {
       const provider =
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      await ensureClawdisModelsJson(params.config);
-      const agentDir = resolveClawdisAgentDir();
+      await ensureClawdbotModelsJson(params.config);
+      const agentDir = resolveClawdbotAgentDir();
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
@@ -496,7 +496,7 @@ export async function runEmbeddedPiAgent(params: {
           await loadWorkspaceBootstrapFiles(resolvedWorkspace);
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
         const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
-        const tools = createClawdisCodingTools({
+        const tools = createClawdbotCodingTools({
           bash: {
             ...params.config?.agent?.bash,
             elevated: params.bashElevated,

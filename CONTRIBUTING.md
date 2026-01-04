@@ -1,9 +1,9 @@
-# Contributing to Clawdis
+# Contributing to Clawdbot
 
 Welcome to the lobster tank! 🦞
 
 ## Quick Links
-- **GitHub:** https://github.com/steipete/clawdis
+- **GitHub:** https://github.com/clawdbot/clawdbot
 - **Discord:** https://discord.gg/qkhbAGHRBT
 - **X/Twitter:** [@steipete](https://x.com/steipete) / [@clawdbot](https://x.com/clawdbot)
 
@@ -20,11 +20,11 @@ Welcome to the lobster tank! 🦞
 
 ## How to Contribute
 1. **Bugs & small fixes** → Open a PR!
-2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/steipete/clawdis/discussions) or ask in Discord first
+2. **New features / architecture** → Start a [GitHub Discussion](https://github.com/clawdbot/clawdbot/discussions) or ask in Discord first
 3. **Questions** → Discord #setup-help
 
 ## Before You PR
-- Test locally with your Clawdis instance
+- Test locally with your Clawdbot instance
 - Run linter: `npm run lint`
 - Keep PRs focused (one thing per PR)
 - Describe what & why
