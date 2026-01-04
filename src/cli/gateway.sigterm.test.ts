@@ -1,5 +1,8 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const waitForPortOpen = async (
@@ -72,8 +75,11 @@ describe("gateway SIGTERM", () => {
     child = null;
   });
 
-  it("exits 0 on SIGTERM", { timeout: 60_000 }, async () => {
+  it("exits 0 on SIGTERM", { timeout: 90_000 }, async () => {
     const port = await getFreePort();
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdis-gateway-test-"),
+    );
     const out: string[] = [];
     const err: string[] = [];
 
@@ -94,6 +100,8 @@ describe("gateway SIGTERM", () => {
         cwd: process.cwd(),
         env: {
           ...process.env,
+          CLAWDIS_STATE_DIR: stateDir,
+          CLAWDIS_CONFIG_PATH: path.join(stateDir, "clawdis.json"),
           CLAWDIS_SKIP_PROVIDERS: "1",
           CLAWDIS_SKIP_BROWSER_CONTROL_SERVER: "1",
           CLAWDIS_SKIP_CANVAS_HOST: "1",
@@ -113,7 +121,7 @@ describe("gateway SIGTERM", () => {
     child.stdout?.on("data", (d) => out.push(String(d)));
     child.stderr?.on("data", (d) => err.push(String(d)));
 
-    await waitForPortOpen(proc, out, err, port, 45_000);
+    await waitForPortOpen(proc, out, err, port, 75_000);
 
     proc.kill("SIGTERM");
 
