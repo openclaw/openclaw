@@ -451,17 +451,6 @@ export class ClawdbotApp extends LitElement {
     this.nodesPollInterval = null;
   }
 
-  private hasConnectedMobileNode() {
-    return this.nodes.some((n) => {
-      if (!Boolean(n.connected)) return false;
-      const p =
-        typeof n.platform === "string" ? n.platform.trim().toLowerCase() : "";
-      return (
-        p.startsWith("ios") || p.startsWith("ipados") || p.startsWith("android")
-      );
-    });
-  }
-
   resetToolStream() {
     this.toolStreamById.clear();
     this.toolStreamOrder = [];
@@ -765,9 +754,8 @@ export class ClawdbotApp extends LitElement {
   async loadCron() {
     await Promise.all([loadCronStatus(this), loadCronJobs(this)]);
   }
-
   async handleSendChat() {
-    if (!this.connected || !this.hasConnectedMobileNode()) return;
+    if (!this.connected) return;
     await sendChat(this);
     void loadChatHistory(this);
   }
