@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-
+import { resolveUserPath } from "../utils.js";
 import type { ClawdbotConfig } from "./types.js";
 
 /**
@@ -51,6 +51,32 @@ export function resolveConfigPath(
 export const CONFIG_PATH_CLAWDBOT = resolveConfigPath();
 
 export const DEFAULT_GATEWAY_PORT = 18789;
+
+const OAUTH_FILENAME = "oauth.json";
+
+/**
+ * OAuth credentials storage directory.
+ *
+ * Precedence:
+ * - `CLAWDBOT_OAUTH_DIR` (explicit override)
+ * - `CLAWDBOT_STATE_DIR/credentials` (canonical server/default)
+ * - `~/.clawdbot/credentials` (legacy default)
+ */
+export function resolveOAuthDir(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir: string = resolveStateDir(env, os.homedir),
+): string {
+  const override = env.CLAWDBOT_OAUTH_DIR?.trim();
+  if (override) return resolveUserPath(override);
+  return path.join(stateDir, "credentials");
+}
+
+export function resolveOAuthPath(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir: string = resolveStateDir(env, os.homedir),
+): string {
+  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
+}
 
 export function resolveGatewayPort(
   cfg?: ClawdbotConfig,

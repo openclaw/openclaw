@@ -25,6 +25,7 @@ import {
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveOAuthPath } from "../config/paths.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -32,7 +33,7 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -106,7 +107,6 @@ type EmbeddedRunWaiter = {
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
 const OAUTH_FILENAME = "oauth.json";
-const DEFAULT_OAUTH_DIR = path.join(CONFIG_DIR, "credentials");
 let oauthStorageConfigured = false;
 
 type OAuthStorage = Record<string, OAuthCredentials>;
@@ -140,9 +140,7 @@ export function buildEmbeddedSandboxInfo(
 }
 
 function resolveClawdbotOAuthPath(): string {
-  const overrideDir =
-    process.env.CLAWDBOT_OAUTH_DIR?.trim() || DEFAULT_OAUTH_DIR;
-  return path.join(resolveUserPath(overrideDir), OAUTH_FILENAME);
+  return resolveOAuthPath();
 }
 
 function loadOAuthStorageAt(pathname: string): OAuthStorage | null {
