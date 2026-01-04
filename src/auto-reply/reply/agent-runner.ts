@@ -84,6 +84,8 @@ export async function runReplyAgent(params: {
     shouldInjectGroupIntro,
   } = params;
 
+  const isHeartbeat = opts?.isHeartbeat === true;
+
   const shouldEmitToolResult = () => {
     if (!sessionKey || !storePath) {
       return resolvedVerboseLevel === "on";
@@ -203,7 +205,7 @@ export async function runReplyAgent(params: {
             onPartialReply: opts?.onPartialReply
               ? async (payload) => {
                   let text = payload.text;
-                  if (!opts?.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+                  if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
                     const stripped = stripHeartbeatToken(text, {
                       mode: "message",
                     });
@@ -221,7 +223,9 @@ export async function runReplyAgent(params: {
                     }
                     text = stripped.text;
                   }
-                  await typing.startTypingOnText(text);
+                  if (!isHeartbeat) {
+                    await typing.startTypingOnText(text);
+                  }
                   await opts.onPartialReply?.({
                     text,
                     mediaUrls: payload.mediaUrls,
@@ -232,7 +236,7 @@ export async function runReplyAgent(params: {
               blockStreamingEnabled && opts?.onBlockReply
                 ? async (payload) => {
                     let text = payload.text;
-                    if (!opts?.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+                    if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
                       const stripped = stripHeartbeatToken(text, {
                         mode: "message",
                       });
@@ -270,7 +274,9 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      await typing.startTypingOnText(cleaned);
+                      if (!isHeartbeat) {
+                        await typing.startTypingOnText(cleaned);
+                      }
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -293,7 +299,7 @@ export async function runReplyAgent(params: {
             onToolResult: opts?.onToolResult
               ? async (payload) => {
                   let text = payload.text;
-                  if (!opts?.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+                  if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
                     const stripped = stripHeartbeatToken(text, {
                       mode: "message",
                     });
@@ -311,7 +317,9 @@ export async function runReplyAgent(params: {
                     }
                     text = stripped.text;
                   }
-                  await typing.startTypingOnText(text);
+                  if (!isHeartbeat) {
+                    await typing.startTypingOnText(text);
+                  }
                   await opts.onToolResult?.({
                     text,
                     mediaUrls: payload.mediaUrls,
@@ -356,7 +364,7 @@ export async function runReplyAgent(params: {
       await Promise.allSettled(pendingBlockTasks);
     }
 
-    const sanitizedPayloads = opts?.isHeartbeat
+    const sanitizedPayloads = isHeartbeat
       ? payloadArray
       : payloadArray.flatMap((payload) => {
           const text = payload.text;
@@ -410,7 +418,7 @@ export async function runReplyAgent(params: {
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
     });
-    if (shouldSignalTyping) {
+    if (shouldSignalTyping && !isHeartbeat) {
       await typing.startTypingLoop();
     }
 
