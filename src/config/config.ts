@@ -265,6 +265,8 @@ export type DiscordActionConfig = {
   voiceStatus?: boolean;
   events?: boolean;
   moderation?: boolean;
+  emojiUploads?: boolean;
+  stickerUploads?: boolean;
 };
 
 export type DiscordConfig = {

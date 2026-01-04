@@ -75,6 +75,8 @@ import {
   sendStickerDiscord,
   timeoutMemberDiscord,
   unpinMessageDiscord,
+  uploadEmojiDiscord,
+  uploadStickerDiscord,
 } from "../discord/send.js";
 import { callGateway } from "../gateway/call.js";
 import { detectMime, imageMimeFromFormat } from "../media/mime.js";
@@ -1846,6 +1848,21 @@ const DiscordToolSchema = Type.Union([
     guildId: Type.String(),
   }),
   Type.Object({
+    action: Type.Literal("emojiUpload"),
+    guildId: Type.String(),
+    name: Type.String(),
+    mediaUrl: Type.String(),
+    roleIds: Type.Optional(Type.Array(Type.String())),
+  }),
+  Type.Object({
+    action: Type.Literal("stickerUpload"),
+    guildId: Type.String(),
+    name: Type.String(),
+    description: Type.String(),
+    tags: Type.String(),
+    mediaUrl: Type.String(),
+  }),
+  Type.Object({
     action: Type.Literal("roleAdd"),
     guildId: Type.String(),
     userId: Type.String(),
@@ -2259,6 +2276,50 @@ function createDiscordTool(): AnyAgentTool {
           });
           const emojis = await listGuildEmojisDiscord(guildId);
           return jsonResult({ ok: true, emojis });
+        }
+        case "emojiUpload": {
+          if (!isActionEnabled("emojiUploads")) {
+            throw new Error("Discord emoji uploads are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const name = readStringParam(params, "name", { required: true });
+          const mediaUrl = readStringParam(params, "mediaUrl", {
+            required: true,
+          });
+          const roleIds = readStringArrayParam(params, "roleIds");
+          const emoji = await uploadEmojiDiscord({
+            guildId,
+            name,
+            mediaUrl,
+            roleIds: roleIds?.length ? roleIds : undefined,
+          });
+          return jsonResult({ ok: true, emoji });
+        }
+        case "stickerUpload": {
+          if (!isActionEnabled("stickerUploads")) {
+            throw new Error("Discord sticker uploads are disabled.");
+          }
+          const guildId = readStringParam(params, "guildId", {
+            required: true,
+          });
+          const name = readStringParam(params, "name", { required: true });
+          const description = readStringParam(params, "description", {
+            required: true,
+          });
+          const tags = readStringParam(params, "tags", { required: true });
+          const mediaUrl = readStringParam(params, "mediaUrl", {
+            required: true,
+          });
+          const sticker = await uploadStickerDiscord({
+            guildId,
+            name,
+            description,
+            tags,
+            mediaUrl,
+          });
+          return jsonResult({ ok: true, sticker });
         }
         case "roleAdd": {
           if (!isActionEnabled("roles", false)) {

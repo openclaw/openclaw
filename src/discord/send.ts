@@ -14,11 +14,13 @@ import type {
 
 import { chunkText } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
-import { loadWebMedia } from "../web/media.js";
+import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
+const DISCORD_MAX_EMOJI_BYTES = 256 * 1024;
+const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
 const DISCORD_POLL_MIN_ANSWERS = 2;
 const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
@@ -128,6 +130,21 @@ export type DiscordTimeoutTarget = DiscordModerationTarget & {
   until?: string;
 };
 
+export type DiscordEmojiUpload = {
+  guildId: string;
+  name: string;
+  mediaUrl: string;
+  roleIds?: string[];
+};
+
+export type DiscordStickerUpload = {
+  guildId: string;
+  name: string;
+  description: string;
+  tags: string;
+  mediaUrl: string;
+};
+
 function resolveToken(explicit?: string) {
   const cfgToken = loadConfig().discord?.token;
   const token = normalizeDiscordToken(
@@ -192,6 +209,14 @@ function normalizeStickerIds(raw: string[]) {
     throw new Error("Discord supports up to 3 stickers per message");
   }
   return ids;
+}
+
+function normalizeEmojiName(raw: string, label: string) {
+  const name = raw.trim();
+  if (!name) {
+    throw new Error(`${label} is required`);
+  }
+  return name;
 }
 
 function normalizePollInput(input: DiscordPollInput): RESTAPIPoll {
@@ -696,6 +721,74 @@ export async function listGuildEmojisDiscord(
   const token = resolveToken(opts.token);
   const rest = opts.rest ?? new REST({ version: "10" }).setToken(token);
   return await rest.get(Routes.guildEmojis(guildId));
+}
+
+export async function uploadEmojiDiscord(
+  payload: DiscordEmojiUpload,
+  opts: DiscordReactOpts = {},
+) {
+  const token = resolveToken(opts.token);
+  const rest = opts.rest ?? new REST({ version: "10" }).setToken(token);
+  const media = await loadWebMediaRaw(
+    payload.mediaUrl,
+    DISCORD_MAX_EMOJI_BYTES,
+  );
+  const contentType = media.contentType?.toLowerCase();
+  if (
+    !contentType ||
+    !["image/png", "image/jpeg", "image/jpg", "image/gif"].includes(contentType)
+  ) {
+    throw new Error("Discord emoji uploads require a PNG, JPG, or GIF image");
+  }
+  const image = `data:${contentType};base64,${media.buffer.toString("base64")}`;
+  const roleIds = (payload.roleIds ?? [])
+    .map((id) => id.trim())
+    .filter(Boolean);
+  return await rest.post(Routes.guildEmojis(payload.guildId), {
+    body: {
+      name: normalizeEmojiName(payload.name, "Emoji name"),
+      image,
+      roles: roleIds.length ? roleIds : undefined,
+    },
+  });
+}
+
+export async function uploadStickerDiscord(
+  payload: DiscordStickerUpload,
+  opts: DiscordReactOpts = {},
+) {
+  const token = resolveToken(opts.token);
+  const rest = opts.rest ?? new REST({ version: "10" }).setToken(token);
+  const media = await loadWebMediaRaw(
+    payload.mediaUrl,
+    DISCORD_MAX_STICKER_BYTES,
+  );
+  const contentType = media.contentType?.toLowerCase();
+  if (
+    !contentType ||
+    !["image/png", "image/apng", "application/json"].includes(contentType)
+  ) {
+    throw new Error(
+      "Discord sticker uploads require a PNG, APNG, or Lottie JSON file",
+    );
+  }
+  return await rest.post(Routes.guildStickers(payload.guildId), {
+    body: {
+      name: normalizeEmojiName(payload.name, "Sticker name"),
+      description: normalizeEmojiName(
+        payload.description,
+        "Sticker description",
+      ),
+      tags: normalizeEmojiName(payload.tags, "Sticker tags"),
+    },
+    files: [
+      {
+        data: media.buffer,
+        name: media.fileName ?? "sticker",
+        contentType,
+      },
+    ],
+  });
 }
 
 export async function fetchMemberInfoDiscord(

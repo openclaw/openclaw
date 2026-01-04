@@ -21,6 +21,8 @@ import {
   sendStickerDiscord,
   timeoutMemberDiscord,
   unpinMessageDiscord,
+  uploadEmojiDiscord,
+  uploadStickerDiscord,
 } from "./send.js";
 
 vi.mock("../web/media.js", () => ({
@@ -28,6 +30,12 @@ vi.mock("../web/media.js", () => ({
     buffer: Buffer.from("img"),
     fileName: "photo.jpg",
     contentType: "image/jpeg",
+    kind: "image",
+  }),
+  loadWebMediaRaw: vi.fn().mockResolvedValue({
+    buffer: Buffer.from("img"),
+    fileName: "asset.png",
+    contentType: "image/png",
     kind: "image",
   }),
 }));
@@ -446,6 +454,73 @@ describe("listGuildEmojisDiscord", () => {
     getMock.mockResolvedValue([{ id: "e1", name: "party" }]);
     await listGuildEmojisDiscord("g1", { rest, token: "t" });
     expect(getMock).toHaveBeenCalledWith(Routes.guildEmojis("g1"));
+  });
+});
+
+describe("uploadEmojiDiscord", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uploads emoji assets", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockResolvedValue({ id: "e1" });
+    await uploadEmojiDiscord(
+      {
+        guildId: "g1",
+        name: "party_blob",
+        mediaUrl: "file:///tmp/party.png",
+        roleIds: ["r1"],
+      },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.guildEmojis("g1"),
+      expect.objectContaining({
+        body: {
+          name: "party_blob",
+          image: "data:image/png;base64,aW1n",
+          roles: ["r1"],
+        },
+      }),
+    );
+  });
+});
+
+describe("uploadStickerDiscord", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("uploads sticker assets", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockResolvedValue({ id: "s1" });
+    await uploadStickerDiscord(
+      {
+        guildId: "g1",
+        name: "clawdis_wave",
+        description: "Clawdis waving",
+        tags: "👋",
+        mediaUrl: "file:///tmp/wave.png",
+      },
+      { rest, token: "t" },
+    );
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.guildStickers("g1"),
+      expect.objectContaining({
+        body: {
+          name: "clawdis_wave",
+          description: "Clawdis waving",
+          tags: "👋",
+        },
+        files: [
+          expect.objectContaining({
+            name: "asset.png",
+            contentType: "image/png",
+          }),
+        ],
+      }),
+    );
   });
 });
 
