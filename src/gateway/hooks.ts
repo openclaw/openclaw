@@ -137,7 +137,14 @@ export type HookAgentPayload = {
   wakeMode: "now" | "next-heartbeat";
   sessionKey: string;
   deliver: boolean;
-  channel: "last" | "whatsapp" | "telegram" | "discord" | "signal" | "imessage";
+  channel:
+    | "last"
+    | "whatsapp"
+    | "telegram"
+    | "discord"
+    | "slack"
+    | "signal"
+    | "imessage";
   to?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -171,6 +178,7 @@ export function normalizeAgentPayload(
     channelRaw === "whatsapp" ||
     channelRaw === "telegram" ||
     channelRaw === "discord" ||
+    channelRaw === "slack" ||
     channelRaw === "signal" ||
     channelRaw === "imessage" ||
     channelRaw === "last"
@@ -183,7 +191,8 @@ export function normalizeAgentPayload(
   if (channel === null) {
     return {
       ok: false,
-      error: "channel must be last|whatsapp|telegram|discord|signal|imessage",
+      error:
+        "channel must be last|whatsapp|telegram|discord|slack|signal|imessage",
     };
   }
   const toRaw = payload.to;

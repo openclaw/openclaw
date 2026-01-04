@@ -21,6 +21,7 @@ import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
 import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageTelegram } from "../telegram/send.js";
@@ -391,7 +392,9 @@ async function deliverHeartbeatReply(params: {
 
   if (channel === "slack") {
     if (mediaUrls.length === 0) {
-      await deps.sendSlack(to, text);
+      for (const chunk of chunkText(text, textLimit)) {
+        await deps.sendSlack(to, chunk);
+      }
       return;
     }
     let first = true;
@@ -402,7 +405,6 @@ async function deliverHeartbeatReply(params: {
     }
     return;
   }
-
   if (mediaUrls.length === 0) {
     await deps.sendDiscord(to, text, { verbose: false });
     return;
