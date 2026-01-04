@@ -2,6 +2,9 @@
 set -euo pipefail
 
 export DISPLAY=:1
+export HOME=/tmp/clawdis-home
+export XDG_CONFIG_HOME="${HOME}/.config"
+export XDG_CACHE_HOME="${HOME}/.cache"
 
 CDP_PORT="${CLAWDIS_BROWSER_CDP_PORT:-9222}"
 VNC_PORT="${CLAWDIS_BROWSER_VNC_PORT:-5900}"
@@ -9,9 +12,7 @@ NOVNC_PORT="${CLAWDIS_BROWSER_NOVNC_PORT:-6080}"
 ENABLE_NOVNC="${CLAWDIS_BROWSER_ENABLE_NOVNC:-1}"
 HEADLESS="${CLAWDIS_BROWSER_HEADLESS:-0}"
 
-mkdir -p /workspace/.chrome
-mkdir -p /tmp/.X11-unix
-chmod 1777 /tmp/.X11-unix 2>/dev/null || true
+mkdir -p "${HOME}" "${HOME}/.chrome" "${XDG_CONFIG_HOME}" "${XDG_CACHE_HOME}"
 
 Xvfb :1 -screen 0 1280x800x24 -ac -nolisten tcp &
 
@@ -27,7 +28,7 @@ fi
 CHROME_ARGS+=(
   "--remote-debugging-address=0.0.0.0"
   "--remote-debugging-port=${CDP_PORT}"
-  "--user-data-dir=/workspace/.chrome"
+  "--user-data-dir=${HOME}/.chrome"
   "--no-first-run"
   "--no-default-browser-check"
   "--disable-dev-shm-usage"
