@@ -637,6 +637,14 @@ export type ModelsConfig = {
 };
 
 export type ClawdbotConfig = {
+  env?: {
+    /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
+    shellEnv?: {
+      enabled?: boolean;
+      /** Timeout for the login shell exec (ms). Default: 15000. */
+      timeoutMs?: number;
+    };
+  };
   identity?: {
     name?: string;
     theme?: string;

@@ -7,6 +7,7 @@
 ### Highlights
 - Models: add image-specific model config (`agent.imageModel` + fallbacks) and scan support.
 - Agent tools: new `image` tool routed to the image model (when configured).
+- Config: default model shorthands (`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`).
 
 ### Fixes
 - Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
@@ -16,6 +17,7 @@
 - WhatsApp: suppress typing indicator during heartbeat background tasks. (#190) — thanks @mcinteerj
 - Discord: avoid duplicate replies when a provider emits late streaming `text_end` events (OpenAI/GPT).
 - Env: load global `$CLAWDBOT_STATE_DIR/.env` (`~/.clawdbot/.env`) as a fallback after CWD `.env`.
+- Env: optional login-shell env fallback (opt-in; imports expected keys without overriding existing env).
 - Agent tools: OpenAI-compatible tool JSON Schemas (fix `browser`, normalize union schemas).
 - Onboarding: when running from source, auto-build missing Control UI assets (`pnpm ui:build`).
 - Discord/Slack: route reaction + system notifications to the correct session (no main-session bleed).
