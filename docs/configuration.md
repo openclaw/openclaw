@@ -82,7 +82,7 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 {
   wizard: {
     lastRunAt: "2026-01-01T00:00:00.000Z",
-    lastRunVersion: "2.0.0-beta5",
+    lastRunVersion: "2026.1.4",
     lastRunCommit: "abc1234",
     lastRunCommand: "configure",
     lastRunMode: "local"

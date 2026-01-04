@@ -68,7 +68,7 @@ Using Claude Pro/Max subscription? See `docs/onboarding.md` for the Anthropic OA
 - Nix mode for declarative config; Docker-based installs.
 - Health, doctor migrations, structured logging, release tooling.
 
-## Changes since 2.0.0-beta5 (2026-01-03)
+## Changes since 2026.1.4 (2026-01-04)
 
 ### Highlights
 - Project rename completed: CLIs, paths, bundle IDs, env vars, and docs unified on Clawdbot.
