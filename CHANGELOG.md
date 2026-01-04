@@ -69,6 +69,7 @@
 - Onboarding/Config: add protocol notes for wizard + schema RPC.
 - Queue: clarify steer-backlog behavior with inline commands and update examples for streaming surfaces.
 - Sandbox: document per-session agent sandbox setup, browser image, and Docker build.
+- macOS: clarify menu bar uses sessionKey from agent events.
 
 ## 2.0.0-beta5 — 2026-01-03
 

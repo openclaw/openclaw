@@ -11,7 +11,7 @@ read_when:
 - The “Nodes” block in the menu lists **devices** only (gateway bridge nodes via `node.list`), not client/presence entries.
 
 ## State model
-- Sessions: events arrive with `runId` (session key). The “main” session is the key `main`; if absent, we fall back to the most recently updated session.
+- Sessions: events arrive with `runId` (per-run) plus `sessionKey` in the payload. The “main” session is the key `main`; if absent, we fall back to the most recently updated session.
 - Priority: main always wins. If main is active, its state is shown immediately. If main is idle, the most recently active non‑main session is shown. We do not flip‑flop mid‑activity; we only switch when the current session goes idle or main becomes active.
 - Activity kinds:
   - `job`: high‑level command execution (`state: started|streaming|done|error`).
