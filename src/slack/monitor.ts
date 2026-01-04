@@ -1,4 +1,8 @@
 import bolt from "@slack/bolt";
+import type {
+  SlackCommandMiddlewareArgs,
+  SlackEventMiddlewareArgs,
+} from "@slack/bolt";
 
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
@@ -685,103 +689,109 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
 
-  app.event("message", async ({ event }) => {
-    try {
-      const message = event as SlackMessageEvent;
-      if (message.subtype === "message_changed") {
-        const changed = event as SlackMessageChangedEvent;
-        const channelId = changed.channel;
-        const channelInfo = channelId
-          ? await resolveChannelName(channelId)
-          : {};
-        const channelType = channelInfo?.type;
-        if (
-          !isChannelAllowed({
+  app.event(
+    "message",
+    async ({ event }: SlackEventMiddlewareArgs<"message">) => {
+      try {
+        const message = event as SlackMessageEvent;
+        if (message.subtype === "message_changed") {
+          const changed = event as SlackMessageChangedEvent;
+          const channelId = changed.channel;
+          const channelInfo = channelId
+            ? await resolveChannelName(channelId)
+            : {};
+          const channelType = channelInfo?.type;
+          if (
+            !isChannelAllowed({
+              channelId,
+              channelName: channelInfo?.name,
+              channelType,
+            })
+          ) {
+            return;
+          }
+          const messageId = changed.message?.ts ?? changed.previous_message?.ts;
+          const label = resolveSlackChannelLabel({
             channelId,
             channelName: channelInfo?.name,
-            channelType,
-          })
-        ) {
+          });
+          enqueueSystemEvent(`Slack message edited in ${label}.`, {
+            contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
+          });
           return;
         }
-        const messageId = changed.message?.ts ?? changed.previous_message?.ts;
-        const label = resolveSlackChannelLabel({
-          channelId,
-          channelName: channelInfo?.name,
-        });
-        enqueueSystemEvent(`Slack message edited in ${label}.`, {
-          contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
-        });
-        return;
-      }
-      if (message.subtype === "message_deleted") {
-        const deleted = event as SlackMessageDeletedEvent;
-        const channelId = deleted.channel;
-        const channelInfo = channelId
-          ? await resolveChannelName(channelId)
-          : {};
-        const channelType = channelInfo?.type;
-        if (
-          !isChannelAllowed({
+        if (message.subtype === "message_deleted") {
+          const deleted = event as SlackMessageDeletedEvent;
+          const channelId = deleted.channel;
+          const channelInfo = channelId
+            ? await resolveChannelName(channelId)
+            : {};
+          const channelType = channelInfo?.type;
+          if (
+            !isChannelAllowed({
+              channelId,
+              channelName: channelInfo?.name,
+              channelType,
+            })
+          ) {
+            return;
+          }
+          const label = resolveSlackChannelLabel({
             channelId,
             channelName: channelInfo?.name,
-            channelType,
-          })
-        ) {
+          });
+          enqueueSystemEvent(`Slack message deleted in ${label}.`, {
+            contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
+          });
           return;
         }
-        const label = resolveSlackChannelLabel({
-          channelId,
-          channelName: channelInfo?.name,
-        });
-        enqueueSystemEvent(`Slack message deleted in ${label}.`, {
-          contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
-        });
-        return;
-      }
-      if (message.subtype === "thread_broadcast") {
-        const thread = event as SlackThreadBroadcastEvent;
-        const channelId = thread.channel;
-        const channelInfo = channelId
-          ? await resolveChannelName(channelId)
-          : {};
-        const channelType = channelInfo?.type;
-        if (
-          !isChannelAllowed({
+        if (message.subtype === "thread_broadcast") {
+          const thread = event as SlackThreadBroadcastEvent;
+          const channelId = thread.channel;
+          const channelInfo = channelId
+            ? await resolveChannelName(channelId)
+            : {};
+          const channelType = channelInfo?.type;
+          if (
+            !isChannelAllowed({
+              channelId,
+              channelName: channelInfo?.name,
+              channelType,
+            })
+          ) {
+            return;
+          }
+          const label = resolveSlackChannelLabel({
             channelId,
             channelName: channelInfo?.name,
-            channelType,
-          })
-        ) {
+          });
+          const messageId = thread.message?.ts ?? thread.event_ts;
+          enqueueSystemEvent(`Slack thread reply broadcast in ${label}.`, {
+            contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
+          });
           return;
         }
-        const label = resolveSlackChannelLabel({
-          channelId,
-          channelName: channelInfo?.name,
-        });
-        const messageId = thread.message?.ts ?? thread.event_ts;
-        enqueueSystemEvent(`Slack thread reply broadcast in ${label}.`, {
-          contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
-        });
-        return;
+        await handleSlackMessage(message, { source: "message" });
+      } catch (err) {
+        runtime.error?.(danger(`slack handler failed: ${String(err)}`));
       }
-      await handleSlackMessage(message, { source: "message" });
-    } catch (err) {
-      runtime.error?.(danger(`slack handler failed: ${String(err)}`));
-    }
-  });
+    },
+  );
 
-  app.event("app_mention", async ({ event }) => {
-    try {
-      const mention = event as SlackAppMentionEvent;
-      await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-        source: "app_mention",
-        wasMentioned: true,
-      });
-    } catch (err) {
-      runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
-    }
-  });
+  app.event(
+    "app_mention",
+    async ({ event }: SlackEventMiddlewareArgs<"app_mention">) => {
+      try {
+        const mention = event as SlackAppMentionEvent;
+        await handleSlackMessage(mention as unknown as SlackMessageEvent, {
+          source: "app_mention",
+          wasMentioned: true,
+        });
+      } catch (err) {
+        runtime.error?.(danger(`slack mention handler failed: ${String(err)}`));
+      }
+    },
+  );
 
   const handleReactionEvent = async (
     event: SlackReactionEvent,
@@ -858,333 +868,379 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
 
-  app.event("reaction_added", async ({ event }) => {
-    await handleReactionEvent(event as SlackReactionEvent, "added");
-  });
+  app.event(
+    "reaction_added",
+    async ({ event }: SlackEventMiddlewareArgs<"reaction_added">) => {
+      await handleReactionEvent(event as SlackReactionEvent, "added");
+    },
+  );
 
-  app.event("reaction_removed", async ({ event }) => {
-    await handleReactionEvent(event as SlackReactionEvent, "removed");
-  });
+  app.event(
+    "reaction_removed",
+    async ({ event }: SlackEventMiddlewareArgs<"reaction_removed">) => {
+      await handleReactionEvent(event as SlackReactionEvent, "removed");
+    },
+  );
 
-  app.event("member_joined_channel", async ({ event }) => {
-    try {
-      const payload = event as SlackMemberChannelEvent;
-      const channelId = payload.channel;
-      const channelInfo = channelId ? await resolveChannelName(channelId) : {};
-      const channelType = payload.channel_type ?? channelInfo?.type;
-      if (
-        !isChannelAllowed({
-          channelId,
-          channelName: channelInfo?.name,
-          channelType,
-        })
-      ) {
-        return;
-      }
-      const userInfo = payload.user ? await resolveUserName(payload.user) : {};
-      const userLabel = userInfo?.name ?? payload.user ?? "someone";
-      const label = resolveSlackChannelLabel({
-        channelId,
-        channelName: channelInfo?.name,
-      });
-      enqueueSystemEvent(`Slack: ${userLabel} joined ${label}.`, {
-        contextKey: `slack:member:joined:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
-      });
-    } catch (err) {
-      runtime.error?.(danger(`slack join handler failed: ${String(err)}`));
-    }
-  });
-
-  app.event("member_left_channel", async ({ event }) => {
-    try {
-      const payload = event as SlackMemberChannelEvent;
-      const channelId = payload.channel;
-      const channelInfo = channelId ? await resolveChannelName(channelId) : {};
-      const channelType = payload.channel_type ?? channelInfo?.type;
-      if (
-        !isChannelAllowed({
-          channelId,
-          channelName: channelInfo?.name,
-          channelType,
-        })
-      ) {
-        return;
-      }
-      const userInfo = payload.user ? await resolveUserName(payload.user) : {};
-      const userLabel = userInfo?.name ?? payload.user ?? "someone";
-      const label = resolveSlackChannelLabel({
-        channelId,
-        channelName: channelInfo?.name,
-      });
-      enqueueSystemEvent(`Slack: ${userLabel} left ${label}.`, {
-        contextKey: `slack:member:left:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
-      });
-    } catch (err) {
-      runtime.error?.(danger(`slack leave handler failed: ${String(err)}`));
-    }
-  });
-
-  app.event("channel_created", async ({ event }) => {
-    try {
-      const payload = event as SlackChannelCreatedEvent;
-      const channelId = payload.channel?.id;
-      const channelName = payload.channel?.name;
-      if (
-        !isChannelAllowed({
-          channelId,
-          channelName,
-          channelType: "channel",
-        })
-      ) {
-        return;
-      }
-      const label = resolveSlackChannelLabel({ channelId, channelName });
-      enqueueSystemEvent(`Slack channel created: ${label}.`, {
-        contextKey: `slack:channel:created:${channelId ?? channelName ?? "unknown"}`,
-      });
-    } catch (err) {
-      runtime.error?.(
-        danger(`slack channel created handler failed: ${String(err)}`),
-      );
-    }
-  });
-
-  app.event("channel_rename", async ({ event }) => {
-    try {
-      const payload = event as SlackChannelRenamedEvent;
-      const channelId = payload.channel?.id;
-      const channelName =
-        payload.channel?.name_normalized ?? payload.channel?.name;
-      if (
-        !isChannelAllowed({
-          channelId,
-          channelName,
-          channelType: "channel",
-        })
-      ) {
-        return;
-      }
-      const label = resolveSlackChannelLabel({ channelId, channelName });
-      enqueueSystemEvent(`Slack channel renamed: ${label}.`, {
-        contextKey: `slack:channel:renamed:${channelId ?? channelName ?? "unknown"}`,
-      });
-    } catch (err) {
-      runtime.error?.(
-        danger(`slack channel rename handler failed: ${String(err)}`),
-      );
-    }
-  });
-
-  app.event("pin_added", async ({ event }) => {
-    try {
-      const payload = event as SlackPinEvent;
-      const channelId = payload.channel_id;
-      const channelInfo = channelId ? await resolveChannelName(channelId) : {};
-      if (
-        !isChannelAllowed({
-          channelId,
-          channelName: channelInfo?.name,
-          channelType: channelInfo?.type,
-        })
-      ) {
-        return;
-      }
-      const label = resolveSlackChannelLabel({
-        channelId,
-        channelName: channelInfo?.name,
-      });
-      const userInfo = payload.user ? await resolveUserName(payload.user) : {};
-      const userLabel = userInfo?.name ?? payload.user ?? "someone";
-      const itemType = payload.item?.type ?? "item";
-      const messageId = payload.item?.message?.ts ?? payload.event_ts;
-      enqueueSystemEvent(
-        `Slack: ${userLabel} pinned a ${itemType} in ${label}.`,
-        {
-          contextKey: `slack:pin:added:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
-        },
-      );
-    } catch (err) {
-      runtime.error?.(danger(`slack pin added handler failed: ${String(err)}`));
-    }
-  });
-
-  app.event("pin_removed", async ({ event }) => {
-    try {
-      const payload = event as SlackPinEvent;
-      const channelId = payload.channel_id;
-      const channelInfo = channelId ? await resolveChannelName(channelId) : {};
-      if (
-        !isChannelAllowed({
-          channelId,
-          channelName: channelInfo?.name,
-          channelType: channelInfo?.type,
-        })
-      ) {
-        return;
-      }
-      const label = resolveSlackChannelLabel({
-        channelId,
-        channelName: channelInfo?.name,
-      });
-      const userInfo = payload.user ? await resolveUserName(payload.user) : {};
-      const userLabel = userInfo?.name ?? payload.user ?? "someone";
-      const itemType = payload.item?.type ?? "item";
-      const messageId = payload.item?.message?.ts ?? payload.event_ts;
-      enqueueSystemEvent(
-        `Slack: ${userLabel} unpinned a ${itemType} in ${label}.`,
-        {
-          contextKey: `slack:pin:removed:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
-        },
-      );
-    } catch (err) {
-      runtime.error?.(
-        danger(`slack pin removed handler failed: ${String(err)}`),
-      );
-    }
-  });
-
-  if (slashCommand.enabled) {
-    app.command(slashCommand.name, async ({ command, ack, respond }) => {
+  app.event(
+    "member_joined_channel",
+    async ({ event }: SlackEventMiddlewareArgs<"member_joined_channel">) => {
       try {
-        const prompt = command.text?.trim();
-        if (!prompt) {
-          await ack({
-            text: "Message required.",
-            response_type: "ephemeral",
-          });
-          return;
-        }
-        await ack();
-
-        if (botUserId && command.user_id === botUserId) return;
-
-        const channelInfo = await resolveChannelName(command.channel_id);
-        const channelType =
-          channelInfo?.type ??
-          (command.channel_name === "directmessage" ? "im" : undefined);
-        const isDirectMessage = channelType === "im";
-        const isGroupDm = channelType === "mpim";
-        const isRoom = channelType === "channel" || channelType === "group";
-
-        if (isDirectMessage && !dmEnabled) {
-          await respond({
-            text: "Slack DMs are disabled.",
-            response_type: "ephemeral",
-          });
-          return;
-        }
-        if (isGroupDm && !groupDmEnabled) {
-          await respond({
-            text: "Slack group DMs are disabled.",
-            response_type: "ephemeral",
-          });
-          return;
-        }
-        if (isGroupDm && groupDmChannels.length > 0) {
-          const allowList = normalizeAllowListLower(groupDmChannels);
-          const channelName = channelInfo?.name;
-          const candidates = [
-            command.channel_id,
-            channelName ? `#${channelName}` : undefined,
-            channelName,
-            channelName ? normalizeSlackSlug(channelName) : undefined,
-          ]
-            .filter((value): value is string => Boolean(value))
-            .map((value) => value.toLowerCase());
-          const permitted =
-            allowList.includes("*") ||
-            candidates.some((candidate) => allowList.includes(candidate));
-          if (!permitted) {
-            await respond({
-              text: "This group DM is not allowed.",
-              response_type: "ephemeral",
-            });
-            return;
-          }
-        }
-
-        if (isDirectMessage && allowFrom.length > 0) {
-          const sender = await resolveUserName(command.user_id);
-          const permitted = allowListMatches({
-            allowList: normalizeAllowListLower(allowFrom),
-            id: command.user_id,
-            name: sender?.name ?? undefined,
-          });
-          if (!permitted) {
-            await respond({
-              text: "You are not authorized to use this command.",
-              response_type: "ephemeral",
-            });
-            return;
-          }
-        }
-
-        if (isRoom) {
-          const channelConfig = resolveSlackChannelConfig({
-            channelId: command.channel_id,
+        const payload = event as SlackMemberChannelEvent;
+        const channelId = payload.channel;
+        const channelInfo = channelId
+          ? await resolveChannelName(channelId)
+          : {};
+        const channelType = payload.channel_type ?? channelInfo?.type;
+        if (
+          !isChannelAllowed({
+            channelId,
             channelName: channelInfo?.name,
-            channels: channelsConfig,
-          });
-          if (channelConfig?.allowed === false) {
-            await respond({
-              text: "This channel is not allowed.",
-              response_type: "ephemeral",
-            });
-            return;
-          }
+            channelType,
+          })
+        ) {
+          return;
         }
-
-        const sender = await resolveUserName(command.user_id);
-        const senderName = sender?.name ?? command.user_name ?? command.user_id;
-        const channelName = channelInfo?.name;
-        const roomLabel = channelName
-          ? `#${channelName}`
-          : `#${command.channel_id}`;
-        const isRoomish = isRoom || isGroupDm;
-
-        const ctxPayload = {
-          Body: prompt,
-          From: isDirectMessage
-            ? `slack:${command.user_id}`
-            : isRoom
-              ? `slack:channel:${command.channel_id}`
-              : `slack:group:${command.channel_id}`,
-          To: `slash:${command.user_id}`,
-          ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
-          GroupSubject: isRoomish ? roomLabel : undefined,
-          SenderName: senderName,
-          Surface: "slack" as const,
-          WasMentioned: true,
-          MessageSid: command.trigger_id,
-          Timestamp: Date.now(),
-          SessionKey: `${slashCommand.sessionPrefix}:${command.user_id}`,
-        };
-
-        const replyResult = await getReplyFromConfig(
-          ctxPayload,
-          undefined,
-          cfg,
-        );
-        const replies = replyResult
-          ? Array.isArray(replyResult)
-            ? replyResult
-            : [replyResult]
-          : [];
-
-        await deliverSlackSlashReplies({
-          replies,
-          respond,
-          ephemeral: slashCommand.ephemeral,
-          textLimit,
+        const userInfo = payload.user
+          ? await resolveUserName(payload.user)
+          : {};
+        const userLabel = userInfo?.name ?? payload.user ?? "someone";
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
+        enqueueSystemEvent(`Slack: ${userLabel} joined ${label}.`, {
+          contextKey: `slack:member:joined:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
         });
       } catch (err) {
-        runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
-        await respond({
-          text: "Sorry, something went wrong handling that command.",
-          response_type: "ephemeral",
-        });
+        runtime.error?.(danger(`slack join handler failed: ${String(err)}`));
       }
-    });
+    },
+  );
+
+  app.event(
+    "member_left_channel",
+    async ({ event }: SlackEventMiddlewareArgs<"member_left_channel">) => {
+      try {
+        const payload = event as SlackMemberChannelEvent;
+        const channelId = payload.channel;
+        const channelInfo = channelId
+          ? await resolveChannelName(channelId)
+          : {};
+        const channelType = payload.channel_type ?? channelInfo?.type;
+        if (
+          !isChannelAllowed({
+            channelId,
+            channelName: channelInfo?.name,
+            channelType,
+          })
+        ) {
+          return;
+        }
+        const userInfo = payload.user
+          ? await resolveUserName(payload.user)
+          : {};
+        const userLabel = userInfo?.name ?? payload.user ?? "someone";
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
+        enqueueSystemEvent(`Slack: ${userLabel} left ${label}.`, {
+          contextKey: `slack:member:left:${channelId ?? "unknown"}:${payload.user ?? "unknown"}`,
+        });
+      } catch (err) {
+        runtime.error?.(danger(`slack leave handler failed: ${String(err)}`));
+      }
+    },
+  );
+
+  app.event(
+    "channel_created",
+    async ({ event }: SlackEventMiddlewareArgs<"channel_created">) => {
+      try {
+        const payload = event as SlackChannelCreatedEvent;
+        const channelId = payload.channel?.id;
+        const channelName = payload.channel?.name;
+        if (
+          !isChannelAllowed({
+            channelId,
+            channelName,
+            channelType: "channel",
+          })
+        ) {
+          return;
+        }
+        const label = resolveSlackChannelLabel({ channelId, channelName });
+        enqueueSystemEvent(`Slack channel created: ${label}.`, {
+          contextKey: `slack:channel:created:${channelId ?? channelName ?? "unknown"}`,
+        });
+      } catch (err) {
+        runtime.error?.(
+          danger(`slack channel created handler failed: ${String(err)}`),
+        );
+      }
+    },
+  );
+
+  app.event(
+    "channel_rename",
+    async ({ event }: SlackEventMiddlewareArgs<"channel_rename">) => {
+      try {
+        const payload = event as SlackChannelRenamedEvent;
+        const channelId = payload.channel?.id;
+        const channelName =
+          payload.channel?.name_normalized ?? payload.channel?.name;
+        if (
+          !isChannelAllowed({
+            channelId,
+            channelName,
+            channelType: "channel",
+          })
+        ) {
+          return;
+        }
+        const label = resolveSlackChannelLabel({ channelId, channelName });
+        enqueueSystemEvent(`Slack channel renamed: ${label}.`, {
+          contextKey: `slack:channel:renamed:${channelId ?? channelName ?? "unknown"}`,
+        });
+      } catch (err) {
+        runtime.error?.(
+          danger(`slack channel rename handler failed: ${String(err)}`),
+        );
+      }
+    },
+  );
+
+  app.event(
+    "pin_added",
+    async ({ event }: SlackEventMiddlewareArgs<"pin_added">) => {
+      try {
+        const payload = event as SlackPinEvent;
+        const channelId = payload.channel_id;
+        const channelInfo = channelId
+          ? await resolveChannelName(channelId)
+          : {};
+        if (
+          !isChannelAllowed({
+            channelId,
+            channelName: channelInfo?.name,
+            channelType: channelInfo?.type,
+          })
+        ) {
+          return;
+        }
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
+        const userInfo = payload.user
+          ? await resolveUserName(payload.user)
+          : {};
+        const userLabel = userInfo?.name ?? payload.user ?? "someone";
+        const itemType = payload.item?.type ?? "item";
+        const messageId = payload.item?.message?.ts ?? payload.event_ts;
+        enqueueSystemEvent(
+          `Slack: ${userLabel} pinned a ${itemType} in ${label}.`,
+          {
+            contextKey: `slack:pin:added:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
+          },
+        );
+      } catch (err) {
+        runtime.error?.(
+          danger(`slack pin added handler failed: ${String(err)}`),
+        );
+      }
+    },
+  );
+
+  app.event(
+    "pin_removed",
+    async ({ event }: SlackEventMiddlewareArgs<"pin_removed">) => {
+      try {
+        const payload = event as SlackPinEvent;
+        const channelId = payload.channel_id;
+        const channelInfo = channelId
+          ? await resolveChannelName(channelId)
+          : {};
+        if (
+          !isChannelAllowed({
+            channelId,
+            channelName: channelInfo?.name,
+            channelType: channelInfo?.type,
+          })
+        ) {
+          return;
+        }
+        const label = resolveSlackChannelLabel({
+          channelId,
+          channelName: channelInfo?.name,
+        });
+        const userInfo = payload.user
+          ? await resolveUserName(payload.user)
+          : {};
+        const userLabel = userInfo?.name ?? payload.user ?? "someone";
+        const itemType = payload.item?.type ?? "item";
+        const messageId = payload.item?.message?.ts ?? payload.event_ts;
+        enqueueSystemEvent(
+          `Slack: ${userLabel} unpinned a ${itemType} in ${label}.`,
+          {
+            contextKey: `slack:pin:removed:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
+          },
+        );
+      } catch (err) {
+        runtime.error?.(
+          danger(`slack pin removed handler failed: ${String(err)}`),
+        );
+      }
+    },
+  );
+
+  if (slashCommand.enabled) {
+    app.command(
+      slashCommand.name,
+      async ({ command, ack, respond }: SlackCommandMiddlewareArgs) => {
+        try {
+          const prompt = command.text?.trim();
+          if (!prompt) {
+            await ack({
+              text: "Message required.",
+              response_type: "ephemeral",
+            });
+            return;
+          }
+          await ack();
+
+          if (botUserId && command.user_id === botUserId) return;
+
+          const channelInfo = await resolveChannelName(command.channel_id);
+          const channelType =
+            channelInfo?.type ??
+            (command.channel_name === "directmessage" ? "im" : undefined);
+          const isDirectMessage = channelType === "im";
+          const isGroupDm = channelType === "mpim";
+          const isRoom = channelType === "channel" || channelType === "group";
+
+          if (isDirectMessage && !dmEnabled) {
+            await respond({
+              text: "Slack DMs are disabled.",
+              response_type: "ephemeral",
+            });
+            return;
+          }
+          if (isGroupDm && !groupDmEnabled) {
+            await respond({
+              text: "Slack group DMs are disabled.",
+              response_type: "ephemeral",
+            });
+            return;
+          }
+          if (isGroupDm && groupDmChannels.length > 0) {
+            const allowList = normalizeAllowListLower(groupDmChannels);
+            const channelName = channelInfo?.name;
+            const candidates = [
+              command.channel_id,
+              channelName ? `#${channelName}` : undefined,
+              channelName,
+              channelName ? normalizeSlackSlug(channelName) : undefined,
+            ]
+              .filter((value): value is string => Boolean(value))
+              .map((value) => value.toLowerCase());
+            const permitted =
+              allowList.includes("*") ||
+              candidates.some((candidate) => allowList.includes(candidate));
+            if (!permitted) {
+              await respond({
+                text: "This group DM is not allowed.",
+                response_type: "ephemeral",
+              });
+              return;
+            }
+          }
+
+          if (isDirectMessage && allowFrom.length > 0) {
+            const sender = await resolveUserName(command.user_id);
+            const permitted = allowListMatches({
+              allowList: normalizeAllowListLower(allowFrom),
+              id: command.user_id,
+              name: sender?.name ?? undefined,
+            });
+            if (!permitted) {
+              await respond({
+                text: "You are not authorized to use this command.",
+                response_type: "ephemeral",
+              });
+              return;
+            }
+          }
+
+          if (isRoom) {
+            const channelConfig = resolveSlackChannelConfig({
+              channelId: command.channel_id,
+              channelName: channelInfo?.name,
+              channels: channelsConfig,
+            });
+            if (channelConfig?.allowed === false) {
+              await respond({
+                text: "This channel is not allowed.",
+                response_type: "ephemeral",
+              });
+              return;
+            }
+          }
+
+          const sender = await resolveUserName(command.user_id);
+          const senderName =
+            sender?.name ?? command.user_name ?? command.user_id;
+          const channelName = channelInfo?.name;
+          const roomLabel = channelName
+            ? `#${channelName}`
+            : `#${command.channel_id}`;
+          const isRoomish = isRoom || isGroupDm;
+
+          const ctxPayload = {
+            Body: prompt,
+            From: isDirectMessage
+              ? `slack:${command.user_id}`
+              : isRoom
+                ? `slack:channel:${command.channel_id}`
+                : `slack:group:${command.channel_id}`,
+            To: `slash:${command.user_id}`,
+            ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
+            GroupSubject: isRoomish ? roomLabel : undefined,
+            SenderName: senderName,
+            Surface: "slack" as const,
+            WasMentioned: true,
+            MessageSid: command.trigger_id,
+            Timestamp: Date.now(),
+            SessionKey: `${slashCommand.sessionPrefix}:${command.user_id}`,
+          };
+
+          const replyResult = await getReplyFromConfig(
+            ctxPayload,
+            undefined,
+            cfg,
+          );
+          const replies = replyResult
+            ? Array.isArray(replyResult)
+              ? replyResult
+              : [replyResult]
+            : [];
+
+          await deliverSlackSlashReplies({
+            replies,
+            respond,
+            ephemeral: slashCommand.ephemeral,
+            textLimit,
+          });
+        } catch (err) {
+          runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
+          await respond({
+            text: "Sorry, something went wrong handling that command.",
+            response_type: "ephemeral",
+          });
+        }
+      },
+    );
   }
 
   const stopOnAbort = () => {
