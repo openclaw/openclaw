@@ -29,7 +29,9 @@ What I need you to do:
 Reference the nix-clawdbot README for module options.
 ```
 
-Or see the full guide: **[github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot)**
+> **📦 Full guide: [github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot)**
+>
+> The nix-clawdbot repo is the source of truth for Nix installation. This page is just a quick overview.
 
 ## What you get
 
