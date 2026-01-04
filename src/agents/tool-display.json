@@ -196,6 +196,8 @@
         "memberInfo": { "label": "member", "detailKeys": ["guildId", "userId"] },
         "roleInfo": { "label": "roles", "detailKeys": ["guildId"] },
         "emojiList": { "label": "emoji list", "detailKeys": ["guildId"] },
+        "emojiUpload": { "label": "emoji upload", "detailKeys": ["guildId", "name"] },
+        "stickerUpload": { "label": "sticker upload", "detailKeys": ["guildId", "name"] },
         "roleAdd": { "label": "role add", "detailKeys": ["guildId", "userId", "roleId"] },
         "roleRemove": { "label": "role remove", "detailKeys": ["guildId", "userId", "roleId"] },
         "channelInfo": { "label": "channel", "detailKeys": ["channelId"] },

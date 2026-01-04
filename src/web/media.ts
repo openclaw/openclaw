@@ -10,15 +10,23 @@ import {
 import { resizeToJpeg } from "../media/image-ops.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 
-export async function loadWebMedia(
-  mediaUrl: string,
-  maxBytes?: number,
-): Promise<{
+type WebMediaResult = {
   buffer: Buffer;
   contentType?: string;
   kind: MediaKind;
   fileName?: string;
-}> {
+};
+
+type WebMediaOptions = {
+  maxBytes?: number;
+  optimizeImages?: boolean;
+};
+
+async function loadWebMediaInternal(
+  mediaUrl: string,
+  options: WebMediaOptions = {},
+): Promise<WebMediaResult> {
+  const { maxBytes, optimizeImages = true } = options;
   if (mediaUrl.startsWith("file://")) {
     mediaUrl = mediaUrl.replace("file://", "");
   }
@@ -74,11 +82,13 @@ export async function loadWebMedia(
       maxBytesForKind(kind),
     );
     if (kind === "image") {
-      // Skip optimization for GIFs to preserve animation
-      if (contentType === "image/gif") {
+      // Skip optimization for GIFs to preserve animation.
+      if (contentType === "image/gif" || !optimizeImages) {
         if (array.length > cap) {
           throw new Error(
-            `GIF exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+            `${
+              contentType === "image/gif" ? "GIF" : "Media"
+            } exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
               array.length / (1024 * 1024)
             ).toFixed(2)}MB)`,
           );
@@ -116,11 +126,13 @@ export async function loadWebMedia(
     maxBytesForKind(kind),
   );
   if (kind === "image") {
-    // Skip optimization for GIFs to preserve animation
-    if (mime === "image/gif") {
+    // Skip optimization for GIFs to preserve animation.
+    if (mime === "image/gif" || !optimizeImages) {
       if (data.length > cap) {
         throw new Error(
-          `GIF exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
+          `${
+            mime === "image/gif" ? "GIF" : "Media"
+          } exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
             data.length / (1024 * 1024)
           ).toFixed(2)}MB)`,
         );
@@ -137,6 +149,26 @@ export async function loadWebMedia(
     );
   }
   return { buffer: data, contentType: mime, kind, fileName };
+}
+
+export async function loadWebMedia(
+  mediaUrl: string,
+  maxBytes?: number,
+): Promise<WebMediaResult> {
+  return await loadWebMediaInternal(mediaUrl, {
+    maxBytes,
+    optimizeImages: true,
+  });
+}
+
+export async function loadWebMediaRaw(
+  mediaUrl: string,
+  maxBytes?: number,
+): Promise<WebMediaResult> {
+  return await loadWebMediaInternal(mediaUrl, {
+    maxBytes,
+    optimizeImages: false,
+  });
 }
 
 export async function optimizeImageToJpeg(

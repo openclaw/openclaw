@@ -1,6 +1,6 @@
 ---
 name: discord
-description: Use when you need to control Discord from Clawdis via the discord tool: send messages, react, post stickers, run polls, manage threads/pins/search, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
+description: Use when you need to control Discord from Clawdis via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
 ---
 
 # Discord Actions
@@ -15,6 +15,8 @@ Use `discord` to manage messages, reactions, threads, polls, and moderation. You
 - For stickers/polls/sendMessage: a `to` target (`channel:<id>` or `user:<id>`). Optional `content` text.
 - Polls also need a `question` plus 2–10 `answers`.
 - For media: `mediaUrl` with `file:///path` for local files or `https://...` for remote.
+- For emoji uploads: `guildId`, `name`, `mediaUrl`, optional `roleIds` (limit 256KB, PNG/JPG/GIF).
+- For sticker uploads: `guildId`, `name`, `description`, `tags`, `mediaUrl` (limit 512KB, PNG/APNG/Lottie JSON).
 
 Message context lines include `discord message id` and `channel` fields you can reuse directly.
 
@@ -58,6 +60,37 @@ Message context lines include `discord message id` and `channel` fields you can 
 - Up to 3 sticker IDs per message.
 - `to` can be `user:<id>` for DMs.
 
+### Upload a custom emoji
+
+```json
+{
+  "action": "emojiUpload",
+  "guildId": "999",
+  "name": "party_blob",
+  "mediaUrl": "file:///tmp/party.png",
+  "roleIds": ["222"]
+}
+```
+
+- Emoji images must be PNG/JPG/GIF and <= 256KB.
+- `roleIds` is optional; omit to make the emoji available to everyone.
+
+### Upload a sticker
+
+```json
+{
+  "action": "stickerUpload",
+  "guildId": "999",
+  "name": "clawdis_wave",
+  "description": "Clawdis waving hello",
+  "tags": "👋",
+  "mediaUrl": "file:///tmp/wave.png"
+}
+```
+
+- Stickers require `name`, `description`, and `tags`.
+- Uploads must be PNG/APNG/Lottie JSON and <= 512KB.
+
 ### Create a poll
 
 ```json
@@ -88,6 +121,7 @@ Message context lines include `discord message id` and `channel` fields you can 
 - React with ✅/⚠️ to mark status updates.
 - Post a quick poll for release decisions or meeting times.
 - Send celebratory stickers after successful deploys.
+- Upload new emojis/stickers for release moments.
 - Run weekly “priority check” polls in team channels.
 - DM stickers as acknowledgements when a user’s request is completed.
 
@@ -96,6 +130,7 @@ Message context lines include `discord message id` and `channel` fields you can 
 Use `discord.actions.*` to disable action groups:
 - `reactions` (react + reactions list + emojiList)
 - `stickers`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
+- `emojiUploads`, `stickerUploads`
 - `memberInfo`, `roleInfo`, `channelInfo`, `voiceStatus`, `events`
 - `roles` (role add/remove, default `false`)
 - `moderation` (timeout/kick/ban, default `false`)
