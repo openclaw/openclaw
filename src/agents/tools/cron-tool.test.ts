@@ -1,0 +1,37 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const callGatewayMock = vi.fn();
+vi.mock("../../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+import { createCronTool } from "./cron-tool.js";
+
+describe("cron tool", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValue({ ok: true });
+  });
+
+  it.each([
+    [
+      "update",
+      { action: "update", jobId: "job-1", patch: { foo: "bar" } },
+      { id: "job-1", patch: { foo: "bar" } },
+    ],
+    ["remove", { action: "remove", jobId: "job-1" }, { id: "job-1" }],
+    ["run", { action: "run", jobId: "job-1" }, { id: "job-1" }],
+    ["runs", { action: "runs", jobId: "job-1" }, { id: "job-1" }],
+  ])("%s sends id to gateway", async (action, args, expectedParams) => {
+    const tool = createCronTool();
+    await tool.execute("call1", args);
+
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    const call = callGatewayMock.mock.calls[0]?.[0] as {
+      method?: string;
+      params?: unknown;
+    };
+    expect(call.method).toBe(`cron.${action}`);
+    expect(call.params).toEqual(expectedParams);
+  });
+});
