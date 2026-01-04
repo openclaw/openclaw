@@ -10,6 +10,7 @@ import {
 } from "./browser-cli-examples.js";
 import { registerBrowserInspectCommands } from "./browser-cli-inspect.js";
 import { registerBrowserManageCommands } from "./browser-cli-manage.js";
+import type { BrowserParentOpts } from "./browser-cli-shared.js";
 
 export function registerBrowserCli(program: Command) {
   const browser = program
@@ -19,6 +20,7 @@ export function registerBrowserCli(program: Command) {
       "--url <url>",
       "Override browser control URL (default from ~/.clawdis/clawdis.json)",
     )
+    .option("--profile <name>", "Browser profile name (default from config)")
     .option("--json", "Output machine-readable JSON", false)
     .addHelpText(
       "after",
@@ -33,7 +35,7 @@ export function registerBrowserCli(program: Command) {
     });
 
   const parentOpts = (cmd: Command) =>
-    cmd.parent?.opts?.() as { url?: string; json?: boolean };
+    cmd.parent?.opts?.() as BrowserParentOpts;
 
   registerBrowserManageCommands(browser, parentOpts);
   registerBrowserInspectCommands(browser, parentOpts);

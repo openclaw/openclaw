@@ -1,5 +1,37 @@
 import type express from "express";
 
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+
+/**
+ * Extract profile name from query string or body and get profile context.
+ * Query string takes precedence over body for consistency with GET routes.
+ */
+export function getProfileContext(
+  req: express.Request,
+  ctx: BrowserRouteContext,
+): ProfileContext | { error: string; status: number } {
+  let profileName: string | undefined;
+
+  // Check query string first (works for GET and POST)
+  if (typeof req.query.profile === "string") {
+    profileName = req.query.profile.trim() || undefined;
+  }
+
+  // Fall back to body for POST requests
+  if (!profileName && req.body && typeof req.body === "object") {
+    const body = req.body as Record<string, unknown>;
+    if (typeof body.profile === "string") {
+      profileName = body.profile.trim() || undefined;
+    }
+  }
+
+  try {
+    return ctx.forProfile(profileName);
+  } catch (err) {
+    return { error: String(err), status: 404 };
+  }
+}
+
 export function jsonError(
   res: express.Response,
   status: number,

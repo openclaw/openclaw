@@ -8,7 +8,7 @@ import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging.js";
 import { CONFIG_DIR } from "../utils.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
-import type { ResolvedBrowserConfig } from "./config.js";
+import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import {
   DEFAULT_CLAWD_BROWSER_COLOR,
   DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
@@ -116,11 +116,13 @@ function resolveBrowserExecutable(
   return null;
 }
 
-export function resolveClawdUserDataDir() {
+export function resolveClawdUserDataDir(
+  profileName = DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
+) {
   return path.join(
     CONFIG_DIR,
     "browser",
-    DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
+    profileName,
     "user-data",
   );
 }
@@ -255,9 +257,9 @@ function isProfileDecorated(
  */
 export function decorateClawdProfile(
   userDataDir: string,
-  opts?: { color?: string },
+  opts?: { name?: string; color?: string },
 ) {
-  const desiredName = DEFAULT_CLAWD_BROWSER_PROFILE_NAME;
+  const desiredName = opts?.name ?? DEFAULT_CLAWD_BROWSER_PROFILE_NAME;
   const desiredColor = (
     opts?.color ?? DEFAULT_CLAWD_BROWSER_COLOR
   ).toUpperCase();
@@ -433,8 +435,14 @@ export async function isChromeCdpReady(
 
 export async function launchClawdChrome(
   resolved: ResolvedBrowserConfig,
+  profile: ResolvedBrowserProfile,
 ): Promise<RunningChrome> {
-  await ensurePortAvailable(resolved.cdpPort);
+  if (!profile.cdpIsLoopback) {
+    throw new Error(
+      `Profile "${profile.name}" is remote; cannot launch local Chrome.`,
+    );
+  }
+  await ensurePortAvailable(profile.cdpPort);
 
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
@@ -443,19 +451,19 @@ export async function launchClawdChrome(
     );
   }
 
-  const userDataDir = resolveClawdUserDataDir();
+  const userDataDir = resolveClawdUserDataDir(profile.name);
   fs.mkdirSync(userDataDir, { recursive: true });
 
   const needsDecorate = !isProfileDecorated(
     userDataDir,
-    DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
-    (resolved.color ?? DEFAULT_CLAWD_BROWSER_COLOR).toUpperCase(),
+    profile.name,
+    (profile.color ?? DEFAULT_CLAWD_BROWSER_COLOR).toUpperCase(),
   );
 
   // First launch to create preference files if missing, then decorate and relaunch.
   const spawnOnce = () => {
     const args: string[] = [
-      `--remote-debugging-port=${resolved.cdpPort}`,
+      `--remote-debugging-port=${profile.cdpPort}`,
       `--user-data-dir=${userDataDir}`,
       "--no-first-run",
       "--no-default-browser-check",
@@ -521,8 +529,11 @@ export async function launchClawdChrome(
 
   if (needsDecorate) {
     try {
-      decorateClawdProfile(userDataDir, { color: resolved.color });
-      log.info(`🦞 clawd browser profile decorated (${resolved.color})`);
+      decorateClawdProfile(userDataDir, {
+        name: profile.name,
+        color: profile.color,
+      });
+      log.info(`🦞 clawd browser profile decorated (${profile.color})`);
     } catch (err) {
       log.warn(`clawd browser profile decoration failed: ${String(err)}`);
     }
@@ -532,29 +543,31 @@ export async function launchClawdChrome(
   // Wait for CDP to come up.
   const readyDeadline = Date.now() + 15_000;
   while (Date.now() < readyDeadline) {
-    if (await isChromeReachable(resolved.cdpUrl, 500)) break;
+    if (await isChromeReachable(profile.cdpUrl, 500)) break;
     await new Promise((r) => setTimeout(r, 200));
   }
 
-  if (!(await isChromeReachable(resolved.cdpUrl, 500))) {
+  if (!(await isChromeReachable(profile.cdpUrl, 500))) {
     try {
       proc.kill("SIGKILL");
     } catch {
       // ignore
     }
-    throw new Error(`Failed to start Chrome CDP on port ${resolved.cdpPort}.`);
+    throw new Error(
+      `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}".`,
+    );
   }
 
   const pid = proc.pid ?? -1;
   log.info(
-    `🦞 clawd browser started (${exe.kind}) on 127.0.0.1:${resolved.cdpPort} (pid ${pid})`,
+    `🦞 clawd browser started (${exe.kind}) profile "${profile.name}" on 127.0.0.1:${profile.cdpPort} (pid ${pid})`,
   );
 
   return {
     pid,
     exe,
     userDataDir,
-    cdpPort: resolved.cdpPort,
+    cdpPort: profile.cdpPort,
     startedAt,
     proc,
   };

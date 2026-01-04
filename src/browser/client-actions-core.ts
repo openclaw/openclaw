@@ -5,6 +5,10 @@ import type {
 } from "./client-actions-types.js";
 import { fetchBrowserJson } from "./client-fetch.js";
 
+function buildProfileQuery(profile?: string): string {
+  return profile ? `?profile=${encodeURIComponent(profile)}` : "";
+}
+
 export type BrowserFormField = {
   ref: string;
   type: string;
@@ -57,14 +61,18 @@ export type BrowserActResponse = {
 
 export async function browserNavigate(
   baseUrl: string,
-  opts: { url: string; targetId?: string },
+  opts: { url: string; targetId?: string; profile?: string },
 ): Promise<BrowserActionTabResult> {
-  return await fetchBrowserJson<BrowserActionTabResult>(`${baseUrl}/navigate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
-    timeoutMs: 20000,
-  });
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<BrowserActionTabResult>(
+    `${baseUrl}/navigate${q}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: opts.url, targetId: opts.targetId }),
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export async function browserArmDialog(
@@ -74,19 +82,24 @@ export async function browserArmDialog(
     promptText?: string;
     targetId?: string;
     timeoutMs?: number;
+    profile?: string;
   },
 ): Promise<BrowserActionOk> {
-  return await fetchBrowserJson<BrowserActionOk>(`${baseUrl}/hooks/dialog`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      accept: opts.accept,
-      promptText: opts.promptText,
-      targetId: opts.targetId,
-      timeoutMs: opts.timeoutMs,
-    }),
-    timeoutMs: 20000,
-  });
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<BrowserActionOk>(
+    `${baseUrl}/hooks/dialog${q}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accept: opts.accept,
+        promptText: opts.promptText,
+        targetId: opts.targetId,
+        timeoutMs: opts.timeoutMs,
+      }),
+      timeoutMs: 20000,
+    },
+  );
 }
 
 export async function browserArmFileChooser(
@@ -98,10 +111,12 @@ export async function browserArmFileChooser(
     element?: string;
     targetId?: string;
     timeoutMs?: number;
+    profile?: string;
   },
 ): Promise<BrowserActionOk> {
+  const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionOk>(
-    `${baseUrl}/hooks/file-chooser`,
+    `${baseUrl}/hooks/file-chooser${q}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -121,8 +136,10 @@ export async function browserArmFileChooser(
 export async function browserAct(
   baseUrl: string,
   req: BrowserActRequest,
+  opts?: { profile?: string },
 ): Promise<BrowserActResponse> {
-  return await fetchBrowserJson<BrowserActResponse>(`${baseUrl}/act`, {
+  const q = buildProfileQuery(opts?.profile);
+  return await fetchBrowserJson<BrowserActResponse>(`${baseUrl}/act${q}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -138,10 +155,12 @@ export async function browserScreenshotAction(
     ref?: string;
     element?: string;
     type?: "png" | "jpeg";
+    profile?: string;
   },
 ): Promise<BrowserActionPathResult> {
+  const q = buildProfileQuery(opts.profile);
   return await fetchBrowserJson<BrowserActionPathResult>(
-    `${baseUrl}/screenshot`,
+    `${baseUrl}/screenshot${q}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

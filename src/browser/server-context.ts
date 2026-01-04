@@ -1,9 +1,6 @@
 import fs from "node:fs";
 import type { Server } from "node:http";
-import os from "node:os";
-import path from "node:path";
 
-import { runExec } from "../process/exec.js";
 import { createTargetViaCdp, normalizeCdpWsUrl } from "./cdp.js";
 import {
   isChromeCdpReady,
@@ -13,27 +10,37 @@ import {
   resolveClawdUserDataDir,
   stopClawdChrome,
 } from "./chrome.js";
-import type { ResolvedBrowserConfig } from "./config.js";
+import type { BrowserTab } from "./client.js";
+import type {
+  ResolvedBrowserConfig,
+  ResolvedBrowserProfile,
+} from "./config.js";
+import { resolveProfile } from "./config.js";
 import { resolveTargetIdFromTabs } from "./target-id.js";
+import { movePathToTrash } from "./trash.js";
 
-export type BrowserTab = {
-  targetId: string;
-  title: string;
-  url: string;
-  wsUrl?: string;
-  type?: string;
+export type { BrowserTab };
+
+/**
+ * Runtime state for a single profile's Chrome instance.
+ */
+export type ProfileRuntimeState = {
+  profile: ResolvedBrowserProfile;
+  running: RunningChrome | null;
 };
 
 export type BrowserServerState = {
   server: Server;
   port: number;
-  cdpPort: number;
-  running: RunningChrome | null;
   resolved: ResolvedBrowserConfig;
+  profiles: Map<string, ProfileRuntimeState>;
 };
 
 export type BrowserRouteContext = {
   state: () => BrowserServerState;
+  forProfile: (profileName?: string) => ProfileContext;
+  listProfiles: () => Promise<ProfileStatus[]>;
+  // Legacy methods delegate to default profile for backward compatibility
   ensureBrowserAvailable: () => Promise<void>;
   ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
@@ -51,10 +58,49 @@ export type BrowserRouteContext = {
   mapTabError: (err: unknown) => { status: number; message: string } | null;
 };
 
+export type ProfileContext = {
+  profile: ResolvedBrowserProfile;
+  ensureBrowserAvailable: () => Promise<void>;
+  ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
+  isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
+  isReachable: (timeoutMs?: number) => Promise<boolean>;
+  listTabs: () => Promise<BrowserTab[]>;
+  openTab: (url: string) => Promise<BrowserTab>;
+  focusTab: (targetId: string) => Promise<void>;
+  closeTab: (targetId: string) => Promise<void>;
+  stopRunningBrowser: () => Promise<{ stopped: boolean }>;
+  resetProfile: () => Promise<{ moved: boolean; from: string; to?: string }>;
+};
+
+export type ProfileStatus = {
+  name: string;
+  cdpPort: number;
+  cdpUrl: string;
+  color: string;
+  running: boolean;
+  tabCount: number;
+  isDefault: boolean;
+  isRemote: boolean;
+};
+
 type ContextOptions = {
   getState: () => BrowserServerState | null;
-  setRunning: (running: RunningChrome | null) => void;
 };
+
+/**
+ * Normalize a CDP WebSocket URL to use the correct base URL.
+ */
+function normalizeWsUrl(
+  raw: string | undefined,
+  cdpBaseUrl: string,
+): string | undefined {
+  if (!raw) return undefined;
+  try {
+    return normalizeCdpWsUrl(raw, cdpBaseUrl);
+  } catch {
+    return raw;
+  }
+}
 
 async function fetchJson<T>(
   url: string,
@@ -87,26 +133,35 @@ async function fetchOk(
   }
 }
 
-export function createBrowserRouteContext(
+/**
+ * Create a profile-scoped context for browser operations.
+ */
+function createProfileContext(
   opts: ContextOptions,
-): BrowserRouteContext {
+  profile: ResolvedBrowserProfile,
+): ProfileContext {
   const state = () => {
     const current = opts.getState();
     if (!current) throw new Error("Browser server not started");
     return current;
   };
 
-  const listTabs = async (): Promise<BrowserTab[]> => {
+  const getProfileState = (): ProfileRuntimeState => {
     const current = state();
-    const base = current.resolved.cdpUrl;
-    const normalizeWsUrl = (raw?: string) => {
-      if (!raw) return undefined;
-      try {
-        return normalizeCdpWsUrl(raw, base);
-      } catch {
-        return raw;
-      }
-    };
+    let profileState = current.profiles.get(profile.name);
+    if (!profileState) {
+      profileState = { profile, running: null };
+      current.profiles.set(profile.name, profileState);
+    }
+    return profileState;
+  };
+
+  const setProfileRunning = (running: RunningChrome | null) => {
+    const profileState = getProfileState();
+    profileState.running = running;
+  };
+
+  const listTabs = async (): Promise<BrowserTab[]> => {
     const raw = await fetchJson<
       Array<{
         id?: string;
@@ -115,22 +170,21 @@ export function createBrowserRouteContext(
         webSocketDebuggerUrl?: string;
         type?: string;
       }>
-    >(`${base.replace(/\/$/, "")}/json/list`);
+    >(`${profile.cdpUrl.replace(/\/$/, "")}/json/list`);
     return raw
       .map((t) => ({
         targetId: t.id ?? "",
         title: t.title ?? "",
         url: t.url ?? "",
-        wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl),
+        wsUrl: normalizeWsUrl(t.webSocketDebuggerUrl, profile.cdpUrl),
         type: t.type,
       }))
       .filter((t) => Boolean(t.targetId));
   };
 
   const openTab = async (url: string): Promise<BrowserTab> => {
-    const current = state();
     const createdViaCdp = await createTargetViaCdp({
-      cdpUrl: current.resolved.cdpUrl,
+      cdpUrl: profile.cdpUrl,
       url,
     })
       .then((r) => r.targetId)
@@ -148,7 +202,6 @@ export function createBrowserRouteContext(
     }
 
     const encoded = encodeURIComponent(url);
-
     type CdpTarget = {
       id?: string;
       title?: string;
@@ -157,15 +210,7 @@ export function createBrowserRouteContext(
       type?: string;
     };
 
-    const base = current.resolved.cdpUrl.replace(/\/$/, "");
-    const normalizeWsUrl = (raw?: string) => {
-      if (!raw) return undefined;
-      try {
-        return normalizeCdpWsUrl(raw, base);
-      } catch {
-        return raw;
-      }
-    };
+    const base = profile.cdpUrl.replace(/\/$/, "");
     const endpoint = `${base}/json/new?${encoded}`;
     const created = await fetchJson<CdpTarget>(endpoint, 1500, {
       method: "PUT",
@@ -181,76 +226,81 @@ export function createBrowserRouteContext(
       targetId: created.id,
       title: created.title ?? "",
       url: created.url ?? url,
-      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl),
+      wsUrl: normalizeWsUrl(created.webSocketDebuggerUrl, base),
       type: created.type,
     };
   };
 
   const isReachable = async (timeoutMs = 300) => {
-    const current = state();
     const wsTimeout = Math.max(200, Math.min(2000, timeoutMs * 2));
-    return await isChromeCdpReady(
-      current.resolved.cdpUrl,
-      timeoutMs,
-      wsTimeout,
-    );
+    return await isChromeCdpReady(profile.cdpUrl, timeoutMs, wsTimeout);
   };
 
   const isHttpReachable = async (timeoutMs = 300) => {
-    const current = state();
-    return await isChromeReachable(current.resolved.cdpUrl, timeoutMs);
+    return await isChromeReachable(profile.cdpUrl, timeoutMs);
   };
 
   const attachRunning = (running: RunningChrome) => {
-    opts.setRunning(running);
+    setProfileRunning(running);
     running.proc.on("exit", () => {
-      const live = opts.getState();
-      if (live?.running?.pid === running.pid) {
-        opts.setRunning(null);
+      // Guard against server teardown (e.g., SIGUSR1 restart)
+      if (!opts.getState()) return;
+      const profileState = getProfileState();
+      if (profileState.running?.pid === running.pid) {
+        setProfileRunning(null);
       }
     });
   };
 
   const ensureBrowserAvailable = async (): Promise<void> => {
     const current = state();
-    const remoteCdp = !current.resolved.cdpIsLoopback;
+    const remoteCdp = !profile.cdpIsLoopback;
+    const profileState = getProfileState();
     const httpReachable = await isHttpReachable();
+
     if (!httpReachable) {
       if (current.resolved.attachOnly || remoteCdp) {
         throw new Error(
           remoteCdp
-            ? "Remote CDP is not reachable. Check browser.cdpUrl."
-            : "Browser attachOnly is enabled and no browser is running.",
+            ? `Remote CDP for profile "${profile.name}" is not reachable at ${profile.cdpUrl}.`
+            : `Browser attachOnly is enabled and profile "${profile.name}" is not running.`,
         );
       }
-      const launched = await launchClawdChrome(current.resolved);
+      const launched = await launchClawdChrome(current.resolved, profile);
       attachRunning(launched);
+      return;
     }
 
+    // Port is reachable - check if we own it
     if (await isReachable()) return;
 
+    // HTTP responds but WebSocket fails - port in use by something else
+    if (!profileState.running) {
+      throw new Error(
+        `Port ${profile.cdpPort} is in use for profile "${profile.name}" but not by clawdis. ` +
+          `Run action=reset-profile profile=${profile.name} to kill the process.`,
+      );
+    }
+
+    // We own it but WebSocket failed - restart
     if (current.resolved.attachOnly || remoteCdp) {
       throw new Error(
         remoteCdp
-          ? "Remote CDP websocket is not reachable. Check browser.cdpUrl."
-          : "Browser attachOnly is enabled and CDP websocket is not reachable.",
+          ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`
+          : `Browser attachOnly is enabled and CDP websocket for profile "${profile.name}" is not reachable.`,
       );
     }
 
-    if (!current.running) {
-      throw new Error(
-        "CDP port responds but websocket handshake failed. Ensure the clawd browser owns the port or stop the conflicting process.",
-      );
-    }
+    await stopClawdChrome(profileState.running);
+    setProfileRunning(null);
 
-    await stopClawdChrome(current.running);
-    opts.setRunning(null);
-
-    const relaunched = await launchClawdChrome(current.resolved);
+    const relaunched = await launchClawdChrome(current.resolved, profile);
     attachRunning(relaunched);
 
     if (!(await isReachable(600))) {
-      throw new Error("Chrome CDP websocket is not reachable after restart.");
+      throw new Error(
+        `Chrome CDP websocket for profile "${profile.name}" is not reachable after restart.`,
+      );
     }
   };
 
@@ -281,8 +331,7 @@ export function createBrowserRouteContext(
   };
 
   const focusTab = async (targetId: string): Promise<void> => {
-    const current = state();
-    const base = current.resolved.cdpUrl.replace(/\/$/, "");
+    const base = profile.cdpUrl.replace(/\/$/, "");
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -295,8 +344,7 @@ export function createBrowserRouteContext(
   };
 
   const closeTab = async (targetId: string): Promise<void> => {
-    const current = state();
-    const base = current.resolved.cdpUrl.replace(/\/$/, "");
+    const base = profile.cdpUrl.replace(/\/$/, "");
     const tabs = await listTabs();
     const resolved = resolveTargetIdFromTabs(targetId, tabs);
     if (!resolved.ok) {
@@ -309,28 +357,34 @@ export function createBrowserRouteContext(
   };
 
   const stopRunningBrowser = async (): Promise<{ stopped: boolean }> => {
-    const current = state();
-    if (!current.running) return { stopped: false };
-    await stopClawdChrome(current.running);
-    opts.setRunning(null);
+    const profileState = getProfileState();
+    if (!profileState.running) return { stopped: false };
+    await stopClawdChrome(profileState.running);
+    setProfileRunning(null);
     return { stopped: true };
   };
 
   const resetProfile = async () => {
-    const current = state();
-    if (!current.resolved.cdpIsLoopback) {
-      throw new Error("reset-profile is only supported for local browsers.");
-    }
-    const userDataDir = resolveClawdUserDataDir();
-
-    const httpReachable = await isHttpReachable(300);
-    if (httpReachable && !current.running) {
+    if (!profile.cdpIsLoopback) {
       throw new Error(
-        "Browser appears to be running but is not owned by clawd. Stop it before resetting the profile.",
+        `reset-profile is only supported for local profiles (profile "${profile.name}" is remote).`,
       );
     }
+    const userDataDir = resolveClawdUserDataDir(profile.name);
+    const profileState = getProfileState();
 
-    if (current.running) {
+    const httpReachable = await isHttpReachable(300);
+    if (httpReachable && !profileState.running) {
+      // Port in use but not by us - kill it
+      try {
+        const mod = await import("./pw-ai.js");
+        await mod.closePlaywrightBrowserConnection();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (profileState.running) {
       await stopRunningBrowser();
     }
 
@@ -349,19 +403,8 @@ export function createBrowserRouteContext(
     return { moved: true, from: userDataDir, to: moved };
   };
 
-  const mapTabError = (err: unknown) => {
-    const msg = String(err);
-    if (msg.includes("ambiguous target id prefix")) {
-      return { status: 409, message: "ambiguous target id prefix" };
-    }
-    if (msg.includes("tab not found")) {
-      return { status: 404, message: "tab not found" };
-    }
-    return null;
-  };
-
   return {
-    state,
+    profile,
     ensureBrowserAvailable,
     ensureTabAvailable,
     isHttpReachable,
@@ -372,23 +415,116 @@ export function createBrowserRouteContext(
     closeTab,
     stopRunningBrowser,
     resetProfile,
-    mapTabError,
   };
 }
 
-async function movePathToTrash(targetPath: string): Promise<string> {
-  try {
-    await runExec("trash", [targetPath], { timeoutMs: 10_000 });
-    return targetPath;
-  } catch {
-    const trashDir = path.join(os.homedir(), ".Trash");
-    fs.mkdirSync(trashDir, { recursive: true });
-    const base = path.basename(targetPath);
-    let dest = path.join(trashDir, `${base}-${Date.now()}`);
-    if (fs.existsSync(dest)) {
-      dest = path.join(trashDir, `${base}-${Date.now()}-${Math.random()}`);
+export function createBrowserRouteContext(
+  opts: ContextOptions,
+): BrowserRouteContext {
+  const state = () => {
+    const current = opts.getState();
+    if (!current) throw new Error("Browser server not started");
+    return current;
+  };
+
+  const forProfile = (profileName?: string): ProfileContext => {
+    const current = state();
+    const name = profileName ?? current.resolved.defaultProfile;
+    const profile = resolveProfile(current.resolved, name);
+    if (!profile) {
+      const available = Object.keys(current.resolved.profiles).join(", ");
+      throw new Error(
+        `Profile "${name}" not found. Available profiles: ${available || "(none)"}`,
+      );
     }
-    fs.renameSync(targetPath, dest);
-    return dest;
-  }
+    return createProfileContext(opts, profile);
+  };
+
+  const listProfiles = async (): Promise<ProfileStatus[]> => {
+    const current = state();
+    const result: ProfileStatus[] = [];
+
+    for (const name of Object.keys(current.resolved.profiles)) {
+      const profileState = current.profiles.get(name);
+      const profile = resolveProfile(current.resolved, name);
+      if (!profile) continue;
+
+      let tabCount = 0;
+      let running = false;
+
+      if (profileState?.running) {
+        running = true;
+        try {
+          const ctx = createProfileContext(opts, profile);
+          const tabs = await ctx.listTabs();
+          tabCount = tabs.filter((t) => t.type === "page").length;
+        } catch {
+          // Browser might not be responsive
+        }
+      } else {
+        // Check if something is listening on the port
+        try {
+          const reachable = await isChromeReachable(profile.cdpUrl, 200);
+          if (reachable) {
+            running = true;
+            const ctx = createProfileContext(opts, profile);
+            const tabs = await ctx.listTabs().catch(() => []);
+            tabCount = tabs.filter((t) => t.type === "page").length;
+          }
+        } catch {
+          // Not reachable
+        }
+      }
+
+      result.push({
+        name,
+        cdpPort: profile.cdpPort,
+        cdpUrl: profile.cdpUrl,
+        color: profile.color,
+        running,
+        tabCount,
+        isDefault: name === current.resolved.defaultProfile,
+        isRemote: !profile.cdpIsLoopback,
+      });
+    }
+
+    return result;
+  };
+
+  // Create default profile context for backward compatibility
+  const getDefaultContext = () => forProfile();
+
+  const mapTabError = (err: unknown) => {
+    const msg = String(err);
+    if (msg.includes("ambiguous target id prefix")) {
+      return { status: 409, message: "ambiguous target id prefix" };
+    }
+    if (msg.includes("tab not found")) {
+      return { status: 404, message: "tab not found" };
+    }
+    if (msg.includes("not found")) {
+      return { status: 404, message: msg };
+    }
+    return null;
+  };
+
+  return {
+    state,
+    forProfile,
+    listProfiles,
+    // Legacy methods delegate to default profile
+    ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
+    ensureTabAvailable: (targetId) =>
+      getDefaultContext().ensureTabAvailable(targetId),
+    isHttpReachable: (timeoutMs) =>
+      getDefaultContext().isHttpReachable(timeoutMs),
+    isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
+    listTabs: () => getDefaultContext().listTabs(),
+    openTab: (url) => getDefaultContext().openTab(url),
+    focusTab: (targetId) => getDefaultContext().focusTab(targetId),
+    closeTab: (targetId) => getDefaultContext().closeTab(targetId),
+    stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),
+    resetProfile: () => getDefaultContext().resetProfile(),
+    mapTabError,
+  };
 }

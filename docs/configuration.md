@@ -692,11 +692,16 @@ Example:
 ### `browser` (clawd-managed Chrome)
 
 Clawdis can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
+Profiles can point at a **remote** Chrome via `profiles.<name>.cdpUrl`. Remote
+profiles are attach-only (start/stop/reset are disabled).
+
+`browser.cdpUrl` remains for legacy single-profile configs and as the base
+scheme/host for profiles that only set `cdpPort`.
 
 Defaults:
 - enabled: `true`
 - control URL: `http://127.0.0.1:18791` (CDP uses `18792`)
-- CDP URL: `http://127.0.0.1:18792` (control URL + 1)
+- CDP URL: `http://127.0.0.1:18792` (control URL + 1, legacy single-profile)
 - profile color: `#FF4500` (lobster-orange)
 - Note: the control server is started by the running gateway (Clawdis.app menubar, or `clawdis gateway`).
 
@@ -705,7 +710,13 @@ Defaults:
   browser: {
     enabled: true,
     controlUrl: "http://127.0.0.1:18791",
-    // cdpUrl: "http://127.0.0.1:18792", // override for remote CDP
+    // cdpUrl: "http://127.0.0.1:18792", // legacy single-profile override
+    defaultProfile: "clawd",
+    profiles: {
+      clawd: { cdpPort: 18800, color: "#FF4500" },
+      work: { cdpPort: 18801, color: "#0066CC" },
+      remote: { cdpUrl: "http://10.0.0.42:9222", color: "#00AA00" }
+    },
     color: "#FF4500",
     // Advanced:
     // headless: false,

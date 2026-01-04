@@ -10,8 +10,9 @@ import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
   normalizeBrowserScreenshot,
 } from "../screenshot.js";
-import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
 import {
+  getProfileContext,
   jsonError,
   toBoolean,
   toNumber,
@@ -61,6 +62,19 @@ function handleRouteError(
   jsonError(res, 500, String(err));
 }
 
+function resolveProfileContext(
+  req: express.Request,
+  res: express.Response,
+  ctx: BrowserRouteContext,
+): ProfileContext | null {
+  const profileCtx = getProfileContext(req, ctx);
+  if ("error" in profileCtx) {
+    jsonError(res, profileCtx.status, profileCtx.error);
+    return null;
+  }
+  return profileCtx;
+}
+
 function parseClickButton(raw: string): ClickButton | undefined {
   if (raw === "left" || raw === "right" || raw === "middle") return raw;
   return undefined;
@@ -100,16 +114,18 @@ export function registerBrowserAgentRoutes(
   ctx: BrowserRouteContext,
 ) {
   app.post("/navigate", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const body = readBody(req);
     const url = toStringOrEmpty(body.url);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     if (!url) return jsonError(res, 400, "url is required");
     try {
-      const tab = await ctx.ensureTabAvailable(targetId);
+      const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "navigate");
       if (!pw) return;
       const result = await pw.navigateViaPlaywright({
-        cdpUrl: ctx.state().resolved.cdpUrl,
+        cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         url,
       });
@@ -120,6 +136,8 @@ export function registerBrowserAgentRoutes(
   });
 
   app.post("/act", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const body = readBody(req);
     const kind = toStringOrEmpty(body.kind) as ActKind;
     const targetId = toStringOrEmpty(body.targetId) || undefined;
@@ -144,8 +162,8 @@ export function registerBrowserAgentRoutes(
     }
 
     try {
-      const tab = await ctx.ensureTabAvailable(targetId);
-      const cdpUrl = ctx.state().resolved.cdpUrl;
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const cdpUrl = profileCtx.profile.cdpUrl;
       const pw = await requirePwAi(res, `act:${kind}`);
       if (!pw) return;
 
@@ -336,6 +354,8 @@ export function registerBrowserAgentRoutes(
   });
 
   app.post("/hooks/file-chooser", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const ref = toStringOrEmpty(body.ref) || undefined;
@@ -345,7 +365,7 @@ export function registerBrowserAgentRoutes(
     const timeoutMs = toNumber(body.timeoutMs);
     if (!paths.length) return jsonError(res, 400, "paths are required");
     try {
-      const tab = await ctx.ensureTabAvailable(targetId);
+      const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "file chooser hook");
       if (!pw) return;
       if (inputRef || element) {
@@ -357,7 +377,7 @@ export function registerBrowserAgentRoutes(
           );
         }
         await pw.setInputFilesViaPlaywright({
-          cdpUrl: ctx.state().resolved.cdpUrl,
+          cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
           inputRef,
           element,
@@ -365,14 +385,14 @@ export function registerBrowserAgentRoutes(
         });
       } else {
         await pw.armFileUploadViaPlaywright({
-          cdpUrl: ctx.state().resolved.cdpUrl,
+          cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
           paths,
           timeoutMs: timeoutMs ?? undefined,
         });
         if (ref) {
           await pw.clickViaPlaywright({
-            cdpUrl: ctx.state().resolved.cdpUrl,
+            cdpUrl: profileCtx.profile.cdpUrl,
             targetId: tab.targetId,
             ref,
           });
@@ -385,6 +405,8 @@ export function registerBrowserAgentRoutes(
   });
 
   app.post("/hooks/dialog", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const accept = toBoolean(body.accept);
@@ -392,11 +414,11 @@ export function registerBrowserAgentRoutes(
     const timeoutMs = toNumber(body.timeoutMs);
     if (accept === undefined) return jsonError(res, 400, "accept is required");
     try {
-      const tab = await ctx.ensureTabAvailable(targetId);
+      const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "dialog hook");
       if (!pw) return;
       await pw.armDialogViaPlaywright({
-        cdpUrl: ctx.state().resolved.cdpUrl,
+        cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         accept,
         promptText,
@@ -409,16 +431,18 @@ export function registerBrowserAgentRoutes(
   });
 
   app.get("/console", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const targetId =
       typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const level = typeof req.query.level === "string" ? req.query.level : "";
 
     try {
-      const tab = await ctx.ensureTabAvailable(targetId || undefined);
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       const pw = await requirePwAi(res, "console messages");
       if (!pw) return;
       const messages = await pw.getConsoleMessagesViaPlaywright({
-        cdpUrl: ctx.state().resolved.cdpUrl,
+        cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
         level: level.trim() || undefined,
       });
@@ -429,14 +453,16 @@ export function registerBrowserAgentRoutes(
   });
 
   app.post("/pdf", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     try {
-      const tab = await ctx.ensureTabAvailable(targetId);
+      const tab = await profileCtx.ensureTabAvailable(targetId);
       const pw = await requirePwAi(res, "pdf");
       if (!pw) return;
       const pdf = await pw.pdfViaPlaywright({
-        cdpUrl: ctx.state().resolved.cdpUrl,
+        cdpUrl: profileCtx.profile.cdpUrl,
         targetId: tab.targetId,
       });
       await ensureMediaDir();
@@ -458,6 +484,8 @@ export function registerBrowserAgentRoutes(
   });
 
   app.post("/screenshot", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const body = readBody(req);
     const targetId = toStringOrEmpty(body.targetId) || undefined;
     const fullPage = toBoolean(body.fullPage) ?? false;
@@ -474,13 +502,13 @@ export function registerBrowserAgentRoutes(
     }
 
     try {
-      const tab = await ctx.ensureTabAvailable(targetId);
+      const tab = await profileCtx.ensureTabAvailable(targetId);
       let buffer: Buffer;
       if (ref || element) {
         const pw = await requirePwAi(res, "element/ref screenshot");
         if (!pw) return;
         const snap = await pw.takeScreenshotViaPlaywright({
-          cdpUrl: ctx.state().resolved.cdpUrl,
+          cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
           ref,
           element,
@@ -520,6 +548,8 @@ export function registerBrowserAgentRoutes(
   });
 
   app.get("/snapshot", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
     const targetId =
       typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
     const format =
@@ -534,12 +564,12 @@ export function registerBrowserAgentRoutes(
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
 
     try {
-      const tab = await ctx.ensureTabAvailable(targetId || undefined);
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       if (format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");
         if (!pw) return;
         const snap = await pw.snapshotAiViaPlaywright({
-          cdpUrl: ctx.state().resolved.cdpUrl,
+          cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
         });
         return res.json({

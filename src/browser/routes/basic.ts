@@ -1,13 +1,26 @@
 import type express from "express";
 
+import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { jsonError } from "./utils.js";
+import { getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
 export function registerBrowserBasicRoutes(
   app: express.Express,
   ctx: BrowserRouteContext,
 ) {
-  app.get("/", async (_req, res) => {
+  // List all profiles with their status
+  app.get("/profiles", async (_req, res) => {
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const profiles = await service.listProfiles();
+      res.json({ profiles });
+    } catch (err) {
+      jsonError(res, 500, String(err));
+    }
+  });
+
+  // Get status (profile-aware)
+  app.get("/", async (req, res) => {
     let current: ReturnType<typeof ctx.state>;
     try {
       current = ctx.state();
@@ -15,22 +28,31 @@ export function registerBrowserBasicRoutes(
       return jsonError(res, 503, "browser server not started");
     }
 
+    const profileCtx = getProfileContext(req, ctx);
+    if ("error" in profileCtx) {
+      return jsonError(res, profileCtx.status, profileCtx.error);
+    }
+
     const [cdpHttp, cdpReady] = await Promise.all([
-      ctx.isHttpReachable(300),
-      ctx.isReachable(600),
+      profileCtx.isHttpReachable(300),
+      profileCtx.isReachable(600),
     ]);
+
+    const profileState = current.profiles.get(profileCtx.profile.name);
+
     res.json({
       enabled: current.resolved.enabled,
       controlUrl: current.resolved.controlUrl,
+      profile: profileCtx.profile.name,
       running: cdpReady,
       cdpReady,
       cdpHttp,
-      pid: current.running?.pid ?? null,
-      cdpPort: current.cdpPort,
-      cdpUrl: current.resolved.cdpUrl,
-      chosenBrowser: current.running?.exe.kind ?? null,
-      userDataDir: current.running?.userDataDir ?? null,
-      color: current.resolved.color,
+      pid: profileState?.running?.pid ?? null,
+      cdpPort: profileCtx.profile.cdpPort,
+      cdpUrl: profileCtx.profile.cdpUrl,
+      chosenBrowser: profileState?.running?.exe.kind ?? null,
+      userDataDir: profileState?.running?.userDataDir ?? null,
+      color: profileCtx.profile.color,
       headless: current.resolved.headless,
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
@@ -38,30 +60,110 @@ export function registerBrowserBasicRoutes(
     });
   });
 
-  app.post("/start", async (_req, res) => {
+  // Start browser (profile-aware)
+  app.post("/start", async (req, res) => {
+    const profileCtx = getProfileContext(req, ctx);
+    if ("error" in profileCtx) {
+      return jsonError(res, profileCtx.status, profileCtx.error);
+    }
+
     try {
-      await ctx.ensureBrowserAvailable();
-      res.json({ ok: true });
+      await profileCtx.ensureBrowserAvailable();
+      res.json({ ok: true, profile: profileCtx.profile.name });
     } catch (err) {
       jsonError(res, 500, String(err));
     }
   });
 
-  app.post("/stop", async (_req, res) => {
+  // Stop browser (profile-aware)
+  app.post("/stop", async (req, res) => {
+    const profileCtx = getProfileContext(req, ctx);
+    if ("error" in profileCtx) {
+      return jsonError(res, profileCtx.status, profileCtx.error);
+    }
+
     try {
-      const result = await ctx.stopRunningBrowser();
-      res.json({ ok: true, stopped: result.stopped });
+      const result = await profileCtx.stopRunningBrowser();
+      res.json({
+        ok: true,
+        stopped: result.stopped,
+        profile: profileCtx.profile.name,
+      });
     } catch (err) {
       jsonError(res, 500, String(err));
     }
   });
 
-  app.post("/reset-profile", async (_req, res) => {
+  // Reset profile (profile-aware)
+  app.post("/reset-profile", async (req, res) => {
+    const profileCtx = getProfileContext(req, ctx);
+    if ("error" in profileCtx) {
+      return jsonError(res, profileCtx.status, profileCtx.error);
+    }
+
     try {
-      const result = await ctx.resetProfile();
-      res.json({ ok: true, ...result });
+      const result = await profileCtx.resetProfile();
+      res.json({ ok: true, profile: profileCtx.profile.name, ...result });
     } catch (err) {
       jsonError(res, 500, String(err));
+    }
+  });
+
+  // Create a new profile
+  app.post("/profiles/create", async (req, res) => {
+    const name = toStringOrEmpty((req.body as { name?: unknown })?.name);
+    const color = toStringOrEmpty((req.body as { color?: unknown })?.color);
+    const cdpUrl = toStringOrEmpty((req.body as { cdpUrl?: unknown })?.cdpUrl);
+
+    if (!name) return jsonError(res, 400, "name is required");
+
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.createProfile({
+        name,
+        color: color || undefined,
+        cdpUrl: cdpUrl || undefined,
+      });
+      res.json(result);
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("already exists")) {
+        return jsonError(res, 409, msg);
+      }
+      if (msg.includes("invalid profile name")) {
+        return jsonError(res, 400, msg);
+      }
+      if (msg.includes("no available CDP ports")) {
+        return jsonError(res, 507, msg);
+      }
+      if (msg.includes("cdpUrl")) {
+        return jsonError(res, 400, msg);
+      }
+      jsonError(res, 500, msg);
+    }
+  });
+
+  // Delete a profile
+  app.delete("/profiles/:name", async (req, res) => {
+    const name = toStringOrEmpty(req.params.name);
+    if (!name) return jsonError(res, 400, "profile name is required");
+
+    try {
+      const service = createBrowserProfilesService(ctx);
+      const result = await service.deleteProfile(name);
+      res.json(result);
+    } catch (err) {
+      const msg = String(err);
+      if (msg.includes("invalid profile name")) {
+        return jsonError(res, 400, msg);
+      }
+      if (msg.includes("default profile")) {
+        return jsonError(res, 400, msg);
+      }
+      if (msg.includes("not found")) {
+        return jsonError(res, 404, msg);
+      }
+      jsonError(res, 500, msg);
     }
   });
 }

@@ -16,6 +16,7 @@
 - Control UI: support configurable base paths (`gateway.controlUi.basePath`, default unchanged) for hosting under URL prefixes.
 - Onboarding: shared wizard engine powering CLI + macOS via gateway wizard RPC.
 - Config: expose schema + UI hints for generic config forms (Web UI + future clients).
+- Browser: add multi-profile browser control with per-profile remote CDP URLs — thanks @jamesgroat.
 - Skills: add blogwatcher skill for RSS/Atom monitoring — thanks @Hyaxia.
 - Discord: emit system events for reaction add/remove with per-guild reaction notifications (off|own|all|allowlist) (#140) — thanks @thewilloftheshadow.
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.

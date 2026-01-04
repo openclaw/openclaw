@@ -72,26 +72,33 @@ vi.mock("../config/config.js", () => ({
       color: "#FF4500",
       attachOnly: cfgAttachOnly,
       headless: true,
+      defaultProfile: "clawd",
+      profiles: {
+        clawd: { cdpPort: testPort + 1, color: "#FF4500" },
+      },
     },
   }),
+  writeConfigFile: vi.fn(async () => {}),
 }));
 
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({
   isChromeCdpReady: vi.fn(async () => reachable),
   isChromeReachable: vi.fn(async () => reachable),
-  launchClawdChrome: vi.fn(async (resolved: { cdpPort: number }) => {
-    launchCalls.push({ port: resolved.cdpPort });
-    reachable = true;
-    return {
-      pid: 123,
-      exe: { kind: "chrome", path: "/fake/chrome" },
-      userDataDir: "/tmp/clawd",
-      cdpPort: resolved.cdpPort,
-      startedAt: Date.now(),
-      proc,
-    };
-  }),
+  launchClawdChrome: vi.fn(
+    async (_resolved: unknown, profile: { cdpPort: number }) => {
+      launchCalls.push({ port: profile.cdpPort });
+      reachable = true;
+      return {
+        pid: 123,
+        exe: { kind: "chrome", path: "/fake/chrome" },
+        userDataDir: "/tmp/clawd",
+        cdpPort: profile.cdpPort,
+        startedAt: Date.now(),
+        proc,
+      };
+    },
+  ),
   resolveClawdUserDataDir: vi.fn(() => "/tmp/clawd"),
   stopClawdChrome: vi.fn(async () => {
     reachable = false;
@@ -744,5 +751,291 @@ describe("browser control server", () => {
       `${base}/snapshot?format=aria&targetId=abc`,
     );
     expect(snapAmbiguous.status).toBe(409);
+  });
+});
+
+describe("backward compatibility (profile parameter)", () => {
+  beforeEach(async () => {
+    reachable = false;
+    cfgAttachOnly = false;
+    createTargetId = null;
+
+    for (const fn of Object.values(pwMocks)) fn.mockClear();
+    for (const fn of Object.values(cdpMocks)) fn.mockClear();
+
+    testPort = await getFreePort();
+    cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (u.includes("/json/list")) {
+          if (!reachable) return makeResponse([]);
+          return makeResponse([
+            {
+              id: "abcd1234",
+              title: "Tab",
+              url: "https://example.com",
+              webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/abcd1234",
+              type: "page",
+            },
+          ]);
+        }
+        if (u.includes("/json/new?")) {
+          return makeResponse({
+            id: "newtab1",
+            title: "",
+            url: "about:blank",
+            webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/newtab1",
+            type: "page",
+          });
+        }
+        if (u.includes("/json/activate/")) return makeResponse("ok");
+        if (u.includes("/json/close/")) return makeResponse("ok");
+        return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    const { stopBrowserControlServer } = await import("./server.js");
+    await stopBrowserControlServer();
+  });
+
+  it("GET / without profile uses default profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const status = (await realFetch(`${base}/`).then((r) => r.json())) as {
+      running: boolean;
+      profile?: string;
+    };
+    expect(status.running).toBe(false);
+    // Should use default profile (clawd)
+    expect(status.profile).toBe("clawd");
+  });
+
+  it("POST /start without profile uses default profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = (await realFetch(`${base}/start`, { method: "POST" }).then(
+      (r) => r.json(),
+    )) as { ok: boolean; profile?: string };
+    expect(result.ok).toBe(true);
+    expect(result.profile).toBe("clawd");
+  });
+
+  it("POST /stop without profile uses default profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    await realFetch(`${base}/start`, { method: "POST" });
+
+    const result = (await realFetch(`${base}/stop`, { method: "POST" }).then(
+      (r) => r.json(),
+    )) as { ok: boolean; profile?: string };
+    expect(result.ok).toBe(true);
+    expect(result.profile).toBe("clawd");
+  });
+
+  it("GET /tabs without profile uses default profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    await realFetch(`${base}/start`, { method: "POST" });
+
+    const result = (await realFetch(`${base}/tabs`).then((r) => r.json())) as {
+      running: boolean;
+      tabs: unknown[];
+    };
+    expect(result.running).toBe(true);
+    expect(Array.isArray(result.tabs)).toBe(true);
+  });
+
+  it("POST /tabs/open without profile uses default profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    await realFetch(`${base}/start`, { method: "POST" });
+
+    const result = (await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(result.targetId).toBe("newtab1");
+  });
+
+  it("GET /profiles returns list of profiles", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = (await realFetch(`${base}/profiles`).then((r) =>
+      r.json(),
+    )) as { profiles: Array<{ name: string }> };
+    expect(Array.isArray(result.profiles)).toBe(true);
+    // Should at least have the default clawd profile
+    expect(result.profiles.some((p) => p.name === "clawd")).toBe(true);
+  });
+});
+
+describe("profile CRUD endpoints", () => {
+  beforeEach(async () => {
+    reachable = false;
+    cfgAttachOnly = false;
+
+    for (const fn of Object.values(pwMocks)) fn.mockClear();
+    for (const fn of Object.values(cdpMocks)) fn.mockClear();
+
+    testPort = await getFreePort();
+    cdpBaseUrl = `http://127.0.0.1:${testPort + 1}`;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        const u = String(url);
+        if (u.includes("/json/list")) return makeResponse([]);
+        return makeResponse({}, { ok: false, status: 500, text: "unexpected" });
+      }),
+    );
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    const { stopBrowserControlServer } = await import("./server.js");
+    await stopBrowserControlServer();
+  });
+
+  it("POST /profiles/create returns 400 for missing name", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("name is required");
+  });
+
+  it("POST /profiles/create returns 400 for invalid name format", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Invalid Name!" }),
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("invalid profile name");
+  });
+
+  it("POST /profiles/create returns 409 for duplicate name", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    // "clawd" already exists as the default profile
+    const result = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "clawd" }),
+    });
+    expect(result.status).toBe(409);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("already exists");
+  });
+
+  it("POST /profiles/create accepts cdpUrl for remote profiles", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "remote", cdpUrl: "http://10.0.0.42:9222" }),
+    });
+    expect(result.status).toBe(200);
+    const body = (await result.json()) as {
+      profile?: string;
+      cdpUrl?: string;
+      isRemote?: boolean;
+    };
+    expect(body.profile).toBe("remote");
+    expect(body.cdpUrl).toBe("http://10.0.0.42:9222");
+    expect(body.isRemote).toBe(true);
+  });
+
+  it("POST /profiles/create returns 400 for invalid cdpUrl", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/profiles/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "badremote", cdpUrl: "ws://bad" }),
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("cdpUrl");
+  });
+
+  it("DELETE /profiles/:name returns 404 for non-existent profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/profiles/nonexistent`, {
+      method: "DELETE",
+    });
+    expect(result.status).toBe(404);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("not found");
+  });
+
+  it("DELETE /profiles/:name returns 400 for default profile deletion", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    // clawd is the default profile
+    const result = await realFetch(`${base}/profiles/clawd`, {
+      method: "DELETE",
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("cannot delete the default profile");
+  });
+
+  it("DELETE /profiles/:name returns 400 for invalid name format", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/profiles/Invalid-Name!`, {
+      method: "DELETE",
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("invalid profile name");
   });
 });

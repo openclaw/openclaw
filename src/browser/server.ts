@@ -36,9 +36,6 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
-    setRunning: (running) => {
-      if (state) state.running = running;
-    },
   });
   registerBrowserRoutes(app, ctx);
 
@@ -58,9 +55,8 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
   state = {
     server,
     port,
-    cdpPort: resolved.cdpPort,
-    running: null,
     resolved,
+    profiles: new Map(),
   };
 
   logServer.info(`Browser control listening on http://127.0.0.1:${port}/`);
@@ -73,13 +69,19 @@ export async function stopBrowserControlServer(): Promise<void> {
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
-    setRunning: (running) => {
-      if (state) state.running = running;
-    },
   });
 
   try {
-    await ctx.stopRunningBrowser();
+    const current = state;
+    if (current) {
+      for (const name of Object.keys(current.resolved.profiles)) {
+        try {
+          await ctx.forProfile(name).stopRunningBrowser();
+        } catch {
+          // ignore
+        }
+      }
+    }
   } catch (err) {
     logServer.warn(`clawd browser stop failed: ${String(err)}`);
   }
