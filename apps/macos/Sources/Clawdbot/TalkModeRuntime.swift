@@ -588,7 +588,9 @@ actor TalkModeRuntime {
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
 
-        if self.interruptOnSpeech, ! await self.prepareForPlayback(generation: input.generation) { return }
+        if self.interruptOnSpeech {
+            guard await self.prepareForPlayback(generation: input.generation) else { return }
+        }
 
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
@@ -643,7 +645,9 @@ actor TalkModeRuntime {
 
     private func playSystemVoice(input: TalkPlaybackInput) async throws {
         self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
-        if self.interruptOnSpeech, ! await self.prepareForPlayback(generation: input.generation) { return }
+        if self.interruptOnSpeech {
+            guard await self.prepareForPlayback(generation: input.generation) else { return }
+        }
         await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
         self.phase = .speaking
         await TalkSystemSpeechSynthesizer.shared.stop()
@@ -727,7 +731,6 @@ actor TalkModeRuntime {
 }
 
 extension TalkModeRuntime {
-
     // MARK: - Audio playback (MainActor helpers)
 
     @MainActor

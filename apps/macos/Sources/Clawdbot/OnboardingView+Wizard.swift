@@ -1,3 +1,4 @@
+import ClawdbotProtocol
 import Observation
 import SwiftUI
 

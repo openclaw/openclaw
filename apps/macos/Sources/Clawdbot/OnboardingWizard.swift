@@ -232,41 +232,49 @@ struct OnboardingWizardStepView: View {
 
     private var selectOptions: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(self.optionItems) { item in
-                Button {
-                    self.selectedIndex = item.index
-                } label: {
-                    HStack(alignment: .top, spacing: 8) {
-                        Image(systemName: self.selectedIndex == item.index ? "largecircle.fill.circle" : "circle")
-                            .foregroundStyle(.accent)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(item.option.label)
-                                .foregroundStyle(.primary)
-                            if let hint = item.option.hint, !hint.isEmpty {
-                                Text(hint)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
+            ForEach(self.optionItems, id: \.index) { item in
+                self.selectOptionRow(item)
             }
         }
     }
 
     private var multiselectOptions: some View {
         VStack(alignment: .leading, spacing: 8) {
-            ForEach(self.optionItems) { item in
-                Toggle(isOn: self.bindingForOption(item)) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.option.label)
-                        if let hint = item.option.hint, !hint.isEmpty {
-                            Text(hint)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
+            ForEach(self.optionItems, id: \.index) { item in
+                self.multiselectOptionRow(item)
+            }
+        }
+    }
+
+    private func selectOptionRow(_ item: WizardOptionItem) -> some View {
+        Button {
+            self.selectedIndex = item.index
+        } label: {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: self.selectedIndex == item.index ? "largecircle.fill.circle" : "circle")
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.option.label)
+                        .foregroundStyle(.primary)
+                    if let hint = item.option.hint, !hint.isEmpty {
+                        Text(hint)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func multiselectOptionRow(_ item: WizardOptionItem) -> some View {
+        Toggle(isOn: self.bindingForOption(item)) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(item.option.label)
+                if let hint = item.option.hint, !hint.isEmpty {
+                    Text(hint)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

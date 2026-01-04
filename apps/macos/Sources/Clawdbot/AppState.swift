@@ -9,7 +9,7 @@ import SwiftUI
 final class AppState {
     private let isPreview: Bool
     private var isInitializing = true
-    private nonisolated var configWatcher: ConfigFileWatcher?
+    private var configWatcher: ConfigFileWatcher?
     private var suppressVoiceWakeGlobalSync = false
     private var voiceWakeGlobalSyncTask: Task<Void, Never>?
 
@@ -321,6 +321,7 @@ final class AppState {
         }
     }
 
+    @MainActor
     deinit {
         self.configWatcher?.stop()
     }

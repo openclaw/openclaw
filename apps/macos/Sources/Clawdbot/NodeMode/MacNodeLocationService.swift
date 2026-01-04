@@ -11,9 +11,6 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
 
     private let manager = CLLocationManager()
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
-    private struct UncheckedSendable<T>: @unchecked Sendable {
-        let value: T
-    }
 
     override init() {
         super.init()
@@ -63,7 +60,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
-    private func withTimeout<T>(
+    private func withTimeout<T: Sendable>(
         timeoutMs: Int,
         operation: @escaping () async throws -> T) async throws -> T
     {
@@ -71,15 +68,38 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
             return try await operation()
         }
 
-        return try await withThrowingTaskGroup(of: UncheckedSendable<T>.self) { group in
-            group.addTask { try await UncheckedSendable(value: operation()) }
-            group.addTask {
-                try await Task.sleep(nanoseconds: UInt64(timeoutMs) * 1_000_000)
-                throw Error.timeout
+        return try await withCheckedThrowingContinuation { continuation in
+            var didFinish = false
+
+            func finish(returning value: T) {
+                guard !didFinish else { return }
+                didFinish = true
+                continuation.resume(returning: value)
             }
-            let result = try await group.next()!
-            group.cancelAll()
-            return result.value
+
+            func finish(throwing error: Swift.Error) {
+                guard !didFinish else { return }
+                didFinish = true
+                continuation.resume(throwing: error)
+            }
+
+            let timeoutItem = DispatchWorkItem {
+                finish(throwing: Error.timeout)
+            }
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + .milliseconds(timeoutMs),
+                execute: timeoutItem)
+
+            Task { @MainActor in
+                do {
+                    let value = try await operation()
+                    timeoutItem.cancel()
+                    finish(returning: value)
+                } catch {
+                    timeoutItem.cancel()
+                    finish(throwing: error)
+                }
+            }
         }
     }
 

@@ -86,7 +86,7 @@ extension OnboardingView {
 
     var navigationBar: some View {
         let wizardLockIndex = self.wizardPageOrderIndex
-        HStack(spacing: 20) {
+        return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
                     Label("Back", systemImage: "chevron.left").labelStyle(.iconOnly)
