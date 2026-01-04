@@ -18,6 +18,8 @@ type TelegramSendOpts = {
   maxBytes?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
+  /** Send audio as voice message (voice bubble) instead of audio file. Defaults to false. */
+  asVoice?: boolean;
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -160,6 +162,7 @@ export async function sendMessageTelegram(
       | Awaited<ReturnType<typeof api.sendPhoto>>
       | Awaited<ReturnType<typeof api.sendVideo>>
       | Awaited<ReturnType<typeof api.sendAudio>>
+      | Awaited<ReturnType<typeof api.sendVoice>>
       | Awaited<ReturnType<typeof api.sendAnimation>>
       | Awaited<ReturnType<typeof api.sendDocument>>;
     if (isGif) {
@@ -184,12 +187,22 @@ export async function sendMessageTelegram(
         throw wrapChatNotFound(err);
       });
     } else if (kind === "audio") {
-      result = await request(
-        () => api.sendAudio(chatId, file, mediaParams),
-        "audio",
-      ).catch((err) => {
-        throw wrapChatNotFound(err);
-      });
+      const useVoice = opts.asVoice === true; // default false (backward compatible)
+      if (useVoice) {
+        result = await request(
+          () => api.sendVoice(chatId, file, mediaParams),
+          "voice",
+        ).catch((err) => {
+          throw wrapChatNotFound(err);
+        });
+      } else {
+        result = await request(
+          () => api.sendAudio(chatId, file, mediaParams),
+          "audio",
+        ).catch((err) => {
+          throw wrapChatNotFound(err);
+        });
+      }
     } else {
       result = await request(
         () => api.sendDocument(chatId, file, mediaParams),
