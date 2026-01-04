@@ -62,6 +62,7 @@
 - Dependencies: bump pi-mono packages to 0.32.3.
 
 ### Docs
+- Skills: add Notion API skill — thanks @scald.
 - Skills: add Sheets/Docs examples to gog skill (#128) — thanks @mbelinky.
 - Skills: clarify bear-notes token + callback usage (#120) — thanks @tylerwince.
 - Skills: document Discord `sendMessage` media attachments and `to` format clarification.
