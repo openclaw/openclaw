@@ -134,21 +134,6 @@ export const chatHandlers: GatewayRequestHandlers = {
     client,
     isWebchatConnect,
   }) => {
-    if (
-      client &&
-      isWebchatConnect(client.connect) &&
-      !context.hasConnectedMobileNode()
-    ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          "web chat disabled: no connected iOS/Android nodes",
-        ),
-      );
-      return;
-    }
     if (!validateChatSendParams(params)) {
       respond(
         false,
