@@ -64,9 +64,7 @@ export function registerModelsCli(program: Command) {
       }
     });
 
-  const aliases = models
-    .command("aliases")
-    .description("Manage model aliases");
+  const aliases = models.command("aliases").description("Manage model aliases");
 
   aliases
     .command("list")

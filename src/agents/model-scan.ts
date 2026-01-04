@@ -1,13 +1,13 @@
-import { Type } from "@sinclair/typebox";
 import {
+  type Context,
   complete,
   getEnvApiKey,
   getModel,
-  type Context,
   type Model,
-  type Tool,
   type OpenAICompletionsOptions,
+  type Tool,
 } from "@mariozechner/pi-ai";
+import { Type } from "@sinclair/typebox";
 
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const DEFAULT_TIMEOUT_MS = 12_000;
@@ -130,9 +130,7 @@ async function fetchOpenRouterModels(
       const id = typeof obj.id === "string" ? obj.id.trim() : "";
       if (!id) return null;
       const name =
-        typeof obj.name === "string" && obj.name.trim()
-          ? obj.name.trim()
-          : id;
+        typeof obj.name === "string" && obj.name.trim() ? obj.name.trim() : id;
 
       const contextLength =
         typeof obj.context_length === "number" &&
@@ -274,7 +272,7 @@ async function mapWithConcurrency<T, R>(
   fn: (item: T, index: number) => Promise<R>,
 ): Promise<R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
-  const results: R[] = new Array(items.length);
+  const results = Array.from({ length: items.length }) as R[];
   let nextIndex = 0;
 
   const worker = async () => {
@@ -296,8 +294,7 @@ export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
-  const apiKey =
-    options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
+  const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
   if (!apiKey) {
     throw new Error(
       "Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.",
@@ -337,10 +334,7 @@ export async function scanOpenRouterModels(
     return true;
   });
 
-  const baseModel = getModel(
-    "openrouter",
-    "openrouter/auto",
-  ) as OpenAIModel;
+  const baseModel = getModel("openrouter", "openrouter/auto") as OpenAIModel;
 
   return mapWithConcurrency(filtered, concurrency, async (entry) => {
     const model: OpenAIModel = {

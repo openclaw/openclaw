@@ -1,11 +1,11 @@
 import crypto from "node:crypto";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   loadSessionStore,
   type SessionEntry,
@@ -209,7 +209,9 @@ export async function runReplyAgent(params: {
                     });
                     if (stripped.didStrip && !didLogHeartbeatStrip) {
                       didLogHeartbeatStrip = true;
-                      logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+                      logVerbose(
+                        "Stripped stray HEARTBEAT_OK token from reply",
+                      );
                     }
                     if (
                       stripped.shouldSkip &&
@@ -297,7 +299,9 @@ export async function runReplyAgent(params: {
                     });
                     if (stripped.didStrip && !didLogHeartbeatStrip) {
                       didLogHeartbeatStrip = true;
-                      logVerbose("Stripped stray HEARTBEAT_OK token from reply");
+                      logVerbose(
+                        "Stripped stray HEARTBEAT_OK token from reply",
+                      );
                     }
                     if (
                       stripped.shouldSkip &&

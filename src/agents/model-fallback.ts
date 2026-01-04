@@ -59,7 +59,10 @@ function resolveFallbackCandidates(params: {
   const seen = new Set<string>();
   const candidates: ModelCandidate[] = [];
 
-  const addCandidate = (candidate: ModelCandidate, enforceAllowlist: boolean) => {
+  const addCandidate = (
+    candidate: ModelCandidate,
+    enforceAllowlist: boolean,
+  ) => {
     if (!candidate.provider || !candidate.model) return;
     const key = modelKey(candidate.provider, candidate.model);
     if (seen.has(key)) return;

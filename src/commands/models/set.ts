@@ -1,11 +1,13 @@
 import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { buildAllowlistSet, modelKey, resolveModelTarget, updateConfig } from "./shared.js";
+import {
+  buildAllowlistSet,
+  modelKey,
+  resolveModelTarget,
+  updateConfig,
+} from "./shared.js";
 
-export async function modelsSetCommand(
-  modelRaw: string,
-  runtime: RuntimeEnv,
-) {
+export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const allowlist = buildAllowlistSet(cfg);

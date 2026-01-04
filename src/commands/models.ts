@@ -1,4 +1,3 @@
-export { modelsListCommand, modelsStatusCommand } from "./models/list.js";
 export {
   modelsAliasesAddCommand,
   modelsAliasesListCommand,
@@ -10,5 +9,6 @@ export {
   modelsFallbacksListCommand,
   modelsFallbacksRemoveCommand,
 } from "./models/fallbacks.js";
+export { modelsListCommand, modelsStatusCommand } from "./models/list.js";
 export { modelsScanCommand } from "./models/scan.js";
 export { modelsSetCommand } from "./models/set.js";

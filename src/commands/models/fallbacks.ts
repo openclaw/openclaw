@@ -1,12 +1,9 @@
 import {
-  CONFIG_PATH_CLAWDBOT,
-  loadConfig,
-} from "../../config/config.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import {
   buildModelAliasIndex,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   DEFAULT_PROVIDER,
   ensureFlagCompatibility,
@@ -60,8 +57,8 @@ export async function modelsFallbacksAddCommand(
           aliasIndex,
         }),
       )
-      .filter(Boolean)
-      .map((entry) => modelKey(entry!.ref.provider, entry!.ref.model));
+      .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
+      .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
 
     if (existingKeys.includes(targetKey)) return cfg;
 

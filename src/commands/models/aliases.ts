@@ -1,7 +1,4 @@
-import {
-  CONFIG_PATH_CLAWDBOT,
-  loadConfig,
-} from "../../config/config.js";
+import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
   ensureFlagCompatibility,
@@ -47,7 +44,7 @@ export async function modelsAliasesAddCommand(
   const alias = normalizeAlias(aliasRaw);
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
-    const nextAliases = { ...(cfg.agent?.modelAliases ?? {}) };
+    const nextAliases = { ...cfg.agent?.modelAliases };
     nextAliases[alias] = `${resolved.provider}/${resolved.model}`;
     return {
       ...cfg,
@@ -68,7 +65,7 @@ export async function modelsAliasesRemoveCommand(
 ) {
   const alias = normalizeAlias(aliasRaw);
   const updated = await updateConfig((cfg) => {
-    const nextAliases = { ...(cfg.agent?.modelAliases ?? {}) };
+    const nextAliases = { ...cfg.agent?.modelAliases };
     if (!nextAliases[alias]) {
       throw new Error(`Alias not found: ${alias}`);
     }
@@ -83,7 +80,10 @@ export async function modelsAliasesRemoveCommand(
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  if (!updated.agent?.modelAliases || Object.keys(updated.agent.modelAliases).length === 0) {
+  if (
+    !updated.agent?.modelAliases ||
+    Object.keys(updated.agent.modelAliases).length === 0
+  ) {
     runtime.log("No aliases configured.");
   }
 }
