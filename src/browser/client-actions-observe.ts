@@ -27,13 +27,10 @@ export async function browserPdfSave(
   opts: { targetId?: string; profile?: string } = {},
 ): Promise<BrowserActionPathResult> {
   const q = buildProfileQuery(opts.profile);
-  return await fetchBrowserJson<BrowserActionPathResult>(
-    `${baseUrl}/pdf${q}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetId: opts.targetId }),
-      timeoutMs: 20000,
-    },
-  );
+  return await fetchBrowserJson<BrowserActionPathResult>(`${baseUrl}/pdf${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ targetId: opts.targetId }),
+    timeoutMs: 20000,
+  });
 }

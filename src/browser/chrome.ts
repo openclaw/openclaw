@@ -8,7 +8,10 @@ import { ensurePortAvailable } from "../infra/ports.js";
 import { createSubsystemLogger } from "../logging.js";
 import { CONFIG_DIR } from "../utils.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
-import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
+import type {
+  ResolvedBrowserConfig,
+  ResolvedBrowserProfile,
+} from "./config.js";
 import {
   DEFAULT_CLAWD_BROWSER_COLOR,
   DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
@@ -119,12 +122,7 @@ function resolveBrowserExecutable(
 export function resolveClawdUserDataDir(
   profileName = DEFAULT_CLAWD_BROWSER_PROFILE_NAME,
 ) {
-  return path.join(
-    CONFIG_DIR,
-    "browser",
-    profileName,
-    "user-data",
-  );
+  return path.join(CONFIG_DIR, "browser", profileName, "user-data");
 }
 
 function decoratedMarkerPath(userDataDir: string) {
