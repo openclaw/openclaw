@@ -305,7 +305,7 @@ export async function getReplyFromConfig(
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       "on")
-    : "on";
+    : "off";
   const resolvedBlockStreaming =
     agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
   const resolvedBlockStreamingBreak: "text_end" | "message_end" =
