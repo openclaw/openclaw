@@ -3,39 +3,30 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { GATEWAY_LAUNCH_AGENT_LABEL } from "./constants.js";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
+} from "./constants.js";
 
 const execFileAsync = promisify(execFile);
-const LEGACY_GATEWAY_LAUNCH_AGENT_LABEL = "com.steipete.clawdbot.gateway";
-
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) throw new Error("Missing HOME");
   return home;
 }
 
+function resolveLaunchAgentPlistPathForLabel(
+  env: Record<string, string | undefined>,
+  label: string,
+): string {
+  const home = resolveHomeDir(env);
+  return path.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
 export function resolveLaunchAgentPlistPath(
   env: Record<string, string | undefined>,
 ): string {
-  const home = resolveHomeDir(env);
-  return path.join(
-    home,
-    "Library",
-    "LaunchAgents",
-    `${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
-  );
-}
-
-function resolveLegacyLaunchAgentPlistPath(
-  env: Record<string, string | undefined>,
-): string {
-  const home = resolveHomeDir(env);
-  return path.join(
-    home,
-    "Library",
-    "LaunchAgents",
-    `${LEGACY_GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
-  );
+  return resolveLaunchAgentPlistPathForLabel(env, GATEWAY_LAUNCH_AGENT_LABEL);
 }
 
 export function resolveGatewayLogPaths(
@@ -212,6 +203,79 @@ export async function isLaunchAgentLoaded(): Promise<boolean> {
   return res.code === 0;
 }
 
+export type LegacyLaunchAgent = {
+  label: string;
+  plistPath: string;
+  loaded: boolean;
+  exists: boolean;
+};
+
+export async function findLegacyLaunchAgents(
+  env: Record<string, string | undefined>,
+): Promise<LegacyLaunchAgent[]> {
+  const domain = resolveGuiDomain();
+  const results: LegacyLaunchAgent[] = [];
+  for (const label of LEGACY_GATEWAY_LAUNCH_AGENT_LABELS) {
+    const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
+    const res = await execLaunchctl(["print", `${domain}/${label}`]);
+    const loaded = res.code === 0;
+    let exists = false;
+    try {
+      await fs.access(plistPath);
+      exists = true;
+    } catch {
+      // ignore
+    }
+    if (loaded || exists) {
+      results.push({ label, plistPath, loaded, exists });
+    }
+  }
+  return results;
+}
+
+export async function uninstallLegacyLaunchAgents({
+  env,
+  stdout,
+}: {
+  env: Record<string, string | undefined>;
+  stdout: NodeJS.WritableStream;
+}): Promise<LegacyLaunchAgent[]> {
+  const domain = resolveGuiDomain();
+  const agents = await findLegacyLaunchAgents(env);
+  if (agents.length === 0) return agents;
+
+  const home = resolveHomeDir(env);
+  const trashDir = path.join(home, ".Trash");
+  try {
+    await fs.mkdir(trashDir, { recursive: true });
+  } catch {
+    // ignore
+  }
+
+  for (const agent of agents) {
+    await execLaunchctl(["bootout", domain, agent.plistPath]);
+    await execLaunchctl(["unload", agent.plistPath]);
+
+    try {
+      await fs.access(agent.plistPath);
+    } catch {
+      continue;
+    }
+
+    const dest = path.join(trashDir, `${agent.label}.plist`);
+    try {
+      await fs.rename(agent.plistPath, dest);
+      stdout.write(`Moved legacy LaunchAgent to Trash: ${dest}\n`);
+    } catch {
+      stdout.write(
+        `Legacy LaunchAgent remains at ${agent.plistPath} (could not move)\n`,
+      );
+    }
+  }
+
+  return agents;
+}
+
 export async function uninstallLaunchAgent({
   env,
   stdout,
@@ -259,14 +323,19 @@ export async function installLaunchAgent({
   const { logDir, stdoutPath, stderrPath } = resolveGatewayLogPaths(env);
   await fs.mkdir(logDir, { recursive: true });
 
-  const legacyPlistPath = resolveLegacyLaunchAgentPlistPath(env);
   const domain = resolveGuiDomain();
-  await execLaunchctl(["bootout", domain, legacyPlistPath]);
-  await execLaunchctl(["unload", legacyPlistPath]);
-  try {
-    await fs.unlink(legacyPlistPath);
-  } catch {
-    // ignore
+  for (const legacyLabel of LEGACY_GATEWAY_LAUNCH_AGENT_LABELS) {
+    const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(
+      env,
+      legacyLabel,
+    );
+    await execLaunchctl(["bootout", domain, legacyPlistPath]);
+    await execLaunchctl(["unload", legacyPlistPath]);
+    try {
+      await fs.unlink(legacyPlistPath);
+    } catch {
+      // ignore
+    }
   }
 
   const plistPath = resolveLaunchAgentPlistPath(env);

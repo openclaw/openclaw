@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
-import { GATEWAY_SYSTEMD_SERVICE_NAME } from "./constants.js";
+import {
+  GATEWAY_SYSTEMD_SERVICE_NAME,
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
+} from "./constants.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,17 +16,18 @@ function resolveHomeDir(env: Record<string, string | undefined>): string {
   return home;
 }
 
+function resolveSystemdUnitPathForName(
+  env: Record<string, string | undefined>,
+  name: string,
+): string {
+  const home = resolveHomeDir(env);
+  return path.join(home, ".config", "systemd", "user", `${name}.service`);
+}
+
 function resolveSystemdUnitPath(
   env: Record<string, string | undefined>,
 ): string {
-  const home = resolveHomeDir(env);
-  return path.join(
-    home,
-    ".config",
-    "systemd",
-    "user",
-    `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
-  );
+  return resolveSystemdUnitPathForName(env, GATEWAY_SYSTEMD_SERVICE_NAME);
 }
 
 function systemdEscapeArg(value: string): string {
@@ -275,4 +279,83 @@ export async function isSystemdServiceEnabled(): Promise<boolean> {
   const unitName = `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
   const res = await execSystemctl(["--user", "is-enabled", unitName]);
   return res.code === 0;
+}
+export type LegacySystemdUnit = {
+  name: string;
+  unitPath: string;
+  enabled: boolean;
+  exists: boolean;
+};
+
+async function isSystemctlAvailable(): Promise<boolean> {
+  const res = await execSystemctl(["--user", "status"]);
+  if (res.code === 0) return true;
+  const detail = `${res.stderr || res.stdout}`.toLowerCase();
+  return !detail.includes("not found");
+}
+
+export async function findLegacySystemdUnits(
+  env: Record<string, string | undefined>,
+): Promise<LegacySystemdUnit[]> {
+  const results: LegacySystemdUnit[] = [];
+  const systemctlAvailable = await isSystemctlAvailable();
+  for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {
+    const unitPath = resolveSystemdUnitPathForName(env, name);
+    let exists = false;
+    try {
+      await fs.access(unitPath);
+      exists = true;
+    } catch {
+      // ignore
+    }
+    let enabled = false;
+    if (systemctlAvailable) {
+      const res = await execSystemctl([
+        "--user",
+        "is-enabled",
+        `${name}.service`,
+      ]);
+      enabled = res.code === 0;
+    }
+    if (exists || enabled) {
+      results.push({ name, unitPath, enabled, exists });
+    }
+  }
+  return results;
+}
+
+export async function uninstallLegacySystemdUnits({
+  env,
+  stdout,
+}: {
+  env: Record<string, string | undefined>;
+  stdout: NodeJS.WritableStream;
+}): Promise<LegacySystemdUnit[]> {
+  const units = await findLegacySystemdUnits(env);
+  if (units.length === 0) return units;
+
+  const systemctlAvailable = await isSystemctlAvailable();
+  for (const unit of units) {
+    if (systemctlAvailable) {
+      await execSystemctl([
+        "--user",
+        "disable",
+        "--now",
+        `${unit.name}.service`,
+      ]);
+    } else {
+      stdout.write(
+        `systemctl unavailable; removed legacy unit file only: ${unit.name}.service\n`,
+      );
+    }
+
+    try {
+      await fs.unlink(unit.unitPath);
+      stdout.write(`Removed legacy systemd service: ${unit.unitPath}\n`);
+    } catch {
+      stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
+    }
+  }
+
+  return units;
 }
