@@ -4,6 +4,7 @@ enum class ClawdisCapability(val rawValue: String) {
   Canvas("canvas"),
   Camera("camera"),
   Screen("screen"),
+  Sms("sms"),
   VoiceWake("voiceWake"),
   Location("location"),
 }
@@ -48,6 +49,15 @@ enum class ClawdisScreenCommand(val rawValue: String) {
 
   companion object {
     const val NamespacePrefix: String = "screen."
+  }
+}
+
+enum class ClawdisSmsCommand(val rawValue: String) {
+  Send("sms.send"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "sms."
   }
 }
 

@@ -21,13 +21,15 @@ import com.clawdis.android.node.LocationCaptureManager
 import com.clawdis.android.BuildConfig
 import com.clawdis.android.node.CanvasController
 import com.clawdis.android.node.ScreenRecordManager
+import com.clawdis.android.node.SmsManager
 import com.clawdis.android.protocol.ClawdisCapability
 import com.clawdis.android.protocol.ClawdisCameraCommand
 import com.clawdis.android.protocol.ClawdisCanvasA2UIAction
 import com.clawdis.android.protocol.ClawdisCanvasA2UICommand
 import com.clawdis.android.protocol.ClawdisCanvasCommand
-import com.clawdis.android.protocol.ClawdisLocationCommand
 import com.clawdis.android.protocol.ClawdisScreenCommand
+import com.clawdis.android.protocol.ClawdisLocationCommand
+import com.clawdis.android.protocol.ClawdisSmsCommand
 import com.clawdis.android.voice.TalkModeManager
 import com.clawdis.android.voice.VoiceWakeManager
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +63,7 @@ class NodeRuntime(context: Context) {
   val camera = CameraCaptureManager(appContext)
   val location = LocationCaptureManager(appContext)
   val screenRecorder = ScreenRecordManager(appContext)
+  val sms = SmsManager(appContext)
   private val json = Json { ignoreUnknownKeys = true }
 
   private val externalAudioCaptureActive = MutableStateFlow(false)
@@ -388,8 +391,8 @@ class NodeRuntime(context: Context) {
             add(ClawdisCameraCommand.Snap.rawValue)
             add(ClawdisCameraCommand.Clip.rawValue)
           }
-          if (locationMode.value != LocationMode.Off) {
-            add(ClawdisLocationCommand.Get.rawValue)
+          if (sms.hasSmsPermission()) {
+            add(ClawdisSmsCommand.Send.rawValue)
           }
         }
       val resolved =
@@ -399,6 +402,7 @@ class NodeRuntime(context: Context) {
             add(ClawdisCapability.Canvas.rawValue)
             add(ClawdisCapability.Screen.rawValue)
             if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
+            if (sms.hasSmsPermission()) add(ClawdisCapability.Sms.rawValue)
             if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
               add(ClawdisCapability.VoiceWake.rawValue)
             }
@@ -463,6 +467,7 @@ class NodeRuntime(context: Context) {
                 add(ClawdisCapability.Canvas.rawValue)
                 add(ClawdisCapability.Screen.rawValue)
                 if (cameraEnabled.value) add(ClawdisCapability.Camera.rawValue)
+                if (sms.hasSmsPermission()) add(ClawdisCapability.Sms.rawValue)
                 if (voiceWakeMode.value != VoiceWakeMode.Off && hasRecordAudioPermission()) {
                   add(ClawdisCapability.VoiceWake.rawValue)
                 }
@@ -909,6 +914,17 @@ class NodeRuntime(context: Context) {
           BridgeSession.InvokeResult.ok(res.payloadJson)
         } finally {
           _screenRecordActive.value = false
+        }
+      }
+      ClawdisSmsCommand.Send.rawValue -> {
+        val res = sms.send(paramsJson)
+        if (res.ok) {
+          BridgeSession.InvokeResult.ok(res.payloadJson)
+        } else {
+          val error = res.error ?: "SMS_SEND_FAILED"
+          val idx = error.indexOf(':')
+          val code = if (idx > 0) error.substring(0, idx).trim() else "SMS_SEND_FAILED"
+          BridgeSession.InvokeResult.error(code = code, message = error)
         }
       }
       else ->
