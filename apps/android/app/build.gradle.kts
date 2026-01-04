@@ -48,6 +48,10 @@ android {
   lint {
     disable += setOf("IconLauncherShape")
   }
+
+  testOptions {
+    unitTests.isIncludeAndroidResources = true
+  }
 }
 
 kotlin {
@@ -96,6 +100,7 @@ dependencies {
   testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
   testImplementation("io.kotest:kotest-runner-junit5-jvm:6.0.7")
   testImplementation("io.kotest:kotest-assertions-core-jvm:6.0.7")
+  testImplementation("org.robolectric:robolectric:4.16")
   testRuntimeOnly("org.junit.vintage:junit-vintage-engine:5.13.3")
 }
 
