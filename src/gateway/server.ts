@@ -236,6 +236,7 @@ const METHODS = [
   "system-event",
   "send",
   "agent",
+  "agent.wait",
   "web.login.start",
   "web.login.wait",
   "web.logout",

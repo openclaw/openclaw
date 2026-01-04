@@ -213,6 +213,15 @@ export const AgentParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentWaitParamsSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    afterMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
 export const WakeParamsSchema = Type.Object(
   {
     mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
@@ -818,6 +827,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   AgentEvent: AgentEventSchema,
   SendParams: SendParamsSchema,
   AgentParams: AgentParamsSchema,
+  AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
   NodePairRequestParams: NodePairRequestParamsSchema,
   NodePairListParams: NodePairListParamsSchema,
@@ -885,6 +895,7 @@ export type PresenceEntry = Static<typeof PresenceEntrySchema>;
 export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type StateVersion = Static<typeof StateVersionSchema>;
 export type AgentEvent = Static<typeof AgentEventSchema>;
+export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
 export type WakeParams = Static<typeof WakeParamsSchema>;
 export type NodePairRequestParams = Static<typeof NodePairRequestParamsSchema>;
 export type NodePairListParams = Static<typeof NodePairListParamsSchema>;

@@ -4,12 +4,6 @@ import fs from "node:fs";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
-  abortEmbeddedPiRun,
-  isEmbeddedPiRunActive,
-  resolveEmbeddedSessionLane,
-  waitForEmbeddedPiRunEnd,
-} from "../agents/pi-embedded.js";
-import {
   buildAllowedModelSet,
   buildModelAliasIndex,
   modelKey,
@@ -17,6 +11,12 @@ import {
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
+import {
+  abortEmbeddedPiRun,
+  isEmbeddedPiRunActive,
+  resolveEmbeddedSessionLane,
+  waitForEmbeddedPiRunEnd,
+} from "../agents/pi-embedded.js";
 import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace.js";
@@ -59,6 +59,7 @@ import { sendMessageIMessage } from "../imessage/index.js";
 import { type IMessageProbe, probeIMessage } from "../imessage/probe.js";
 import type { startNodeBridgeServer } from "../infra/bridge/server.js";
 import { getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { setHeartbeatsEnabled } from "../infra/heartbeat-runner.js";
 import {
   approveNodePairing,
@@ -80,9 +81,9 @@ import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
+import { clearCommandLane } from "../process/command-queue.js";
 import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime } from "../runtime.js";
-import { clearCommandLane } from "../process/command-queue.js";
 import {
   normalizeSendPolicy,
   resolveSendPolicy,
@@ -110,7 +111,9 @@ import {
   type SessionsListParams,
   type SessionsPatchParams,
   type SessionsResetParams,
+  type AgentWaitParams,
   validateAgentParams,
+  validateAgentWaitParams,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatSendParams,
@@ -188,6 +191,137 @@ type DedupeEntry = {
   payload?: unknown;
   error?: ErrorShape;
 };
+
+type AgentJobSnapshot = {
+  runId: string;
+  state: "done" | "error";
+  startedAt?: number;
+  endedAt?: number;
+  error?: string;
+  ts: number;
+};
+
+const AGENT_JOB_CACHE_TTL_MS = 10 * 60_000;
+const agentJobCache = new Map<string, AgentJobSnapshot>();
+const agentRunStarts = new Map<string, number>();
+let agentJobListenerStarted = false;
+
+function pruneAgentJobCache(now = Date.now()) {
+  for (const [runId, entry] of agentJobCache) {
+    if (now - entry.ts > AGENT_JOB_CACHE_TTL_MS) {
+      agentJobCache.delete(runId);
+    }
+  }
+}
+
+function recordAgentJobSnapshot(entry: AgentJobSnapshot) {
+  pruneAgentJobCache(entry.ts);
+  agentJobCache.set(entry.runId, entry);
+}
+
+function ensureAgentJobListener() {
+  if (agentJobListenerStarted) return;
+  agentJobListenerStarted = true;
+  onAgentEvent((evt) => {
+    if (!evt || evt.stream !== "job") return;
+    const state = evt.data?.state;
+    if (state === "started") {
+      const startedAt =
+        typeof evt.data?.startedAt === "number"
+          ? (evt.data.startedAt as number)
+          : undefined;
+      if (startedAt !== undefined) {
+        agentRunStarts.set(evt.runId, startedAt);
+      }
+      return;
+    }
+    if (state !== "done" && state !== "error") return;
+    const startedAt =
+      typeof evt.data?.startedAt === "number"
+        ? (evt.data.startedAt as number)
+        : agentRunStarts.get(evt.runId);
+    const endedAt =
+      typeof evt.data?.endedAt === "number"
+        ? (evt.data.endedAt as number)
+        : undefined;
+    const error =
+      typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+    agentRunStarts.delete(evt.runId);
+    recordAgentJobSnapshot({
+      runId: evt.runId,
+      state: state === "error" ? "error" : "done",
+      startedAt,
+      endedAt,
+      error,
+      ts: Date.now(),
+    });
+  });
+}
+
+function matchesAfterMs(entry: AgentJobSnapshot, afterMs?: number) {
+  if (afterMs === undefined) return true;
+  if (typeof entry.startedAt === "number") return entry.startedAt >= afterMs;
+  if (typeof entry.endedAt === "number") return entry.endedAt >= afterMs;
+  return false;
+}
+
+function getCachedAgentJob(runId: string, afterMs?: number) {
+  pruneAgentJobCache();
+  const cached = agentJobCache.get(runId);
+  if (!cached) return undefined;
+  return matchesAfterMs(cached, afterMs) ? cached : undefined;
+}
+
+async function waitForAgentJob(params: {
+  runId: string;
+  afterMs?: number;
+  timeoutMs: number;
+}): Promise<AgentJobSnapshot | null> {
+  const { runId, afterMs, timeoutMs } = params;
+  ensureAgentJobListener();
+  const cached = getCachedAgentJob(runId, afterMs);
+  if (cached) return cached;
+  if (timeoutMs <= 0) return null;
+
+  return await new Promise((resolve) => {
+    let settled = false;
+    const finish = (entry: AgentJobSnapshot | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(entry);
+    };
+    const unsubscribe = onAgentEvent((evt) => {
+      if (!evt || evt.stream !== "job") return;
+      if (evt.runId !== runId) return;
+      const state = evt.data?.state;
+      if (state !== "done" && state !== "error") return;
+      const startedAt =
+        typeof evt.data?.startedAt === "number"
+          ? (evt.data.startedAt as number)
+          : agentRunStarts.get(evt.runId);
+      const endedAt =
+        typeof evt.data?.endedAt === "number"
+          ? (evt.data.endedAt as number)
+          : undefined;
+      const error =
+        typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      const snapshot: AgentJobSnapshot = {
+        runId: evt.runId,
+        state: state === "error" ? "error" : "done",
+        startedAt,
+        endedAt,
+        error,
+        ts: Date.now(),
+      };
+      recordAgentJobSnapshot(snapshot);
+      if (!matchesAfterMs(snapshot, afterMs)) return;
+      finish(snapshot);
+    });
+    const timer = setTimeout(() => finish(null), Math.max(1, timeoutMs));
+  });
+}
 
 export type GatewayRequestContext = {
   deps: ReturnType<typeof createDefaultDeps>;
@@ -2954,7 +3088,11 @@ export async function handleGatewayRequest(
 
       const deliver = params.deliver === true && resolvedChannel !== "webchat";
 
-      const accepted = { runId, status: "accepted" as const };
+      const accepted = {
+        runId,
+        status: "accepted" as const,
+        acceptedAt: Date.now(),
+      };
       // Store an in-flight ack so retries do not spawn a second run.
       dedupe.set(`agent:${idem}`, {
         ts: Date.now(),
@@ -3011,6 +3149,51 @@ export async function handleGatewayRequest(
             error: formatForLog(err),
           });
         });
+      break;
+    }
+    case "agent.wait": {
+      const params = (req.params ?? {}) as Record<string, unknown>;
+      if (!validateAgentWaitParams(params)) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent.wait params: ${formatValidationErrors(validateAgentWaitParams.errors)}`,
+          ),
+        );
+        break;
+      }
+      const p = params as AgentWaitParams;
+      const runId = p.runId.trim();
+      const afterMs =
+        typeof p.afterMs === "number" && Number.isFinite(p.afterMs)
+          ? Math.max(0, Math.floor(p.afterMs))
+          : undefined;
+      const timeoutMs =
+        typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
+          ? Math.max(0, Math.floor(p.timeoutMs))
+          : 30_000;
+
+      const snapshot = await waitForAgentJob({
+        runId,
+        afterMs,
+        timeoutMs,
+      });
+      if (!snapshot) {
+        respond(true, {
+          runId,
+          status: "timeout",
+        });
+        break;
+      }
+      respond(true, {
+        runId,
+        status: snapshot.state === "done" ? "ok" : "error",
+        startedAt: snapshot.startedAt,
+        endedAt: snapshot.endedAt,
+        error: snapshot.error,
+      });
       break;
     }
     default: {
