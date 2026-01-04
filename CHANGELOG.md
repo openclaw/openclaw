@@ -9,6 +9,7 @@
 - Sessions: primary session key is fixed to `main` (or `global` for global scope); `session.mainKey` is ignored.
 
 ### Features
+- Highlight: agent-to-agent ping-pong (reply-back loop) with `REPLY_SKIP` plus target announce step with `ANNOUNCE_SKIP` (max turns configurable, 0–5).
 - Gateway: support `gateway.port` + `CLAWDIS_GATEWAY_PORT` across CLI, TUI, and macOS app.
 - Gateway: add config hot reload with hybrid restart strategy (`gateway.reload`) and per-section reload handling.
 - UI: centralize tool display metadata and show action/detail summaries across Web Chat, SwiftUI, Android, and the TUI.
@@ -20,7 +21,6 @@
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
 - Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
-- Sessions: add agent‑to‑agent post step with `ANNOUNCE_SKIP` to suppress channel announcements.
 
 ### Fixes
 - CI: fix lint ordering after merge cleanup (#156) — thanks @steipete.
@@ -72,7 +72,8 @@
 - Queue: clarify steer-backlog behavior with inline commands and update examples for streaming surfaces.
 - Sandbox: document per-session agent sandbox setup, browser image, and Docker build.
 - macOS: clarify menu bar uses sessionKey from agent events.
-- Sessions: document agent-to-agent post step and `ANNOUNCE_SKIP`.
+- Sessions: document agent-to-agent reply loop (`REPLY_SKIP`) and announce step (`ANNOUNCE_SKIP`).
+- Skills: clarify wacli third-party messaging scope and JID format examples.
 
 ## 2.0.0-beta5 — 2026-01-03
 

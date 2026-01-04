@@ -88,6 +88,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agent.model": "Default Model",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
+  "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
   "talk.apiKey": "Talk API Key",
   "telegram.botToken": "Telegram Bot Token",
   "discord.token": "Discord Bot Token",
@@ -106,6 +107,8 @@ const FIELD_HELP: Record<string, string> = {
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
     "Debounce window (ms) before applying config changes.",
+  "session.agentToAgent.maxPingPongTurns":
+    "Max reply-back turns between requester and target (0–5).",
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

@@ -2713,6 +2713,9 @@ function createSessionsHistoryTool(): AnyAgentTool {
 }
 
 const ANNOUNCE_SKIP_TOKEN = "ANNOUNCE_SKIP";
+const REPLY_SKIP_TOKEN = "REPLY_SKIP";
+const DEFAULT_PING_PONG_TURNS = 5;
+const MAX_PING_PONG_TURNS = 5;
 
 type AnnounceTarget = {
   channel: string;
@@ -2747,38 +2750,72 @@ function buildAgentToAgentMessageContext(params: {
   const lines = [
     "Agent-to-agent message context:",
     params.requesterSessionKey
-      ? `Requester session: ${params.requesterSessionKey}.`
+      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
     params.requesterSurface
-      ? `Requester surface: ${params.requesterSurface}.`
+      ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
       : undefined,
-    `Target session: ${params.targetSessionKey}.`,
+    `Agent 2 (target) session: ${params.targetSessionKey}.`,
   ].filter(Boolean);
   return lines.join("\n");
 }
 
-function buildAgentToAgentPostContext(params: {
+function buildAgentToAgentReplyContext(params: {
+  requesterSessionKey?: string;
+  requesterSurface?: string;
+  targetSessionKey: string;
+  targetChannel?: string;
+  currentRole: "requester" | "target";
+  turn: number;
+  maxTurns: number;
+}) {
+  const currentLabel =
+    params.currentRole === "requester"
+      ? "Agent 1 (requester)"
+      : "Agent 2 (target)";
+  const lines = [
+    "Agent-to-agent reply step:",
+    `Current agent: ${currentLabel}.`,
+    `Turn ${params.turn} of ${params.maxTurns}.`,
+    params.requesterSessionKey
+      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
+      : undefined,
+    params.requesterSurface
+      ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
+      : undefined,
+    `Agent 2 (target) session: ${params.targetSessionKey}.`,
+    params.targetChannel ? `Agent 2 (target) surface: ${params.targetChannel}.` : undefined,
+    `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
+  ].filter(Boolean);
+  return lines.join("\n");
+}
+
+function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
   requesterSurface?: string;
   targetSessionKey: string;
   targetChannel?: string;
   originalMessage: string;
   roundOneReply?: string;
+  latestReply?: string;
 }) {
   const lines = [
-    "Agent-to-agent post step:",
+    "Agent-to-agent announce step:",
     params.requesterSessionKey
-      ? `Requester session: ${params.requesterSessionKey}.`
+      ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
     params.requesterSurface
-      ? `Requester surface: ${params.requesterSurface}.`
+      ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
       : undefined,
-    `Target session: ${params.targetSessionKey}.`,
-    params.targetChannel ? `Target surface: ${params.targetChannel}.` : undefined,
+    `Agent 2 (target) session: ${params.targetSessionKey}.`,
+    params.targetChannel ? `Agent 2 (target) surface: ${params.targetChannel}.` : undefined,
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
       ? `Round 1 reply: ${params.roundOneReply}`
       : "Round 1 reply: (not available).",
+    params.latestReply
+      ? `Latest reply: ${params.latestReply}`
+      : "Latest reply: (not available).",
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
     "Any other reply will be posted to the target channel.",
     "After this reply, the agent-to-agent conversation is over.",
@@ -2788,6 +2825,18 @@ function buildAgentToAgentPostContext(params: {
 
 function isAnnounceSkip(text?: string) {
   return (text ?? "").trim() === ANNOUNCE_SKIP_TOKEN;
+}
+
+function isReplySkip(text?: string) {
+  return (text ?? "").trim() === REPLY_SKIP_TOKEN;
+}
+
+function resolvePingPongTurns(cfg?: ClawdisConfig) {
+  const raw = cfg?.session?.agentToAgent?.maxPingPongTurns;
+  const fallback = DEFAULT_PING_PONG_TURNS;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return fallback;
+  const rounded = Math.floor(raw);
+  return Math.max(0, Math.min(MAX_PING_PONG_TURNS, rounded));
 }
 
 function createSessionsSendTool(opts?: {
@@ -2839,6 +2888,9 @@ function createSessionsSendTool(opts?: {
         lane: "nested",
         extraSystemPrompt: agentMessageContext,
       };
+      const requesterSessionKey = opts?.agentSessionKey;
+      const requesterSurface = opts?.agentSurface;
+      const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       const resolveAnnounceTarget = async (): Promise<AnnounceTarget | null> => {
         const parsed = resolveAnnounceTargetFromKey(resolvedKey);
@@ -2869,85 +2921,160 @@ function createSessionsSendTool(opts?: {
         return null;
       };
 
-      const runAgentToAgentPost = async (roundOneReply?: string) => {
-        const announceTarget = await resolveAnnounceTarget();
+      const readLatestAssistantReply = async (
+        sessionKeyToRead: string,
+      ): Promise<string | undefined> => {
+        const history = (await callGateway({
+          method: "chat.history",
+          params: { sessionKey: sessionKeyToRead, limit: 50 },
+        })) as { messages?: unknown[] };
+        const filtered = stripToolMessages(
+          Array.isArray(history?.messages) ? history.messages : [],
+        );
+        const last =
+          filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
+        return last ? extractAssistantText(last) : undefined;
+      };
+
+      const runAgentStep = async (params: {
+        sessionKey: string;
+        message: string;
+        extraSystemPrompt: string;
+        timeoutMs: number;
+      }): Promise<string | undefined> => {
+        const stepIdem = crypto.randomUUID();
+        const response = (await callGateway({
+          method: "agent",
+          params: {
+            message: params.message,
+            sessionKey: params.sessionKey,
+            idempotencyKey: stepIdem,
+            deliver: false,
+            lane: "nested",
+            extraSystemPrompt: params.extraSystemPrompt,
+          },
+          timeoutMs: 10_000,
+        })) as { runId?: string; acceptedAt?: number };
+        const stepRunId =
+          typeof response?.runId === "string" && response.runId
+            ? response.runId
+            : stepIdem;
+        const stepAcceptedAt =
+          typeof response?.acceptedAt === "number"
+            ? response.acceptedAt
+            : undefined;
+        const stepWaitMs = Math.min(params.timeoutMs, 60_000);
+        const wait = (await callGateway({
+          method: "agent.wait",
+          params: {
+            runId: stepRunId,
+            afterMs: stepAcceptedAt,
+            timeoutMs: stepWaitMs,
+          },
+          timeoutMs: stepWaitMs + 2000,
+        })) as { status?: string };
+        if (wait?.status !== "ok") return undefined;
+        return readLatestAssistantReply(params.sessionKey);
+      };
+
+      const runAgentToAgentFlow = async (
+        roundOneReply?: string,
+        runInfo?: { runId: string; acceptedAt?: number },
+      ) => {
         try {
-          const postPrompt = buildAgentToAgentPostContext({
-            requesterSessionKey: opts?.agentSessionKey,
-            requesterSurface: opts?.agentSurface,
-            targetSessionKey: displayKey,
-            targetChannel: announceTarget?.channel ?? "unknown",
-            originalMessage: message,
-            roundOneReply,
-          });
-          const postIdem = crypto.randomUUID();
-          const postResponse = (await callGateway({
-            method: "agent",
-            params: {
-              message: "Agent-to-agent post step.",
-              sessionKey: resolvedKey,
-              idempotencyKey: postIdem,
-              deliver: false,
-              lane: "nested",
-              extraSystemPrompt: postPrompt,
-            },
-            timeoutMs: 10_000,
-          })) as { runId?: string; acceptedAt?: number };
-          const postRunId =
-            typeof postResponse?.runId === "string" && postResponse.runId
-              ? postResponse.runId
-              : postIdem;
-          const postAcceptedAt =
-            typeof postResponse?.acceptedAt === "number"
-              ? postResponse.acceptedAt
-              : undefined;
-          const postWaitMs = Math.min(announceTimeoutMs, 60_000);
-          const postWait = (await callGateway({
-            method: "agent.wait",
-            params: {
-              runId: postRunId,
-              afterMs: postAcceptedAt,
-              timeoutMs: postWaitMs,
-            },
-            timeoutMs: postWaitMs + 2000,
-          })) as { status?: string };
-          if (postWait?.status === "ok") {
-            const postHistory = (await callGateway({
-              method: "chat.history",
-              params: { sessionKey: resolvedKey, limit: 50 },
-            })) as { messages?: unknown[] };
-            const postFiltered = stripToolMessages(
-              Array.isArray(postHistory?.messages)
-                ? postHistory.messages
-                : [],
-            );
-            const postLast =
-              postFiltered.length > 0
-                ? postFiltered[postFiltered.length - 1]
-                : undefined;
-            const postReply = postLast
-              ? extractAssistantText(postLast)
-              : undefined;
-            if (
-              announceTarget &&
-              postReply &&
-              postReply.trim() &&
-              !isAnnounceSkip(postReply)
-            ) {
-              await callGateway({
-                method: "send",
-                params: {
-                  to: announceTarget.to,
-                  message: postReply.trim(),
-                  provider: announceTarget.channel,
-                  idempotencyKey: crypto.randomUUID(),
-                },
-                timeoutMs: 10_000,
-              });
+          let primaryReply = roundOneReply;
+          let latestReply = roundOneReply;
+          if (!primaryReply && runInfo?.runId) {
+            const waitMs = Math.min(announceTimeoutMs, 60_000);
+            const wait = (await callGateway({
+              method: "agent.wait",
+              params: {
+                runId: runInfo.runId,
+                afterMs: runInfo.acceptedAt,
+                timeoutMs: waitMs,
+              },
+              timeoutMs: waitMs + 2000,
+            })) as { status?: string };
+            if (wait?.status === "ok") {
+              primaryReply = await readLatestAssistantReply(resolvedKey);
+              latestReply = primaryReply;
             }
           }
+          if (!latestReply) return;
+          const announceTarget = await resolveAnnounceTarget();
+          const targetChannel = announceTarget?.channel ?? "unknown";
+          if (
+            maxPingPongTurns > 0 &&
+            requesterSessionKey &&
+            requesterSessionKey !== resolvedKey
+          ) {
+            let currentSessionKey = requesterSessionKey;
+            let nextSessionKey = resolvedKey;
+            let incomingMessage = latestReply;
+            for (let turn = 1; turn <= maxPingPongTurns; turn += 1) {
+              const currentRole =
+                currentSessionKey === requesterSessionKey
+                  ? "requester"
+                  : "target";
+              const replyPrompt = buildAgentToAgentReplyContext({
+                requesterSessionKey,
+                requesterSurface,
+                targetSessionKey: displayKey,
+                targetChannel,
+                currentRole,
+                turn,
+                maxTurns: maxPingPongTurns,
+              });
+              const replyText = await runAgentStep({
+                sessionKey: currentSessionKey,
+                message: incomingMessage,
+                extraSystemPrompt: replyPrompt,
+                timeoutMs: announceTimeoutMs,
+              });
+              if (!replyText || isReplySkip(replyText)) {
+                break;
+              }
+              latestReply = replyText;
+              incomingMessage = replyText;
+              const swap = currentSessionKey;
+              currentSessionKey = nextSessionKey;
+              nextSessionKey = swap;
+            }
+          }
+          const announcePrompt = buildAgentToAgentAnnounceContext({
+            requesterSessionKey,
+            requesterSurface,
+            targetSessionKey: displayKey,
+            targetChannel,
+            originalMessage: message,
+            roundOneReply: primaryReply,
+            latestReply,
+          });
+          const announceReply = await runAgentStep({
+            sessionKey: resolvedKey,
+            message: "Agent-to-agent announce step.",
+            extraSystemPrompt: announcePrompt,
+            timeoutMs: announceTimeoutMs,
+          });
+          if (
+            announceTarget &&
+            announceReply &&
+            announceReply.trim() &&
+            !isAnnounceSkip(announceReply)
+          ) {
+            await callGateway({
+              method: "send",
+              params: {
+                to: announceTarget.to,
+                message: announceReply.trim(),
+                provider: announceTarget.channel,
+                idempotencyKey: crypto.randomUUID(),
+              },
+              timeoutMs: 10_000,
+            });
+          }
         } catch {
-          // Best-effort announce; ignore failures to avoid breaking the caller response.
+          // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
         }
       };
 
@@ -2957,11 +3084,15 @@ function createSessionsSendTool(opts?: {
             method: "agent",
             params: sendParams,
             timeoutMs: 10_000,
-          })) as { runId?: string };
+          })) as { runId?: string; acceptedAt?: number };
+          const acceptedAt =
+            typeof response?.acceptedAt === "number"
+              ? response.acceptedAt
+              : undefined;
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
-          void runAgentToAgentPost();
+          void runAgentToAgentFlow(undefined, { runId, acceptedAt });
           return jsonResult({
             runId,
             status: "accepted",
@@ -3067,7 +3198,7 @@ function createSessionsSendTool(opts?: {
       const last =
         filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
       const reply = last ? extractAssistantText(last) : undefined;
-      void runAgentToAgentPost(reply ?? undefined);
+      void runAgentToAgentFlow(reply ?? undefined);
 
       return jsonResult({
         runId,

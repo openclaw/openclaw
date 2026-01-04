@@ -44,6 +44,10 @@ export type SessionConfig = {
   typingIntervalSeconds?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  agentToAgent?: {
+    /** Max ping-pong turns between requester/target (0–5). Default: 5. */
+    maxPingPongTurns?: number;
+  };
 };
 
 export type LoggingConfig = {
@@ -892,6 +896,11 @@ const SessionSchema = z
             }),
           )
           .optional(),
+      })
+      .optional(),
+    agentToAgent: z
+      .object({
+        maxPingPongTurns: z.number().int().min(0).max(5).optional(),
       })
       .optional(),
   })
