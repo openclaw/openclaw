@@ -214,7 +214,9 @@ describe("gateway server cron", () => {
     testState.cronStorePath = undefined;
   });
 
-  test("enables cron scheduler by default and runs due jobs automatically", async () => {
+  test(
+    "enables cron scheduler by default and runs due jobs automatically",
+    async () => {
     const dir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdis-gw-cron-default-on-"),
     );
@@ -305,5 +307,7 @@ describe("gateway server cron", () => {
       testState.cronStorePath = undefined;
       await fs.rm(dir, { recursive: true, force: true });
     }
-  });
+    },
+    15_000,
+  );
 });
