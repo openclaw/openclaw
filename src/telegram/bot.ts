@@ -1250,9 +1250,16 @@ async function deliverReplies(params: {
           ...mediaParams,
         });
       } else if (kind === "audio") {
-        await bot.api.sendAudio(chatId, file, {
-          ...mediaParams,
-        });
+        const useVoice = reply.audioAsVoice === true; // default false
+        if (useVoice) {
+          await bot.api.sendVoice(chatId, file, {
+            ...mediaParams,
+          });
+        } else {
+          await bot.api.sendAudio(chatId, file, {
+            ...mediaParams,
+          });
+        }
       } else {
         await bot.api.sendDocument(chatId, file, {
           ...mediaParams,
