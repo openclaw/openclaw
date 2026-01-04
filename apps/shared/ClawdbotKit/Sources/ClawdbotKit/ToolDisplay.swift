@@ -17,9 +17,9 @@ public struct ToolDisplaySummary: Sendable, Equatable {
 
     public var summaryLine: String {
         if let detailLine {
-            return "\(emoji) \(label): \(detailLine)"
+            return "\(self.emoji) \(self.label): \(detailLine)"
         }
-        return "\(emoji) \(label)"
+        return "\(self.emoji) \(self.label)"
     }
 }
 
@@ -48,28 +48,28 @@ public enum ToolDisplayRegistry {
     public static func resolve(name: String?, args: AnyCodable?, meta: String? = nil) -> ToolDisplaySummary {
         let trimmedName = name?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "tool"
         let key = trimmedName.lowercased()
-        let spec = config.tools?[key]
-        let fallback = config.fallback
+        let spec = self.config.tools?[key]
+        let fallback = self.config.fallback
 
         let emoji = spec?.emoji ?? fallback?.emoji ?? "🧩"
-        let title = spec?.title ?? titleFromName(trimmedName)
+        let title = spec?.title ?? self.titleFromName(trimmedName)
         let label = spec?.label ?? trimmedName
 
-        let actionRaw = valueForKeyPath(args, path: "action") as? String
+        let actionRaw = self.valueForKeyPath(args, path: "action") as? String
         let action = actionRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
         let actionSpec = action.flatMap { spec?.actions?[$0] }
-        let verb = normalizeVerb(actionSpec?.label ?? action)
+        let verb = self.normalizeVerb(actionSpec?.label ?? action)
 
         var detail: String?
         if key == "read" {
-            detail = readDetail(args)
+            detail = self.readDetail(args)
         } else if key == "write" || key == "edit" || key == "attach" {
-            detail = pathDetail(args)
+            detail = self.pathDetail(args)
         }
 
         let detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallback?.detailKeys ?? []
         if detail == nil {
-            detail = firstValue(args, keys: detailKeys)
+            detail = self.firstValue(args, keys: detailKeys)
         }
 
         if detail == nil {
@@ -77,7 +77,7 @@ public enum ToolDisplayRegistry {
         }
 
         if let detailValue = detail {
-            detail = shortenHomeInString(detailValue)
+            detail = self.shortenHomeInString(detailValue)
         }
 
         return ToolDisplaySummary(
@@ -108,7 +108,7 @@ public enum ToolDisplayRegistry {
             .split(separator: " ")
             .map { part in
                 let upper = part.uppercased()
-                if part.count <= 2 && part == upper { return String(part) }
+                if part.count <= 2, part == upper { return String(part) }
                 return String(upper.prefix(1)) + String(part.lowercased().dropFirst())
             }
             .joined(separator: " ")
@@ -122,8 +122,8 @@ public enum ToolDisplayRegistry {
 
     private static func readDetail(_ args: AnyCodable?) -> String? {
         guard let path = valueForKeyPath(args, path: "path") as? String else { return nil }
-        let offset = valueForKeyPath(args, path: "offset") as? Double
-        let limit = valueForKeyPath(args, path: "limit") as? Double
+        let offset = self.valueForKeyPath(args, path: "offset") as? Double
+        let limit = self.valueForKeyPath(args, path: "limit") as? Double
         if let offset, let limit {
             let end = offset + limit
             return "\(path):\(Int(offset))-\(Int(end))"
@@ -132,7 +132,7 @@ public enum ToolDisplayRegistry {
     }
 
     private static func pathDetail(_ args: AnyCodable?) -> String? {
-        return valueForKeyPath(args, path: "path") as? String
+        self.valueForKeyPath(args, path: "path") as? String
     }
 
     private static func firstValue(_ args: AnyCodable?, keys: [String]) -> String? {
@@ -158,7 +158,7 @@ public enum ToolDisplayRegistry {
         if let num = value as? Double { return String(num) }
         if let bool = value as? Bool { return bool ? "true" : "false" }
         if let array = value as? [Any] {
-            let items = array.compactMap { renderValue($0) }
+            let items = array.compactMap { self.renderValue($0) }
             guard !items.isEmpty else { return nil }
             let preview = items.prefix(3).joined(separator: ", ")
             return items.count > 3 ? "\(preview)…" : preview

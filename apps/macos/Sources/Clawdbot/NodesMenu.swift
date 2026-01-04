@@ -110,8 +110,8 @@ struct NodeMenuEntryFormatter {
         guard !trimmed.isEmpty else { return trimmed }
         if let range = trimmed.range(
             of: #"\s*\([^)]*\d[^)]*\)$"#,
-            options: .regularExpression
-        ) {
+            options: .regularExpression)
+        {
             return String(trimmed[..<range.lowerBound])
         }
         return trimmed
@@ -227,7 +227,6 @@ struct NodeMenuRowView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
         }
         .padding(.vertical, 8)
         .padding(.leading, 18)

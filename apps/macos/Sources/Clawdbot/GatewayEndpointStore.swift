@@ -40,8 +40,8 @@ actor GatewayEndpointStore {
     private static func resolveGatewayPassword(
         isRemote: Bool,
         root: [String: Any],
-        env: [String: String]
-    ) -> String? {
+        env: [String: String]) -> String?
+    {
         let raw = env["CLAWDBOT_GATEWAY_PASSWORD"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty {
@@ -93,7 +93,11 @@ actor GatewayEndpointStore {
         let password = deps.password()
         switch initialMode {
         case .local:
-            self.state = .ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: token, password: password)
+            self.state = .ready(
+                mode: .local,
+                url: URL(string: "ws://127.0.0.1:\(port)")!,
+                token: token,
+                password: password)
         case .remote:
             self.state = .unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel")
         case .unconfigured:
@@ -125,14 +129,22 @@ actor GatewayEndpointStore {
         switch mode {
         case .local:
             let port = self.deps.localPort()
-            self.setState(.ready(mode: .local, url: URL(string: "ws://127.0.0.1:\(port)")!, token: token, password: password))
+            self.setState(.ready(
+                mode: .local,
+                url: URL(string: "ws://127.0.0.1:\(port)")!,
+                token: token,
+                password: password))
         case .remote:
             let port = await self.deps.remotePortIfRunning()
             guard let port else {
                 self.setState(.unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel"))
                 return
             }
-            self.setState(.ready(mode: .remote, url: URL(string: "ws://127.0.0.1:\(Int(port))")!, token: token, password: password))
+            self.setState(.ready(
+                mode: .remote,
+                url: URL(string: "ws://127.0.0.1:\(Int(port))")!,
+                token: token,
+                password: password))
         case .unconfigured:
             self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))
         }
@@ -213,8 +225,8 @@ extension GatewayEndpointStore {
     static func _testResolveGatewayPassword(
         isRemote: Bool,
         root: [String: Any],
-        env: [String: String]
-    ) -> String? {
+        env: [String: String]) -> String?
+    {
         self.resolveGatewayPassword(isRemote: isRemote, root: root, env: env)
     }
 }

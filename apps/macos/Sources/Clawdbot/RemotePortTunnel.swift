@@ -53,10 +53,12 @@ final class RemotePortTunnel {
         let resolvedRemotePort = remotePortOverride ?? remotePort
         if let override = remotePortOverride {
             Self.logger.info(
-                "ssh tunnel remote port override host=\(sshHost, privacy: .public) port=\(override, privacy: .public)")
+                "ssh tunnel remote port override " +
+                    "host=\(sshHost, privacy: .public) port=\(override, privacy: .public)")
         } else {
             Self.logger.debug(
-                "ssh tunnel using default remote port host=\(sshHost, privacy: .public) port=\(remotePort, privacy: .public)")
+                "ssh tunnel using default remote port " +
+                    "host=\(sshHost, privacy: .public) port=\(remotePort, privacy: .public)")
         }
         var args: [String] = [
             "-o", "BatchMode=yes",

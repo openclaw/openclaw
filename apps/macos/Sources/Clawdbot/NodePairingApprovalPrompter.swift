@@ -611,7 +611,7 @@ final class NodePairingApprovalPrompter {
     private func updatePendingCounts() {
         // Keep a cheap observable summary for the menu bar status line.
         self.pendingCount = self.queue.count
-        self.pendingRepairCount = self.queue.filter { $0.isRepair == true }.count
+        self.pendingRepairCount = self.queue.count(where: { $0.isRepair == true })
     }
 
     private func reconcileOnce(timeoutMs: Double) async {

@@ -213,7 +213,7 @@ final class WorkActivityStore {
         meta: String?,
         args: [String: AnyCodable]?) -> String
     {
-        let wrappedArgs = wrapToolArgs(args)
+        let wrappedArgs = self.wrapToolArgs(args)
         let display = ToolDisplayRegistry.resolve(name: name ?? "tool", args: wrappedArgs, meta: meta)
         if let detail = display.detailLine, !detail.isEmpty {
             return "\(display.label): \(detail)"
@@ -223,22 +223,22 @@ final class WorkActivityStore {
 
     private static func wrapToolArgs(_ args: [String: AnyCodable]?) -> ClawdbotKit.AnyCodable? {
         guard let args else { return nil }
-        let converted: [String: Any] = args.mapValues { unwrapJSONValue($0.value) }
+        let converted: [String: Any] = args.mapValues { self.unwrapJSONValue($0.value) }
         return ClawdbotKit.AnyCodable(converted)
     }
 
     private static func unwrapJSONValue(_ value: Any) -> Any {
         if let dict = value as? [String: AnyCodable] {
-            return dict.mapValues { unwrapJSONValue($0.value) }
+            return dict.mapValues { self.unwrapJSONValue($0.value) }
         }
         if let array = value as? [AnyCodable] {
-            return array.map { unwrapJSONValue($0.value) }
+            return array.map { self.unwrapJSONValue($0.value) }
         }
         if let dict = value as? [String: Any] {
-            return dict.mapValues { unwrapJSONValue($0) }
+            return dict.mapValues { self.unwrapJSONValue($0) }
         }
         if let array = value as? [Any] {
-            return array.map { unwrapJSONValue($0) }
+            return array.map { self.unwrapJSONValue($0) }
         }
         return value
     }

@@ -172,7 +172,7 @@ struct MenuContent: View {
     }
 
     @MainActor
-    private static func buildAndSaveBrowserEnabled(_ enabled: Bool) async -> (Bool,()) {
+    private static func buildAndSaveBrowserEnabled(_ enabled: Bool) async -> (Bool, ()) {
         var root = await ConfigStore.load()
         var browser = root["browser"] as? [String: Any] ?? [:]
         browser["enabled"] = enabled

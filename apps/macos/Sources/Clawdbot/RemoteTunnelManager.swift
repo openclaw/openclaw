@@ -29,7 +29,9 @@ actor RemoteTunnelManager {
         {
             if await self.isTunnelHealthy(port: desiredPort) {
                 self.logger.info(
-                    "reusing existing SSH tunnel listener localPort=\(desiredPort, privacy: .public) pid=\(desc.pid, privacy: .public)")
+                    "reusing existing SSH tunnel listener " +
+                        "localPort=\(desiredPort, privacy: .public) " +
+                        "pid=\(desc.pid, privacy: .public)")
                 return desiredPort
             }
             await self.cleanupStaleTunnel(desc: desc, port: desiredPort)
@@ -50,7 +52,8 @@ actor RemoteTunnelManager {
 
         let identitySet = !settings.identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         self.logger.info(
-            "ensure SSH tunnel target=\(settings.target, privacy: .public) identitySet=\(identitySet, privacy: .public)")
+            "ensure SSH tunnel target=\(settings.target, privacy: .public) " +
+                "identitySet=\(identitySet, privacy: .public)")
 
         if let local = await self.controlTunnelPortIfRunning() { return local }
 

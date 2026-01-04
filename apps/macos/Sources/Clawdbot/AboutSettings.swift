@@ -108,7 +108,8 @@ struct AboutSettings: View {
     }
 
     private var buildTimestamp: String? {
-        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ClawdbotBuildTimestamp") as? String else { return nil }
+        guard let raw = Bundle.main.object(forInfoDictionaryKey: "ClawdbotBuildTimestamp") as? String
+        else { return nil }
         let parser = ISO8601DateFormatter()
         parser.formatOptions = [.withInternetDateTime]
         guard let date = parser.date(from: raw) else { return raw }

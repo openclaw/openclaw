@@ -108,6 +108,10 @@ function_body_length:
   warning: 150
   error: 300
 
+function_parameter_count:
+  warning: 7
+  error: 10
+
 file_length:
   warning: 1500
   error: 2500

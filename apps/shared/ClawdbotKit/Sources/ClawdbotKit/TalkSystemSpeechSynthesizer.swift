@@ -17,7 +17,7 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
 
     public var isSpeaking: Bool { self.synth.isSpeaking }
 
-    private override init() {
+    override private init() {
         super.init()
         self.synth.delegate = self
     }
@@ -96,13 +96,19 @@ public final class TalkSystemSpeechSynthesizer: NSObject {
 }
 
 extension TalkSystemSpeechSynthesizer: AVSpeechSynthesizerDelegate {
-    public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+    public nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didFinish utterance: AVSpeechUtterance)
+    {
         Task { @MainActor in
             self.handleFinish(error: nil)
         }
     }
 
-    public nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+    public nonisolated func speechSynthesizer(
+        _ synthesizer: AVSpeechSynthesizer,
+        didCancel utterance: AVSpeechUtterance)
+    {
         Task { @MainActor in
             self.handleFinish(error: SpeakError.canceled)
         }

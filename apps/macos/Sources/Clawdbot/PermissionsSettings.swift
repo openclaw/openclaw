@@ -48,7 +48,8 @@ struct PermissionStatusList: View {
 
             if (self.status[.accessibility] ?? false) == false || (self.status[.screenRecording] ?? false) == false {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Note: macOS may require restarting Clawdbot after enabling Accessibility or Screen Recording.")
+                    Text(
+                        "Note: macOS may require restarting Clawdbot after enabling Accessibility or Screen Recording.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

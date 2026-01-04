@@ -285,8 +285,7 @@ struct TailscaleIntegrationSection: View {
             requireCredentialsForServe: self.requireCredentialsForServe,
             password: trimmedPassword,
             connectionMode: self.connectionMode,
-            isPaused: self.isPaused
-        )
+            isPaused: self.isPaused)
 
         if !success, let errorMessage {
             self.statusMessage = errorMessage
@@ -307,8 +306,8 @@ struct TailscaleIntegrationSection: View {
         requireCredentialsForServe: Bool,
         password: String,
         connectionMode: AppState.ConnectionMode,
-        isPaused: Bool
-    ) async -> (Bool, String?) {
+        isPaused: Bool) async -> (Bool, String?)
+    {
         var root = await ConfigStore.load()
         var gateway = root["gateway"] as? [String: Any] ?? [:]
         var tailscale = gateway["tailscale"] as? [String: Any] ?? [:]
@@ -349,7 +348,7 @@ struct TailscaleIntegrationSection: View {
         do {
             try await ConfigStore.save(root)
             return (true, nil)
-        } catch let error {
+        } catch {
             return (false, error.localizedDescription)
         }
     }

@@ -101,7 +101,7 @@ extension OnboardingView {
         do {
             try await ConfigStore.save(root)
             return (true, nil)
-        } catch let error {
+        } catch {
             let errorMessage = "Failed to save config: \(error.localizedDescription)"
             return (false, errorMessage)
         }

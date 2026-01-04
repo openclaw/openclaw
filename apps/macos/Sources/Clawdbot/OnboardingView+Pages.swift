@@ -198,7 +198,9 @@ extension OnboardingView {
                                     Text("CLI path")
                                         .font(.callout.weight(.semibold))
                                         .frame(width: labelWidth, alignment: .leading)
-                                    TextField("/Applications/Clawdbot.app/.../clawdbot", text: self.$state.remoteCliPath)
+                                    TextField(
+                                        "/Applications/Clawdbot.app/.../clawdbot",
+                                        text: self.$state.remoteCliPath)
                                         .textFieldStyle(.roundedBorder)
                                         .frame(width: fieldWidth)
                                 }
@@ -444,7 +446,7 @@ extension OnboardingView {
     }
 
     func permissionsPage() -> some View {
-        return self.onboardingPage {
+        self.onboardingPage {
             Text("Grant permissions")
                 .font(.largeTitle.weight(.semibold))
             Text("These macOS permissions let Clawdbot automate apps and capture context on this Mac.")

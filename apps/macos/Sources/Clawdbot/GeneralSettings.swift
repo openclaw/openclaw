@@ -150,21 +150,12 @@ struct GeneralSettings: View {
 
     private func requestLocationAuthorization(mode: ClawdbotLocationMode) async -> Bool {
         guard mode != .off else { return true }
-        let status = CLLocationManager.authorizationStatus()
-        if status == .authorizedAlways || status == .authorizedWhenInUse {
-            if mode == .always && status != .authorizedAlways {
-                let updated = await LocationPermissionRequester.shared.request(always: true)
-                return updated == .authorizedAlways || updated == .authorizedWhenInUse
-            }
+        let status = CLLocationManager().authorizationStatus
+        if status == .authorizedAlways {
             return true
         }
         let updated = await LocationPermissionRequester.shared.request(always: mode == .always)
-        switch updated {
-        case .authorizedAlways, .authorizedWhenInUse:
-            return true
-        default:
-            return false
-        }
+        return updated == .authorizedAlways
     }
 
     private var connectionSection: some View {

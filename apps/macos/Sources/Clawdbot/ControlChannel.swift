@@ -55,8 +55,8 @@ final class ControlChannel {
     private(set) var state: ConnectionState = .disconnected {
         didSet {
             CanvasManager.shared.refreshDebugStatus()
-            guard oldValue != state else { return }
-            switch state {
+            guard oldValue != self.state else { return }
+            switch self.state {
             case .connected:
                 self.logger.info("control channel state -> connected")
             case .connecting:
@@ -71,6 +71,7 @@ final class ControlChannel {
             }
         }
     }
+
     private(set) var lastPingMs: Double?
 
     private let logger = Logger(subsystem: "com.clawdbot", category: "control")
@@ -105,7 +106,8 @@ final class ControlChannel {
                 _ = (target, identity)
                 let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 self.logger.info(
-                    "control channel configure mode=remote target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
+                    "control channel configure mode=remote " +
+                        "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
                 await self.configure()
             } catch {
@@ -261,7 +263,9 @@ final class ControlChannel {
             let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
             let reasonText = trimmedReason.isEmpty ? "unknown" : trimmedReason
             self.logger.info(
-                "control channel recovery starting mode=\(String(describing: mode), privacy: .public) reason=\(reasonText, privacy: .public)")
+                "control channel recovery starting " +
+                    "mode=\(String(describing: mode), privacy: .public) " +
+                    "reason=\(reasonText, privacy: .public)")
             if mode == .local {
                 GatewayProcessManager.shared.setActive(true)
             }

@@ -436,14 +436,49 @@ actor TalkModeRuntime {
         }
     }
 
-    // swiftlint:disable:next cyclomatic_complexity function_body_length
     private func playAssistant(text: String) async {
+        guard let input = await self.preparePlaybackInput(text: text) else { return }
+        do {
+            if let apiKey = input.apiKey, !apiKey.isEmpty, let voiceId = input.voiceId {
+                try await self.playElevenLabs(input: input, apiKey: apiKey, voiceId: voiceId)
+            } else {
+                try await self.playSystemVoice(input: input)
+            }
+        } catch {
+            self.ttsLogger
+                .error(
+                    "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
+                        "falling back to system voice")
+            do {
+                try await self.playSystemVoice(input: input)
+            } catch {
+                self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+
+        if self.phase == .speaking {
+            self.phase = .thinking
+            await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        }
+    }
+
+    private struct TalkPlaybackInput {
+        let generation: Int
+        let cleanedText: String
+        let directive: TalkDirective?
+        let apiKey: String?
+        let voiceId: String?
+        let language: String?
+        let synthTimeoutSeconds: Double
+    }
+
+    private func preparePlaybackInput(text: String) async -> TalkPlaybackInput? {
         let gen = self.lifecycleGeneration
         let parse = TalkDirectiveParser.parse(text)
         let directive = parse.directive
         let cleaned = parse.stripped.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return }
-        guard self.isCurrent(gen) else { return }
+        guard !cleaned.isEmpty else { return nil }
+        guard self.isCurrent(gen) else { return nil }
 
         if !parse.unknownKeys.isEmpty {
             self.logger
@@ -504,116 +539,123 @@ actor TalkModeRuntime {
 
         let synthTimeoutSeconds = max(20.0, min(90.0, Double(cleaned.count) * 0.12))
 
-        do {
-            if let apiKey, !apiKey.isEmpty, let voiceId {
-                let desiredOutputFormat = directive?.outputFormat ?? self.defaultOutputFormat ?? "pcm_44100"
-                let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(desiredOutputFormat)
-                if outputFormat == nil, !desiredOutputFormat.isEmpty {
-                    self.logger
-                        .warning(
-                            "talk output_format unsupported for local playback: " +
-                                "\(desiredOutputFormat, privacy: .public)")
-                }
+        guard self.isCurrent(gen) else { return nil }
 
-                let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
-                func makeRequest(outputFormat: String?) -> ElevenLabsTTSRequest {
-                    ElevenLabsTTSRequest(
-                        text: cleaned,
-                        modelId: modelId,
-                        outputFormat: outputFormat,
-                        speed: TalkTTSValidation.resolveSpeed(speed: directive?.speed, rateWPM: directive?.rateWPM),
-                        stability: TalkTTSValidation.validatedStability(directive?.stability, modelId: modelId),
-                        similarity: TalkTTSValidation.validatedUnit(directive?.similarity),
-                        style: TalkTTSValidation.validatedUnit(directive?.style),
-                        speakerBoost: directive?.speakerBoost,
-                        seed: TalkTTSValidation.validatedSeed(directive?.seed),
-                        normalize: ElevenLabsTTSClient.validatedNormalize(directive?.normalize),
-                        language: language,
-                        latencyTier: TalkTTSValidation.validatedLatencyTier(directive?.latencyTier))
-                }
+        return TalkPlaybackInput(
+            generation: gen,
+            cleanedText: cleaned,
+            directive: directive,
+            apiKey: apiKey,
+            voiceId: voiceId,
+            language: language,
+            synthTimeoutSeconds: synthTimeoutSeconds)
+    }
 
-                let request = makeRequest(outputFormat: outputFormat)
-
-                self.ttsLogger.info("talk TTS synth timeout=\(synthTimeoutSeconds, privacy: .public)s")
-                let client = ElevenLabsTTSClient(apiKey: apiKey)
-                let stream = client.streamSynthesize(voiceId: voiceId, request: request)
-                guard self.isCurrent(gen) else { return }
-
-                if self.interruptOnSpeech {
-                    await self.startRecognition()
-                    guard self.isCurrent(gen) else { return }
-                }
-
-                await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-                self.phase = .speaking
-
-                let sampleRate = TalkTTSValidation.pcmSampleRate(from: outputFormat)
-                var result: StreamingPlaybackResult
-                if let sampleRate {
-                    self.lastPlaybackWasPCM = true
-                    result = await self.playPCM(stream: stream, sampleRate: sampleRate)
-                    if !result.finished, result.interruptedAt == nil {
-                        let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100")
-                        self.ttsLogger.warning("talk pcm playback failed; retrying mp3")
-                        self.lastPlaybackWasPCM = false
-                        let mp3Stream = client.streamSynthesize(
-                            voiceId: voiceId,
-                            request: makeRequest(outputFormat: mp3Format))
-                        result = await self.playMP3(stream: mp3Stream)
-                    }
-                } else {
-                    self.lastPlaybackWasPCM = false
-                    result = await self.playMP3(stream: stream)
-                }
-                self.ttsLogger
-                    .info(
-                        "talk audio result finished=\(result.finished, privacy: .public) " +
-                            "interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
-                if !result.finished, result.interruptedAt == nil {
-                    throw NSError(domain: "StreamingAudioPlayer", code: 1, userInfo: [
-                        NSLocalizedDescriptionKey: "audio playback failed",
-                    ])
-                }
-                if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
-                    if self.interruptOnSpeech {
-                        self.lastInterruptedAtSeconds = interruptedAt
-                    }
-                }
-            } else {
-                self.ttsLogger.info("talk system voice start chars=\(cleaned.count, privacy: .public)")
-                if self.interruptOnSpeech {
-                    await self.startRecognition()
-                    guard self.isCurrent(gen) else { return }
-                }
-                await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-                self.phase = .speaking
-                await TalkSystemSpeechSynthesizer.shared.stop()
-                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
-                self.ttsLogger.info("talk system voice done")
-            }
-        } catch {
-            self.ttsLogger
-                .error(
-                    "talk TTS failed: \(error.localizedDescription, privacy: .public); " +
-                        "falling back to system voice")
-            do {
-                if self.interruptOnSpeech {
-                    await self.startRecognition()
-                    guard self.isCurrent(gen) else { return }
-                }
-                await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
-                self.phase = .speaking
-                await TalkSystemSpeechSynthesizer.shared.stop()
-                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
-            } catch {
-                self.ttsLogger.error("talk system voice failed: \(error.localizedDescription, privacy: .public)")
-            }
+    private func playElevenLabs(input: TalkPlaybackInput, apiKey: String, voiceId: String) async throws {
+        let desiredOutputFormat = input.directive?.outputFormat ?? self.defaultOutputFormat ?? "pcm_44100"
+        let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(desiredOutputFormat)
+        if outputFormat == nil, !desiredOutputFormat.isEmpty {
+            self.logger
+                .warning(
+                    "talk output_format unsupported for local playback: " +
+                        "\(desiredOutputFormat, privacy: .public)")
         }
 
-        if self.phase == .speaking {
-            self.phase = .thinking
-            await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
+        let modelId = input.directive?.modelId ?? self.currentModelId ?? self.defaultModelId
+        func makeRequest(outputFormat: String?) -> ElevenLabsTTSRequest {
+            ElevenLabsTTSRequest(
+                text: input.cleanedText,
+                modelId: modelId,
+                outputFormat: outputFormat,
+                speed: TalkTTSValidation.resolveSpeed(
+                    speed: input.directive?.speed,
+                    rateWPM: input.directive?.rateWPM),
+                stability: TalkTTSValidation.validatedStability(
+                    input.directive?.stability,
+                    modelId: modelId),
+                similarity: TalkTTSValidation.validatedUnit(input.directive?.similarity),
+                style: TalkTTSValidation.validatedUnit(input.directive?.style),
+                speakerBoost: input.directive?.speakerBoost,
+                seed: TalkTTSValidation.validatedSeed(input.directive?.seed),
+                normalize: ElevenLabsTTSClient.validatedNormalize(input.directive?.normalize),
+                language: input.language,
+                latencyTier: TalkTTSValidation.validatedLatencyTier(input.directive?.latencyTier))
         }
+
+        let request = makeRequest(outputFormat: outputFormat)
+        self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
+        let client = ElevenLabsTTSClient(apiKey: apiKey)
+        let stream = client.streamSynthesize(voiceId: voiceId, request: request)
+        guard self.isCurrent(input.generation) else { return }
+
+        if self.interruptOnSpeech, ! await self.prepareForPlayback(generation: input.generation) { return }
+
+        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        self.phase = .speaking
+
+        let result = await self.playRemoteStream(
+            client: client,
+            voiceId: voiceId,
+            outputFormat: outputFormat,
+            makeRequest: makeRequest,
+            stream: stream)
+        self.ttsLogger
+            .info(
+                "talk audio result finished=\(result.finished, privacy: .public) " +
+                    "interruptedAt=\(String(describing: result.interruptedAt), privacy: .public)")
+        if !result.finished, result.interruptedAt == nil {
+            throw NSError(domain: "StreamingAudioPlayer", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "audio playback failed",
+            ])
+        }
+        if !result.finished, let interruptedAt = result.interruptedAt, self.phase == .speaking {
+            if self.interruptOnSpeech {
+                self.lastInterruptedAtSeconds = interruptedAt
+            }
+        }
+    }
+
+    private func playRemoteStream(
+        client: ElevenLabsTTSClient,
+        voiceId: String,
+        outputFormat: String?,
+        makeRequest: (String?) -> ElevenLabsTTSRequest,
+        stream: AsyncThrowingStream<Data, Error>) async -> StreamingPlaybackResult
+    {
+        let sampleRate = TalkTTSValidation.pcmSampleRate(from: outputFormat)
+        if let sampleRate {
+            self.lastPlaybackWasPCM = true
+            let result = await self.playPCM(stream: stream, sampleRate: sampleRate)
+            if result.finished || result.interruptedAt != nil {
+                return result
+            }
+            let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100")
+            self.ttsLogger.warning("talk pcm playback failed; retrying mp3")
+            self.lastPlaybackWasPCM = false
+            let mp3Stream = client.streamSynthesize(
+                voiceId: voiceId,
+                request: makeRequest(mp3Format))
+            return await self.playMP3(stream: mp3Stream)
+        }
+        self.lastPlaybackWasPCM = false
+        return await self.playMP3(stream: stream)
+    }
+
+    private func playSystemVoice(input: TalkPlaybackInput) async throws {
+        self.ttsLogger.info("talk system voice start chars=\(input.cleanedText.count, privacy: .public)")
+        if self.interruptOnSpeech, ! await self.prepareForPlayback(generation: input.generation) { return }
+        await MainActor.run { TalkModeController.shared.updatePhase(.speaking) }
+        self.phase = .speaking
+        await TalkSystemSpeechSynthesizer.shared.stop()
+        try await TalkSystemSpeechSynthesizer.shared.speak(
+            text: input.cleanedText,
+            language: input.language)
+        self.ttsLogger.info("talk system voice done")
+    }
+
+    private func prepareForPlayback(generation: Int) async -> Bool {
+        await self.startRecognition()
+        return self.isCurrent(generation)
     }
 
     private func resolveVoiceId(preferred: String?, apiKey: String) async -> String? {
@@ -682,6 +724,9 @@ actor TalkModeRuntime {
         self.phase = .thinking
         await MainActor.run { TalkModeController.shared.updatePhase(.thinking) }
     }
+}
+
+extension TalkModeRuntime {
 
     // MARK: - Audio playback (MainActor helpers)
 

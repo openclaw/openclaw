@@ -139,6 +139,7 @@ struct OnboardingView: View {
     var isWizardBlocking: Bool {
         self.activePageIndex == self.wizardPageIndex && !self.onboardingWizard.isComplete
     }
+
     var canAdvance: Bool { !self.isWizardBlocking }
     var devLinkCommand: String {
         let bundlePath = Bundle.main.bundlePath

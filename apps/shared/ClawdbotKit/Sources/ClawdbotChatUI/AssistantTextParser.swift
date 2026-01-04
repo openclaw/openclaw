@@ -86,7 +86,7 @@ enum AssistantTextParser {
             self.findTagStart(tag: "final", closing: true, in: text, from: start).map {
                 TagMatch(kind: .final, closing: true, range: $0)
             },
-        ].compactMap { $0 }
+        ].compactMap(\.self)
 
         return candidates.min { $0.range.lowerBound < $1.range.lowerBound }
     }

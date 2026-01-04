@@ -78,7 +78,7 @@ enum ConfigStore {
         let data = try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys])
         guard let raw = String(data: data, encoding: .utf8) else {
             throw NSError(domain: "ConfigStore", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "Failed to encode config."
+                NSLocalizedDescriptionKey: "Failed to encode config.",
             ])
         }
         let params: [String: AnyCodable] = ["raw": AnyCodable(raw)]
@@ -88,7 +88,7 @@ enum ConfigStore {
             timeoutMs: 10000)
     }
 
-#if DEBUG
+    #if DEBUG
     static func _testSetOverrides(_ overrides: Overrides) async {
         await self.overrideStore.setOverride(overrides)
     }
@@ -96,5 +96,5 @@ enum ConfigStore {
     static func _testClearOverrides() async {
         await self.overrideStore.setOverride(.init())
     }
-#endif
+    #endif
 }

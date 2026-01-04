@@ -138,17 +138,20 @@ enum DeviceModelCatalog {
         if bundle.url(
             forResource: "ios-device-identifiers",
             withExtension: "json",
-            subdirectory: self.resourceSubdirectory) != nil {
+            subdirectory: self.resourceSubdirectory) != nil
+        {
             return bundle
         }
         if bundle.url(
             forResource: "mac-device-identifiers",
             withExtension: "json",
-            subdirectory: self.resourceSubdirectory) != nil {
+            subdirectory: self.resourceSubdirectory) != nil
+        {
             return bundle
         }
         return nil
     }
+
     private enum NameValue: Decodable {
         case string(String)
         case stringArray([String])
