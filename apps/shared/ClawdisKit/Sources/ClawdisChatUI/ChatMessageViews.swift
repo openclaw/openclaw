@@ -158,7 +158,6 @@ private struct ChatMessageBody: View {
 
     var body: some View {
         let text = self.primaryText
-        let split = ChatMarkdownSplitter.split(markdown: text)
         let textColor = self.isUser ? ClawdisChatTheme.userText : ClawdisChatTheme.assistantText
 
         VStack(alignment: .leading, spacing: 10) {
@@ -169,37 +168,40 @@ private struct ChatMessageBody: View {
                         text: text,
                         isUser: self.isUser)
                 }
-            } else {
+            } else if self.isUser {
+                let split = ChatMarkdownSplitter.split(markdown: text)
                 ForEach(split.blocks) { block in
                     switch block.kind {
                     case .text:
-                        MarkdownTextView(text: block.text, textColor: textColor)
+                        MarkdownTextView(text: block.text, textColor: textColor, font: .system(size: 14))
                     case let .code(language):
                         CodeBlockView(code: block.text, language: language, isUser: self.isUser)
                     }
                 }
-            }
 
-            if !split.images.isEmpty {
-                ForEach(
-                    split.images,
-                    id: \ChatMarkdownSplitter.InlineImage.id)
-                { (item: ChatMarkdownSplitter.InlineImage) in
-                    if let img = item.image {
-                        ClawdisPlatformImageFactory.image(img)
-                            .resizable()
-                            .scaledToFit()
-                            .frame(maxHeight: 260)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
-                    } else {
-                        Text(item.label.isEmpty ? "Image" : item.label)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                if !split.images.isEmpty {
+                    ForEach(
+                        split.images,
+                        id: \ChatMarkdownSplitter.InlineImage.id)
+                    { (item: ChatMarkdownSplitter.InlineImage) in
+                        if let img = item.image {
+                            ClawdisPlatformImageFactory.image(img)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(maxHeight: 260)
+                                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(Color.white.opacity(0.12), lineWidth: 1))
+                        } else {
+                            Text(item.label.isEmpty ? "Image" : item.label)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
+            } else {
+                ChatAssistantTextBody(text: text)
             }
 
             if !self.inlineAttachments.isEmpty {
@@ -506,7 +508,7 @@ struct ChatStreamingAssistantBubble: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            ChatMarkdownBody(text: self.text, textColor: ClawdisChatTheme.assistantText)
+            ChatAssistantTextBody(text: self.text)
         }
         .padding(12)
         .background(
@@ -614,6 +616,7 @@ private struct TypingDots: View {
 private struct MarkdownTextView: View {
     let text: String
     let textColor: Color
+    let font: Font
 
     var body: some View {
         let normalized = self.text.replacingOccurrences(
@@ -624,12 +627,27 @@ private struct MarkdownTextView: View {
             interpretedSyntax: .inlineOnlyPreservingWhitespace)
         if let attributed = try? AttributedString(markdown: normalized, options: options) {
             Text(attributed)
-                .font(.system(size: 14))
+                .font(self.font)
                 .foregroundStyle(self.textColor)
         } else {
             Text(normalized)
-                .font(.system(size: 14))
+                .font(self.font)
                 .foregroundStyle(self.textColor)
+        }
+    }
+}
+
+@MainActor
+private struct ChatAssistantTextBody: View {
+    let text: String
+
+    var body: some View {
+        let segments = AssistantTextParser.segments(from: self.text)
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(segments) { segment in
+                let font = segment.kind == .thinking ? Font.system(size: 14).italic() : Font.system(size: 14)
+                ChatMarkdownBody(text: segment.text, textColor: ClawdisChatTheme.assistantText, font: font)
+            }
         }
     }
 }
@@ -638,6 +656,7 @@ private struct MarkdownTextView: View {
 private struct ChatMarkdownBody: View {
     let text: String
     let textColor: Color
+    let font: Font
 
     var body: some View {
         let split = ChatMarkdownSplitter.split(markdown: self.text)
@@ -645,7 +664,7 @@ private struct ChatMarkdownBody: View {
             ForEach(split.blocks) { block in
                 switch block.kind {
                 case .text:
-                    MarkdownTextView(text: block.text, textColor: self.textColor)
+                    MarkdownTextView(text: block.text, textColor: self.textColor, font: self.font)
                 case let .code(language):
                     CodeBlockView(code: block.text, language: language, isUser: false)
                 }
