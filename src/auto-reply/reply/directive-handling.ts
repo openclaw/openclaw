@@ -18,10 +18,10 @@ import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import {
+  type ElevatedLevel,
   extractElevatedDirective,
   extractThinkDirective,
   extractVerboseDirective,
-  type ElevatedLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./directives.js";

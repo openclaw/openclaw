@@ -50,8 +50,8 @@ import {
 import { createTypingController } from "./reply/typing.js";
 import type { MsgContext } from "./templating.js";
 import {
-  normalizeThinkLevel,
   type ElevatedLevel,
+  normalizeThinkLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
@@ -261,7 +261,10 @@ export async function getReplyFromConfig(
           allowFrom: elevatedConfig?.allowFrom,
         }),
     );
-  if (directives.hasElevatedDirective && (!elevatedEnabled || !elevatedAllowed)) {
+  if (
+    directives.hasElevatedDirective &&
+    (!elevatedEnabled || !elevatedAllowed)
+  ) {
     typing.cleanup();
     return { text: "elevated is not available right now." };
   }

@@ -7,6 +7,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 
+import { logInfo } from "../logger.js";
 import {
   addSession,
   appendOutput,
@@ -26,7 +27,6 @@ import {
   killProcessTree,
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
-import { logInfo } from "../logger.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 const DEFAULT_MAX_OUTPUT = clampNumber(

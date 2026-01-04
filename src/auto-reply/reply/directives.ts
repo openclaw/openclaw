@@ -1,8 +1,8 @@
 import {
+  type ElevatedLevel,
   normalizeElevatedLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
-  type ElevatedLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "../thinking.js";
