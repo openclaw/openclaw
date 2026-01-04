@@ -646,6 +646,7 @@ public struct SessionsPatchParams: Codable {
     public let key: String
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
+    public let elevatedlevel: AnyCodable?
     public let model: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
@@ -654,6 +655,7 @@ public struct SessionsPatchParams: Codable {
         key: String,
         thinkinglevel: AnyCodable?,
         verboselevel: AnyCodable?,
+        elevatedlevel: AnyCodable?,
         model: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?
@@ -661,6 +663,7 @@ public struct SessionsPatchParams: Codable {
         self.key = key
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
+        self.elevatedlevel = elevatedlevel
         self.model = model
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
@@ -669,6 +672,7 @@ public struct SessionsPatchParams: Codable {
         case key
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
+        case elevatedlevel = "elevatedLevel"
         case model
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
@@ -871,7 +875,7 @@ public struct WizardStep: Codable {
     }
 }
 
-public struct WizardNextResult: Codable, Sendable {
+public struct WizardNextResult: Codable {
     public let done: Bool
     public let step: [String: AnyCodable]?
     public let status: AnyCodable?
@@ -896,7 +900,7 @@ public struct WizardNextResult: Codable, Sendable {
     }
 }
 
-public struct WizardStartResult: Codable, Sendable {
+public struct WizardStartResult: Codable {
     public let sessionid: String
     public let done: Bool
     public let step: [String: AnyCodable]?
@@ -925,7 +929,7 @@ public struct WizardStartResult: Codable, Sendable {
     }
 }
 
-public struct WizardStatusResult: Codable, Sendable {
+public struct WizardStatusResult: Codable {
     public let status: AnyCodable
     public let error: String?
 
