@@ -6,11 +6,11 @@ import {
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { runWithModelFallback } from "../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
@@ -294,7 +294,10 @@ export async function runCronIsolatedAgentTurn(params: {
           model: modelOverride,
           thinkLevel,
           verboseLevel:
-            (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
+            (cronSession.sessionEntry.verboseLevel as
+              | "on"
+              | "off"
+              | undefined) ??
             (agentCfg?.verboseDefault as "on" | "off" | undefined),
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
@@ -312,8 +315,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // Update token+model fields in the session store.
   {
     const usage = runResult.meta.agentMeta?.usage;
-    const modelUsed =
-      runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
+    const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed =
       runResult.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =

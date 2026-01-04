@@ -133,7 +133,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const provider = entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
+  const provider =
+    entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
   let model = entry?.model ?? resolved.model ?? DEFAULT_MODEL;
   let contextTokens =
     entry?.contextTokens ??

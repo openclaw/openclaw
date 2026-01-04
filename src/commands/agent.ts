@@ -6,13 +6,13 @@ import {
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
+import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
   buildAllowedModelSet,
   modelKey,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { runWithModelFallback } from "../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import {
@@ -443,8 +443,7 @@ export async function agentCommand(
   // Update token+model fields in the session store.
   if (sessionStore && sessionKey) {
     const usage = result.meta.agentMeta?.usage;
-    const modelUsed =
-      result.meta.agentMeta?.model ?? fallbackModel ?? model;
+    const modelUsed = result.meta.agentMeta?.model ?? fallbackModel ?? model;
     const providerUsed =
       result.meta.agentMeta?.provider ?? fallbackProvider ?? provider;
     const contextTokens =

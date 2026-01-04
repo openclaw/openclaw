@@ -1,22 +1,22 @@
-import chalk from "chalk";
+import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import {
   discoverAuthStorage,
   discoverModels,
 } from "@mariozechner/pi-coding-agent";
-import { getEnvApiKey, type Api, type Model } from "@mariozechner/pi-ai";
+import chalk from "chalk";
 
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
-import { ensureClawdbotModelsJson } from "../../agents/models-config.js";
 import {
   buildModelAliasIndex,
   parseModelRef,
-  resolveModelRefFromString,
   resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { ensureClawdbotModelsJson } from "../../agents/models-config.js";
 import {
+  type ClawdbotConfig,
   CONFIG_PATH_CLAWDBOT,
   loadConfig,
-  type ClawdbotConfig,
 } from "../../config/config.js";
 import { info } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -35,7 +35,9 @@ const LOCAL_PAD = 5;
 const AUTH_PAD = 5;
 
 const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
-  Boolean(process.stdout.isTTY && chalk.level > 0 && !opts?.json && !opts?.plain);
+  Boolean(
+    process.stdout.isTTY && chalk.level > 0 && !opts?.json && !opts?.plain,
+  );
 
 const pad = (value: string, size: number) => value.padEnd(size);
 

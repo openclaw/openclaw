@@ -1,7 +1,4 @@
-import {
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
-} from "../../agents/defaults.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -9,9 +6,9 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import {
+  type ClawdbotConfig,
   readConfigFileSnapshot,
   writeConfigFile,
-  type ClawdbotConfig,
 } from "../../config/config.js";
 
 export const ensureFlagCompatibility = (opts: {

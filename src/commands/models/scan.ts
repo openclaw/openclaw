@@ -3,9 +3,10 @@ import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import {
-  scanOpenRouterModels,
   type ModelScanResult,
+  scanOpenRouterModels,
 } from "../../agents/model-scan.js";
+import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
 import { warn } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import {
@@ -14,7 +15,6 @@ import {
   formatTokenK,
   updateConfig,
 } from "./shared.js";
-import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
 
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
@@ -26,7 +26,6 @@ const truncate = (value: string, max: number) => {
   if (max <= 3) return value.slice(0, max);
   return `${value.slice(0, max - 3)}...`;
 };
-
 
 function sortScanResults(results: ModelScanResult[]): ModelScanResult[] {
   return results.slice().sort((a, b) => {
@@ -133,16 +132,20 @@ export async function modelsScanCommand(
   runtime: RuntimeEnv,
 ) {
   const minParams = opts.minParams ? Number(opts.minParams) : undefined;
-  if (minParams !== undefined && (!Number.isFinite(minParams) || minParams < 0)) {
+  if (
+    minParams !== undefined &&
+    (!Number.isFinite(minParams) || minParams < 0)
+  ) {
     throw new Error("--min-params must be >= 0");
   }
   const maxAgeDays = opts.maxAgeDays ? Number(opts.maxAgeDays) : undefined;
-  if (maxAgeDays !== undefined && (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)) {
+  if (
+    maxAgeDays !== undefined &&
+    (!Number.isFinite(maxAgeDays) || maxAgeDays < 0)
+  ) {
     throw new Error("--max-age-days must be >= 0");
   }
-  const maxCandidates = opts.maxCandidates
-    ? Number(opts.maxCandidates)
-    : 6;
+  const maxCandidates = opts.maxCandidates ? Number(opts.maxCandidates) : 6;
   if (!Number.isFinite(maxCandidates) || maxCandidates <= 0) {
     throw new Error("--max-candidates must be > 0");
   }
@@ -151,7 +154,10 @@ export async function modelsScanCommand(
     throw new Error("--timeout must be > 0");
   }
   const concurrency = opts.concurrency ? Number(opts.concurrency) : undefined;
-  if (concurrency !== undefined && (!Number.isFinite(concurrency) || concurrency <= 0)) {
+  if (
+    concurrency !== undefined &&
+    (!Number.isFinite(concurrency) || concurrency <= 0)
+  ) {
     throw new Error("--concurrency must be > 0");
   }
 
@@ -226,9 +232,7 @@ export async function modelsScanCommand(
 
   const allowlist = buildAllowlistSet(updated);
   const allowlistMissing =
-    allowlist.size > 0
-      ? selected.filter((entry) => !allowlist.has(entry))
-      : [];
+    allowlist.size > 0 ? selected.filter((entry) => !allowlist.has(entry)) : [];
 
   if (opts.json) {
     runtime.log(
