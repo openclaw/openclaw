@@ -62,6 +62,7 @@ type AgentCommandOpts = {
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;
+  extraSystemPrompt?: string;
 };
 
 type SessionResolution = {
@@ -388,6 +389,7 @@ export async function agentCommand(
       runId,
       lane: opts.lane,
       abortSignal: opts.abortSignal,
+      extraSystemPrompt: opts.extraSystemPrompt,
       onAgentEvent: (evt) => {
         emitAgentEvent({
           runId,

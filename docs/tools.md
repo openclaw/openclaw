@@ -119,6 +119,7 @@ Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.
 - `messageLimit > 0` fetches last N messages per session (tool messages filtered).
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
+- `sessions_send` always runs a follow‑up **agent‑to‑agent post step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
 
 ### `discord`
 Send Discord reactions, stickers, or polls.

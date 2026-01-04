@@ -445,6 +445,7 @@ export function createClawdisCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   surface?: string;
   sandbox?: SandboxContext | null;
+  sessionKey?: string;
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -488,6 +489,8 @@ export function createClawdisCodingTools(options?: {
     createWhatsAppLoginTool(),
     ...createClawdisTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
+      agentSessionKey: options?.sessionKey,
+      agentSurface: options?.surface,
     }),
   ];
   const allowDiscord = shouldIncludeDiscordTool(options?.surface);
