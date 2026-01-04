@@ -34,8 +34,8 @@ async function main() {
 
   await patchBunLongForProtobuf();
 
-  const { default: dotenv } = await import("dotenv");
-  dotenv.config({ quiet: true });
+  const { loadDotEnv } = await import("../infra/dotenv.js");
+  loadDotEnv({ quiet: true });
 
   const { ensureClawdbotCliOnPath } = await import("../infra/path-env.js");
   ensureClawdbotCliOnPath();

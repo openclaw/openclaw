@@ -214,6 +214,8 @@ Minimal `~/.clawdbot/clawdbot.json`:
 }
 ```
 
+Env vars: loaded from `.env` in the current working directory, plus a global fallback at `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`) without overriding existing values.
+
 ### WhatsApp
 
 - Link the device: `pnpm clawdbot login` (stores creds in `~/.clawdbot/credentials`).
