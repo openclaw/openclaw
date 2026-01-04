@@ -61,6 +61,7 @@ type AgentCommandOpts = {
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
   lane?: string;
+  runId?: string;
 };
 
 type SessionResolution = {
@@ -209,9 +210,10 @@ export async function agentCommand(
     persistedVerbose,
   } = sessionResolution;
   let sessionEntry = resolvedSessionEntry;
+  const runId = opts.runId?.trim() || sessionId;
 
   if (sessionKey) {
-    registerAgentRunContext(sessionId, { sessionKey });
+    registerAgentRunContext(runId, { sessionKey });
   }
 
   if (opts.deliver === true) {
@@ -349,7 +351,7 @@ export async function agentCommand(
 
   const startedAt = Date.now();
   emitAgentEvent({
-    runId: sessionId,
+    runId,
     stream: "job",
     data: {
       state: "started",
@@ -383,19 +385,19 @@ export async function agentCommand(
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       timeoutMs,
-      runId: sessionId,
+      runId,
       lane: opts.lane,
       abortSignal: opts.abortSignal,
       onAgentEvent: (evt) => {
         emitAgentEvent({
-          runId: sessionId,
+          runId,
           stream: evt.stream,
           data: evt.data,
         });
       },
     });
     emitAgentEvent({
-      runId: sessionId,
+      runId,
       stream: "job",
       data: {
         state: "done",
@@ -409,7 +411,7 @@ export async function agentCommand(
     });
   } catch (err) {
     emitAgentEvent({
-      runId: sessionId,
+      runId,
       stream: "job",
       data: {
         state: "error",
