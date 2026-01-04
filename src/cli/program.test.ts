@@ -51,13 +51,13 @@ describe("cli program", () => {
     expect(statusCommand).toHaveBeenCalled();
   });
 
-    it("runs config alias as configure", async () => {
+  it("runs config alias as configure", async () => {
     const program = buildProgram();
     await program.parseAsync(["config"], { from: "user" });
     expect(configureCommand).toHaveBeenCalled();
   });
 
-it("runs nodes list and calls node.pair.list", async () => {
+  it("runs nodes list and calls node.pair.list", async () => {
     callGateway.mockResolvedValue({ pending: [], paired: [] });
     const program = buildProgram();
     runtime.log.mockClear();

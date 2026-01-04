@@ -97,7 +97,11 @@ async function isWSL(): Promise<boolean> {
     wslCached = false;
     return wslCached;
   }
-  if (process.env.WSL_INTEROP || process.env.WSL_DISTRO_NAME || process.env.WSLENV) {
+  if (
+    process.env.WSL_INTEROP ||
+    process.env.WSL_DISTRO_NAME ||
+    process.env.WSLENV
+  ) {
     wslCached = true;
     return wslCached;
   }
@@ -118,7 +122,9 @@ type BrowserOpenCommand = {
 
 async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
-  const hasDisplay = Boolean(process.env.DISPLAY || process.env.WAYLAND_DISPLAY);
+  const hasDisplay = Boolean(
+    process.env.DISPLAY || process.env.WAYLAND_DISPLAY,
+  );
   const isSsh =
     Boolean(process.env.SSH_CLIENT) ||
     Boolean(process.env.SSH_TTY) ||
@@ -172,7 +178,9 @@ export function formatControlUiSshHint(params: {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const tokenParam = params.token ? `?token=${encodeURIComponent(params.token)}` : "";
+  const tokenParam = params.token
+    ? `?token=${encodeURIComponent(params.token)}`
+    : "";
   const authedUrl = params.token ? `${localUrl}${tokenParam}` : undefined;
   const sshTarget = resolveSshTargetHint();
   return [

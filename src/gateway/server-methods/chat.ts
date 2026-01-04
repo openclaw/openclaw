@@ -131,8 +131,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     params,
     respond,
     context,
-    client,
-    isWebchatConnect,
+    client: _client,
+    isWebchatConnect: _isWebchatConnect,
   }) => {
     if (!validateChatSendParams(params)) {
       respond(
