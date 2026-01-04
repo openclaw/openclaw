@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_IMAGE="${BASE_IMAGE:-clawdis-sandbox:bookworm-slim}"
 TARGET_IMAGE="${TARGET_IMAGE:-clawdis-sandbox-common:bookworm-slim}"
-PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo}"
+PACKAGES="${PACKAGES:-curl wget jq coreutils grep nodejs npm python3 git ca-certificates golang-go rustc cargo unzip pkg-config libasound2-dev}"
 INSTALL_PNPM="${INSTALL_PNPM:-1}"
 INSTALL_BUN="${INSTALL_BUN:-1}"
 BUN_INSTALL_DIR="${BUN_INSTALL_DIR:-/opt/bun}"
