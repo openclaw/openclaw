@@ -1,27 +1,38 @@
 ---
 name: mcporter
-description: Manage and call MCP servers (list, call, auth, daemon).
+description: Use the mcporter CLI to list, configure, auth, and call MCP servers/tools directly (HTTP or stdio), including ad-hoc servers, config edits, and CLI/type generation.
 homepage: http://mcporter.dev
 metadata: {"clawdis":{"emoji":"📦","requires":{"bins":["mcporter"]},"install":[{"id":"node","kind":"node","package":"mcporter","bins":["mcporter"],"label":"Install mcporter (node)"}]}}
 ---
 
 # mcporter
 
-Use `mcporter` to list MCP servers and call tools.
+Use `mcporter` to work with MCP servers directly.
 
 Quick start
 - `mcporter list`
 - `mcporter list <server> --schema`
-- `mcporter call <server.tool> arg=value`
+- `mcporter call <server.tool> key=value`
 
-Auth + lifecycle
-- OAuth: `mcporter auth <server>`
-- Daemon: `mcporter daemon status|start|stop`
+Call tools
+- Selector: `mcporter call linear.list_issues team=ENG limit:5`
+- Function syntax: `mcporter call "linear.create_issue(title: \"Bug\")"`
+- Full URL: `mcporter call https://api.example.com/mcp.fetch url:https://example.com`
+- Stdio: `mcporter call --stdio "bun run ./server.ts" scrape url=https://example.com`
+- JSON payload: `mcporter call <server.tool> --args '{"limit":5}'`
 
-Ad-hoc servers
-- HTTP: `mcporter list --http-url https://host/mcp --name <name>`
-- STDIO: `mcporter call --stdio "bun run ./server.ts" --name <name>`
+Auth + config
+- OAuth: `mcporter auth <server | url> [--reset]`
+- Config: `mcporter config list|get|add|remove|import|login|logout`
+
+Daemon
+- `mcporter daemon start|status|stop|restart`
+
+Codegen
+- CLI: `mcporter generate-cli --server <name>` or `--command <url>`
+- Inspect: `mcporter inspect-cli <path> [--json]`
+- TS: `mcporter emit-ts <server> --mode client|types`
 
 Notes
-- Config sources: `~/.mcporter/mcporter.json[c]` and `config/mcporter.json`.
-- Prefer `--json` when you need machine-readable output.
+- Config default: `./config/mcporter.json` (override with `--config`).
+- Prefer `--output json` for machine-readable results.
