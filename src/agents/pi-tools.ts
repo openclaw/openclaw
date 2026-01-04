@@ -8,6 +8,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
+import type { ClawdbotConfig } from "../config/config.js";
 import { detectMime } from "../media/mime.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import {
@@ -17,7 +18,6 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
-import type { ClawdbotConfig } from "../config/config.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";

@@ -249,7 +249,11 @@ export function registerModelsCli(program: Command) {
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
     .option("--set-default", "Set agent.model to the first selection", false)
-    .option("--set-image", "Set agent.imageModel to the first image selection", false)
+    .option(
+      "--set-image",
+      "Set agent.imageModel to the first image selection",
+      false,
+    )
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       try {

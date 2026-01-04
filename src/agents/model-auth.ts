@@ -10,7 +10,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import type { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 

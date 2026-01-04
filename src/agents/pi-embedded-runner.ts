@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 
 import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
-import {
-  type Api,
-  type AssistantMessage,
-  type Model,
-} from "@mariozechner/pi-ai";
+import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
   createAgentSession,

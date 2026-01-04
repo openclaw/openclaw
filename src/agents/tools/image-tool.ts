@@ -1,15 +1,24 @@
-import { type Api, type AssistantMessage, complete, type Context, type Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage, discoverModels } from "@mariozechner/pi-coding-agent";
+import {
+  type Api,
+  type AssistantMessage,
+  type Context,
+  complete,
+  type Model,
+} from "@mariozechner/pi-ai";
+import {
+  discoverAuthStorage,
+  discoverModels,
+} from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
 import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { getApiKeyForModel } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
-import { resolveUserPath } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
@@ -20,18 +29,33 @@ function ensureImageToolConfigured(cfg?: ClawdbotConfig): boolean {
   return Boolean(primary || fallbacks.length > 0);
 }
 
-function pickMaxBytes(cfg?: ClawdbotConfig, maxBytesMb?: number): number | undefined {
-  if (typeof maxBytesMb === "number" && Number.isFinite(maxBytesMb) && maxBytesMb > 0) {
+function pickMaxBytes(
+  cfg?: ClawdbotConfig,
+  maxBytesMb?: number,
+): number | undefined {
+  if (
+    typeof maxBytesMb === "number" &&
+    Number.isFinite(maxBytesMb) &&
+    maxBytesMb > 0
+  ) {
     return Math.floor(maxBytesMb * 1024 * 1024);
   }
   const configured = cfg?.agent?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
+  if (
+    typeof configured === "number" &&
+    Number.isFinite(configured) &&
+    configured > 0
+  ) {
     return Math.floor(configured * 1024 * 1024);
   }
   return undefined;
 }
 
-function buildImageContext(prompt: string, base64: string, mimeType: string): Context {
+function buildImageContext(
+  prompt: string,
+  base64: string,
+  mimeType: string,
+): Context {
   return {
     messages: [
       {
@@ -67,7 +91,9 @@ async function runImagePrompt(params: {
         throw new Error(`Unknown model: ${provider}/${modelId}`);
       }
       if (!model.input?.includes("image")) {
-        throw new Error(`Model does not support images: ${provider}/${modelId}`);
+        throw new Error(
+          `Model does not support images: ${provider}/${modelId}`,
+        );
       }
       const apiKey = await getApiKeyForModel(model, authStorage);
       authStorage.setRuntimeApiKey(model.provider, apiKey);
