@@ -192,6 +192,4 @@ actor MacNodeBridgePairingClient {
             }
         }
     }
-
-    
 }

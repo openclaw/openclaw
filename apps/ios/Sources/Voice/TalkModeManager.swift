@@ -288,9 +288,9 @@ final class TalkModeManager: NSObject {
             self.chatSubscribedSessionKeys.insert(key)
             self.logger.info("chat.subscribe ok sessionKey=\(key, privacy: .public)")
         } catch {
-            self.logger
-                .warning(
-                    "chat.subscribe failed sessionKey=\(key, privacy: .public) err=\(error.localizedDescription, privacy: .public)")
+            self.logger.warning(
+                "chat.subscribe failed sessionKey=\(key, privacy: .public) " +
+                    "err=\(error.localizedDescription, privacy: .public)")
         }
     }
 
@@ -340,7 +340,12 @@ final class TalkModeManager: NSObject {
             "idempotencyKey": UUID().uuidString,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
-        let json = String(decoding: data, as: UTF8.self)
+        guard let json = String(bytes: data, encoding: .utf8) else {
+            throw NSError(
+                domain: "TalkModeManager",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
+        }
         let res = try await bridge.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 30)
         let decoded = try JSONDecoder().decode(SendResponse.self, from: res)
         return decoded.runId
@@ -523,9 +528,9 @@ final class TalkModeManager: NSObject {
                     self.lastPlaybackWasPCM = false
                     result = await self.mp3Player.play(stream: stream)
                 }
-                self.logger
-                    .info(
-                        "elevenlabs stream finished=\(result.finished, privacy: .public) dur=\(Date().timeIntervalSince(started), privacy: .public)s")
+                self.logger.info(
+                    "elevenlabs stream finished=\(result.finished, privacy: .public) " +
+                        "dur=\(Date().timeIntervalSince(started), privacy: .public)s")
                 if !result.finished, let interruptedAt = result.interruptedAt {
                     self.lastInterruptedAtSeconds = interruptedAt
                 }

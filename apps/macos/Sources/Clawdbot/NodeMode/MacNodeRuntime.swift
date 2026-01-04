@@ -8,10 +8,9 @@ actor MacNodeRuntime {
     @MainActor private let screenRecorder = ScreenRecordService()
     @MainActor private let locationService = MacNodeLocationService()
 
-    // swiftlint:disable:next function_body_length cyclomatic_complexity
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
-        if command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui."), !Self.canvasEnabled() {
+        if self.isCanvasCommand(command), !Self.canvasEnabled() {
             return BridgeInvokeResponse(
                 id: req.id,
                 ok: false,
@@ -21,257 +20,275 @@ actor MacNodeRuntime {
         }
         do {
             switch command {
-            case ClawdbotCanvasCommand.present.rawValue:
-                let params = (try? Self.decodeParams(ClawdbotCanvasPresentParams.self, from: req.paramsJSON)) ??
-                    ClawdbotCanvasPresentParams()
-                let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                let url = urlTrimmed.isEmpty ? nil : urlTrimmed
-                let placement = params.placement.map {
-                    CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
-                }
-                try await MainActor.run {
-                    _ = try CanvasManager.shared.showDetailed(
-                        sessionKey: "main",
-                        target: url,
-                        placement: placement)
-                }
-                return BridgeInvokeResponse(id: req.id, ok: true)
-
-            case ClawdbotCanvasCommand.hide.rawValue:
-                await MainActor.run {
-                    CanvasManager.shared.hide(sessionKey: "main")
-                }
-                return BridgeInvokeResponse(id: req.id, ok: true)
-
-            case ClawdbotCanvasCommand.navigate.rawValue:
-                let params = try Self.decodeParams(ClawdbotCanvasNavigateParams.self, from: req.paramsJSON)
-                try await MainActor.run {
-                    _ = try CanvasManager.shared.show(sessionKey: "main", path: params.url)
-                }
-                return BridgeInvokeResponse(id: req.id, ok: true)
-
-            case ClawdbotCanvasCommand.evalJS.rawValue:
-                let params = try Self.decodeParams(ClawdbotCanvasEvalParams.self, from: req.paramsJSON)
-                let result = try await CanvasManager.shared.eval(
-                    sessionKey: "main",
-                    javaScript: params.javaScript)
-                let payload = try Self.encodePayload(["result": result] as [String: String])
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-
-            case ClawdbotCanvasCommand.snapshot.rawValue:
-                let params = try? Self.decodeParams(ClawdbotCanvasSnapshotParams.self, from: req.paramsJSON)
-                let format = params?.format ?? .jpeg
-                let maxWidth: Int? = {
-                    if let raw = params?.maxWidth, raw > 0 { return raw }
-                    return switch format {
-                    case .png: 900
-                    case .jpeg: 1600
-                    }
-                }()
-                let quality = params?.quality ?? 0.9
-
-                let path = try await CanvasManager.shared.snapshot(sessionKey: "main", outPath: nil)
-                defer { try? FileManager.default.removeItem(atPath: path) }
-                let data = try Data(contentsOf: URL(fileURLWithPath: path))
-                guard let image = NSImage(data: data) else {
-                    return Self.errorResponse(req, code: .unavailable, message: "canvas snapshot decode failed")
-                }
-                let encoded = try Self.encodeCanvasSnapshot(
-                    image: image,
-                    format: format,
-                    maxWidth: maxWidth,
-                    quality: quality)
-                let payload = try Self.encodePayload([
-                    "format": format == .jpeg ? "jpeg" : "png",
-                    "base64": encoded.base64EncodedString(),
-                ])
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-
-            case ClawdbotCanvasA2UICommand.reset.rawValue:
-                return try await self.handleA2UIReset(req)
-
-            case ClawdbotCanvasA2UICommand.push.rawValue, ClawdbotCanvasA2UICommand.pushJSONL.rawValue:
-                return try await self.handleA2UIPush(req)
-
-            case ClawdbotCameraCommand.snap.rawValue:
-                guard Self.cameraEnabled() else {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "CAMERA_DISABLED: enable Camera in Settings"))
-                }
-                let params = (try? Self.decodeParams(ClawdbotCameraSnapParams.self, from: req.paramsJSON)) ??
-                    ClawdbotCameraSnapParams()
-                let delayMs = min(10_000, max(0, params.delayMs ?? 2000))
-                let res = try await self.cameraCapture.snap(
-                    facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
-                    maxWidth: params.maxWidth,
-                    quality: params.quality,
-                    deviceId: params.deviceId,
-                    delayMs: delayMs)
-                struct SnapPayload: Encodable {
-                    var format: String
-                    var base64: String
-                    var width: Int
-                    var height: Int
-                }
-                let payload = try Self.encodePayload(SnapPayload(
-                    format: (params.format ?? .jpg).rawValue,
-                    base64: res.data.base64EncodedString(),
-                    width: Int(res.size.width),
-                    height: Int(res.size.height)))
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-
-            case ClawdbotCameraCommand.clip.rawValue:
-                guard Self.cameraEnabled() else {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "CAMERA_DISABLED: enable Camera in Settings"))
-                }
-                let params = (try? Self.decodeParams(ClawdbotCameraClipParams.self, from: req.paramsJSON)) ??
-                    ClawdbotCameraClipParams()
-                let res = try await self.cameraCapture.clip(
-                    facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
-                    durationMs: params.durationMs,
-                    includeAudio: params.includeAudio ?? true,
-                    deviceId: params.deviceId,
-                    outPath: nil)
-                defer { try? FileManager.default.removeItem(atPath: res.path) }
-                let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
-                struct ClipPayload: Encodable {
-                    var format: String
-                    var base64: String
-                    var durationMs: Int
-                    var hasAudio: Bool
-                }
-                let payload = try Self.encodePayload(ClipPayload(
-                    format: (params.format ?? .mp4).rawValue,
-                    base64: data.base64EncodedString(),
-                    durationMs: res.durationMs,
-                    hasAudio: res.hasAudio))
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-
-            case ClawdbotCameraCommand.list.rawValue:
-                guard Self.cameraEnabled() else {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "CAMERA_DISABLED: enable Camera in Settings"))
-                }
-                let devices = await self.cameraCapture.listDevices()
-                let payload = try Self.encodePayload(["devices": devices])
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-
+            case ClawdbotCanvasCommand.present.rawValue,
+                 ClawdbotCanvasCommand.hide.rawValue,
+                 ClawdbotCanvasCommand.navigate.rawValue,
+                 ClawdbotCanvasCommand.evalJS.rawValue,
+                 ClawdbotCanvasCommand.snapshot.rawValue:
+                return try await self.handleCanvasInvoke(req)
+            case ClawdbotCanvasA2UICommand.reset.rawValue,
+                 ClawdbotCanvasA2UICommand.push.rawValue,
+                 ClawdbotCanvasA2UICommand.pushJSONL.rawValue:
+                return try await self.handleA2UIInvoke(req)
+            case ClawdbotCameraCommand.snap.rawValue,
+                 ClawdbotCameraCommand.clip.rawValue,
+                 ClawdbotCameraCommand.list.rawValue:
+                return try await self.handleCameraInvoke(req)
             case ClawdbotLocationCommand.get.rawValue:
-                let mode = Self.locationMode()
-                guard mode != .off else {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "LOCATION_DISABLED: enable Location in Settings"))
-                }
-                let params = (try? Self.decodeParams(ClawdbotLocationGetParams.self, from: req.paramsJSON)) ??
-                    ClawdbotLocationGetParams()
-                let desired = params.desiredAccuracy ??
-                    (Self.locationPreciseEnabled() ? .precise : .balanced)
-                let status = await self.locationService.authorizationStatus()
-                if status != .authorizedAlways && status != .authorizedWhenInUse {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
-                }
-                do {
-                    let location = try await self.locationService.currentLocation(
-                        desiredAccuracy: desired,
-                        maxAgeMs: params.maxAgeMs,
-                        timeoutMs: params.timeoutMs)
-                    let isPrecise = await self.locationService.accuracyAuthorization() == .fullAccuracy
-                    let payload = ClawdbotLocationPayload(
-                        lat: location.coordinate.latitude,
-                        lon: location.coordinate.longitude,
-                        accuracyMeters: location.horizontalAccuracy,
-                        altitudeMeters: location.verticalAccuracy >= 0 ? location.altitude : nil,
-                        speedMps: location.speed >= 0 ? location.speed : nil,
-                        headingDeg: location.course >= 0 ? location.course : nil,
-                        timestamp: ISO8601DateFormatter().string(from: location.timestamp),
-                        isPrecise: isPrecise,
-                        source: nil)
-                    let json = try Self.encodePayload(payload)
-                    return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
-                } catch MacNodeLocationService.Error.timeout {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "LOCATION_TIMEOUT: no fix in time"))
-                } catch {
-                    return BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: ClawdbotNodeError(
-                            code: .unavailable,
-                            message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
-                }
-
+                return try await self.handleLocationInvoke(req)
             case MacNodeScreenCommand.record.rawValue:
-                let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
-                    MacNodeScreenRecordParams()
-                if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
-                    return Self.errorResponse(
-                        req,
-                        code: .invalidRequest,
-                        message: "INVALID_REQUEST: screen format must be mp4")
-                }
-                let res = try await self.screenRecorder.record(
-                    screenIndex: params.screenIndex,
-                    durationMs: params.durationMs,
-                    fps: params.fps,
-                    includeAudio: params.includeAudio,
-                    outPath: nil)
-                defer { try? FileManager.default.removeItem(atPath: res.path) }
-                let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
-                struct ScreenPayload: Encodable {
-                    var format: String
-                    var base64: String
-                    var durationMs: Int?
-                    var fps: Double?
-                    var screenIndex: Int?
-                    var hasAudio: Bool
-                }
-                let payload = try Self.encodePayload(ScreenPayload(
-                    format: "mp4",
-                    base64: data.base64EncodedString(),
-                    durationMs: params.durationMs,
-                    fps: params.fps,
-                    screenIndex: params.screenIndex,
-                    hasAudio: res.hasAudio))
-                return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
-
+                return try await self.handleScreenRecordInvoke(req)
             case ClawdbotSystemCommand.run.rawValue:
                 return try await self.handleSystemRun(req)
-
             case ClawdbotSystemCommand.notify.rawValue:
                 return try await self.handleSystemNotify(req)
-
             default:
                 return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
             }
         } catch {
             return Self.errorResponse(req, code: .unavailable, message: error.localizedDescription)
         }
+    }
+
+    private func isCanvasCommand(_ command: String) -> Bool {
+        command.hasPrefix("canvas.") || command.hasPrefix("canvas.a2ui.")
+    }
+
+    private func handleCanvasInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case ClawdbotCanvasCommand.present.rawValue:
+            let params = (try? Self.decodeParams(ClawdbotCanvasPresentParams.self, from: req.paramsJSON)) ??
+                ClawdbotCanvasPresentParams()
+            let urlTrimmed = params.url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let url = urlTrimmed.isEmpty ? nil : urlTrimmed
+            let placement = params.placement.map {
+                CanvasPlacement(x: $0.x, y: $0.y, width: $0.width, height: $0.height)
+            }
+            try await MainActor.run {
+                _ = try CanvasManager.shared.showDetailed(
+                    sessionKey: "main",
+                    target: url,
+                    placement: placement)
+            }
+            return BridgeInvokeResponse(id: req.id, ok: true)
+        case ClawdbotCanvasCommand.hide.rawValue:
+            await MainActor.run {
+                CanvasManager.shared.hide(sessionKey: "main")
+            }
+            return BridgeInvokeResponse(id: req.id, ok: true)
+        case ClawdbotCanvasCommand.navigate.rawValue:
+            let params = try Self.decodeParams(ClawdbotCanvasNavigateParams.self, from: req.paramsJSON)
+            try await MainActor.run {
+                _ = try CanvasManager.shared.show(sessionKey: "main", path: params.url)
+            }
+            return BridgeInvokeResponse(id: req.id, ok: true)
+        case ClawdbotCanvasCommand.evalJS.rawValue:
+            let params = try Self.decodeParams(ClawdbotCanvasEvalParams.self, from: req.paramsJSON)
+            let result = try await CanvasManager.shared.eval(
+                sessionKey: "main",
+                javaScript: params.javaScript)
+            let payload = try Self.encodePayload(["result": result] as [String: String])
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case ClawdbotCanvasCommand.snapshot.rawValue:
+            let params = try? Self.decodeParams(ClawdbotCanvasSnapshotParams.self, from: req.paramsJSON)
+            let format = params?.format ?? .jpeg
+            let maxWidth: Int? = {
+                if let raw = params?.maxWidth, raw > 0 { return raw }
+                return switch format {
+                case .png: 900
+                case .jpeg: 1600
+                }
+            }()
+            let quality = params?.quality ?? 0.9
+
+            let path = try await CanvasManager.shared.snapshot(sessionKey: "main", outPath: nil)
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            let data = try Data(contentsOf: URL(fileURLWithPath: path))
+            guard let image = NSImage(data: data) else {
+                return Self.errorResponse(req, code: .unavailable, message: "canvas snapshot decode failed")
+            }
+            let encoded = try Self.encodeCanvasSnapshot(
+                image: image,
+                format: format,
+                maxWidth: maxWidth,
+                quality: quality)
+            let payload = try Self.encodePayload([
+                "format": format == .jpeg ? "jpeg" : "png",
+                "base64": encoded.base64EncodedString(),
+            ])
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        default:
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
+        }
+    }
+
+    private func handleA2UIInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        switch req.command {
+        case ClawdbotCanvasA2UICommand.reset.rawValue:
+            try await self.handleA2UIReset(req)
+        case ClawdbotCanvasA2UICommand.push.rawValue,
+             ClawdbotCanvasA2UICommand.pushJSONL.rawValue:
+            try await self.handleA2UIPush(req)
+        default:
+            Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
+        }
+    }
+
+    private func handleCameraInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        guard Self.cameraEnabled() else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdbotNodeError(
+                    code: .unavailable,
+                    message: "CAMERA_DISABLED: enable Camera in Settings"))
+        }
+        switch req.command {
+        case ClawdbotCameraCommand.snap.rawValue:
+            let params = (try? Self.decodeParams(ClawdbotCameraSnapParams.self, from: req.paramsJSON)) ??
+                ClawdbotCameraSnapParams()
+            let delayMs = min(10000, max(0, params.delayMs ?? 2000))
+            let res = try await self.cameraCapture.snap(
+                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                maxWidth: params.maxWidth,
+                quality: params.quality,
+                deviceId: params.deviceId,
+                delayMs: delayMs)
+            struct SnapPayload: Encodable {
+                var format: String
+                var base64: String
+                var width: Int
+                var height: Int
+            }
+            let payload = try Self.encodePayload(SnapPayload(
+                format: (params.format ?? .jpg).rawValue,
+                base64: res.data.base64EncodedString(),
+                width: Int(res.size.width),
+                height: Int(res.size.height)))
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case ClawdbotCameraCommand.clip.rawValue:
+            let params = (try? Self.decodeParams(ClawdbotCameraClipParams.self, from: req.paramsJSON)) ??
+                ClawdbotCameraClipParams()
+            let res = try await self.cameraCapture.clip(
+                facing: CameraFacing(rawValue: params.facing?.rawValue ?? "") ?? .front,
+                durationMs: params.durationMs,
+                includeAudio: params.includeAudio ?? true,
+                deviceId: params.deviceId,
+                outPath: nil)
+            defer { try? FileManager.default.removeItem(atPath: res.path) }
+            let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+            struct ClipPayload: Encodable {
+                var format: String
+                var base64: String
+                var durationMs: Int
+                var hasAudio: Bool
+            }
+            let payload = try Self.encodePayload(ClipPayload(
+                format: (params.format ?? .mp4).rawValue,
+                base64: data.base64EncodedString(),
+                durationMs: res.durationMs,
+                hasAudio: res.hasAudio))
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        case ClawdbotCameraCommand.list.rawValue:
+            let devices = await self.cameraCapture.listDevices()
+            let payload = try Self.encodePayload(["devices": devices])
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
+        default:
+            return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: unknown command")
+        }
+    }
+
+    private func handleLocationInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let mode = Self.locationMode()
+        guard mode != .off else {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdbotNodeError(
+                    code: .unavailable,
+                    message: "LOCATION_DISABLED: enable Location in Settings"))
+        }
+        let params = (try? Self.decodeParams(ClawdbotLocationGetParams.self, from: req.paramsJSON)) ??
+            ClawdbotLocationGetParams()
+        let desired = params.desiredAccuracy ??
+            (Self.locationPreciseEnabled() ? .precise : .balanced)
+        let status = await self.locationService.authorizationStatus()
+        if status != .authorizedAlways {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdbotNodeError(
+                    code: .unavailable,
+                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
+        }
+        do {
+            let location = try await self.locationService.currentLocation(
+                desiredAccuracy: desired,
+                maxAgeMs: params.maxAgeMs,
+                timeoutMs: params.timeoutMs)
+            let isPrecise = await self.locationService.accuracyAuthorization() == .fullAccuracy
+            let payload = ClawdbotLocationPayload(
+                lat: location.coordinate.latitude,
+                lon: location.coordinate.longitude,
+                accuracyMeters: location.horizontalAccuracy,
+                altitudeMeters: location.verticalAccuracy >= 0 ? location.altitude : nil,
+                speedMps: location.speed >= 0 ? location.speed : nil,
+                headingDeg: location.course >= 0 ? location.course : nil,
+                timestamp: ISO8601DateFormatter().string(from: location.timestamp),
+                isPrecise: isPrecise,
+                source: nil)
+            let json = try Self.encodePayload(payload)
+            return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        } catch MacNodeLocationService.Error.timeout {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdbotNodeError(
+                    code: .unavailable,
+                    message: "LOCATION_TIMEOUT: no fix in time"))
+        } catch {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdbotNodeError(
+                    code: .unavailable,
+                    message: "LOCATION_UNAVAILABLE: \(error.localizedDescription)"))
+        }
+    }
+
+    private func handleScreenRecordInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
+        let params = (try? Self.decodeParams(MacNodeScreenRecordParams.self, from: req.paramsJSON)) ??
+            MacNodeScreenRecordParams()
+        if let format = params.format?.lowercased(), !format.isEmpty, format != "mp4" {
+            return Self.errorResponse(
+                req,
+                code: .invalidRequest,
+                message: "INVALID_REQUEST: screen format must be mp4")
+        }
+        let res = try await self.screenRecorder.record(
+            screenIndex: params.screenIndex,
+            durationMs: params.durationMs,
+            fps: params.fps,
+            includeAudio: params.includeAudio,
+            outPath: nil)
+        defer { try? FileManager.default.removeItem(atPath: res.path) }
+        let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
+        struct ScreenPayload: Encodable {
+            var format: String
+            var base64: String
+            var durationMs: Int?
+            var fps: Double?
+            var screenIndex: Int?
+            var hasAudio: Bool
+        }
+        let payload = try Self.encodePayload(ScreenPayload(
+            format: "mp4",
+            base64: data.base64EncodedString(),
+            durationMs: params.durationMs,
+            fps: params.fps,
+            screenIndex: params.screenIndex,
+            hasAudio: res.hasAudio))
+        return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
     private func handleA2UIReset(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {

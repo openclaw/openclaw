@@ -47,7 +47,7 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
         }
 
         self.manager.desiredAccuracy = Self.accuracyValue(desiredAccuracy)
-        let timeout = max(0, timeoutMs ?? 10_000)
+        let timeout = max(0, timeoutMs ?? 10000)
         return try await self.withTimeout(timeoutMs: timeout) {
             try await self.requestLocation()
         }
@@ -83,11 +83,11 @@ final class MacNodeLocationService: NSObject, CLLocationManagerDelegate {
     private static func accuracyValue(_ accuracy: ClawdbotLocationAccuracy) -> CLLocationAccuracy {
         switch accuracy {
         case .coarse:
-            return kCLLocationAccuracyKilometer
+            kCLLocationAccuracyKilometer
         case .balanced:
-            return kCLLocationAccuracyHundredMeters
+            kCLLocationAccuracyHundredMeters
         case .precise:
-            return kCLLocationAccuracyBest
+            kCLLocationAccuracyBest
         }
     }
 
