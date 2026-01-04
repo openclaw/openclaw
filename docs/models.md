@@ -19,16 +19,22 @@ that prefers tool-call + image-capable models and maintains ordered fallbacks.
   - show default model + aliases + fallbacks + allowlist
 - `clawdbot models set <modelOrAlias>`
   - writes `agent.model` in config
+- `clawdbot models set-image <modelOrAlias>`
+  - writes `agent.imageModel` in config
 - `clawdbot models aliases list|add|remove`
   - writes `agent.modelAliases`
 - `clawdbot models fallbacks list|add|remove|clear`
   - writes `agent.modelFallbacks`
+- `clawdbot models image-fallbacks list|add|remove|clear`
+  - writes `agent.imageModelFallbacks`
 - `clawdbot models scan`
   - OpenRouter :free scan; probe tool-call + image; interactive selection
 
 ## Config changes
 
 - Add `agent.modelFallbacks: string[]` (ordered list of provider/model IDs).
+- Add `agent.imageModel?: string` (optional image-capable model for image tool).
+- Add `agent.imageModelFallbacks?: string[]` (ordered list for image tool).
 - Keep existing:
   - `agent.model` (default)
   - `agent.allowedModels` (list filter)
@@ -49,8 +55,8 @@ Probes (direct pi-ai complete)
   - Prompt includes 1x1 PNG; success if no "unsupported image" error.
 
 Scoring/selection
-- Prefer models passing tool + image.
-- Fallback to tool-only if no tool+image pass.
+- Prefer models passing tool + image for text/tool fallbacks.
+- Prefer image-only models for image tool fallback (even if tool probe fails).
 - Rank by: image ok, then lower tool latency, then larger context, then params.
 
 Interactive selection (TTY)
@@ -61,7 +67,9 @@ Interactive selection (TTY)
 
 Output
 - Writes `agent.modelFallbacks` ordered.
+- Writes `agent.imageModelFallbacks` ordered (image-capable models).
 - Optional `--set-default` to set `agent.model`.
+- Optional `--set-image` to set `agent.imageModel`.
 
 ## Runtime fallback
 

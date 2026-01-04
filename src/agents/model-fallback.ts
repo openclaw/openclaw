@@ -44,6 +44,54 @@ function buildAllowedModelKeys(
   return keys.size > 0 ? keys : null;
 }
 
+function resolveImageFallbackCandidates(params: {
+  cfg: ClawdbotConfig | undefined;
+  defaultProvider: string;
+  modelOverride?: string;
+}): ModelCandidate[] {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg ?? {},
+    defaultProvider: params.defaultProvider,
+  });
+  const allowlist = buildAllowedModelKeys(params.cfg, params.defaultProvider);
+  const seen = new Set<string>();
+  const candidates: ModelCandidate[] = [];
+
+  const addCandidate = (
+    candidate: ModelCandidate,
+    enforceAllowlist: boolean,
+  ) => {
+    if (!candidate.provider || !candidate.model) return;
+    const key = modelKey(candidate.provider, candidate.model);
+    if (seen.has(key)) return;
+    if (enforceAllowlist && allowlist && !allowlist.has(key)) return;
+    seen.add(key);
+    candidates.push(candidate);
+  };
+
+  const addRaw = (raw: string, enforceAllowlist: boolean) => {
+    const resolved = resolveModelRefFromString({
+      raw: String(raw ?? ""),
+      defaultProvider: params.defaultProvider,
+      aliasIndex,
+    });
+    if (!resolved) return;
+    addCandidate(resolved.ref, enforceAllowlist);
+  };
+
+  if (params.modelOverride?.trim()) {
+    addRaw(params.modelOverride, false);
+  } else if (params.cfg?.agent?.imageModel?.trim()) {
+    addRaw(params.cfg.agent.imageModel, false);
+  }
+
+  for (const raw of params.cfg?.agent?.imageModelFallbacks ?? []) {
+    addRaw(raw, true);
+  }
+
+  return candidates;
+}
+
 function resolveFallbackCandidates(params: {
   cfg: ClawdbotConfig | undefined;
   provider: string;
@@ -148,6 +196,81 @@ export async function runWithModelFallback<T>(params: {
       : "unknown";
   throw new Error(
     `All models failed (${attempts.length || candidates.length}): ${summary}`,
+    { cause: lastError instanceof Error ? lastError : undefined },
+  );
+}
+
+export async function runWithImageModelFallback<T>(params: {
+  cfg: ClawdbotConfig | undefined;
+  modelOverride?: string;
+  run: (provider: string, model: string) => Promise<T>;
+  onError?: (attempt: {
+    provider: string;
+    model: string;
+    error: unknown;
+    attempt: number;
+    total: number;
+  }) => void | Promise<void>;
+}): Promise<{
+  result: T;
+  provider: string;
+  model: string;
+  attempts: FallbackAttempt[];
+}> {
+  const candidates = resolveImageFallbackCandidates({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    modelOverride: params.modelOverride,
+  });
+  if (candidates.length === 0) {
+    throw new Error(
+      "No image model configured. Set agent.imageModel or agent.imageModelFallbacks.",
+    );
+  }
+
+  const attempts: FallbackAttempt[] = [];
+  let lastError: unknown;
+
+  for (let i = 0; i < candidates.length; i += 1) {
+    const candidate = candidates[i] as ModelCandidate;
+    try {
+      const result = await params.run(candidate.provider, candidate.model);
+      return {
+        result,
+        provider: candidate.provider,
+        model: candidate.model,
+        attempts,
+      };
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      lastError = err;
+      attempts.push({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      await params.onError?.({
+        provider: candidate.provider,
+        model: candidate.model,
+        error: err,
+        attempt: i + 1,
+        total: candidates.length,
+      });
+    }
+  }
+
+  if (attempts.length <= 1 && lastError) throw lastError;
+  const summary =
+    attempts.length > 0
+      ? attempts
+          .map(
+            (attempt) =>
+              `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+          )
+          .join(" | ")
+      : "unknown";
+  throw new Error(
+    `All image models failed (${attempts.length || candidates.length}): ${summary}`,
     { cause: lastError instanceof Error ? lastError : undefined },
   );
 }

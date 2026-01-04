@@ -101,6 +101,19 @@ Notes:
 - Videos return `FILE:<path>` (mp4).
 - Location returns a JSON payload (lat/lon/accuracy/timestamp).
 
+### `image`
+Analyze an image with the configured image model.
+
+Core parameters:
+- `image` (required path or URL)
+- `prompt` (optional; defaults to "Describe the image.")
+- `model` (optional override)
+- `maxBytesMb` (optional size cap)
+
+Notes:
+- Only available when `agent.imageModel` or `agent.imageModelFallbacks` is set.
+- Uses the image model directly (independent of the main chat model).
+
 ### `cron`
 Manage Gateway cron jobs and wakeups.
 

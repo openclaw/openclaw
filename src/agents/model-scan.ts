@@ -348,7 +348,7 @@ export async function scanOpenRouterModels(
     };
 
     const toolResult = await probeTool(model, apiKey, timeoutMs);
-    const imageResult = toolResult.ok
+    const imageResult = model.input.includes("image")
       ? await probeImage(ensureImageInput(model), apiKey, timeoutMs)
       : { ok: false, latencyMs: null, skipped: true };
 

@@ -17,6 +17,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -452,6 +453,7 @@ export function createClawdbotCodingTools(options?: {
   surface?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  config?: ClawdbotConfig;
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -497,6 +499,7 @@ export function createClawdbotCodingTools(options?: {
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
       agentSurface: options?.surface,
+      config: options?.config,
     }),
   ];
   const allowDiscord = shouldIncludeDiscordTool(options?.surface);

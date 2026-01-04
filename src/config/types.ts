@@ -660,6 +660,8 @@ export type ClawdbotConfig = {
   agent?: {
     /** Model id (provider/model), e.g. "anthropic/claude-opus-4-5". */
     model?: string;
+    /** Optional image-capable model (provider/model) used by the image tool. */
+    imageModel?: string;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
     /** Optional allowlist for /model (provider/model or model-only). */
@@ -668,6 +670,8 @@ export type ClawdbotConfig = {
     modelAliases?: Record<string, string>;
     /** Ordered fallback models (provider/model). */
     modelFallbacks?: string[];
+    /** Ordered fallback image models (provider/model) for the image tool. */
+    imageModelFallbacks?: string[];
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
     /** Default thinking level when no /think directive is present. */

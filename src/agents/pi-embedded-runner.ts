@@ -1,17 +1,11 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
-import path from "node:path";
 
 import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import {
   type Api,
   type AssistantMessage,
-  getEnvApiKey,
-  getOAuthApiKey,
   type Model,
-  type OAuthCredentials,
-  type OAuthProvider,
 } from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
@@ -25,7 +19,6 @@ import {
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { resolveOAuthPath } from "../config/paths.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -37,6 +30,7 @@ import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { getApiKeyForModel } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
@@ -106,10 +100,6 @@ type EmbeddedRunWaiter = {
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
-const OAUTH_FILENAME = "oauth.json";
-let oauthStorageConfigured = false;
-
-type OAuthStorage = Record<string, OAuthCredentials>;
 type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
@@ -137,90 +127,6 @@ export function buildEmbeddedSandboxInfo(
     browserControlUrl: sandbox.browser?.controlUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
   };
-}
-
-function resolveClawdbotOAuthPath(): string {
-  return resolveOAuthPath();
-}
-
-function loadOAuthStorageAt(pathname: string): OAuthStorage | null {
-  if (!fsSync.existsSync(pathname)) return null;
-  try {
-    const content = fsSync.readFileSync(pathname, "utf8");
-    const json = JSON.parse(content) as OAuthStorage;
-    if (!json || typeof json !== "object") return null;
-    return json;
-  } catch {
-    return null;
-  }
-}
-
-function hasAnthropicOAuth(storage: OAuthStorage): boolean {
-  const entry = storage.anthropic as
-    | {
-        refresh?: string;
-        refresh_token?: string;
-        refreshToken?: string;
-        access?: string;
-        access_token?: string;
-        accessToken?: string;
-      }
-    | undefined;
-  if (!entry) return false;
-  const refresh =
-    entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
-  const access = entry.access ?? entry.access_token ?? entry.accessToken ?? "";
-  return Boolean(refresh.trim() && access.trim());
-}
-
-function saveOAuthStorageAt(pathname: string, storage: OAuthStorage): void {
-  const dir = path.dirname(pathname);
-  fsSync.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  fsSync.writeFileSync(
-    pathname,
-    `${JSON.stringify(storage, null, 2)}\n`,
-    "utf8",
-  );
-  fsSync.chmodSync(pathname, 0o600);
-}
-
-function legacyOAuthPaths(): string[] {
-  const paths: string[] = [];
-  const piOverride = process.env.PI_CODING_AGENT_DIR?.trim();
-  if (piOverride) {
-    paths.push(path.join(resolveUserPath(piOverride), OAUTH_FILENAME));
-  }
-  paths.push(path.join(os.homedir(), ".pi", "agent", OAUTH_FILENAME));
-  paths.push(path.join(os.homedir(), ".claude", OAUTH_FILENAME));
-  paths.push(path.join(os.homedir(), ".config", "claude", OAUTH_FILENAME));
-  paths.push(path.join(os.homedir(), ".config", "anthropic", OAUTH_FILENAME));
-  return Array.from(new Set(paths));
-}
-
-function importLegacyOAuthIfNeeded(destPath: string): void {
-  if (fsSync.existsSync(destPath)) return;
-  for (const legacyPath of legacyOAuthPaths()) {
-    const storage = loadOAuthStorageAt(legacyPath);
-    if (!storage || !hasAnthropicOAuth(storage)) continue;
-    saveOAuthStorageAt(destPath, storage);
-    return;
-  }
-}
-
-function ensureOAuthStorage(): void {
-  if (oauthStorageConfigured) return;
-  oauthStorageConfigured = true;
-  const oauthPath = resolveClawdbotOAuthPath();
-  importLegacyOAuthIfNeeded(oauthPath);
-}
-
-function isOAuthProvider(provider: string): provider is OAuthProvider {
-  return (
-    provider === "anthropic" ||
-    provider === "github-copilot" ||
-    provider === "google-gemini-cli" ||
-    provider === "google-antigravity"
-  );
 }
 
 export function queueEmbeddedPiMessage(
@@ -323,38 +229,6 @@ function resolveModel(
     };
   }
   return { model, authStorage, modelRegistry };
-}
-
-async function getApiKeyForModel(
-  model: Model<Api>,
-  authStorage: ReturnType<typeof discoverAuthStorage>,
-): Promise<string> {
-  const storedKey = await authStorage.getApiKey(model.provider);
-  if (storedKey) return storedKey;
-  ensureOAuthStorage();
-  if (model.provider === "anthropic") {
-    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
-    if (oauthEnv?.trim()) return oauthEnv.trim();
-  }
-  const envKey = getEnvApiKey(model.provider);
-  if (envKey) return envKey;
-  if (isOAuthProvider(model.provider)) {
-    const oauthPath = resolveClawdbotOAuthPath();
-    const storage = loadOAuthStorageAt(oauthPath);
-    if (storage) {
-      try {
-        const result = await getOAuthApiKey(model.provider, storage);
-        if (result?.apiKey) {
-          storage[model.provider] = result.newCredentials;
-          saveOAuthStorageAt(oauthPath, storage);
-          return result.apiKey;
-        }
-      } catch {
-        // fall through to error below
-      }
-    }
-  }
-  throw new Error(`No API key found for provider "${model.provider}"`);
 }
 
 function resolvePromptSkills(
@@ -502,6 +376,7 @@ export async function runEmbeddedPiAgent(params: {
           sandbox,
           surface: params.surface,
           sessionKey: params.sessionKey ?? params.sessionId,
+          config: params.config,
         });
         const machineName = await getMachineDisplayName();
         const runtimeInfo = {
