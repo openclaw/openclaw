@@ -24,6 +24,7 @@
 - Agent: add optional per-session Docker sandbox for tool execution (`agent.sandbox`) with allow/deny policy and auto-pruning.
 - Agent: add sandboxed Chromium browser (CDP + optional noVNC observer) for sandboxed sessions.
 - Nodes: add `location.get` with Always/Precise settings on macOS/iOS/Android plus CLI/tool support.
+- Android nodes: add `sms.send` with permission-gated capability refresh (#172) — thanks @vsabavat.
 
 ### Fixes
 - macOS: improve Swift 6 strict concurrency compatibility (#166) — thanks @Nachx639.
