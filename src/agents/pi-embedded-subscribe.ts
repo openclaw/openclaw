@@ -248,7 +248,9 @@ export function subscribeEmbeddedPiSession(params: {
   };
 
   const emitBlockChunk = (text: string) => {
-    const chunk = text.trimEnd();
+    // Strip any <thinking> tags that may have leaked into the output (e.g., from Gemini mimicking history)
+    const strippedText = stripThinkingSegments(stripUnpairedThinkingTags(text));
+    const chunk = strippedText.trimEnd();
     if (!chunk) return;
     if (chunk === lastBlockReplyText) return;
     lastBlockReplyText = chunk;

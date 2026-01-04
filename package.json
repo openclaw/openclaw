@@ -140,8 +140,7 @@
       "@sinclair/typebox": "0.34.46"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
-      "@mariozechner/pi-coding-agent@0.32.3": "patches/@mariozechner__pi-coding-agent@0.32.3.patch"
+      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch"
     }
   },
   "vitest": {
