@@ -50,6 +50,7 @@ describe("resolveTextChunkLimit", () => {
   it("uses per-surface defaults", () => {
     expect(resolveTextChunkLimit(undefined, "whatsapp")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "telegram")).toBe(4000);
+    expect(resolveTextChunkLimit(undefined, "slack")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "signal")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "imessage")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "discord")).toBe(2000);
@@ -62,8 +63,9 @@ describe("resolveTextChunkLimit", () => {
   });
 
   it("uses the matching provider override", () => {
-    const cfg = { discord: { textChunkLimit: 111 } };
+    const cfg = { discord: { textChunkLimit: 111 }, slack: { textChunkLimit: 222 } };
     expect(resolveTextChunkLimit(cfg, "discord")).toBe(111);
+    expect(resolveTextChunkLimit(cfg, "slack")).toBe(222);
     expect(resolveTextChunkLimit(cfg, "telegram")).toBe(4000);
   });
 });
