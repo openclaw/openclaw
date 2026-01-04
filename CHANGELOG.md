@@ -63,6 +63,7 @@
 - Build: drop stale ClawdisCLI product from macOS build-and-run script.
 - Auto-reply: add run-level telemetry + typing TTL guardrails to diagnose stuck replies.
 - WhatsApp: honor per-group mention gating overrides when group ids are stored as session keys.
+- Slack: add missing deps and wire Slack into cron/heartbeat/hook delivery.
 - Dependencies: bump pi-mono packages to 0.32.3.
 
 ### Docs
