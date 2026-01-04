@@ -57,9 +57,9 @@ import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
 import { sendMessageIMessage } from "../imessage/index.js";
 import { type IMessageProbe, probeIMessage } from "../imessage/probe.js";
+import { onAgentEvent } from "../infra/agent-events.js";
 import type { startNodeBridgeServer } from "../infra/bridge/server.js";
 import { getLastHeartbeatEvent } from "../infra/heartbeat-events.js";
-import { onAgentEvent } from "../infra/agent-events.js";
 import { setHeartbeatsEnabled } from "../infra/heartbeat-runner.js";
 import {
   approveNodePairing,
@@ -100,6 +100,7 @@ import { getWebAuthAgeMs, logoutWeb, readWebSelfId } from "../web/session.js";
 import { WizardSession } from "../wizard/session.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
+  type AgentWaitParams,
   type ConnectParams,
   ErrorCodes,
   type ErrorShape,
@@ -111,7 +112,6 @@ import {
   type SessionsListParams,
   type SessionsPatchParams,
   type SessionsResetParams,
-  type AgentWaitParams,
   validateAgentParams,
   validateAgentWaitParams,
   validateChatAbortParams,
@@ -245,7 +245,9 @@ function ensureAgentJobListener() {
         ? (evt.data.endedAt as number)
         : undefined;
     const error =
-      typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+      typeof evt.data?.error === "string"
+        ? (evt.data.error as string)
+        : undefined;
     agentRunStarts.delete(evt.runId);
     recordAgentJobSnapshot({
       runId: evt.runId,
@@ -306,7 +308,9 @@ async function waitForAgentJob(params: {
           ? (evt.data.endedAt as number)
           : undefined;
       const error =
-        typeof evt.data?.error === "string" ? (evt.data.error as string) : undefined;
+        typeof evt.data?.error === "string"
+          ? (evt.data.error as string)
+          : undefined;
       const snapshot: AgentJobSnapshot = {
         runId: evt.runId,
         state: state === "error" ? "error" : "done",

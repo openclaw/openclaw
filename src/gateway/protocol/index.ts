@@ -3,6 +3,7 @@ import {
   type AgentEvent,
   AgentEventSchema,
   AgentParamsSchema,
+  type AgentWaitParams,
   AgentWaitParamsSchema,
   type ChatAbortParams,
   ChatAbortParamsSchema,
@@ -78,7 +79,6 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
-  type AgentWaitParams,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsDeleteParams,
@@ -148,8 +148,9 @@ export const validateResponseFrame =
 export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
-export const validateAgentWaitParams =
-  ajv.compile<AgentWaitParams>(AgentWaitParamsSchema);
+export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(
+  AgentWaitParamsSchema,
+);
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
