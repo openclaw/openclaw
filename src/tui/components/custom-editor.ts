@@ -1,4 +1,15 @@
-import { Editor, Key, matchesKey } from "@mariozechner/pi-tui";
+import {
+  Editor,
+  isAltEnter,
+  isCtrlC,
+  isCtrlD,
+  isCtrlL,
+  isCtrlO,
+  isCtrlP,
+  isCtrlT,
+  isEscape,
+  isShiftTab,
+} from "@mariozechner/pi-tui";
 
 export class CustomEditor extends Editor {
   onEscape?: () => void;
@@ -12,43 +23,39 @@ export class CustomEditor extends Editor {
   onAltEnter?: () => void;
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
+    if (isAltEnter(data) && this.onAltEnter) {
       this.onAltEnter();
       return;
     }
-    if (matchesKey(data, Key.ctrl("l")) && this.onCtrlL) {
+    if (isCtrlL(data) && this.onCtrlL) {
       this.onCtrlL();
       return;
     }
-    if (matchesKey(data, Key.ctrl("o")) && this.onCtrlO) {
+    if (isCtrlO(data) && this.onCtrlO) {
       this.onCtrlO();
       return;
     }
-    if (matchesKey(data, Key.ctrl("p")) && this.onCtrlP) {
+    if (isCtrlP(data) && this.onCtrlP) {
       this.onCtrlP();
       return;
     }
-    if (matchesKey(data, Key.ctrl("t")) && this.onCtrlT) {
+    if (isCtrlT(data) && this.onCtrlT) {
       this.onCtrlT();
       return;
     }
-    if (matchesKey(data, Key.shift("tab")) && this.onShiftTab) {
+    if (isShiftTab(data) && this.onShiftTab) {
       this.onShiftTab();
       return;
     }
-    if (
-      matchesKey(data, Key.escape) &&
-      this.onEscape &&
-      !this.isShowingAutocomplete()
-    ) {
+    if (isEscape(data) && this.onEscape && !this.isShowingAutocomplete()) {
       this.onEscape();
       return;
     }
-    if (matchesKey(data, Key.ctrl("c")) && this.onCtrlC) {
+    if (isCtrlC(data) && this.onCtrlC) {
       this.onCtrlC();
       return;
     }
-    if (matchesKey(data, Key.ctrl("d"))) {
+    if (isCtrlD(data)) {
       if (this.getText().length === 0 && this.onCtrlD) {
         this.onCtrlD();
       }
