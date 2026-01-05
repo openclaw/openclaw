@@ -489,6 +489,17 @@ export async function runOnboardingWizard(
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
   await writeConfigFile(nextConfig);
 
+  await ensureSystemdUserLingerInteractive({
+    runtime,
+    prompter: {
+      confirm: prompter.confirm,
+      note: prompter.note,
+    },
+    reason:
+      "Linux installs use a systemd user service by default. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+    requireConfirm: false,
+  });
+
   const installDaemon = await prompter.confirm({
     message: "Install Gateway daemon (recommended)",
     initialValue: true,
@@ -539,16 +550,6 @@ export async function runOnboardingWizard(
       });
     }
 
-    await ensureSystemdUserLingerInteractive({
-      runtime,
-      prompter: {
-        confirm: prompter.confirm,
-        note: prompter.note,
-      },
-      reason:
-        "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
-      requireConfirm: true,
-    });
   }
 
   await sleep(1500);

@@ -42,8 +42,8 @@ export async function ensureSystemdUserLingerInteractive(params: {
     params.reason ??
     "Systemd user services stop when you log out or go idle, which kills the Gateway.";
   const actionNote = params.requireConfirm
-    ? "We can enable lingering now (needs sudo; writes /var/lib/systemd/linger)."
-    : "Enabling lingering now (needs sudo; writes /var/lib/systemd/linger).";
+    ? "We can enable lingering now (may require sudo; writes /var/lib/systemd/linger)."
+    : "Enabling lingering now (may require sudo; writes /var/lib/systemd/linger).";
   await prompter.note(`${reason}\n${actionNote}`, title);
 
   if (params.requireConfirm && prompter.confirm) {
@@ -58,6 +58,15 @@ export async function ensureSystemdUserLingerInteractive(params: {
       );
       return;
     }
+  }
+
+  const resultNoSudo = await enableSystemdUserLinger({
+    env,
+    user: status.user,
+  });
+  if (resultNoSudo.ok) {
+    await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
+    return;
   }
 
   const result = await enableSystemdUserLinger({
