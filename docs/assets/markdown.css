@@ -3,6 +3,10 @@
   line-height: 1.7;
 }
 
+.mdx-content > h1:first-of-type {
+  display: none;
+}
+
 .markdown h1,
 .markdown h2,
 .markdown h3,
@@ -127,4 +131,3 @@
   font-family: var(--font-pixel);
   letter-spacing: 0.06em;
 }
-
