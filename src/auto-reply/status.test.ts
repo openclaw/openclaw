@@ -44,6 +44,7 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("thinking=medium");
     expect(text).toContain("verbose=off");
     expect(text).not.toContain("Shortcuts:");
+    expect(text).not.toContain("set with");
   });
 
   it("handles missing agent config gracefully", () => {

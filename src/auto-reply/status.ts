@@ -230,8 +230,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   )}${entry?.abortedLastRun ? " • last run aborted" : ""}`;
 
   const optionsLine = runtime.sandboxed
-    ? `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel} (set with /think <level>, /verbose on|off, /elevated on|off, /model <id>)`
-    : `Options: thinking=${thinkLevel} | verbose=${verboseLevel} (set with /think <level>, /verbose on|off, /model <id>)`;
+    ? `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel}`
+    : `Options: thinking=${thinkLevel} | verbose=${verboseLevel}`;
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
 
@@ -257,5 +257,9 @@ export function buildStatusMessage(args: StatusArgs): string {
 }
 
 export function buildHelpMessage(): string {
-  return ["ℹ️ Help", "Shortcuts: /new reset | /restart relink"].join("\n");
+  return [
+    "ℹ️ Help",
+    "Shortcuts: /new reset | /restart relink",
+    "Options: /think <level> | /verbose on|off | /elevated on|off | /model <id>",
+  ].join("\n");
 }
