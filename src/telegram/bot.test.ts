@@ -539,6 +539,39 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
+  it("matches usernames case-insensitively when groupPolicy is 'allowlist'", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    loadConfig.mockReturnValue({
+      telegram: {
+        groupPolicy: "allowlist",
+        allowFrom: ["@MNeves"], // Uppercase in config
+        groups: { "*": { requireMention: false } },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 12345, username: "mneves" }, // Lowercase in message
+        text: "hello",
+        date: 1736380800,
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
   it("allows direct messages regardless of groupPolicy", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<

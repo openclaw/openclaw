@@ -78,6 +78,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     return true;
   };
 
+  // Pre-compute normalized allowlist for filtering (used by both group and DM checks)
+  const normalizedAllowFrom = (allowFrom ?? []).map(String);
+  const normalizedAllowFromLower = normalizedAllowFrom.map((v) =>
+    v.toLowerCase(),
+  );
+  const hasWildcard = normalizedAllowFrom.includes("*");
+
   bot.on("message", async (ctx) => {
     try {
       const msg = ctx.message;
@@ -104,18 +111,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           );
           return;
         }
-        const allowed = (allowFrom ?? []).map(String);
-        const hasWildcard = allowed.includes("*");
-        const senderIdAllowed = allowed.includes(String(senderId));
+        const senderIdAllowed = normalizedAllowFrom.includes(String(senderId));
         // Also check username if available (with or without @ prefix)
         const senderUsername = msg.from?.username?.toLowerCase();
         const usernameAllowed =
           senderUsername != null &&
-          (allowed.some(
-            (v) =>
-              v.toLowerCase() === senderUsername ||
-              v.toLowerCase() === `@${senderUsername}`,
-          ));
+          normalizedAllowFromLower.some(
+            (v) => v === senderUsername || v === `@${senderUsername}`,
+          );
         if (!hasWildcard && !senderIdAllowed && !usernameAllowed) {
           logVerbose(
             `Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`,
@@ -135,14 +138,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       };
 
       // allowFrom for direct chats
-      if (!isGroup && Array.isArray(allowFrom) && allowFrom.length > 0) {
+      if (!isGroup && normalizedAllowFrom.length > 0) {
         const candidate = String(chatId);
-        const allowed = allowFrom.map(String);
-        const allowedWithPrefix = allowFrom.map((v) => `telegram:${String(v)}`);
+        const candidateWithPrefix = `telegram:${candidate}`;
         const permitted =
-          allowed.includes(candidate) ||
-          allowedWithPrefix.includes(`telegram:${candidate}`) ||
-          allowed.includes("*");
+          hasWildcard ||
+          normalizedAllowFrom.includes(candidate) ||
+          normalizedAllowFrom.some((v) => v === candidateWithPrefix);
         if (!permitted) {
           logVerbose(
             `Blocked unauthorized telegram sender ${candidate} (not in allowFrom)`,
