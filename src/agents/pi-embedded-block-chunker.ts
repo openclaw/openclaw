@@ -48,6 +48,8 @@ export class EmbeddedBlockChunker {
   }
 
   drain(params: { force: boolean; emit: (chunk: string) => void }) {
+    // KNOWN: We cannot split inside fenced code blocks (Markdown breaks + UI glitches).
+    // When forced (maxChars), we close + reopen the fence to keep Markdown valid.
     const { force, emit } = params;
     const minChars = Math.max(1, Math.floor(this.#chunking.minChars));
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));

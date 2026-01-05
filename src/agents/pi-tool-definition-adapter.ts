@@ -24,6 +24,8 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
         _ctx,
         signal,
       ): Promise<AgentToolResult<unknown>> => {
+        // KNOWN: pi-coding-agent `ToolDefinition.execute` has a different signature/order
+        // than pi-agent-core `AgentTool.execute`. This adapter keeps our existing tools intact.
         return tool.execute(toolCallId, params, signal, onUpdate);
       },
     } satisfies ToolDefinition;
