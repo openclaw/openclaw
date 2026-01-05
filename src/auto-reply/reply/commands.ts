@@ -15,9 +15,9 @@ import {
   parseActivationCommand,
 } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { buildStatusMessage } from "../status.js";
+import { buildHelpMessage, buildStatusMessage } from "../status.js";
 import type { MsgContext } from "../templating.js";
-import type { ThinkLevel, VerboseLevel } from "../thinking.js";
+import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -121,6 +121,7 @@ export async function handleCommands(params: {
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
   resolvedVerboseLevel: VerboseLevel;
+  resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   provider: string;
   model: string;
@@ -143,6 +144,7 @@ export async function handleCommands(params: {
     defaultGroupActivation,
     resolvedThinkLevel,
     resolvedVerboseLevel,
+    resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
     model,
     contextTokens,
@@ -260,6 +262,20 @@ export async function handleCommands(params: {
     };
   }
 
+  const helpRequested =
+    command.commandBodyNormalized === "/help" ||
+    command.commandBodyNormalized === "help" ||
+    /(?:^|\s)\/help(?=$|\s|:)\b/i.test(command.commandBodyNormalized);
+  if (helpRequested) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /help from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    return { shouldContinue: false, reply: { text: buildHelpMessage() } };
+  }
+
   const statusRequested =
     directives.hasStatusDirective ||
     command.commandBodyNormalized === "/status" ||
@@ -281,10 +297,12 @@ export async function handleCommands(params: {
       : undefined;
     const statusText = buildStatusMessage({
       agent: {
+        ...(cfg.agent ?? {}),
         model,
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,
         verboseDefault: cfg.agent?.verboseDefault,
+        elevatedDefault: cfg.agent?.elevatedDefault,
       },
       workspaceDir,
       sessionEntry,
@@ -295,6 +313,7 @@ export async function handleCommands(params: {
       resolvedThink:
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
+      resolvedElevated: resolvedElevatedLevel,
       webLinked,
       webAuthAgeMs,
       heartbeatSeconds,

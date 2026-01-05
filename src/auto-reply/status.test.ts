@@ -36,12 +36,14 @@ describe("buildStatusMessage", () => {
 
     expect(text).toContain("⚙️ Status");
     expect(text).toContain("Agent: embedded pi");
+    expect(text).toContain("Runtime: direct");
     expect(text).toContain("Context: 16k/32k (50%)");
     expect(text).toContain("Session: main");
     expect(text).toContain("Web: linked");
     expect(text).toContain("heartbeat 45s");
     expect(text).toContain("thinking=medium");
     expect(text).toContain("verbose=off");
+    expect(text).not.toContain("Shortcuts:");
   });
 
   it("handles missing agent config gracefully", () => {
