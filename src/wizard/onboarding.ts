@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
@@ -185,6 +186,7 @@ export async function runOnboardingWizard(
     message: "Model/auth choice",
     options: [
       { value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" },
+      { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
       {
         value: "antigravity",
         label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
@@ -222,6 +224,52 @@ export async function runOnboardingWizard(
       }
     } catch (err) {
       spin.stop("OAuth failed");
+      runtime.error(String(err));
+    }
+  } else if (authChoice === "openai-codex") {
+    const isRemote = isRemoteEnvironment();
+    await prompter.note(
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, paste the redirect URL back here.",
+          ].join("\n")
+        : [
+            "Browser will open for OpenAI authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "OpenAI OAuth uses localhost:1455 for the callback.",
+          ].join("\n"),
+      "OpenAI Codex OAuth",
+    );
+    const spin = prompter.progress("Starting OAuth flow…");
+    try {
+      const agentDir = resolveClawdbotAgentDir();
+      const authStorage = discoverAuthStorage(agentDir);
+      await authStorage.login("openai-codex", {
+        onAuth: async ({ url }) => {
+          if (isRemote) {
+            spin.stop("OAuth URL ready");
+            runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
+          } else {
+            spin.update("Complete sign-in in browser…");
+            await openUrl(url);
+            runtime.log(`Open: ${url}`);
+          }
+        },
+        onPrompt: async (prompt) => {
+          const code = await prompter.text({
+            message: prompt.message,
+            placeholder: prompt.placeholder,
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          });
+          return String(code);
+        },
+        onProgress: (msg) => spin.update(msg),
+      });
+      spin.stop("OpenAI OAuth complete");
+    } catch (err) {
+      spin.stop("OpenAI OAuth failed");
       runtime.error(String(err));
     }
   } else if (authChoice === "antigravity") {

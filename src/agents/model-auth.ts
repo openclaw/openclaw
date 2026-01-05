@@ -17,6 +17,7 @@ import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 const OAUTH_FILENAME = "oauth.json";
 const DEFAULT_OAUTH_DIR = path.join(CONFIG_DIR, "credentials");
 let oauthStorageConfigured = false;
+let oauthStorageMigrated = false;
 
 type OAuthStorage = Record<string, OAuthCredentials>;
 
@@ -97,6 +98,26 @@ export function ensureOAuthStorage(): void {
   importLegacyOAuthIfNeeded(oauthPath);
 }
 
+function isValidOAuthCredential(entry: OAuthCredentials | undefined): entry is OAuthCredentials {
+  if (!entry) return false;
+  return Boolean(entry.access?.trim() && entry.refresh?.trim() && Number.isFinite(entry.expires));
+}
+
+function migrateOAuthStorageToAuthStorage(
+  authStorage: ReturnType<typeof discoverAuthStorage>,
+): void {
+  if (oauthStorageMigrated) return;
+  oauthStorageMigrated = true;
+  const oauthPath = resolveClawdbotOAuthPath();
+  const storage = loadOAuthStorageAt(oauthPath);
+  if (!storage) return;
+  for (const [provider, creds] of Object.entries(storage)) {
+    if (!isValidOAuthCredential(creds)) continue;
+    if (authStorage.get(provider)) continue;
+    authStorage.set(provider, { type: "oauth", ...creds });
+  }
+}
+
 function isOAuthProvider(provider: string): provider is OAuthProvider {
   return (
     provider === "anthropic" ||
@@ -104,6 +125,7 @@ function isOAuthProvider(provider: string): provider is OAuthProvider {
     provider === "google" ||
     provider === "openai" ||
     provider === "openai-compatible" ||
+    provider === "openai-codex" ||
     provider === "github-copilot" ||
     provider === "google-gemini-cli" ||
     provider === "google-antigravity"
@@ -114,9 +136,10 @@ export async function getApiKeyForModel(
   model: Model<Api>,
   authStorage: ReturnType<typeof discoverAuthStorage>,
 ): Promise<string> {
+  ensureOAuthStorage();
+  migrateOAuthStorageToAuthStorage(authStorage);
   const storedKey = await authStorage.getApiKey(model.provider);
   if (storedKey) return storedKey;
-  ensureOAuthStorage();
   if (model.provider === "anthropic") {
     const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
     if (oauthEnv?.trim()) return oauthEnv.trim();
