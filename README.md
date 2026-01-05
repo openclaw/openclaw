@@ -26,6 +26,21 @@ Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks throug
 
 Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See `docs/onboarding.md`.
 
+## Recommended setup (from source)
+
+Do **not** download prebuilt binaries. Build from source.
+
+```bash
+# Clone this repo
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
+
+pnpm install
+pnpm build
+pnpm ui:build
+pnpm clawdbot onboard
+```
+
 ## Highlights
 
 - **Local-first Gateway** — single control plane for sessions, providers, tools, and events.
