@@ -199,10 +199,14 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 
 ### WhatsApp
 
+[Read the WhatsApp provider guide in docs/whatsapp.md.](docs/whatsapp.md)
+
 - Link the device: `pnpm clawdbot login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
 
 ### Telegram
+
+[Read the Telegram provider guide in docs/telegram.md.](docs/telegram.md)
 
 - Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
 - Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`), `telegram.allowFrom`, or `telegram.webhookUrl` as needed.
@@ -215,7 +219,15 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 }
 ```
 
+### Slack
+
+[Read the Slack provider guide in docs/slack.md.](docs/slack.md)
+
+- Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `slack.botToken` + `slack.appToken`).
+
 ### Discord
+
+[Read the Discord provider guide in docs/discord.md.](docs/discord.md)
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
 - Optional: set `discord.slashCommand`, `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
@@ -227,6 +239,24 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
   }
 }
 ```
+
+### Signal
+
+[Read the Signal provider guide in docs/signal.md.](docs/signal.md)
+
+- Requires `signal-cli` and a `signal` config section.
+
+### iMessage
+
+[Read the iMessage provider guide in docs/imessage.md.](docs/imessage.md)
+
+- macOS only; Messages must be signed in.
+
+### WebChat
+
+[Read the WebChat guide in docs/webchat.md.](docs/webchat.md)
+
+- Uses the Gateway WebSocket; no separate WebChat port/config.
 
 Browser control (optional):
 
@@ -242,20 +272,24 @@ Browser control (optional):
 
 ## Docs
 
-[Start with the docs index for navigation and “what’s where.”](https://docs.clawdbot.com/)  
-[Read the architecture overview for the gateway + protocol model.](https://docs.clawdbot.com/architecture)  
-[Use the full configuration reference when you need every key and example.](https://docs.clawdbot.com/configuration)  
-[Run the Gateway by the book with the operational runbook.](https://docs.clawdbot.com/gateway)  
-[Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.clawdbot.com/web)  
-[Understand remote access over SSH tunnels or tailnets.](https://docs.clawdbot.com/remote)  
-[Follow the onboarding wizard flow for a guided setup.](https://docs.clawdbot.com/wizard)  
-[Wire external triggers via the webhook surface.](https://docs.clawdbot.com/webhook)  
-[Set up Gmail Pub/Sub triggers.](https://docs.clawdbot.com/gmail-pubsub)  
-[Learn the macOS menu bar companion details.](https://clawdbot.com/clawdbot-mac.html)  
-[Debug common failures with the troubleshooting guide.](https://docs.clawdbot.com/troubleshooting)  
-[Review security guidance before exposing anything.](https://docs.clawdbot.com/security)
+- [Start with the docs index for navigation and “what’s where.”](https://docs.clawdbot.com/)
+- [Read the architecture overview for the gateway + protocol model.](https://docs.clawdbot.com/architecture)
+- [Use the full configuration reference when you need every key and example.](https://docs.clawdbot.com/configuration)
+- [Run the Gateway by the book with the operational runbook.](https://docs.clawdbot.com/gateway)
+- [Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.clawdbot.com/web)
+- [Understand remote access over SSH tunnels or tailnets.](https://docs.clawdbot.com/remote)
+- [Follow the onboarding wizard flow for a guided setup.](https://docs.clawdbot.com/wizard)
+- [Wire external triggers via the webhook surface.](https://docs.clawdbot.com/webhook)
+- [Set up Gmail Pub/Sub triggers.](https://docs.clawdbot.com/gmail-pubsub)
+- [Learn the macOS menu bar companion details.](https://clawdbot.com/clawdbot-mac.html)
+- [Debug common failures with the troubleshooting guide.](https://docs.clawdbot.com/troubleshooting)
+- [Review security guidance before exposing anything.](https://docs.clawdbot.com/security)
 
 ## Email hooks (Gmail)
+
+[Gmail Pub/Sub wiring (gcloud + gogcli), hook tokens, and auto-watch behavior are documented here.](https://docs.clawdbot.com/gmail-pubsub)
+
+Gateway auto-starts the watcher when `hooks.enabled=true` and `hooks.gmail.account` is set; `clawdbot hooks gmail run` is the manual daemon wrapper if you don’t want auto-start.
 
 ```bash
 clawdbot hooks gmail setup --account you@gmail.com
@@ -270,8 +304,20 @@ AI/vibe-coded PRs welcome! 🤖
 
 ## Clawd
 
-Clawdbot was built for **Clawd**, a space lobster AI assistant. 🦞
+Clawdbot was built for **Clawd**, a space lobster AI assistant. 🦞  
+by Peter Steinberger and the community.
 
 - https://clawd.me
 - https://soul.md
 - https://steipete.me
+
+## Community
+
+Thanks to everyone who has contributed:
+
+<p align="left">
+  <a href="https://github.com/steipete"><img src="https://avatars.githubusercontent.com/u/58493?v=4&s=48" width="48" height="48" alt="steipete" title="steipete"/></a> <a href="https://github.com/thewilloftheshadow"><img src="https://avatars.githubusercontent.com/u/35580099?v=4&s=48" width="48" height="48" alt="thewilloftheshadow" title="thewilloftheshadow"/></a> <a href="https://github.com/mcinteerj"><img src="https://avatars.githubusercontent.com/u/3613653?v=4&s=48" width="48" height="48" alt="mcinteerj" title="mcinteerj"/></a> <a href="https://github.com/joshp123"><img src="https://avatars.githubusercontent.com/u/1497361?v=4&s=48" width="48" height="48" alt="joshp123" title="joshp123"/></a> <a href="https://github.com/joaohlisboa"><img src="https://avatars.githubusercontent.com/u/8200873?v=4&s=48" width="48" height="48" alt="joaohlisboa" title="joaohlisboa"/></a> <a href="https://github.com/petter-b"><img src="https://avatars.githubusercontent.com/u/62076402?v=4&s=48" width="48" height="48" alt="petter-b" title="petter-b"/></a> <a href="https://github.com/mukhtharcm"><img src="https://avatars.githubusercontent.com/u/56378562?v=4&s=48" width="48" height="48" alt="mukhtharcm" title="mukhtharcm"/></a> <a href="https://github.com/dan-dr"><img src="https://avatars.githubusercontent.com/u/6669808?v=4&s=48" width="48" height="48" alt="dan-dr" title="dan-dr"/></a> <a href="https://github.com/Nachx639"><img src="https://avatars.githubusercontent.com/u/71144023?v=4&s=48" width="48" height="48" alt="Nachx639" title="Nachx639"/></a> <a href="https://github.com/jeffersonwarrior"><img src="https://avatars.githubusercontent.com/u/89030989?v=4&s=48" width="48" height="48" alt="jeffersonwarrior" title="jeffersonwarrior"/></a>
+  <a href="https://github.com/mbelinky"><img src="https://avatars.githubusercontent.com/u/132747814?v=4&s=48" width="48" height="48" alt="mbelinky" title="mbelinky"/></a> <a href="https://github.com/julianengel"><img src="https://avatars.githubusercontent.com/u/10634231?v=4&s=48" width="48" height="48" alt="julianengel" title="julianengel"/></a> <a href="https://github.com/CashWilliams"><img src="https://avatars.githubusercontent.com/u/613573?v=4&s=48" width="48" height="48" alt="CashWilliams" title="CashWilliams"/></a> <a href="https://github.com/omniwired"><img src="https://avatars.githubusercontent.com/u/322761?v=4&s=48" width="48" height="48" alt="omniwired" title="omniwired"/></a> <a href="https://github.com/jverdi"><img src="https://avatars.githubusercontent.com/u/345050?v=4&s=48" width="48" height="48" alt="jverdi" title="jverdi"/></a> <a href="https://github.com/Syhids"><img src="https://avatars.githubusercontent.com/u/671202?v=4&s=48" width="48" height="48" alt="Syhids" title="Syhids"/></a> <a href="https://github.com/meaningfool"><img src="https://avatars.githubusercontent.com/u/2862331?v=4&s=48" width="48" height="48" alt="meaningfool" title="meaningfool"/></a> <a href="https://github.com/rafaelreis-r"><img src="https://avatars.githubusercontent.com/u/57492577?v=4&s=48" width="48" height="48" alt="rafaelreis-r" title="rafaelreis-r"/></a> <a href="https://github.com/wstock"><img src="https://avatars.githubusercontent.com/u/1394687?v=4&s=48" width="48" height="48" alt="wstock" title="wstock"/></a> <a href="https://github.com/vsabavat"><img src="https://avatars.githubusercontent.com/u/50385532?v=4&s=48" width="48" height="48" alt="vsabavat" title="vsabavat"/></a>
+  <a href="https://github.com/scald"><img src="https://avatars.githubusercontent.com/u/1215913?v=4&s=48" width="48" height="48" alt="scald" title="scald"/></a> <a href="https://github.com/sreekaransrinath"><img src="https://avatars.githubusercontent.com/u/50989977?v=4&s=48" width="48" height="48" alt="sreekaransrinath" title="sreekaransrinath"/></a> <a href="https://github.com/ratulsarna"><img src="https://avatars.githubusercontent.com/u/105903728?v=4&s=48" width="48" height="48" alt="ratulsarna" title="ratulsarna"/></a> <a href="https://github.com/osolmaz"><img src="https://avatars.githubusercontent.com/u/2453968?v=4&s=48" width="48" height="48" alt="osolmaz" title="osolmaz"/></a> <a href="https://github.com/conhecendocontato"><img src="https://avatars.githubusercontent.com/u/82890727?v=4&s=48" width="48" height="48" alt="conhecendocontato" title="conhecendocontato"/></a> <a href="https://github.com/hrdwdmrbl"><img src="https://avatars.githubusercontent.com/u/554881?v=4&s=48" width="48" height="48" alt="hrdwdmrbl" title="hrdwdmrbl"/></a> <a href="https://github.com/jayhickey"><img src="https://avatars.githubusercontent.com/u/1676460?v=4&s=48" width="48" height="48" alt="jayhickey" title="jayhickey"/></a> <a href="https://github.com/jamesgroat"><img src="https://avatars.githubusercontent.com/u/2634024?v=4&s=48" width="48" height="48" alt="jamesgroat" title="jamesgroat"/></a> <a href="https://github.com/gtsifrikas"><img src="https://avatars.githubusercontent.com/u/8904378?v=4&s=48" width="48" height="48" alt="gtsifrikas" title="gtsifrikas"/></a> <a href="https://github.com/djangonavarro220"><img src="https://avatars.githubusercontent.com/u/251162586?v=4&s=48" width="48" height="48" alt="djangonavarro220" title="djangonavarro220"/></a>
+  <a href="https://github.com/azade-c"><img src="https://avatars.githubusercontent.com/u/252790079?v=4&s=48" width="48" height="48" alt="azade-c" title="azade-c"/></a> <a href="https://github.com/andranik-sahakyan"><img src="https://avatars.githubusercontent.com/u/8908029?v=4&s=48" width="48" height="48" alt="andranik-sahakyan" title="andranik-sahakyan"/></a>
+</p>
