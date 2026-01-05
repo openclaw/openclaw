@@ -275,6 +275,16 @@ const HooksGmailSchema = z
   .optional();
 
 export const ClawdbotSchema = z.object({
+  env: z
+    .object({
+      shellEnv: z
+        .object({
+          enabled: z.boolean().optional(),
+          timeoutMs: z.number().int().nonnegative().optional(),
+        })
+        .optional(),
+    })
+    .optional(),
   identity: z
     .object({
       name: z.string().optional(),
@@ -371,6 +381,12 @@ export const ClawdbotSchema = z.object({
       modelFallbacks: z.array(z.string()).optional(),
       imageModelFallbacks: z.array(z.string()).optional(),
       contextTokens: z.number().int().positive().optional(),
+      tools: z
+        .object({
+          allow: z.array(z.string()).optional(),
+          deny: z.array(z.string()).optional(),
+        })
+        .optional(),
       thinkingDefault: z
         .union([
           z.literal("off"),

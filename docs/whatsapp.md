@@ -33,6 +33,8 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 **Tip:** The number only needs to receive one verification SMS. After that, WhatsApp Web sessions persist via `creds.json`.
 
+**WhatsApp Business:** You can use WhatsApp Business on the same phone with a different number. This is a great option if you want to keep your personal WhatsApp separate — just install WhatsApp Business and register it with Clawdbot's dedicated number.
+
 ## Login + credentials
 - Login command: `clawdbot login` (QR via Linked Devices).
 - Credentials stored in `~/.clawdbot/credentials/creds.json`.
@@ -134,7 +136,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
-- Troubleshooting guide: `docs/refactor/web-gateway-troubleshooting.md`.
+- Troubleshooting guide: `docs/troubleshooting.md`.
 
 ## Tests
 - `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)

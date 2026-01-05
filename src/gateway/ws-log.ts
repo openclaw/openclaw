@@ -121,13 +121,9 @@ export function summarizeAgentEventForWsLog(
     return extra;
   }
 
-  if (stream === "job") {
-    const state = typeof data.state === "string" ? data.state : undefined;
-    if (state) extra.state = state;
-    if (data.to === null) extra.to = null;
-    else if (typeof data.to === "string") extra.to = data.to;
-    if (typeof data.durationMs === "number")
-      extra.ms = Math.round(data.durationMs);
+  if (stream === "lifecycle") {
+    const phase = typeof data.phase === "string" ? data.phase : undefined;
+    if (phase) extra.phase = phase;
     if (typeof data.aborted === "boolean") extra.aborted = data.aborted;
     const error = typeof data.error === "string" ? data.error : undefined;
     if (error?.trim()) extra.error = compactPreview(error, 120);

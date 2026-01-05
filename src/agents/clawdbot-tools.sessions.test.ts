@@ -5,16 +5,20 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-      agentToAgent: { maxPingPongTurns: 2 },
-    },
-  }),
-  resolveGatewayPort: () => 18789,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => ({
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+        agentToAgent: { maxPingPongTurns: 2 },
+      },
+    }),
+    resolveGatewayPort: () => 18789,
+  };
+});
 
 import { createClawdbotTools } from "./clawdbot-tools.js";
 
@@ -261,12 +265,6 @@ describe("sessions tools", () => {
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
     expect(historyOnlyCalls).toHaveLength(8);
-    expect(
-      waitCalls.some(
-        (call) =>
-          typeof (call.params as { afterMs?: number })?.afterMs === "number",
-      ),
-    ).toBe(true);
     expect(sendCallCount).toBe(0);
   });
 

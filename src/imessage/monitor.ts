@@ -1,5 +1,7 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
@@ -168,15 +170,14 @@ export async function monitorIMessageProvider(
     const isGroup = Boolean(message.is_group);
     if (isGroup && !chatId) return;
 
-    if (
-      !isAllowedIMessageSender({
-        allowFrom,
-        sender,
-        chatId: chatId ?? undefined,
-        chatGuid,
-        chatIdentifier,
-      })
-    ) {
+    const commandAuthorized = isAllowedIMessageSender({
+      allowFrom,
+      sender,
+      chatId: chatId ?? undefined,
+      chatGuid,
+      chatIdentifier,
+    });
+    if (!commandAuthorized) {
       logVerbose(`Blocked iMessage sender ${sender} (not in allowFrom)`);
       return;
     }
@@ -184,7 +185,13 @@ export async function monitorIMessageProvider(
     const messageText = (message.text ?? "").trim();
     const mentioned = isGroup ? isMentioned(messageText, mentionRegexes) : true;
     const requireMention = resolveGroupRequireMention(cfg, opts, chatId);
-    if (isGroup && requireMention && !mentioned) {
+    const shouldBypassMention =
+      isGroup &&
+      requireMention &&
+      !mentioned &&
+      commandAuthorized &&
+      hasControlCommand(messageText);
+    if (isGroup && requireMention && !mentioned && !shouldBypassMention) {
       logVerbose(`imessage: skipping group message (no mention)`);
       return;
     }
@@ -228,6 +235,7 @@ export async function monitorIMessageProvider(
         ? (message.participants ?? []).filter(Boolean).join(", ")
         : undefined,
       SenderName: sender,
+      SenderId: sender,
       Surface: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
       Timestamp: createdAt,
@@ -235,6 +243,7 @@ export async function monitorIMessageProvider(
       MediaType: mediaType,
       MediaUrl: mediaPath,
       WasMentioned: mentioned,
+      CommandAuthorized: commandAuthorized,
     };
 
     if (!isGroup) {
@@ -259,36 +268,35 @@ export async function monitorIMessageProvider(
       );
     }
 
-    let blockSendChain: Promise<void> = Promise.resolve();
-    const sendBlockReply = (payload: ReplyPayload) => {
-      if (
-        !payload?.text &&
-        !payload?.mediaUrl &&
-        !(payload?.mediaUrls?.length ?? 0)
-      ) {
-        return;
-      }
-      blockSendChain = blockSendChain
-        .then(async () => {
-          await deliverReplies({
-            replies: [payload],
-            target: ctxPayload.To,
-            client,
-            runtime,
-            maxBytes: mediaMaxBytes,
-            textLimit,
-          });
-        })
-        .catch((err) => {
-          runtime.error?.(
-            danger(`imessage block reply failed: ${String(err)}`),
-          );
+    const dispatcher = createReplyDispatcher({
+      responsePrefix: cfg.messages?.responsePrefix,
+      deliver: async (payload) => {
+        await deliverReplies({
+          replies: [payload],
+          target: ctxPayload.To,
+          client,
+          runtime,
+          maxBytes: mediaMaxBytes,
+          textLimit,
         });
-    };
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          danger(`imessage ${info.kind} reply failed: ${String(err)}`),
+        );
+      },
+    });
 
     const replyResult = await getReplyFromConfig(
       ctxPayload,
-      { onBlockReply: sendBlockReply },
+      {
+        onToolResult: (payload) => {
+          dispatcher.sendToolResult(payload);
+        },
+        onBlockReply: (payload) => {
+          dispatcher.sendBlockReply(payload);
+        },
+      },
       cfg,
     );
     const replies = replyResult
@@ -296,17 +304,12 @@ export async function monitorIMessageProvider(
         ? replyResult
         : [replyResult]
       : [];
-    await blockSendChain;
-    if (replies.length === 0) return;
-
-    await deliverReplies({
-      replies,
-      target: ctxPayload.To,
-      client,
-      runtime,
-      maxBytes: mediaMaxBytes,
-      textLimit,
-    });
+    let queuedFinal = false;
+    for (const reply of replies) {
+      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+    }
+    await dispatcher.waitForIdle();
+    if (!queuedFinal) return;
   };
 
   const client = await createIMessageRpcClient({

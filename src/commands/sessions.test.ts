@@ -7,11 +7,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // Disable colors for deterministic snapshots.
 process.env.FORCE_COLOR = "0";
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    agent: { model: "pi:opus", contextTokens: 32000 },
-  }),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => ({
+      agent: { model: "pi:opus", contextTokens: 32000 },
+    }),
+  };
+});
 
 import { sessionsCommand } from "./sessions.js";
 

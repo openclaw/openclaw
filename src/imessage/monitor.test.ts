@@ -14,9 +14,13 @@ let notificationHandler:
   | undefined;
 let closeResolve: (() => void) | undefined;
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => config,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => config,
+  };
+});
 
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: (...args: unknown[]) => replyMock(...args),
@@ -133,6 +137,41 @@ describe("monitorIMessageProvider", () => {
     await run;
 
     expect(replyMock).toHaveBeenCalled();
+  });
+
+  it("prefixes tool and final replies with responsePrefix", async () => {
+    config = {
+      ...config,
+      messages: { responsePrefix: "PFX" },
+    };
+    replyMock.mockImplementation(async (_ctx, opts) => {
+      await opts?.onToolResult?.({ text: "tool update" });
+      return { text: "final reply" };
+    });
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 7,
+          chat_id: 77,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
+    expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
   });
 
   it("delivers group replies when mentioned", async () => {

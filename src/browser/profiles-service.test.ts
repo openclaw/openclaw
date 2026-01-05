@@ -10,10 +10,14 @@ import type {
   BrowserServerState,
 } from "./server-context.js";
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn(),
-  writeConfigFile: vi.fn(async () => {}),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(),
+    writeConfigFile: vi.fn(async () => {}),
+  };
+});
 
 vi.mock("./trash.js", () => ({
   movePathToTrash: vi.fn(async (targetPath: string) => targetPath),

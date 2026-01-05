@@ -28,6 +28,10 @@ import {
   STATE_DIR_CLAWDBOT,
   writeConfigFile,
 } from "../config/config.js";
+import {
+  deriveDefaultBridgePort,
+  deriveDefaultCanvasHostPort,
+} from "../config/port-defaults.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
@@ -355,6 +359,9 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): Promise<GatewayServer> {
+  // Ensure all default port derivations (browser/bridge/canvas) see the actual runtime port.
+  process.env.CLAWDBOT_GATEWAY_PORT = String(port);
+
   const configSnapshot = await readConfigFileSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {
     if (isNixMode) {
@@ -819,9 +826,11 @@ export async function startGatewayServer(
     }
     if (process.env.CLAWDBOT_BRIDGE_PORT !== undefined) {
       const parsed = Number.parseInt(process.env.CLAWDBOT_BRIDGE_PORT, 10);
-      return Number.isFinite(parsed) && parsed > 0 ? parsed : 18790;
+      return Number.isFinite(parsed) && parsed > 0
+        ? parsed
+        : deriveDefaultBridgePort(port);
     }
-    return 18790;
+    return deriveDefaultBridgePort(port);
   })();
 
   const bridgeHost = (() => {
@@ -848,9 +857,14 @@ export async function startGatewayServer(
   })();
 
   const canvasHostPort = (() => {
+    if (process.env.CLAWDBOT_CANVAS_HOST_PORT !== undefined) {
+      const parsed = Number.parseInt(process.env.CLAWDBOT_CANVAS_HOST_PORT, 10);
+      if (Number.isFinite(parsed) && parsed > 0) return parsed;
+      return deriveDefaultCanvasHostPort(port);
+    }
     const configured = cfgAtStart.canvasHost?.port;
     if (typeof configured === "number" && configured > 0) return configured;
-    return 18793;
+    return deriveDefaultCanvasHostPort(port);
   })();
 
   if (canvasHostEnabled && bridgeEnabled && bridgeHost) {

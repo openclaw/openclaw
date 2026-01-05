@@ -74,4 +74,19 @@ export function extractElevatedDirective(body?: string): {
   };
 }
 
+export function extractStatusDirective(body?: string): {
+  cleaned: string;
+  hasDirective: boolean;
+} {
+  if (!body) return { cleaned: "", hasDirective: false };
+  const match = body.match(/(?:^|\s)\/status(?=$|\s|:)\b/i);
+  const cleaned = match
+    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    : body.trim();
+  return {
+    cleaned,
+    hasDirective: !!match,
+  };
+}
+
 export type { ElevatedLevel, ThinkLevel, VerboseLevel };

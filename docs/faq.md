@@ -14,6 +14,8 @@ Everything lives under `~/.clawdbot/`:
 | Path | Purpose |
 |------|---------|
 | `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
+| `~/.clawdbot/credentials/oauth.json` | OAuth credentials (Anthropic/OpenAI, etc.) |
+| `~/.clawdbot/agent/auth.json` | API key store |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
 | `~/.clawdbot/sessions/` | Conversation history & state |
 | `~/.clawdbot/sessions/sessions.json` | Session metadata |
@@ -40,10 +42,10 @@ Some features are platform-specific:
 - **CPU:** 1 core is fine for personal use
 - **Disk:** ~500MB for Clawdbot + deps, plus space for logs/media
 
-The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. You can also use **Bun** instead of Node for even lower memory footprint:
+The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. For the CLI, prefer the Node runtime (most stable):
 
 ```bash
-bun clawdbot gateway
+pnpm clawdbot gateway
 ```
 
 ### How do I install on Linux without Homebrew?
@@ -76,7 +78,7 @@ This creates `~/.clawdbot/clawdbot.json` with your API keys, workspace path, and
 cp -r ~/.clawdbot ~/.clawdbot-backup
 
 # Remove config and credentials
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 
 # Re-run onboarding
 pnpm clawdbot onboard
@@ -105,18 +107,36 @@ The macOS app onboarding is still being polished and can have quirks (e.g., What
 
 ### OAuth vs API key — what's the difference?
 
-- **OAuth** — Uses your Claude Pro/Max subscription ($20-100/mo flat). No per-token charges. ✅ Recommended!
-- **API key** — Pay-per-token via console.anthropic.com. Can get expensive fast.
+- **OAuth** — Uses your **subscription** (Anthropic Claude Pro/Max or OpenAI ChatGPT/Codex). No per‑token charges. ✅ Recommended!
+- **API key** — Pay‑per‑token via the provider’s API billing. Can get expensive fast.
 
 They're **separate billing**! An API key does NOT use your subscription.
 
-**For OAuth:** During onboarding, pick "Anthropic OAuth", log in to your Claude account, paste the code back. Or just run:
+**For OAuth:** During onboarding, pick **Anthropic OAuth** or **OpenAI Codex OAuth**, log in, paste the code/URL when prompted. Or just run:
 
 ```bash
 pnpm clawdbot login
 ```
 
-**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/` to your server. The auth is just a JSON file.
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/credentials/oauth.json` to your server. The auth is just a JSON file.
+
+### How are env vars loaded?
+
+CLAWDBOT reads env vars from the parent process (shell, launchd/systemd, CI, etc.). It also loads `.env` files:
+- `.env` in the current working directory
+- global fallback: `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`)
+
+Neither `.env` file overrides existing env vars.
+
+Optional convenience: import missing expected keys from your login shell env (sources your shell profile):
+
+```json5
+{
+  env: { shellEnv: { enabled: true, timeoutMs: 15000 } }
+}
+```
+
+Or set `CLAWDBOT_LOAD_SHELL_ENV=1` (timeout: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`).
 
 ### Does enterprise OAuth work?
 
@@ -128,7 +148,7 @@ pnpm clawdbot login
 
 OAuth needs the callback to reach the machine running the CLI. Options:
 
-1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/` to the container.
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/oauth.json` to the container.
 2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
 3. **Tailscale** — Put both machines on your tailnet.
 
@@ -209,7 +229,7 @@ Yes! The terminal QR code login works fine over SSH. For long-running operation:
 ### bun binary vs Node runtime?
 
 Clawdbot can run as:
-- **bun binary** — Single executable, easy distribution, auto-restarts via launchd
+- **bun binary (macOS app)** — Single executable, easy distribution, auto-restarts via launchd
 - **Node runtime** (`pnpm clawdbot gateway`) — More stable for WhatsApp
 
 If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys).
@@ -446,6 +466,21 @@ cd ~/path/to/clawdbot
 codex --full-auto "debug why clawdbot gateway won't start"
 ```
 
+### Gateway stops after I log out (Linux)
+
+Linux installs use a systemd **user** service. By default, systemd stops user
+services on logout/idle, which kills the Gateway.
+
+Onboarding attempts to enable lingering; if it’s still off, run:
+```bash
+sudo loginctl enable-linger $USER
+```
+
+**macOS/Windows**
+
+Gateway daemons run in the user session by default. Keep the user logged in.
+Headless/system services are not configured out of the box.
+
 ### Processes keep restarting after I kill them
 
 The gateway runs under a supervisor that auto-restarts it. You need to stop the supervisor, not just kill the process.
@@ -496,10 +531,10 @@ sudo systemctl disable --now clawdbot
 pkill -f "clawdbot"
 
 # Remove data
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 
 # Remove repo and re-clone
-rm -rf ~/clawdbot
+trash ~/clawdbot
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot && pnpm install && pnpm build
 pnpm clawdbot onboard
@@ -530,23 +565,32 @@ Use `/model` to switch without restarting:
 /model sonnet
 /model haiku
 /model opus
+/model gpt
+/model gpt-mini
+/model gemini
+/model gemini-flash
 ```
+
+List available models with `/model`, `/model list`, or `/model status`.
+
+Clawdbot ships a few default model shorthands (you can override them in config):
+`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`.
 
 **Setup:** Configure allowed models and aliases in `clawdbot.json`:
 
 ```json
 {
   "agent": {
-    "model": "anthropic/claude-opus-4-5-20251022",
+    "model": "anthropic/claude-opus-4-5",
     "allowedModels": [
-      "anthropic/claude-opus-4-5-20251022",
-      "anthropic/claude-sonnet-4-5-20251022",
-      "anthropic/claude-haiku-4-5-20251001"
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-5",
+      "anthropic/claude-haiku-4-5"
     ],
     "modelAliases": {
-      "opus": "anthropic/claude-opus-4-5-20251022",
-      "sonnet": "anthropic/claude-sonnet-4-5-20251022",
-      "haiku": "anthropic/claude-haiku-4-5-20251001"
+      "opus": "anthropic/claude-opus-4-5",
+      "sonnet": "anthropic/claude-sonnet-4-5",
+      "haiku": "anthropic/claude-haiku-4-5"
     }
   }
 }

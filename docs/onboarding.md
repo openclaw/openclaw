@@ -1,18 +1,17 @@
 ---
-summary: "Planned first-run onboarding flow for Clawdbot (local vs remote, Anthropic OAuth, workspace bootstrap ritual)"
+summary: "Planned first-run onboarding flow for Clawdbot (local vs remote, OAuth auth, workspace bootstrap ritual)"
 read_when:
   - Designing the macOS onboarding assistant
-  - Implementing Anthropic auth or identity setup
+  - Implementing Anthropic/OpenAI auth or identity setup
 ---
-<!-- {% raw %} -->
 # Onboarding (macOS app)
 
-This doc describes the intended **first-run onboarding** for Clawdbot. The goal is a good “day 0” experience: pick where the Gateway runs, bind Claude (Anthropic) auth for the embedded agent runtime, and then let the **agent bootstrap itself** via a first-run ritual in the workspace.
+This doc describes the intended **first-run onboarding** for Clawdbot. The goal is a good “day 0” experience: pick where the Gateway runs, bind subscription auth (Anthropic or OpenAI) for the embedded agent runtime, and then let the **agent bootstrap itself** via a first-run ritual in the workspace.
 
 ## Page order (high level)
 
 1) **Local vs Remote**
-2) **(Local only)** Connect Claude (Anthropic OAuth) — optional, but recommended
+2) **(Local only)** Connect subscription auth (Anthropic / OpenAI OAuth) — optional, but recommended
 3) **Connect Gmail (optional)** — run `clawdbot hooks gmail setup` to configure Pub/Sub hooks
 4) **Onboarding chat** — dedicated session where the agent introduces itself and guides setup
 
@@ -20,7 +19,7 @@ This doc describes the intended **first-run onboarding** for Clawdbot. The goal 
 
 First question: where does the **Gateway** run?
 
-- **Local (this Mac):** onboarding can run the Anthropic OAuth flow and write the Clawdbot token store locally.
+- **Local (this Mac):** onboarding can run OAuth flows and write OAuth credentials locally.
 - **Remote (over SSH/tailnet):** onboarding must not run OAuth locally, because credentials must exist on the **gateway host**.
 
 Gateway auth tip:
@@ -29,11 +28,11 @@ Gateway auth tip:
 
 Implementation note (2025-12-19): in local mode, the macOS app bundles the Gateway and enables it via a per-user launchd LaunchAgent (no global npm install/Node requirement for the user).
 
-## 2) Local-only: Connect Claude (Anthropic OAuth)
+## 2) Local-only: Connect subscription auth (Anthropic / OpenAI OAuth)
 
-This is the “bind Clawdbot to Anthropic” step. It is explicitly the **Anthropic (Claude Pro/Max) OAuth flow**, not a generic “login”.
+This is the “bind Clawdbot to subscription auth” step. It is explicitly the **Anthropic (Claude Pro/Max)** or **OpenAI (ChatGPT/Codex)** OAuth flow, not a generic “login”.
 
-### Recommended: OAuth
+### Recommended: OAuth (Anthropic)
 
 The macOS app should:
 - Start the Anthropic OAuth (PKCE) flow in the user’s browser.
@@ -42,7 +41,15 @@ The macOS app should:
   - `~/.clawdbot/credentials/oauth.json` (file mode `0600`, directory mode `0700`)
 
 Why this location matters: it’s the Clawdbot-owned OAuth store.
-On first run, Clawdbot can import existing OAuth tokens from legacy p/Claude locations if present.
+Clawdbot also imports `oauth.json` into the agent auth store (`~/.clawdbot/agent/auth.json`) on first use.
+
+### Recommended: OAuth (OpenAI Codex)
+
+The macOS app should:
+- Start the OpenAI Codex OAuth (PKCE) flow in the user’s browser.
+- Auto-capture the callback on `http://127.0.0.1:1455/auth/callback` when possible.
+- If the callback fails, prompt the user to paste the redirect URL or code.
+- Store credentials in `~/.clawdbot/credentials/oauth.json` (same OAuth store as Anthropic).
 
 ### Alternative: API key (instructions only)
 
@@ -95,7 +102,7 @@ Once setup is complete, the user can switch to the normal chat (`main`) via the 
 
 We no longer collect identity in the onboarding wizard. Instead, the **first agent run** performs a playful bootstrap ritual using files in the workspace:
 
-- Workspace is created implicitly (default `~/.clawdbot/workspace`) when local is selected,
+- Workspace is created implicitly (default `~/clawd`, configurable via `agent.workspace`) when local is selected,
   but only if the folder is empty or already contains `AGENTS.md`.
 - Files are seeded: `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`.
 - `BOOTSTRAP.md` tells the agent to keep it conversational:
@@ -124,7 +131,7 @@ The workspace is created automatically as part of agent bootstrap (no dedicated 
 Recommendation: treat the workspace as the agent’s “memory” and make it a git repo (ideally private) so identity + memories are backed up:
 
 ```bash
-cd ~/.clawdbot/workspace
+cd ~/clawd
 git init
 git add AGENTS.md
 git commit -m "Add agent workspace"
@@ -137,7 +144,7 @@ Daily memory lives under `memory/` in the workspace:
 
 ## Remote mode note (why OAuth is hidden)
 
-If the Gateway runs on another machine, the Anthropic OAuth credentials must be created/stored on that host (where the agent runtime runs).
+If the Gateway runs on another machine, OAuth credentials must be created/stored on that host (where the agent runtime runs).
 
 For now, remote onboarding should:
 - explain why OAuth isn't shown
@@ -150,17 +157,14 @@ On the gateway host, create `~/.clawdbot/credentials/oauth.json` with this exact
 
 ```json
 {
-  "anthropic": {
-    "access": "sk-ant-oat01-...",
-    "refresh": "sk-ant-ort01-...",
-    "expires": 1767304352803
-  }
+  "anthropic": { "type": "oauth", "access": "sk-ant-oat01-...", "refresh": "sk-ant-ort01-...", "expires": 1767304352803 },
+  "openai-codex": { "type": "oauth", "access": "eyJhbGciOi...", "refresh": "oai-refresh-...", "expires": 1767304352803, "accountId": "acct_..." }
 }
 ```
 
 Set permissions: `chmod 600 ~/.clawdbot/credentials/oauth.json`
 
-**Note:** Clawdbot can auto-import from legacy pi-coding-agent paths (`~/.pi/agent/oauth.json`, etc.) but this does NOT work with Claude Code credentials — different file and format.
+**Note:** Clawdbot auto-imports from legacy pi-coding-agent paths (`~/.pi/agent/oauth.json`, etc.) but this does NOT work with Claude Code credentials — different file and format.
 
 ### Using Claude Code credentials
 
@@ -182,4 +186,3 @@ chmod 600 ~/.clawdbot/credentials/oauth.json
 | `accessToken` | `access` |
 | `refreshToken` | `refresh` |
 | `expiresAt` | `expires` |
-<!-- {% endraw %} -->

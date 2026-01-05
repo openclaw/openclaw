@@ -5,9 +5,13 @@ import { createTelegramBot } from "./bot.js";
 const { loadConfig } = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
 }));
-vi.mock("../config/config.js", () => ({
-  loadConfig,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig,
+  };
+});
 
 const useSpy = vi.fn();
 const onSpy = vi.fn();
@@ -222,6 +226,38 @@ describe("createTelegramBot", () => {
     for (const call of rest) {
       expect(call[2]?.reply_to_message_id).toBeUndefined();
     }
+  });
+
+  it("prefixes tool and final replies with responsePrefix", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockImplementation(async (_ctx, opts) => {
+      await opts?.onToolResult?.({ text: "tool result" });
+      return { text: "final reply" };
+    });
+    loadConfig.mockReturnValue({ messages: { responsePrefix: "PFX" } });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    await handler({
+      message: {
+        chat: { id: 5, type: "private" },
+        text: "hi",
+        date: 1736380800,
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+    expect(sendMessageSpy.mock.calls[0][1]).toBe("PFX tool result");
+    expect(sendMessageSpy.mock.calls[1][1]).toBe("PFX final reply");
   });
 
   it("honors replyToMode=all for threaded replies", async () => {

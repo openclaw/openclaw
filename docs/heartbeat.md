@@ -22,6 +22,13 @@ If the model accidentally includes `HEARTBEAT_OK` at the start or end of a
 normal (non-heartbeat) reply, Clawdbot strips the token and logs a verbose
 message. If the reply is only `HEARTBEAT_OK`, it is dropped.
 
+### Outbound normalization (all providers)
+For **all providers** (WhatsApp/Web, Telegram, Slack, Discord, Signal, iMessage),
+Clawdbot applies the same filtering to tool summaries, streaming block replies,
+and final replies:
+- drop payloads that are only `HEARTBEAT_OK` with no media
+- strip `HEARTBEAT_OK` at the edges when mixed with other text
+
 ## Config
 
 ```json5

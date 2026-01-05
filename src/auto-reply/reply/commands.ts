@@ -1,4 +1,10 @@
+import fs from "node:fs";
+
+import { getEnvApiKey } from "@mariozechner/pi-ai";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveOAuthPath } from "../../config/paths.js";
 import {
   type SessionEntry,
   type SessionScope,
@@ -15,18 +21,19 @@ import {
   parseActivationCommand,
 } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
-import { buildStatusMessage } from "../status.js";
+import { buildHelpMessage, buildStatusMessage } from "../status.js";
 import type { MsgContext } from "../templating.js";
-import type { ThinkLevel, VerboseLevel } from "../thinking.js";
+import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
+import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions } from "./mentions.js";
 
 export type CommandContext = {
   surface: string;
   isWhatsAppSurface: boolean;
   ownerList: string[];
-  isOwnerSender: boolean;
+  isAuthorizedSender: boolean;
   senderE164?: string;
   abortKey?: string;
   rawBodyNormalized: string;
@@ -35,14 +42,75 @@ export type CommandContext = {
   to?: string;
 };
 
+function hasOAuthCredentials(provider: string): boolean {
+  try {
+    const oauthPath = resolveOAuthPath();
+    if (!fs.existsSync(oauthPath)) return false;
+    const raw = fs.readFileSync(oauthPath, "utf8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const entry = parsed?.[provider] as
+      | {
+          refresh?: string;
+          refresh_token?: string;
+          refreshToken?: string;
+          access?: string;
+          access_token?: string;
+          accessToken?: string;
+        }
+      | undefined;
+    if (!entry) return false;
+    const refresh =
+      entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
+    const access =
+      entry.access ?? entry.access_token ?? entry.accessToken ?? "";
+    return Boolean(refresh.trim() && access.trim());
+  } catch {
+    return false;
+  }
+}
+
+function resolveModelAuthLabel(provider?: string): string | undefined {
+  const resolved = provider?.trim();
+  if (!resolved) return undefined;
+
+  try {
+    const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
+    const stored = authStorage.get(resolved);
+    if (stored?.type === "oauth") return "oauth";
+    if (stored?.type === "api_key") return "api-key";
+  } catch {
+    // ignore auth storage errors
+  }
+
+  if (resolved === "anthropic") {
+    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
+    if (oauthEnv?.trim()) return "oauth";
+  }
+
+  if (hasOAuthCredentials(resolved)) return "oauth";
+
+  const envKey = getEnvApiKey(resolved);
+  if (envKey?.trim()) return "api-key";
+
+  return "unknown";
+}
+
 export function buildCommandContext(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
   sessionKey?: string;
   isGroup: boolean;
   triggerBodyNormalized: string;
+  commandAuthorized: boolean;
 }): CommandContext {
-  const { ctx, cfg, sessionKey, isGroup, triggerBodyNormalized } = params;
+  const {
+    ctx,
+    cfg,
+    sessionKey,
+    isGroup,
+    triggerBodyNormalized,
+    commandAuthorized,
+  } = params;
   const surface = (ctx.Surface ?? "").trim().toLowerCase();
   const isWhatsAppSurface =
     surface === "whatsapp" ||
@@ -54,16 +122,12 @@ export function buildCommandContext(params: {
     : undefined;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
-  const defaultAllowFrom =
-    isWhatsAppSurface &&
-    (!configuredAllowFrom || configuredAllowFrom.length === 0) &&
-    to
-      ? [to]
-      : undefined;
-  const allowFrom =
-    configuredAllowFrom && configuredAllowFrom.length > 0
-      ? configuredAllowFrom
-      : defaultAllowFrom;
+  const allowFromList =
+    configuredAllowFrom?.filter((entry) => entry?.trim()) ?? [];
+  const allowAll =
+    !isWhatsAppSurface ||
+    allowFromList.length === 0 ||
+    allowFromList.some((entry) => entry.trim() === "*");
 
   const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
@@ -71,23 +135,28 @@ export function buildCommandContext(params: {
     ? stripMentions(rawBodyNormalized, ctx, cfg)
     : rawBodyNormalized;
   const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
-  const ownerCandidates = isWhatsAppSurface
-    ? (allowFrom ?? []).filter((entry) => entry && entry !== "*")
-    : [];
-  if (isWhatsAppSurface && ownerCandidates.length === 0 && to) {
+  const ownerCandidates =
+    isWhatsAppSurface && !allowAll
+      ? allowFromList.filter((entry) => entry !== "*")
+      : [];
+  if (isWhatsAppSurface && !allowAll && ownerCandidates.length === 0 && to) {
     ownerCandidates.push(to);
   }
   const ownerList = ownerCandidates
     .map((entry) => normalizeE164(entry))
     .filter((entry): entry is string => Boolean(entry));
-  const isOwnerSender =
-    Boolean(senderE164) && ownerList.includes(senderE164 ?? "");
+  const isOwner =
+    !isWhatsAppSurface ||
+    allowAll ||
+    ownerList.length === 0 ||
+    (senderE164 ? ownerList.includes(senderE164) : false);
+  const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
     surface,
     isWhatsAppSurface,
     ownerList,
-    isOwnerSender,
+    isAuthorizedSender,
     senderE164: senderE164 || undefined,
     abortKey,
     rawBodyNormalized,
@@ -101,6 +170,7 @@ export async function handleCommands(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
   command: CommandContext;
+  directives: InlineDirectives;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -110,6 +180,7 @@ export async function handleCommands(params: {
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
   resolvedVerboseLevel: VerboseLevel;
+  resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   provider: string;
   model: string;
@@ -122,6 +193,7 @@ export async function handleCommands(params: {
   const {
     cfg,
     command,
+    directives,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -131,7 +203,9 @@ export async function handleCommands(params: {
     defaultGroupActivation,
     resolvedThinkLevel,
     resolvedVerboseLevel,
+    resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
+    provider,
     model,
     contextTokens,
     isGroup,
@@ -151,9 +225,22 @@ export async function handleCommands(params: {
         reply: { text: "⚙️ Group activation only applies to group chats." },
       };
     }
-    if (!command.isOwnerSender) {
+    const activationOwnerList = command.ownerList;
+    const activationSenderE164 = command.senderE164
+      ? normalizeE164(command.senderE164)
+      : "";
+    const isActivationOwner =
+      !command.isWhatsAppSurface || activationOwnerList.length === 0
+        ? command.isAuthorizedSender
+        : Boolean(activationSenderE164) &&
+          activationOwnerList.includes(activationSenderE164);
+
+    if (
+      !command.isAuthorizedSender ||
+      (command.isWhatsAppSurface && !isActivationOwner)
+    ) {
       logVerbose(
-        `Ignoring /activation from non-owner in group: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /activation from unauthorized sender in group: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -179,9 +266,9 @@ export async function handleCommands(params: {
   }
 
   if (sendPolicyCommand.hasCommand) {
-    if (!command.isOwnerSender) {
+    if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /send from non-owner: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /send from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -220,9 +307,9 @@ export async function handleCommands(params: {
     command.commandBodyNormalized === "restart" ||
     command.commandBodyNormalized.startsWith("/restart ")
   ) {
-    if (isGroup && !command.isOwnerSender) {
+    if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /restart from non-owner in group: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /restart from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -235,14 +322,29 @@ export async function handleCommands(params: {
     };
   }
 
-  if (
+  const helpRequested =
+    command.commandBodyNormalized === "/help" ||
+    command.commandBodyNormalized === "help" ||
+    /(?:^|\s)\/help(?=$|\s|:)\b/i.test(command.commandBodyNormalized);
+  if (helpRequested) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /help from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    return { shouldContinue: false, reply: { text: buildHelpMessage() } };
+  }
+
+  const statusRequested =
+    directives.hasStatusDirective ||
     command.commandBodyNormalized === "/status" ||
     command.commandBodyNormalized === "status" ||
-    command.commandBodyNormalized.startsWith("/status ")
-  ) {
-    if (isGroup && !command.isOwnerSender) {
+    command.commandBodyNormalized.startsWith("/status ");
+  if (statusRequested) {
+    if (!command.isAuthorizedSender) {
       logVerbose(
-        `Ignoring /status from non-owner in group: ${command.senderE164 || "<unknown>"}`,
+        `Ignoring /status from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
     }
@@ -255,10 +357,12 @@ export async function handleCommands(params: {
       : undefined;
     const statusText = buildStatusMessage({
       agent: {
+        ...cfg.agent,
         model,
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,
         verboseDefault: cfg.agent?.verboseDefault,
+        elevatedDefault: cfg.agent?.elevatedDefault,
       },
       workspaceDir,
       sessionEntry,
@@ -269,6 +373,8 @@ export async function handleCommands(params: {
       resolvedThink:
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
+      resolvedElevated: resolvedElevatedLevel,
+      modelAuth: resolveModelAuthLabel(provider),
       webLinked,
       webAuthAgeMs,
       heartbeatSeconds,

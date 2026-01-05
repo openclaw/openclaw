@@ -3,9 +3,10 @@ import type {
   SlackEventMiddlewareArgs,
 } from "@slack/bolt";
 import bolt from "@slack/bolt";
-
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -581,7 +582,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       opts.wasMentioned ??
       (!isDirectMessage &&
         Boolean(botUserId && message.text?.includes(`<@${botUserId}>`)));
-    if (isRoom && channelConfig?.requireMention && !wasMentioned) {
+    const sender = await resolveUserName(message.user);
+    const senderName = sender?.name ?? message.user;
+    const allowList = normalizeAllowListLower(allowFrom);
+    const commandAuthorized =
+      allowList.length === 0 ||
+      allowListMatches({
+        allowList,
+        id: message.user,
+        name: senderName,
+      });
+    const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
+    const shouldBypassMention =
+      isRoom &&
+      channelConfig?.requireMention &&
+      !wasMentioned &&
+      !hasAnyMention &&
+      commandAuthorized &&
+      hasControlCommand(message.text ?? "");
+    if (
+      isRoom &&
+      channelConfig?.requireMention &&
+      !wasMentioned &&
+      !shouldBypassMention
+    ) {
       logger.info(
         { channel: message.channel, reason: "no-mention" },
         "skipping room message",
@@ -597,8 +621,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
 
-    const sender = await resolveUserName(message.user);
-    const senderName = sender?.name ?? message.user;
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
@@ -642,6 +664,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
       GroupSubject: isRoomish ? roomLabel : undefined,
       SenderName: senderName,
+      SenderId: message.user,
       Surface: "slack" as const,
       MessageSid: message.ts,
       ReplyToId: message.thread_ts ?? message.ts,
@@ -650,6 +673,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       MediaPath: media?.path,
       MediaType: media?.contentType,
       MediaUrl: media?.path,
+      CommandAuthorized: commandAuthorized,
     };
 
     const replyTarget = ctxPayload.To ?? undefined;
@@ -676,34 +700,33 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
-    let blockSendChain: Promise<void> = Promise.resolve();
-    const sendBlockReply = (payload: ReplyPayload) => {
-      if (
-        !payload?.text &&
-        !payload?.mediaUrl &&
-        !(payload?.mediaUrls?.length ?? 0)
-      ) {
-        return;
-      }
-      blockSendChain = blockSendChain
-        .then(async () => {
-          await deliverReplies({
-            replies: [payload],
-            target: replyTarget,
-            token: botToken,
-            runtime,
-            textLimit,
-          });
-        })
-        .catch((err) => {
-          runtime.error?.(danger(`slack block reply failed: ${String(err)}`));
+    const dispatcher = createReplyDispatcher({
+      responsePrefix: cfg.messages?.responsePrefix,
+      deliver: async (payload) => {
+        await deliverReplies({
+          replies: [payload],
+          target: replyTarget,
+          token: botToken,
+          runtime,
+          textLimit,
         });
-    };
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          danger(`slack ${info.kind} reply failed: ${String(err)}`),
+        );
+      },
+    });
 
     const replyResult = await getReplyFromConfig(
       ctxPayload,
       {
-        onBlockReply: sendBlockReply,
+        onToolResult: (payload) => {
+          dispatcher.sendToolResult(payload);
+        },
+        onBlockReply: (payload) => {
+          dispatcher.sendBlockReply(payload);
+        },
       },
       cfg,
     );
@@ -712,19 +735,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         ? replyResult
         : [replyResult]
       : [];
-    await blockSendChain;
-    if (replies.length === 0) return;
-
-    await deliverReplies({
-      replies,
-      target: replyTarget,
-      token: botToken,
-      runtime,
-      textLimit,
-    });
+    let queuedFinal = false;
+    for (const reply of replies) {
+      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+    }
+    await dispatcher.waitForIdle();
+    if (!queuedFinal) return;
     if (shouldLogVerbose()) {
+      const finalCount = dispatcher.getQueuedCounts().final;
       logVerbose(
-        `slack: delivered ${replies.length} reply${replies.length === 1 ? "" : "ies"} to ${replyTarget}`,
+        `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
     }
   };

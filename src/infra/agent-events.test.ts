@@ -25,10 +25,10 @@ describe("agent-events sequencing", () => {
       list.push(evt.seq);
     });
 
-    emitAgentEvent({ runId: "run-1", stream: "job", data: {} });
-    emitAgentEvent({ runId: "run-1", stream: "job", data: {} });
-    emitAgentEvent({ runId: "run-2", stream: "job", data: {} });
-    emitAgentEvent({ runId: "run-1", stream: "job", data: {} });
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-2", stream: "lifecycle", data: {} });
+    emitAgentEvent({ runId: "run-1", stream: "lifecycle", data: {} });
 
     stop();
 

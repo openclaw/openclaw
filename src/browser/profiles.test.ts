@@ -64,6 +64,17 @@ describe("port allocation", () => {
     expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START);
   });
 
+  it("allocates within an explicit range", () => {
+    const usedPorts = new Set<number>();
+    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(
+      20000,
+    );
+    usedPorts.add(20000);
+    expect(allocateCdpPort(usedPorts, { start: 20000, end: 20002 })).toBe(
+      20001,
+    );
+  });
+
   it("skips used ports and returns next available", () => {
     const usedPorts = new Set([CDP_PORT_RANGE_START, CDP_PORT_RANGE_START + 1]);
     expect(allocateCdpPort(usedPorts)).toBe(CDP_PORT_RANGE_START + 2);

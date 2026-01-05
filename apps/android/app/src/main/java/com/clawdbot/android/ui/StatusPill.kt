@@ -28,9 +28,9 @@ import androidx.compose.ui.unit.dp
 fun StatusPill(
   bridge: BridgeState,
   voiceEnabled: Boolean,
-  activity: StatusActivity? = null,
   onClick: () -> Unit,
   modifier: Modifier = Modifier,
+  activity: StatusActivity? = null,
 ) {
   Surface(
     onClick = onClick,

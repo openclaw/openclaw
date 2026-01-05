@@ -184,9 +184,10 @@ export function renderApp(state: AppViewState) {
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
   const chatDisabledReason = state.connected ? null : "Disconnected from gateway.";
+  const isChat = state.tab === "chat";
 
   return html`
-    <div class="shell">
+    <div class="shell ${isChat ? "shell--chat" : ""}">
       <header class="topbar">
         <div class="brand">
           <div class="brand-title">Clawdbot Control</div>
@@ -211,7 +212,7 @@ export function renderApp(state: AppViewState) {
           `,
         )}
       </aside>
-      <main class="content">
+      <main class="content ${isChat ? "content--chat" : ""}">
         <section class="content-header">
           <div>
             <div class="page-title">${titleForTab(state.tab)}</div>
@@ -377,16 +378,20 @@ export function renderApp(state: AppViewState) {
                 state.sessionKey = next;
                 state.chatMessage = "";
                 state.chatStream = null;
+                state.chatStreamStartedAt = null;
                 state.chatRunId = null;
                 state.resetToolStream();
+                state.resetChatScroll();
                 state.applySettings({ ...state.settings, sessionKey: next });
                 void loadChatHistory(state);
               },
               thinkingLevel: state.chatThinkingLevel,
               loading: state.chatLoading,
               sending: state.chatSending,
-              messages: [...state.chatMessages, ...state.chatToolMessages],
+              messages: state.chatMessages,
+              toolMessages: state.chatToolMessages,
               stream: state.chatStream,
+              streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
               connected: state.connected,
               canSend: state.connected,

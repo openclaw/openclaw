@@ -13,12 +13,14 @@ enum GatewayEndpointState: Sendable, Equatable {
 /// - The endpoint store owns observation + explicit "ensure tunnel" actions.
 actor GatewayEndpointStore {
     static let shared = GatewayEndpointStore()
+    private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
 
     struct Deps: Sendable {
         let mode: @Sendable () async -> AppState.ConnectionMode
         let token: @Sendable () -> String?
         let password: @Sendable () -> String?
         let localPort: @Sendable () -> Int
+        let localHost: @Sendable () async -> String
         let remotePortIfRunning: @Sendable () async -> UInt16?
         let ensureRemoteTunnel: @Sendable () async throws -> UInt16
 
@@ -33,6 +35,16 @@ actor GatewayEndpointStore {
                     env: ProcessInfo.processInfo.environment)
             },
             localPort: { GatewayEnvironment.gatewayPort() },
+            localHost: {
+                let root = ClawdbotConfigFile.loadDict()
+                let bind = GatewayEndpointStore.resolveGatewayBindMode(
+                    root: root,
+                    env: ProcessInfo.processInfo.environment)
+                let tailscaleIP = await MainActor.run { TailscaleService.shared.tailscaleIP }
+                return GatewayEndpointStore.resolveLocalGatewayHost(
+                    bindMode: bind,
+                    tailscaleIP: tailscaleIP)
+            },
             remotePortIfRunning: { await RemoteTunnelManager.shared.controlTunnelPortIfRunning() },
             ensureRemoteTunnel: { try await RemoteTunnelManager.shared.ensureControlTunnel() })
     }
@@ -89,13 +101,17 @@ actor GatewayEndpointStore {
         }
 
         let port = deps.localPort()
+        let bind = GatewayEndpointStore.resolveGatewayBindMode(
+            root: ClawdbotConfigFile.loadDict(),
+            env: ProcessInfo.processInfo.environment)
+        let host = GatewayEndpointStore.resolveLocalGatewayHost(bindMode: bind, tailscaleIP: nil)
         let token = deps.token()
         let password = deps.password()
         switch initialMode {
         case .local:
             self.state = .ready(
                 mode: .local,
-                url: URL(string: "ws://127.0.0.1:\(port)")!,
+                url: URL(string: "ws://\(host):\(port)")!,
                 token: token,
                 password: password)
         case .remote:
@@ -129,9 +145,10 @@ actor GatewayEndpointStore {
         switch mode {
         case .local:
             let port = self.deps.localPort()
+            let host = await self.deps.localHost()
             self.setState(.ready(
                 mode: .local,
-                url: URL(string: "ws://127.0.0.1:\(port)")!,
+                url: URL(string: "ws://\(host):\(port)")!,
                 token: token,
                 password: password))
         case .remote:
@@ -218,6 +235,39 @@ actor GatewayEndpointStore {
                     "endpoint unavailable mode=\(modeDesc, privacy: .public) reason=\(reason, privacy: .public)")
         }
     }
+
+    private static func resolveGatewayBindMode(
+        root: [String: Any],
+        env: [String: String]) -> String?
+    {
+        if let envBind = env["CLAWDBOT_GATEWAY_BIND"] {
+            let trimmed = envBind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if self.supportedBindModes.contains(trimmed) {
+                return trimmed
+            }
+        }
+        if let gateway = root["gateway"] as? [String: Any],
+           let bind = gateway["bind"] as? String
+        {
+            let trimmed = bind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            if self.supportedBindModes.contains(trimmed) {
+                return trimmed
+            }
+        }
+        return nil
+    }
+
+    private static func resolveLocalGatewayHost(
+        bindMode: String?,
+        tailscaleIP: String?) -> String
+    {
+        switch bindMode {
+        case "tailnet", "auto":
+            tailscaleIP ?? "127.0.0.1"
+        default:
+            "127.0.0.1"
+        }
+    }
 }
 
 #if DEBUG
@@ -228,6 +278,20 @@ extension GatewayEndpointStore {
         env: [String: String]) -> String?
     {
         self.resolveGatewayPassword(isRemote: isRemote, root: root, env: env)
+    }
+
+    static func _testResolveGatewayBindMode(
+        root: [String: Any],
+        env: [String: String]) -> String?
+    {
+        self.resolveGatewayBindMode(root: root, env: env)
+    }
+
+    static func _testResolveLocalGatewayHost(
+        bindMode: String?,
+        tailscaleIP: String?) -> String
+    {
+        self.resolveLocalGatewayHost(bindMode: bindMode, tailscaleIP: tailscaleIP)
     }
 }
 #endif

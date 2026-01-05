@@ -2,11 +2,11 @@ import SwiftUI
 
 extension ConnectionsSettings {
     var body: some View {
-        NavigationSplitView {
+        HStack(spacing: 0) {
             self.sidebar
-        } detail: {
             self.detail
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             self.store.start()
             self.ensureSelection()
@@ -18,27 +18,30 @@ extension ConnectionsSettings {
     }
 
     private var sidebar: some View {
-        List(selection: self.$selectedProvider) {
-            if !self.enabledProviders.isEmpty {
-                Section("Configured") {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 8) {
+                if !self.enabledProviders.isEmpty {
+                    self.sidebarSectionHeader("Configured")
                     ForEach(self.enabledProviders) { provider in
                         self.sidebarRow(provider)
-                            .tag(provider)
                     }
                 }
-            }
 
-            if !self.availableProviders.isEmpty {
-                Section("Available") {
+                if !self.availableProviders.isEmpty {
+                    self.sidebarSectionHeader("Available")
                     ForEach(self.availableProviders) { provider in
                         self.sidebarRow(provider)
-                            .tag(provider)
                     }
                 }
             }
+            .padding(.vertical, 10)
+            .padding(.horizontal, 10)
         }
-        .listStyle(.sidebar)
-        .frame(minWidth: 210, idealWidth: 230, maxWidth: 260)
+        .frame(minWidth: 220, idealWidth: 240, maxWidth: 280, maxHeight: .infinity, alignment: .topLeading)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .windowBackgroundColor)))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
     private var detail: some View {
@@ -49,7 +52,7 @@ extension ConnectionsSettings {
                 self.emptyDetail
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var emptyDetail: some View {
@@ -79,18 +82,41 @@ extension ConnectionsSettings {
     }
 
     private func sidebarRow(_ provider: ConnectionProvider) -> some View {
-        HStack(spacing: 8) {
-            Circle()
-                .fill(self.providerTint(provider))
-                .frame(width: 8, height: 8)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(provider.title)
-                Text(self.providerSummary(provider))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+        let isSelected = self.selectedProvider == provider
+        return Button {
+            self.selectedProvider = provider
+        } label: {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(self.providerTint(provider))
+                    .frame(width: 8, height: 8)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(provider.title)
+                    Text(self.providerSummary(provider))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(isSelected ? Color.accentColor.opacity(0.18) : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .background(Color.clear) // ensure full-width hit test area
+            .contentShape(Rectangle())
         }
-        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+    }
+
+    private func sidebarSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+            .padding(.horizontal, 4)
+            .padding(.top, 2)
     }
 
     private func detailHeader(for provider: ConnectionProvider) -> some View {

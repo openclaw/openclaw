@@ -11,6 +11,21 @@ Clawdbot exposes **first-class agent tools** for browser, canvas, nodes, and cro
 These replace the old `clawdbot-*` skills: the tools are typed, no shelling,
 and the agent should rely on them directly.
 
+## Disabling tools
+
+You can globally allow/deny tools via `agent.tools` in `clawdbot.json`
+(deny wins). This prevents disallowed tools from being sent to providers.
+
+```json5
+{
+  agent: {
+    tools: {
+      deny: ["browser"]
+    }
+  }
+}
+```
+
 ## Tool inventory
 
 ### `bash`
@@ -58,7 +73,7 @@ Common parameters:
 - `controlUrl` (defaults from config)
 - `profile` (optional; defaults to `browser.defaultProfile`)
 Notes:
-- Requires `browser.enabled=true` in `~/.clawdbot/clawdbot.json`.
+- Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - Uses `browser.controlUrl` unless `controlUrl` is passed explicitly.
 - All actions accept optional `profile` parameter for multi-instance support.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to "clawd").

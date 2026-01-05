@@ -49,6 +49,34 @@ pnpm gateway:watch
 
 Supported if you isolate state + config and use unique ports.
 
+### Dev profile (`--dev`)
+
+Fast path: run a fully-isolated dev instance (config/state/workspace) without touching your primary setup.
+
+```bash
+clawdbot --dev setup
+clawdbot --dev gateway --allow-unconfigured
+# then target the dev instance:
+clawdbot --dev status
+clawdbot --dev health
+```
+
+Defaults (can be overridden via env/flags/config):
+- `CLAWDBOT_STATE_DIR=~/.clawdbot-dev`
+- `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/clawdbot.json`
+- `CLAWDBOT_GATEWAY_PORT=19001` (Gateway WS + HTTP)
+- `bridge.port=19002` (derived: `gateway.port+1`)
+- `browser.controlUrl=http://127.0.0.1:19003` (derived: `gateway.port+2`)
+- `canvasHost.port=19005` (derived: `gateway.port+4`)
+- `agent.workspace` default becomes `~/clawd-dev` when you run `setup`/`onboard` under `--dev`.
+
+Derived ports (rules of thumb):
+- Base port = `gateway.port` (or `CLAWDBOT_GATEWAY_PORT` / `--port`)
+- `bridge.port = base + 1` (or `CLAWDBOT_BRIDGE_PORT` / config override)
+- `browser.controlUrl port = base + 2` (or `CLAWDBOT_BROWSER_CONTROL_URL` / config override)
+- `canvasHost.port = base + 4` (or `CLAWDBOT_CANVAS_HOST_PORT` / config override)
+- Browser profile CDP ports auto-allocate from `browser.controlPort + 9 .. + 108` (persisted per profile).
+
 Checklist per instance:
 - unique `gateway.port`
 - unique `CLAWDBOT_CONFIG_PATH`
@@ -127,11 +155,13 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
   - KeepAlive: true
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
+- LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
 
 Bundled mac app:
 - Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
 
-## Supervision (systemd example)
+## Supervision (systemd user unit)
+Create `~/.config/systemd/user/clawdbot-gateway.service`:
 ```
 [Unit]
 Description=Clawdbot Gateway
@@ -140,16 +170,36 @@ Wants=network-online.target
 
 [Service]
 ExecStart=/usr/local/bin/clawdbot gateway --port 18789
-Restart=on-failure
+Restart=always
 RestartSec=5
-User=clawdbot
 Environment=CLAWDBOT_GATEWAY_TOKEN=
-WorkingDirectory=/home/clawdbot
+WorkingDirectory=/home/youruser
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target
 ```
-Enable with `systemctl enable --now clawdbot-gateway.service`.
+Enable lingering (required so the user service survives logout/idle):
+```
+sudo loginctl enable-linger youruser
+```
+Onboarding runs this on Linux (may prompt for sudo; writes `/var/lib/systemd/linger`).
+Then enable the service:
+```
+systemctl --user enable --now clawdbot-gateway.service
+```
+
+**Alternative (system service)** - for always-on or multi-user servers, you can
+install a systemd **system** unit instead of a user unit (no lingering needed).
+Create `/etc/systemd/system/clawdbot-gateway.service` (copy the unit above,
+switch `WantedBy=multi-user.target`, set `User=` + `WorkingDirectory=`), then:
+```
+sudo systemctl daemon-reload
+sudo systemctl enable --now clawdbot-gateway.service
+```
+
+## Supervision (Windows scheduled task)
+- Onboarding installs a Scheduled Task named `Clawdbot Gateway` (runs on user logon).
+- Requires a logged-in user session; for headless setups use a system service or a task configured to run without a logged-in user (not shipped).
 
 ## Operational checks
 - Liveness: open WS and send `req:connect` → expect `res` with `payload.type="hello-ok"` (with snapshot).

@@ -334,6 +334,7 @@
 .list {
   display: grid;
   gap: 12px;
+  container-type: inline-size;
 }
 
 .list-item {
@@ -371,10 +372,25 @@
   min-width: 220px;
 }
 
+.list-meta .btn {
+  padding: 6px 10px;
+}
+
 .list-meta .field input,
 .list-meta .field textarea,
 .list-meta .field select {
   width: 100%;
+}
+
+@container (max-width: 560px) {
+  .list-item {
+    grid-template-columns: 1fr;
+  }
+
+  .list-meta {
+    min-width: 0;
+    text-align: left;
+  }
 }
 
 .chip-row {
@@ -429,6 +445,16 @@
   background: rgba(0, 0, 0, 0.2);
 }
 
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.shell--chat .chat {
+  flex: 1;
+}
+
 .chat-header {
   display: flex;
   justify-content: space-between;
@@ -460,8 +486,9 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 60vh;
-  overflow: auto;
+  flex: 1;
+  max-height: none;
+  overflow: visible;
   padding: 14px 12px;
   min-width: 0;
   border-radius: 16px;
@@ -565,6 +592,58 @@
 @media (prefers-reduced-motion: reduce) {
   .chat-bubble.streaming {
     animation: none;
+  }
+}
+
+.chat-bubble.chat-reading-indicator {
+  width: fit-content;
+  padding: 10px 14px;
+}
+
+.chat-reading-indicator__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 10px;
+}
+
+.chat-reading-indicator__dots > span {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--chat-text);
+  opacity: 0.55;
+  transform: translateY(0);
+  animation: chatReadingDot 1.1s ease-in-out infinite;
+  will-change: transform, opacity;
+}
+
+.chat-reading-indicator__dots > span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.chat-reading-indicator__dots > span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+@keyframes chatReadingDot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.38;
+    transform: translateY(0) scale(0.92);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.18);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reading-indicator__dots > span {
+    animation: none;
+    opacity: 0.75;
   }
 }
 
@@ -729,6 +808,16 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
+}
+
+.shell--chat .chat-compose {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin-top: 0;
+  padding-top: 12px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, var(--panel) 35%);
+  border-top: 1px solid var(--border);
 }
 
 .chat-compose__field {

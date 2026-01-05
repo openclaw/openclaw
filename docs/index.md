@@ -3,23 +3,23 @@ summary: "Top-level overview of Clawdbot, features, and purpose"
 read_when:
   - Introducing Clawdbot to newcomers
 ---
-<!-- {% raw %} -->
 # CLAWDBOT 🦞
 
 > *"EXFOLIATE! EXFOLIATE!"* — A space lobster, probably
 
 <p align="center">
-  <img src="whatsapp-clawd.jpg" alt="CLAWDBOT" width="420">
+  <img src="whatsapp-clawd.jpg" alt="CLAWDBOT" width="420" />
 </p>
 
 <p align="center">
-  <strong>WhatsApp + Telegram + Discord + iMessage gateway for AI agents (Pi).</strong><br>
+  <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
   Send a message, get an agent response — from your pocket.
 </p>
 
 <p align="center">
   <a href="https://github.com/clawdbot/clawdbot">GitHub</a> ·
   <a href="https://github.com/clawdbot/clawdbot/releases">Releases</a> ·
+  <a href="https://docs.clawdbot.com/">Docs</a> ·
   <a href="./clawd.md">Clawd setup</a>
 </p>
 
@@ -42,7 +42,8 @@ WhatsApp / Telegram / Discord
               ├─ CLI (clawdbot …)
               ├─ Chat UI (SwiftUI)
               ├─ macOS app (Clawdbot.app)
-              └─ iOS node via Bridge + pairing
+              ├─ iOS node via Bridge + pairing
+              └─ Android node via Bridge + pairing
 ```
 
 Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns provider connections and the WebSocket control plane.
@@ -63,12 +64,14 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 🎮 **Discord Bot** — DMs + guild channels via discord.js
 - 💬 **iMessage** — Local imsg CLI integration (macOS)
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
+- 🔐 **Subscription auth** — Anthropic (Claude Pro/Max) + OpenAI (ChatGPT/Codex) via OAuth
 - 💬 **Sessions** — Direct chats collapse into shared `main` (default); groups are isolated
 - 👥 **Group Chat Support** — Mention-based by default; owner can toggle `/activation always|mention`
 - 📎 **Media Support** — Send and receive images, audio, documents
 - 🎤 **Voice notes** — Optional transcription hook
 - 🖥️ **WebChat + macOS app** — Local UI + menu bar companion for ops and voice wake
 - 📱 **iOS node** — Pairs as a node and exposes a Canvas surface
+- 📱 **Android node** — Pairs as a node and exposes Canvas + Chat + Camera
 
 Note: legacy Claude/Codex/Gemini/Opencode paths have been removed; Pi is the only coding-agent path.
 
@@ -125,6 +128,7 @@ Example:
 ## Docs
 
 - Start here:
+  - [Docs hubs (all pages linked)](./hubs.md)
   - [FAQ](./faq.md) ← *common questions answered*
   - [Configuration](./configuration.md)
   - [Nix mode](./nix.md)
@@ -148,6 +152,12 @@ Example:
   - [WhatsApp group messages](./group-messages.md)
   - [Media: images](./images.md)
   - [Media: audio](./audio.md)
+- Companion apps:
+  - [macOS app](./macos.md)
+  - [iOS app](./ios.md)
+  - [Android app](./android.md)
+  - [Windows app](./windows.md)
+  - [Linux app](./linux.md)
 - Ops and safety:
   - [Sessions](./session.md)
   - [Cron + wakeups](./cron.md)
@@ -161,7 +171,6 @@ Example:
 ---
 
 *"We're all just playing with our own prompts."* — an AI, probably high on tokens
-<!-- {% endraw %} -->
 
 ## Credits
 

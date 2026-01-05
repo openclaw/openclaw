@@ -19,6 +19,24 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
+  it("derives default ports from CLAWDBOT_GATEWAY_PORT when unset", () => {
+    const prev = process.env.CLAWDBOT_GATEWAY_PORT;
+    process.env.CLAWDBOT_GATEWAY_PORT = "19001";
+    try {
+      const resolved = resolveBrowserConfig(undefined);
+      expect(resolved.controlPort).toBe(19003);
+      const profile = resolveProfile(resolved, resolved.defaultProfile);
+      expect(profile?.cdpPort).toBe(19012);
+      expect(profile?.cdpUrl).toBe("http://127.0.0.1:19012");
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CLAWDBOT_GATEWAY_PORT;
+      } else {
+        process.env.CLAWDBOT_GATEWAY_PORT = prev;
+      }
+    }
+  });
+
   it("normalizes hex colors", () => {
     const resolved = resolveBrowserConfig({
       controlUrl: "http://localhost:18791",

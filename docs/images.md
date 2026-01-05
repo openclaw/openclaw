@@ -3,7 +3,6 @@ summary: "Image and media handling rules for send, gateway, and agent replies"
 read_when:
   - Modifying media pipeline or attachments
 ---
-<!-- {% raw %} -->
 # Image & Media Support — 2025-12-05
 
 CLAWDBOT is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
@@ -38,6 +37,7 @@ CLAWDBOT is now **web-only** (Baileys). This document captures the current media
 - When inbound web messages include media, CLAWDBOT downloads to a temp file and exposes templating variables:
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
+- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a relative path like `media/inbound/<filename>`.
 - Audio transcription (if configured) runs before templating and can replace `Body` with the transcript.
 
 ## Limits & Errors
@@ -49,4 +49,3 @@ CLAWDBOT is now **web-only** (Baileys). This document captures the current media
 - Cover send + reply flows for image/audio/document cases.
 - Validate recompression for images (size bound) and voice-note flag for audio.
 - Ensure multi-media replies fan out as sequential sends.
-<!-- {% endraw %} -->

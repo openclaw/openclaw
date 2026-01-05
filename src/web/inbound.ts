@@ -130,7 +130,7 @@ export async function monitorWebInbox(options: {
     type?: string;
     messages?: Array<import("@whiskeysockets/baileys").WAMessage>;
   }) => {
-    if (upsert.type !== "notify") return;
+    if (upsert.type !== "notify" && upsert.type !== "append") return;
     for (const msg of upsert.messages ?? []) {
       const id = msg.key?.id ?? undefined;
       // De-dupe on message id; Baileys can emit retries.
@@ -204,6 +204,10 @@ export async function monitorWebInbox(options: {
         // Self-chat mode: never auto-send read receipts (blue ticks) on behalf of the owner.
         logVerbose(`Self-chat mode: skipping read receipt for ${id}`);
       }
+
+      // If this is history/offline catch-up, we marked it as read above,
+      // but we skip triggering the auto-reply logic to avoid spamming old context.
+      if (upsert.type === "append") continue;
 
       let body = extractText(msg.message ?? undefined);
       if (!body) {

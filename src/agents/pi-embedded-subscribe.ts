@@ -6,6 +6,8 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
+import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   extractAssistantText,
   inferToolMetaFromArgs,
@@ -17,11 +19,7 @@ const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
 
-export type BlockReplyChunking = {
-  minChars: number;
-  maxChars: number;
-  breakPreference?: "paragraph" | "newline" | "sentence";
-};
+export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
@@ -176,6 +174,12 @@ export function subscribeEmbeddedPiSession(params: {
   };
 
   const blockChunking = params.blockReplyChunking;
+  const blockChunker = blockChunking
+    ? new EmbeddedBlockChunker(blockChunking)
+    : null;
+  // KNOWN: Provider streams are not strictly once-only or perfectly ordered.
+  // `text_end` can repeat full content; late `text_end` can arrive after `message_end`.
+  // Tests: `src/agents/pi-embedded-subscribe.test.ts` (e.g. late text_end cases).
   const shouldEmitToolResult = () =>
     typeof params.shouldEmitToolResult === "function"
       ? params.shouldEmitToolResult()
@@ -195,58 +199,6 @@ export function subscribeEmbeddedPiSession(params: {
     }
   };
 
-  const findSentenceBreak = (window: string, minChars: number): number => {
-    if (!window) return -1;
-    const matches = window.matchAll(/[.!?](?=\s|$)/g);
-    let idx = -1;
-    for (const match of matches) {
-      const at = match.index ?? -1;
-      if (at < minChars) continue;
-      idx = at + 1;
-    }
-    return idx;
-  };
-
-  const findWhitespaceBreak = (window: string, minChars: number): number => {
-    for (let i = window.length - 1; i >= minChars; i--) {
-      if (/\s/.test(window[i])) return i;
-    }
-    return -1;
-  };
-
-  const pickBreakIndex = (buffer: string): number => {
-    if (!blockChunking) return -1;
-    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
-    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
-    if (buffer.length < minChars) return -1;
-    const window = buffer.slice(0, Math.min(maxChars, buffer.length));
-
-    const preference = blockChunking.breakPreference ?? "paragraph";
-    const paragraphIdx = window.lastIndexOf("\n\n");
-    if (preference === "paragraph" && paragraphIdx >= minChars) {
-      return paragraphIdx;
-    }
-
-    const newlineIdx = window.lastIndexOf("\n");
-    if (
-      (preference === "paragraph" || preference === "newline") &&
-      newlineIdx >= minChars
-    ) {
-      return newlineIdx;
-    }
-
-    if (preference !== "newline") {
-      const sentenceIdx = findSentenceBreak(window, minChars);
-      if (sentenceIdx >= minChars) return sentenceIdx;
-    }
-
-    const whitespaceIdx = findWhitespaceBreak(window, minChars);
-    if (whitespaceIdx >= minChars) return whitespaceIdx;
-
-    if (buffer.length >= maxChars) return maxChars;
-    return -1;
-  };
-
   const emitBlockChunk = (text: string) => {
     // Strip any <thinking> tags that may have leaked into the output (e.g., from Gemini mimicking history)
     const strippedText = stripThinkingSegments(stripUnpairedThinkingTags(text));
@@ -264,45 +216,6 @@ export function subscribeEmbeddedPiSession(params: {
     });
   };
 
-  const drainBlockBuffer = (force: boolean) => {
-    if (!blockChunking) return;
-    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
-    const maxChars = Math.max(minChars, Math.floor(blockChunking.maxChars));
-    // Force flush small remainders as a single chunk to avoid re-splitting.
-    if (force && blockBuffer.length > 0 && blockBuffer.length <= maxChars) {
-      emitBlockChunk(blockBuffer);
-      blockBuffer = "";
-      return;
-    }
-    if (blockBuffer.length < minChars && !force) return;
-    while (
-      blockBuffer.length >= minChars ||
-      (force && blockBuffer.length > 0)
-    ) {
-      const breakIdx = pickBreakIndex(blockBuffer);
-      if (breakIdx <= 0) {
-        if (force) {
-          emitBlockChunk(blockBuffer);
-          blockBuffer = "";
-        }
-        return;
-      }
-      const rawChunk = blockBuffer.slice(0, breakIdx);
-      if (rawChunk.trim().length === 0) {
-        blockBuffer = blockBuffer.slice(breakIdx).trimStart();
-        continue;
-      }
-      emitBlockChunk(rawChunk);
-      const nextStart =
-        breakIdx < blockBuffer.length && /\s/.test(blockBuffer[breakIdx])
-          ? breakIdx + 1
-          : breakIdx;
-      blockBuffer = blockBuffer.slice(nextStart).trimStart();
-      if (blockBuffer.length < minChars && !force) return;
-      if (blockBuffer.length < maxChars && !force) return;
-    }
-  };
-
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -310,6 +223,7 @@ export function subscribeEmbeddedPiSession(params: {
     toolSummaryById.clear();
     deltaBuffer = "";
     blockBuffer = "";
+    blockChunker?.reset();
     lastStreamedAssistant = undefined;
     lastBlockReplyText = undefined;
     assistantTextBaseline = 0;
@@ -317,6 +231,23 @@ export function subscribeEmbeddedPiSession(params: {
 
   const unsubscribe = params.session.subscribe(
     (evt: AgentEvent | { type: string; [k: string]: unknown }) => {
+      if (evt.type === "message_start") {
+        const msg = (evt as AgentEvent & { message: AgentMessage }).message;
+        if (msg?.role === "assistant") {
+          // KNOWN: Resetting at `text_end` is unsafe (late/duplicate end events).
+          // ASSUME: `message_start` is the only reliable boundary for “new assistant message begins”.
+          // Start-of-message is a safer reset point than message_end: some providers
+          // may deliver late text_end updates after message_end, which would
+          // otherwise re-trigger block replies.
+          deltaBuffer = "";
+          blockBuffer = "";
+          blockChunker?.reset();
+          lastStreamedAssistant = undefined;
+          lastBlockReplyText = undefined;
+          assistantTextBaseline = assistantTexts.length;
+        }
+      }
+
       if (evt.type === "tool_execution_start") {
         const toolName = String(
           (evt as AgentEvent & { toolName: string }).toolName,
@@ -461,6 +392,8 @@ export function subscribeEmbeddedPiSession(params: {
               if (delta) {
                 chunk = delta;
               } else if (content) {
+                // KNOWN: Some providers resend full content on `text_end`.
+                // We only append a suffix (or nothing) to keep output monotonic.
                 // Providers may resend full content on text_end; append only the suffix.
                 if (content.startsWith(deltaBuffer)) {
                   chunk = content.slice(deltaBuffer.length);
@@ -473,7 +406,11 @@ export function subscribeEmbeddedPiSession(params: {
             }
             if (chunk) {
               deltaBuffer += chunk;
-              blockBuffer += chunk;
+              if (blockChunker) {
+                blockChunker.append(chunk);
+              } else {
+                blockBuffer += chunk;
+              }
             }
 
             const cleaned = params.enforceFinalTag
@@ -509,30 +446,22 @@ export function subscribeEmbeddedPiSession(params: {
               }
             }
 
-            if (params.onBlockReply && blockChunking) {
-              drainBlockBuffer(false);
+            if (
+              params.onBlockReply &&
+              blockChunking &&
+              blockReplyBreak === "text_end"
+            ) {
+              blockChunker?.drain({ force: false, emit: emitBlockChunk });
             }
 
             if (evtType === "text_end" && blockReplyBreak === "text_end") {
-              if (blockChunking && blockBuffer.length > 0) {
-                drainBlockBuffer(true);
-              } else if (next && next !== lastBlockReplyText) {
-                lastBlockReplyText = next || undefined;
-                if (next) assistantTexts.push(next);
-                if (next && params.onBlockReply) {
-                  const { text: cleanedText, mediaUrls } =
-                    splitMediaFromOutput(next);
-                  if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-                    void params.onBlockReply({
-                      text: cleanedText,
-                      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-                    });
-                  }
-                }
+              if (blockChunker?.hasBuffered()) {
+                blockChunker.drain({ force: true, emit: emitBlockChunk });
+                blockChunker.reset();
+              } else if (blockBuffer.length > 0) {
+                emitBlockChunk(blockBuffer);
+                blockBuffer = "";
               }
-              deltaBuffer = "";
-              blockBuffer = "";
-              lastStreamedAssistant = undefined;
             }
           }
         }
@@ -557,16 +486,24 @@ export function subscribeEmbeddedPiSession(params: {
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
-          if (!addedDuringMessage && text) assistantTexts.push(text);
+          const chunkingEnabled = Boolean(blockChunking);
+          if (!chunkingEnabled && !addedDuringMessage && text) {
+            const last = assistantTexts.at(-1);
+            if (!last || last !== text) assistantTexts.push(text);
+          }
           assistantTextBaseline = assistantTexts.length;
 
           if (
-            (blockReplyBreak === "message_end" || blockBuffer.length > 0) &&
+            (blockReplyBreak === "message_end" ||
+              (blockChunker
+                ? blockChunker.hasBuffered()
+                : blockBuffer.length > 0)) &&
             text &&
             params.onBlockReply
           ) {
-            if (blockChunking && blockBuffer.length > 0) {
-              drainBlockBuffer(true);
+            if (blockChunker?.hasBuffered()) {
+              blockChunker.drain({ force: true, emit: emitBlockChunk });
+              blockChunker.reset();
             } else if (text !== lastBlockReplyText) {
               lastBlockReplyText = text;
               const { text: cleanedText, mediaUrls } =
@@ -581,8 +518,8 @@ export function subscribeEmbeddedPiSession(params: {
           }
           deltaBuffer = "";
           blockBuffer = "";
+          blockChunker?.reset();
           lastStreamedAssistant = undefined;
-          lastBlockReplyText = undefined;
         }
       }
 
@@ -600,6 +537,18 @@ export function subscribeEmbeddedPiSession(params: {
 
       if (evt.type === "agent_start") {
         log.debug(`embedded run agent start: runId=${params.runId}`);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "lifecycle",
+          data: {
+            phase: "start",
+            startedAt: Date.now(),
+          },
+        });
+        params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
       }
 
       if (evt.type === "auto_compaction_start") {
@@ -622,6 +571,18 @@ export function subscribeEmbeddedPiSession(params: {
 
       if (evt.type === "agent_end") {
         log.debug(`embedded run agent end: runId=${params.runId}`);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: Date.now(),
+          },
+        });
+        params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "end" },
+        });
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {

@@ -194,6 +194,22 @@ enum SettingsTab: CaseIterable {
         case .about: "About"
         }
     }
+
+    var systemImage: String {
+        switch self {
+        case .general: "gearshape"
+        case .connections: "link"
+        case .skills: "sparkles"
+        case .sessions: "clock.arrow.circlepath"
+        case .cron: "calendar"
+        case .config: "slider.horizontal.3"
+        case .instances: "network"
+        case .voiceWake: "waveform.circle"
+        case .permissions: "lock.shield"
+        case .debug: "ant"
+        case .about: "info.circle"
+        }
+    }
 }
 
 @MainActor

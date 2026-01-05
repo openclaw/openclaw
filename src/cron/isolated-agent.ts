@@ -83,7 +83,6 @@ function isHeartbeatOnlyResponse(
     return result.shouldSkip;
   });
 }
-
 function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
   jobPayload: {

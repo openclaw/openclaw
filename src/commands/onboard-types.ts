@@ -1,6 +1,7 @@
 export type OnboardMode = "local" | "remote";
 export type AuthChoice =
   | "oauth"
+  | "openai-codex"
   | "antigravity"
   | "apiKey"
   | "minimax"

@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { resolveModelRefFromString } from "../agents/model-selection.js";
 import {
@@ -7,6 +10,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../agents/pi-embedded.js";
+import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -20,6 +24,7 @@ import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
+import { hasControlCommand } from "./command-detection.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
@@ -48,7 +53,7 @@ import {
   prependSystemEvents,
 } from "./reply/session-updates.js";
 import { createTypingController } from "./reply/typing.js";
-import type { MsgContext } from "./templating.js";
+import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
   normalizeThinkLevel,
@@ -252,11 +257,22 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
   } = sessionState;
 
-  const directives = parseInlineDirectives(
-    sessionCtx.BodyStripped ?? sessionCtx.Body ?? "",
-  );
-  sessionCtx.Body = directives.cleaned;
-  sessionCtx.BodyStripped = directives.cleaned;
+  const rawBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const commandAuthorized = ctx.CommandAuthorized ?? true;
+  const parsedDirectives = parseInlineDirectives(rawBody);
+  const directives = commandAuthorized
+    ? parsedDirectives
+    : {
+        ...parsedDirectives,
+        hasThinkDirective: false,
+        hasVerboseDirective: false,
+        hasStatusDirective: false,
+        hasModelDirective: false,
+        hasQueueDirective: false,
+        queueReset: false,
+      };
+  sessionCtx.Body = parsedDirectives.cleaned;
+  sessionCtx.BodyStripped = parsedDirectives.cleaned;
 
   const surfaceKey =
     sessionCtx.Surface?.trim().toLowerCase() ??
@@ -424,6 +440,7 @@ export async function getReplyFromConfig(
     sessionKey,
     isGroup,
     triggerBodyNormalized,
+    commandAuthorized,
   });
   const isEmptyConfig = Object.keys(cfg).length === 0;
   if (
@@ -445,6 +462,7 @@ export async function getReplyFromConfig(
     ctx,
     cfg,
     command,
+    directives,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -454,6 +472,7 @@ export async function getReplyFromConfig(
     defaultGroupActivation: () => defaultActivation,
     resolvedThinkLevel,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    resolvedElevatedLevel,
     resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
     provider,
     model,
@@ -464,10 +483,20 @@ export async function getReplyFromConfig(
     typing.cleanup();
     return commandResult.reply;
   }
+
+  await stageSandboxMedia({
+    ctx,
+    sessionCtx,
+    cfg,
+    sessionKey,
+    workspaceDir,
+  });
+
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
-  const shouldEagerType = !isGroupChat || wasMentioned;
+  const isHeartbeat = opts?.isHeartbeat === true;
+  const shouldEagerType = (!isGroupChat || wasMentioned) && !isHeartbeat;
   const shouldInjectGroupIntro = Boolean(
     isGroupChat &&
       (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -483,6 +512,10 @@ export async function getReplyFromConfig(
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
+  if (!commandAuthorized && !baseBodyTrimmedRaw && hasControlCommand(rawBody)) {
+    typing.cleanup();
+    return undefined;
+  }
   const isBareSessionReset =
     isNewSession &&
     baseBodyTrimmedRaw.length === 0 &&
@@ -661,4 +694,66 @@ export async function getReplyFromConfig(
     sessionCtx,
     shouldInjectGroupIntro,
   });
+}
+
+async function stageSandboxMedia(params: {
+  ctx: MsgContext;
+  sessionCtx: TemplateContext;
+  cfg: ClawdbotConfig;
+  sessionKey?: string;
+  workspaceDir: string;
+}) {
+  const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
+  const rawPath = ctx.MediaPath?.trim();
+  if (!rawPath || !sessionKey) return;
+
+  const sandbox = await ensureSandboxWorkspaceForSession({
+    config: cfg,
+    sessionKey,
+    workspaceDir,
+  });
+  if (!sandbox) return;
+
+  let source = rawPath;
+  if (source.startsWith("file://")) {
+    try {
+      source = fileURLToPath(source);
+    } catch {
+      return;
+    }
+  }
+  if (!path.isAbsolute(source)) return;
+
+  const originalMediaPath = ctx.MediaPath;
+  const originalMediaUrl = ctx.MediaUrl;
+
+  try {
+    const fileName = path.basename(source);
+    if (!fileName) return;
+    const destDir = path.join(sandbox.workspaceDir, "media", "inbound");
+    await fs.mkdir(destDir, { recursive: true });
+    const dest = path.join(destDir, fileName);
+    await fs.copyFile(source, dest);
+
+    const relative = path.posix.join("media", "inbound", fileName);
+    ctx.MediaPath = relative;
+    sessionCtx.MediaPath = relative;
+
+    if (originalMediaUrl) {
+      let normalizedUrl = originalMediaUrl;
+      if (normalizedUrl.startsWith("file://")) {
+        try {
+          normalizedUrl = fileURLToPath(normalizedUrl);
+        } catch {
+          normalizedUrl = originalMediaUrl;
+        }
+      }
+      if (normalizedUrl === originalMediaPath || normalizedUrl === source) {
+        ctx.MediaUrl = relative;
+        sessionCtx.MediaUrl = relative;
+      }
+    }
+  } catch (err) {
+    logVerbose(`Failed to stage inbound media for sandbox: ${String(err)}`);
+  }
 }

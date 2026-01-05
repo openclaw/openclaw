@@ -151,16 +151,11 @@ export function createSessionsSendTool(opts?: {
           typeof response?.runId === "string" && response.runId
             ? response.runId
             : stepIdem;
-        const stepAcceptedAt =
-          typeof response?.acceptedAt === "number"
-            ? response.acceptedAt
-            : undefined;
         const stepWaitMs = Math.min(step.timeoutMs, 60_000);
         const wait = (await callGateway({
           method: "agent.wait",
           params: {
             runId: stepRunId,
-            afterMs: stepAcceptedAt,
             timeoutMs: stepWaitMs,
           },
           timeoutMs: stepWaitMs + 2000,
@@ -171,7 +166,7 @@ export function createSessionsSendTool(opts?: {
 
       const runAgentToAgentFlow = async (
         roundOneReply?: string,
-        runInfo?: { runId: string; acceptedAt?: number },
+        runInfo?: { runId: string },
       ) => {
         try {
           let primaryReply = roundOneReply;
@@ -182,7 +177,6 @@ export function createSessionsSendTool(opts?: {
               method: "agent.wait",
               params: {
                 runId: runInfo.runId,
-                afterMs: runInfo.acceptedAt,
                 timeoutMs: waitMs,
               },
               timeoutMs: waitMs + 2000,
@@ -277,14 +271,10 @@ export function createSessionsSendTool(opts?: {
             params: sendParams,
             timeoutMs: 10_000,
           })) as { runId?: string; acceptedAt?: number };
-          const acceptedAt =
-            typeof response?.acceptedAt === "number"
-              ? response.acceptedAt
-              : undefined;
           if (typeof response?.runId === "string" && response.runId) {
             runId = response.runId;
           }
-          void runAgentToAgentFlow(undefined, { runId, acceptedAt });
+          void runAgentToAgentFlow(undefined, { runId });
           return jsonResult({
             runId,
             status: "accepted",
@@ -306,7 +296,6 @@ export function createSessionsSendTool(opts?: {
         }
       }
 
-      let acceptedAt: number | undefined;
       try {
         const response = (await callGateway({
           method: "agent",
@@ -315,9 +304,6 @@ export function createSessionsSendTool(opts?: {
         })) as { runId?: string; acceptedAt?: number };
         if (typeof response?.runId === "string" && response.runId) {
           runId = response.runId;
-        }
-        if (typeof response?.acceptedAt === "number") {
-          acceptedAt = response.acceptedAt;
         }
       } catch (err) {
         const messageText =
@@ -341,7 +327,6 @@ export function createSessionsSendTool(opts?: {
           method: "agent.wait",
           params: {
             runId,
-            afterMs: acceptedAt,
             timeoutMs,
           },
           timeoutMs: timeoutMs + 2000,

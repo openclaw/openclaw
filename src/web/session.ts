@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   DisconnectReason,
@@ -17,11 +16,16 @@ import { danger, info, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { Provider } from "../utils.js";
-import { CONFIG_DIR, ensureDir, jidToE164 } from "../utils.js";
+import {
+  CONFIG_DIR,
+  ensureDir,
+  jidToE164,
+  resolveConfigDir,
+} from "../utils.js";
 import { VERSION } from "../version.js";
 
 export function resolveWebAuthDir() {
-  return path.join(os.homedir(), ".clawdbot", "credentials");
+  return path.join(resolveConfigDir(), "credentials");
 }
 
 function resolveWebCredsPath() {

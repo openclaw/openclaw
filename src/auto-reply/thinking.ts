@@ -12,7 +12,11 @@ export function normalizeThinkLevel(
   if (["min", "minimal"].includes(key)) return "minimal";
   if (["low", "thinkhard", "think-hard", "think_hard"].includes(key))
     return "low";
-  if (["med", "medium", "thinkharder", "think-harder", "harder"].includes(key))
+  if (
+    ["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(
+      key,
+    )
+  )
     return "medium";
   if (
     [

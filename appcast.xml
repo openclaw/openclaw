@@ -1,212 +1,55 @@
 <?xml version="1.0" standalone="yes"?>
 <rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
     <channel>
-        <title>Clawdbot</title>
+        <title>Clawdis</title>
         <item>
-            <title>2.0.0-beta5</title>
-            <pubDate>Sat, 03 Jan 2026 07:15:16 +0100</pubDate>
+            <title>2026.1.5-3</title>
+            <pubDate>Mon, 05 Jan 2026 04:30:46 +0100</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
-            <sparkle:version>2765</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta5</sparkle:shortVersionString>
+            <sparkle:version>3095</sparkle:version>
+            <sparkle:shortVersionString>2026.1.5-3</sparkle:shortVersionString>
             <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2.0.0-beta5</h2>
-<h3>Fixed</h3>
-<ul>
-<li>Media: preserve GIF animation when uploading to Discord/other providers (skip JPEG optimization for image/gif).</li>
-<li>Agent runtime: update pi-mono dependencies to 0.31.1 (agent-core split).</li>
-<li>Dependencies: bump to latest compatible versions (TypeBox, grammY, Zod, Rolldown, oxlint-tsgolint).</li>
-<li>Tests: cover read tool image metadata + text output.</li>
-<li>Tests: add queue mode coverage (collect/followup + directive parsing).</li>
-</ul>
-<h3>Breaking</h3>
-<ul>
-<li>Skills config schema moved under <code>skills.*</code>:</li>
-</ul>
-  - <code>skillsLoad.extraDirs</code> → <code>skills.load.extraDirs</code>
-  - <code>skillsInstall.*</code> → <code>skills.install.*</code>
-  - per-skill config map moved to <code>skills.entries</code> (e.g. <code>skills.peekaboo.enabled</code> → <code>skills.entries.peekaboo.enabled</code>)
-  - new optional bundled allowlist: <code>skills.allowBundled</code> (only affects bundled skills)
-<ul>
-<li>Sessions: group keys now use <code>surface:group:<id></code> / <code>surface:channel:<id></code>; legacy <code>group:*</code> keys migrate on next message; <code>groupdm</code> keys are no longer recognized.</li>
-<li>Discord: remove legacy <code>discord.allowFrom</code>, <code>discord.guildAllowFrom</code>, and <code>discord.requireMention</code>; use <code>discord.dm</code> + <code>discord.guilds</code>.</li>
-<li>Providers: Discord/Telegram no longer auto-start from env tokens alone; add <code>discord: { enabled: true }</code> / <code>telegram: { enabled: true }</code> to your config when using <code>DISCORD_BOT_TOKEN</code> / <code>TELEGRAM_BOT_TOKEN</code>.</li>
-<li>Config: remove <code>routing.allowFrom</code>; use <code>whatsapp.allowFrom</code> instead (run <code>clawdbot doctor</code> to migrate).</li>
-<li>Config: remove <code>routing.groupChat.requireMention</code> + <code>telegram.requireMention</code>; use <code>whatsapp.groups</code>, <code>imessage.groups</code>, and <code>telegram.groups</code> defaults instead (run <code>clawdbot doctor</code> to migrate).</li>
-</ul>
-<h3>Features</h3>
-<ul>
-<li>Discord: expand <code>discord</code> tool actions (reactions, stickers, polls, threads, search, moderation gates) (#115) — thanks @thewilloftheshadow.</li>
-<li>Discord/Telegram: add reply tags (<code>[[reply_to_current]]</code>, <code>[[reply_to:<id>]]</code>) with per-provider <code>replyToMode</code> (off|first|all) for native threaded replies.</li>
-<li>Talk mode: continuous speech conversations (macOS/iOS/Android) with ElevenLabs TTS, reply directives, and optional interrupt-on-speech.</li>
-<li>Auto-reply: expand queue modes (steer/followup/collect/steer-backlog) with debounce/cap/drop options and followup backlog handling.</li>
-<li>UI: add optional <code>ui.seamColor</code> accent to tint the Talk Mode side bubble (macOS/iOS/Android).</li>
-<li>Nix mode: opt-in declarative config + read-only settings UI when <code>CLAWDBOT_NIX_MODE=1</code> (thanks @joshp123 for the persistence — earned my trust; I'll merge these going forward).</li>
-<li>CLI: add Google Antigravity OAuth auth option for Claude Opus 4.5/Gemini 3 (#88) — thanks @mukhtharcm.</li>
-<li>Agent runtime: accept legacy <code>Z_AI_API_KEY</code> for Z.AI provider auth (maps to <code>ZAI_API_KEY</code>).</li>
-<li>Groups: add per-group mention gating defaults/overrides for Telegram/WhatsApp/iMessage via <code>*.groups</code> with <code>"*"</code> defaults; Discord now supports <code>discord.guilds."*"</code> as a default.</li>
-<li>Discord: add user-installed slash command handling with per-user sessions and auto-registration (#94) — thanks @thewilloftheshadow.</li>
-<li>Discord: add DM enable/allowlist plus guild channel/user/guild allowlists with id/name matching.</li>
-<li>Signal: add <code>signal-cli</code> JSON-RPC support for send/receive via the Signal provider.</li>
-<li>iMessage: add imsg JSON-RPC integration (stdio), chat_id routing, and group chat support.</li>
-<li>Chat UI: add recent-session dropdown switcher (main first) in macOS/iOS/Android + Control UI.</li>
-<li>UI: add Discord/Signal/iMessage connection panels in macOS + Control UI (thanks @thewilloftheshadow).</li>
-<li>Discord: allow agent-triggered reactions via <code>clawdbot_discord</code> when enabled, and surface message ids in context.</li>
-<li>Discord: revamp guild routing config with per-guild/channel rules and slugged display names; add optional group DM support (default off).</li>
-<li>Discord: remove legacy guild/channel ignore lists in favor of per-guild allowlists (and proposed per-guild ignore lists).</li>
-<li>Skills: add Trello skill for board/list/card management (thanks @clawd).</li>
-<li>Docker: add containerized gateway/CLI setup via Dockerfile, compose, and setup script (thanks @dan-dr).</li>
-<li>Tests: add a Z.AI live test gate for smoke validation when keys are present.</li>
-<li>macOS Debug: add app log verbosity and rolling file log toggle for swift-log-backed app logs.</li>
-<li>CLI: add onboarding wizard (gateway + workspace + skills) with daemon installers and Anthropic/Minimax setup paths.</li>
-<li>CLI: add ASCII banner header to wizard entry points.</li>
-<li>CLI: add <code>configure</code>, <code>doctor</code>, and <code>update</code> wizards for ongoing setup, health checks, and modernization.</li>
-<li>CLI: add Signal CLI auto-install from GitHub releases in the wizard and persist wizard run metadata in config.</li>
-<li>CLI: add remote gateway client config (gateway.remote.*) with Bonjour-assisted discovery.</li>
-<li>CLI: enhance <code>clawdbot tui</code> with model/session pickers, tool cards, and slash commands (local or remote).</li>
-<li>Gateway: allow <code>sessions.patch</code> to set per-session model overrides (used by the TUI <code>/model</code> flow).</li>
-<li>Skills: allow <code>bun</code> as a node manager for skill installs.</li>
-<li>Skills: add <code>things-mac</code> (Things 3 CLI) for read/search plus add/update via URL scheme.</li>
-<li>Skills: add Apple Notes + Reminders skills via memo CLI (thanks @tylerwince).</li>
-<li>Tests: add a Docker-based onboarding E2E harness.</li>
-<li>Tests: harden wizard E2E flows for reset, providers, skills, and remote non-interactive runs.</li>
-<li>Browser tools: add remote CDP URL support, Linux launcher options (<code>executablePath</code>, <code>noSandbox</code>), and surface <code>cdpUrl</code> in status.</li>
-<li>Skills: add tmux-first coding-agent skill + <code>requires.anyBins</code> gate for multi-CLI setup (thanks @sreekaransrinath).</li>
-</ul>
+            <description><![CDATA[<h2>Clawdbot 2026.1.5-3</h2>
 <h3>Fixes</h3>
 <ul>
-<li>Gog calendar: format date ranges as RFC 3339 with timezone to satisfy Google Calendar API (thanks @jayhickey).</li>
-<li>macOS onboarding: add scrollable page gutter for overflowing content (#105) — thanks @thewilloftheshadow.</li>
-<li>Chat UI: keep the chat scrolled to the latest message after switching sessions.</li>
-<li>Chat UI: show rich session display names in Web Chat + SwiftUI + Android.</li>
-<li>Auto-reply: stream completed reply blocks as soon as they finish (configurable default + break); skip empty tool-only blocks unless verbose.</li>
-<li>Discord: avoid duplicate sends when block streaming is enabled (race with typing hook).</li>
-<li>Providers: make outbound text chunk limits configurable via <code>*.textChunkLimit</code> (defaults remain 4000/Discord 2000).</li>
-<li>CLI onboarding: persist gateway token in config so local CLI auth works; recommend auth Off unless you need multi-machine access.</li>
-<li>Control UI: accept a <code>?token=</code> URL param to auto-fill Gateway auth; onboarding now opens the dashboard with token auth when configured.</li>
-<li>Agent prompt: remove hardcoded user name in system prompt example.</li>
-<li>Chat UI: add extra top padding before the first message bubble in Web Chat (macOS/iOS/Android).</li>
-<li>Control UI: refine Web Chat session selector styling (chevron spacing + background).</li>
-<li>WebChat: stream live updates for sessions even when runs start outside the chat UI.</li>
-<li>Gateway CLI: read <code>CLAWDBOT_GATEWAY_PASSWORD</code> from environment in <code>callGateway()</code> — allows <code>doctor</code>/<code>health</code> commands to auth without explicit <code>--password</code> flag.</li>
-<li>Gateway: add password auth support for remote gateway connections (thanks @jeffersonwarrior).</li>
-<li>Auto-reply: strip stray leading/trailing <code>HEARTBEAT_OK</code> from normal replies; drop short (≤ 30 chars) heartbeat acks.</li>
-<li>WhatsApp auto-reply: default to self-only when no config is present.</li>
-<li>Logging: trim provider prefix duplication in Discord/Signal/Telegram runtime log lines.</li>
-<li>Logging/Signal: treat signal-cli "Failed …" lines as errors in gateway logs.</li>
-<li>Discord: include recent guild context when replying to mentions and add <code>discord.historyLimit</code> to tune how many messages are captured.</li>
-<li>Discord: include author tag + id in group context <code>[from:]</code> lines for ping-ready replies (thanks @thewilloftheshadow).</li>
-<li>Discord: include replied-to message context when a Discord message references another message (thanks @thewilloftheshadow).</li>
-<li>Discord: preserve newlines when stripping reply tags from agent output.</li>
-<li>Gateway: fix TypeScript build by aligning hook mapping <code>channel</code> types and removing a dead Group DM branch in Discord monitor.</li>
-<li>Skills: switch imsg installer to brew tap formula.</li>
-<li>Skills: gate macOS-only skills by OS and surface block reasons in the Skills UI.</li>
-<li>Onboarding: show skill descriptions in the macOS setup flow and surface clearer Gateway/skills error messages.</li>
-<li>Onboarding: auto-verify Claude OAuth tokens, show “verified” when detected working, and avoid re-auth prompts unless verification fails.</li>
-<li>CLI onboarding: include exit code + a useful one-line summary when skill dependency installs fail.</li>
-<li>CLI onboarding: explain Tailscale exposure options (Off/Serve/Funnel) and colorize provider status (linked/configured/needs setup).</li>
-<li>CLI onboarding: add provider primers (WhatsApp/Telegram/Discord/Signal) incl. Discord bot token setup steps.</li>
-<li>CLI onboarding: allow skipping the “install missing skill dependencies” selection without canceling the wizard.</li>
-<li>CLI onboarding: always prompt for WhatsApp <code>whatsapp.allowFrom</code> and print (optionally open) the Control UI URL when done.</li>
-<li>CLI onboarding: detect gateway reachability and annotate Local/Remote choices (helps pick the right mode).</li>
-<li>macOS settings: colorize provider status subtitles to distinguish healthy vs degraded states.</li>
-<li>macOS: keep config writes on the main actor to satisfy Swift concurrency rules.</li>
-<li>macOS menu: show multi-line gateway error details, add an always-visible gateway row, avoid duplicate gateway status rows, suppress transient <code>cancelled</code> device refresh errors, and auto-recover the control channel on disconnect.</li>
-<li>macOS menu: show session last-used timestamps in the list and add recent-message previews in session submenus.</li>
-<li>macOS menu: tighten session row padding and time out session preview loading with cached fallback.</li>
-<li>macOS: log health refresh failures and recovery to make gateway issues easier to diagnose.</li>
-<li>macOS codesign: skip hardened runtime for ad-hoc signing and avoid empty options args (#70) — thanks @petter-b</li>
-<li>macOS codesign: include camera entitlement so permission prompts work in the menu bar app.</li>
-<li>Agent tools: bash tool supports real TTY via <code>stdinMode: "pty"</code> with node-pty, warning + fallback on load/start failure.</li>
-<li>Agent tools: map <code>camera.snap</code> JPEG payloads to <code>image/jpeg</code> to avoid MIME mismatch errors.</li>
-<li>Tests: cover <code>camera.snap</code> MIME mapping to prevent image/png vs image/jpeg mismatches.</li>
-<li>macOS camera: wait for exposure/white balance to settle before capturing a snap to avoid dark images.</li>
-<li>Camera snap: add <code>delayMs</code> parameter (default 2000ms on macOS) to improve exposure reliability.</li>
-<li>Camera: add <code>camera.list</code> and optional <code>deviceId</code> selection for snaps/clips.</li>
-<li>Tests: cover camera device selection params in CLI + agent tools.</li>
-<li>macOS packaging: move rpath config into swift build for reliability (#69) — thanks @petter-b</li>
-<li>macOS: prioritize main bundle for device resources to prevent crash (#73) — thanks @petter-b</li>
-<li>macOS remote: route settings through gateway config and avoid local config reads in remote mode.</li>
-<li>Telegram: align token resolution for cron/agent/CLI sends (env/config/tokenFile) to prevent isolated delivery failures (#76).</li>
-<li>Telegram: honor per-group mention gating defaults/overrides via <code>telegram.groups</code> and <code>"*"</code> defaults (thanks @joshp123).</li>
-<li>Chat UI: clear composer input immediately and allow clear while editing to prevent duplicate sends (#72) — thanks @hrdwdmrbl</li>
-<li>Restart: use systemd on Linux (and report actual restart method) instead of always launchctl.</li>
-<li>Gateway relay: detect Bun binaries via execPath to resolve packaged assets on macOS.</li>
-<li>Cron: prevent <code>every</code> schedules without an anchor from firing in a tight loop (thanks @jamesgroat).</li>
-<li>Docs: add manual OAuth setup for remote/headless deployments (#67) — thanks @wstock</li>
-<li>Docs/agent tools: clarify that browser <code>wait</code> should be avoided by default and used only in exceptional cases.</li>
-<li>Docs: clarify self-chat mode and group mention gating config (#111) — thanks @rafaelreis-r.</li>
-<li>Browser tools: <code>upload</code> supports auto-click refs, direct <code>inputRef</code>/<code>element</code> file inputs, and emits input/change after <code>setFiles</code> so JS-heavy sites pick up attachments.</li>
-<li>Browser tools: harden CDP readiness (HTTP + WS), retry CDP connects, and auto-restart the clawd browser when the socket handshake stalls.</li>
-<li>Browser CLI: add <code>clawdbot browser reset-profile</code> to move the clawd profile to Trash when it gets wedged.</li>
-<li>Signal: fix daemon startup race (wait for <code>/api/v1/check</code>) and normalize JSON-RPC <code>version</code> probe parsing.</li>
-<li>Docs/Signal: clarify bot-number vs personal-account setup (self-chat loop protection) and add a quickstart config snippet.</li>
-<li>Docs: refresh the CLI wizard guide and highlight onboarding in the README.</li>
-<li>CLI: tighten onboarding prompt typing to keep bun builds green.</li>
-<li>macOS: Voice Wake now fully tears down the Speech pipeline when disabled (cancel pending restarts, drop stale callbacks) to avoid high CPU in the background.</li>
-<li>macOS menu: add a Talk Mode action alongside the Open Dashboard/Chat/Canvas entries.</li>
-<li>macOS Debug: hide “Restart Gateway” when the app won’t start a local gateway (remote mode / attach-only).</li>
-<li>macOS Debug: add an icon for the App Logging submenu.</li>
-<li>macOS Talk Mode: orb overlay refresh, ElevenLabs request logging, API key status in settings, and auto-select first voice when none is configured.</li>
-<li>macOS Talk Mode: add hard timeout around ElevenLabs TTS synthesis to avoid getting stuck “speaking” forever on hung requests.</li>
-<li>macOS Talk Mode: avoid stuck playback when the audio player never starts (fail-fast + watchdog).</li>
-<li>macOS Talk Mode: fix audio stop ordering so disabling Talk Mode always stops in-flight playback.</li>
-<li>macOS Talk Mode: throttle audio-level updates (avoid per-buffer task creation) to reduce CPU/task churn.</li>
-<li>macOS Talk Mode: increase overlay window size so wave rings don’t clip; close button is hover-only and closer to the orb.</li>
-<li>WebChat: preserve chat run ordering per session so concurrent runs don’t strand the typing indicator.</li>
-<li>Talk Mode: fall back to system TTS when ElevenLabs is unavailable, returns non-audio, or playback fails (macOS/iOS/Android).</li>
-<li>Talk Mode: stream PCM on macOS/iOS for lower latency (incremental playback); Android continues MP3 streaming.</li>
-<li>Talk Mode: validate ElevenLabs v3 stability and latency tier directives before sending requests.</li>
-<li>iOS/Android Talk Mode: auto-select the first ElevenLabs voice when none is configured.</li>
-<li>ElevenLabs: add retry/backoff for 429/5xx and include content-type in errors for debugging.</li>
-<li>Talk Mode: align to the gateway’s main session key and fall back to history polling when chat events drop (prevents stuck “thinking” / missing messages).</li>
-<li>Talk Mode: treat history timestamps as seconds or milliseconds to avoid stale assistant picks (macOS/iOS/Android).</li>
-<li>Chat UI: clear streaming/tool bubbles when external runs finish, preventing duplicate assistant bubbles.</li>
-<li>Chat UI: user bubbles use <code>ui.seamColor</code> (fallback to a calmer default blue).</li>
-<li>Android Chat UI: use <code>onPrimary</code> for user bubble text to preserve contrast (thanks @Syhids).</li>
-<li>Control UI: sync sidebar navigation with the URL for deep-linking, and auto-scroll chat to the latest message.</li>
-<li>Control UI: disable Web Chat + Talk when no iOS/Android node is connected; refreshed Web Chat styling and keyboard send.</li>
-<li>Control UI: keep chat pinned to the latest message while typing/sending and restore drafts on send failures.</li>
-<li>Control UI: soften chat bubble text opacity for calmer readability.</li>
-<li>macOS Web Chat: improve empty/error states, focus message field on open, keep pill/send inside the input field, and make the composer pill edge-to-edge with square top corners.</li>
-<li>macOS: bundle Control UI assets into the app relay so the packaged app can serve them (thanks @mbelinky).</li>
-<li>Talk Mode: wait for chat history to surface the assistant reply before starting TTS (macOS/iOS/Android).</li>
-<li>iOS Talk Mode: fix chat completion wait to time out even if no events arrive (prevents “Thinking…” hangs).</li>
-<li>iOS Talk Mode: keep recognition running during playback to support interrupt-on-speech.</li>
-<li>iOS Talk Mode: preserve directive voice/model overrides across config reloads and add ElevenLabs request timeouts.</li>
-<li>iOS/Android Talk Mode: explicitly <code>chat.subscribe</code> when Talk Mode is active, so completion events arrive even if the Chat UI isn’t open.</li>
-<li>Chat UI: refresh history when another client finishes a run in the same session, so Talk Mode + Voice Wake transcripts appear consistently.</li>
-<li>Gateway: <code>voice.transcript</code> now also maps agent bus output to <code>chat</code> events, ensuring chat UIs refresh for voice-triggered runs.</li>
-<li>Gateway: auto-migrate legacy config on startup (non-Nix); Nix mode hard-fails with a clear error when legacy keys are present.</li>
-<li>iOS/Android: show a centered Talk Mode orb overlay while Talk Mode is enabled.</li>
-<li>Gateway config: inject <code>talk.apiKey</code> from <code>ELEVENLABS_API_KEY</code>/shell profile so nodes can fetch it on demand.</li>
-<li>Canvas A2UI: tag requests with <code>platform=android|ios|macos</code> and boost Android canvas background contrast.</li>
-<li>iOS/Android nodes: enable scrolling for loaded web pages in the Canvas WebView (default scaffold stays touch-first).</li>
-<li>macOS menu: device list now uses <code>node.list</code> (devices only; no agent/tool presence entries).</li>
-<li>macOS menu: device list now shows connected nodes only.</li>
-<li>macOS menu: device rows now pack platform/version on the first line, and command lists wrap in submenus.</li>
-<li>macOS menu: split device platform/version across first and second rows for better fit.</li>
-<li>macOS Canvas: show remote control status in the debug overlay and log A2UI auto-nav decisions.</li>
-<li>Canvas A2UI: polish the debug status HUD styling.</li>
-<li>iOS node: fix ReplayKit screen recording crash caused by queue isolation assertions during capture.</li>
-<li>iOS Talk Mode: avoid audio tap queue assertions when starting recognition.</li>
-<li>macOS: use $HOME/Library/pnpm for SSH PATH exports (thanks @mbelinky).</li>
-<li>macOS remote: harden SSH tunnel recovery/logging, honor <code>gateway.remote.url</code> port when forwarding, clarify gateway disconnect status, and add Debug menu tunnel reset.</li>
-<li>iOS/Android nodes: bridge auto-connect refreshes stale tokens and settings now show richer bridge/device details.</li>
-<li>macOS: bundle device model resources to prevent Instances crashes (thanks @mbelinky).</li>
-<li>iOS/Android nodes: status pill now surfaces camera activity instead of overlay toasts.</li>
-<li>iOS/Android/macOS nodes: camera snaps recompress to keep base64 payloads under 5 MB.</li>
-<li>iOS/Android nodes: status pill now surfaces pairing, screen recording, voice wake, and foreground-required states.</li>
-<li>iOS/Android nodes: avoid duplicating “Gateway reconnecting…” when the bridge is already connecting.</li>
-<li>iOS/Android nodes: Talk Mode now lives on a side bubble (with an iOS toggle to hide it), and Android settings no longer show the Talk Mode switch.</li>
-<li>macOS menu: top status line now shows pending node pairing approvals (incl. repairs).</li>
-<li>CLI: avoid spurious gateway close errors after successful request/response cycles.</li>
-<li>Agent runtime: clamp tool-result images to the 5MB Anthropic limit to avoid hard request rejections.</li>
-<li>Agent runtime: write v2 session headers so Pi session branching stays in the Clawdbot sessions dir.</li>
-<li>Tests: add Swift Testing coverage for camera errors and Kotest coverage for Android bridge endpoints.</li>
+<li>NPM package: include missing runtime dist folders (slack/signal/imessage/tui/wizard/control-ui/daemon) to avoid <code>ERR_MODULE_NOT_FOUND</code> in Node 25 npx installs.</li>
 </ul>
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2.0.0-beta5/Clawdbot-2.0.0-beta5.zip" length="145432870" type="application/octet-stream" sparkle:edSignature="qKPcmSx2pAaIYz9NqFp0TY63KrcDlpctUHnNpRs6Q60qQqBWtQycLIhhvhxmGnHupaiEXJfspb/Ad9RgODIzAw=="/>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5-3/Clawdbot-2026.1.5-3.zip" length="160800596" type="application/octet-stream" sparkle:edSignature="P8U3nvIFpbGmRItT/NGPmJ/i370OMVvDHYQL/znYsLI0MrbGfXgMGEvR5A0uwW+cJevlX/hrJLiY51zo4rAMBg=="/>
+        </item>
+        <item>
+            <title>2026.1.5-3</title>
+            <pubDate>Mon, 05 Jan 2026 03:57:59 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>3091</sparkle:version>
+            <sparkle:shortVersionString>2026.1.5-3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.5-3</h2>
+<h3>Fixes</h3>
+<ul>
+<li>NPM package: include missing runtime dist folders (slack/signal/imessage/tui/wizard/control-ui/daemon) to avoid <code>ERR_MODULE_NOT_FOUND</code> in Node 25 npx installs.</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5-3/Clawdbot-2026.1.5-3.zip" length="160797048" type="application/octet-stream" sparkle:edSignature="5KYFg0SW7liwLxLJbfzd2KsAxbX06gMH0rH/W3a4V0p4N48hjz4AsSrfFLdGZSnW+6XaJjC3MN6Ynh+l7kffDQ=="/>
+        </item>
+        <item>
+            <title>2026.1.5-2</title>
+            <pubDate>Mon, 05 Jan 2026 03:51:30 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>3089</sparkle:version>
+            <sparkle:shortVersionString>2026.1.5-2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.5-2</h2>
+<h3>Fixes</h3>
+<ul>
+<li>NPM package: include <code>dist/sessions</code> so <code>clawdbot agent</code> resolves session helpers in npx installs.</li>
+<li>Node 25: avoid unsupported directory import by targeting <code>qrcode-terminal/vendor/QRCode/*.js</code> modules.</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5-2/Clawdbot-2026.1.5-2.zip" length="150250417" type="application/octet-stream" sparkle:edSignature="ntHNmwyHrv6cPk6NAKOT3AUkwdt5ZadrGU6mJK4GmVxi44uIMT3ZXluvnqK9SxXQwA0H0dXjiGMS/cg8NbgqDA=="/>
         </item>
     </channel>
 </rss>

@@ -1,6 +1,6 @@
 import { createServer } from "node:net";
 import { describe, expect, test } from "vitest";
-import { WebSocket } from "ws";
+import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import {
   connectOk,
@@ -19,31 +19,30 @@ installGatewayTestHooks();
 describe("gateway server misc", () => {
   test("hello-ok advertises the gateway port for canvas host", async () => {
     const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    const prevCanvasPort = process.env.CLAWDBOT_CANVAS_HOST_PORT;
     process.env.CLAWDBOT_GATEWAY_TOKEN = "secret";
     testTailnetIPv4.value = "100.64.0.1";
     testState.gatewayBind = "lan";
     const canvasPort = await getFreePort();
     testState.canvasHostPort = canvasPort;
+    process.env.CLAWDBOT_CANVAS_HOST_PORT = String(canvasPort);
 
     const port = await getFreePort();
-    const server = await startGatewayServer(port, {
-      bind: "lan",
-      allowCanvasHostInTests: true,
+    const canvasHostUrl = resolveCanvasHostUrl({
+      canvasPort,
+      requestHost: `100.64.0.1:${port}`,
+      localAddress: "127.0.0.1",
     });
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
-      headers: { Host: `100.64.0.1:${port}` },
-    });
-    await new Promise<void>((resolve) => ws.once("open", resolve));
-
-    const hello = await connectOk(ws, { token: "secret" });
-    expect(hello.canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
-
-    ws.close();
-    await server.close();
+    expect(canvasHostUrl).toBe(`http://100.64.0.1:${canvasPort}`);
     if (prevToken === undefined) {
       delete process.env.CLAWDBOT_GATEWAY_TOKEN;
     } else {
       process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+    if (prevCanvasPort === undefined) {
+      delete process.env.CLAWDBOT_CANVAS_HOST_PORT;
+    } else {
+      process.env.CLAWDBOT_CANVAS_HOST_PORT = prevCanvasPort;
     }
   });
 

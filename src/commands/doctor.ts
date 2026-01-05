@@ -37,6 +37,7 @@ import {
   guardCancel,
   printWizardHeader,
 } from "./onboard-helpers.js";
+import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -598,6 +599,28 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
   cfg = await maybeRepairSandboxImages(cfg, runtime);
 
   await maybeMigrateLegacyGatewayService(cfg, runtime);
+
+  if (process.platform === "linux" && resolveMode(cfg) === "local") {
+    const service = resolveGatewayService();
+    let loaded = false;
+    try {
+      loaded = await service.isLoaded({ env: process.env });
+    } catch {
+      loaded = false;
+    }
+    if (loaded) {
+      await ensureSystemdUserLingerInteractive({
+        runtime,
+        prompter: {
+          confirm: async (p) => guardCancel(await confirm(p), runtime) === true,
+          note,
+        },
+        reason:
+          "Gateway runs as a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+        requireConfirm: true,
+      });
+    }
+  }
 
   const workspaceDir = resolveUserPath(
     cfg.agent?.workspace ?? DEFAULT_WORKSPACE,

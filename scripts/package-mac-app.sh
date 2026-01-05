@@ -16,7 +16,10 @@ GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || ec
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
 APP_BUILD="${APP_BUILD:-$GIT_BUILD_NUMBER}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
-BUILD_ARCHS_VALUE="${BUILD_ARCHS:-arm64 x86_64}"
+BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
+if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
+  BUILD_ARCHS_VALUE="arm64 x86_64"
+fi
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
@@ -250,6 +253,9 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
     cp "$RELAY_BUILD_DIR/clawdbot-${BUILD_ARCHS[0]}" "$RELAY_OUT"
   fi
   rm -rf "$RELAY_BUILD_DIR"
+
+  echo "🧪 Smoke testing bundled relay QR modules"
+  CLAWDBOT_SMOKE_QR=1 "$RELAY_OUT" >/dev/null
 
   echo "🎨 Copying gateway A2UI host assets"
   rm -rf "$RELAY_DIR/a2ui"

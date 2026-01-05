@@ -4,9 +4,10 @@ import { Buffer } from "node:buffer";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
-
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
@@ -114,10 +115,36 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
 
       const botUsername = ctx.me?.username?.toLowerCase();
+      const allowFromList = Array.isArray(allowFrom)
+        ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
+        : [];
+      const senderId = msg.from?.id ? String(msg.from.id) : "";
+      const senderUsername = msg.from?.username ?? "";
+      const commandAuthorized =
+        allowFromList.length === 0 ||
+        allowFromList.includes("*") ||
+        (senderId && allowFromList.includes(senderId)) ||
+        (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
+        (senderUsername &&
+          allowFromList.some(
+            (entry) =>
+              entry.toLowerCase() === senderUsername.toLowerCase() ||
+              entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
+          ));
       const wasMentioned =
         Boolean(botUsername) && hasBotMention(msg, botUsername);
+      const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
+        (ent) => ent.type === "mention",
+      );
+      const shouldBypassMention =
+        isGroup &&
+        resolveGroupRequireMention(chatId) &&
+        !wasMentioned &&
+        !hasAnyMention &&
+        commandAuthorized &&
+        hasControlCommand(msg.text ?? msg.caption ?? "");
       if (isGroup && resolveGroupRequireMention(chatId) && botUsername) {
-        if (!wasMentioned) {
+        if (!wasMentioned && !shouldBypassMention) {
           logger.info(
             { chatId, reason: "no-mention" },
             "skipping group message",
@@ -161,6 +188,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
         SenderName: buildSenderName(msg),
+        SenderId: senderId || undefined,
+        SenderUsername: senderUsername || undefined,
         Surface: "telegram",
         MessageSid: String(msg.message_id),
         ReplyToId: replyTarget?.id,
@@ -171,6 +200,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
+        CommandAuthorized: commandAuthorized,
       };
 
       if (replyTarget && shouldLogVerbose()) {
@@ -199,37 +229,33 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         );
       }
 
-      let blockSendChain: Promise<void> = Promise.resolve();
-      const sendBlockReply = (payload: ReplyPayload) => {
-        if (
-          !payload?.text &&
-          !payload?.mediaUrl &&
-          !(payload?.mediaUrls?.length ?? 0)
-        ) {
-          return;
-        }
-        blockSendChain = blockSendChain
-          .then(async () => {
-            await deliverReplies({
-              replies: [payload],
-              chatId: String(chatId),
-              token: opts.token,
-              runtime,
-              bot,
-              replyToMode,
-              textLimit,
-            });
-          })
-          .catch((err) => {
-            runtime.error?.(
-              danger(`telegram block reply failed: ${String(err)}`),
-            );
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: cfg.messages?.responsePrefix,
+        deliver: async (payload) => {
+          await deliverReplies({
+            replies: [payload],
+            chatId: String(chatId),
+            token: opts.token,
+            runtime,
+            bot,
+            replyToMode,
+            textLimit,
           });
-      };
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            danger(`telegram ${info.kind} reply failed: ${String(err)}`),
+          );
+        },
+      });
 
       const replyResult = await getReplyFromConfig(
         ctxPayload,
-        { onReplyStart: sendTyping, onBlockReply: sendBlockReply },
+        {
+          onReplyStart: sendTyping,
+          onToolResult: dispatcher.sendToolResult,
+          onBlockReply: dispatcher.sendBlockReply,
+        },
         cfg,
       );
       const replies = replyResult
@@ -237,18 +263,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           ? replyResult
           : [replyResult]
         : [];
-      await blockSendChain;
-      if (replies.length === 0) return;
-
-      await deliverReplies({
-        replies,
-        chatId: String(chatId),
-        token: opts.token,
-        runtime,
-        bot,
-        replyToMode,
-        textLimit,
-      });
+      let queuedFinal = false;
+      for (const reply of replies) {
+        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+      }
+      await dispatcher.waitForIdle();
+      if (!queuedFinal) return;
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));
     }

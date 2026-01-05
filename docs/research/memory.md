@@ -111,7 +111,7 @@ Example:
 ## Retain
 - W @Peter: Currently in Marrakech (Nov 27–Dec 1, 2025) for Andy’s birthday.
 - B @warelay: I fixed the Baileys WS crash by wrapping connection.update handlers in try/catch (see memory/2025-11-27.md).
-- O(c=0.95) @Peter: Prefers concise replies (<1500 chars) on WhatsApp; long content goes into files.
+- O(c=0.95) @Peter: Prefers concise replies (&lt;1500 chars) on WhatsApp; long content goes into files.
 ```
 
 Minimal parsing:

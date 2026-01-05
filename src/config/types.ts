@@ -637,6 +637,14 @@ export type ModelsConfig = {
 };
 
 export type ClawdbotConfig = {
+  env?: {
+    /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
+    shellEnv?: {
+      enabled?: boolean;
+      /** Timeout for the login shell exec (ms). Default: 15000. */
+      timeoutMs?: number;
+    };
+  };
   identity?: {
     name?: string;
     theme?: string;
@@ -817,6 +825,11 @@ export type ClawdbotConfig = {
         /** Prune if older than N days (0 disables). */
         maxAgeDays?: number;
       };
+    };
+    /** Global tool allow/deny policy for all providers (deny wins). */
+    tools?: {
+      allow?: string[];
+      deny?: string[];
     };
   };
   routing?: RoutingConfig;

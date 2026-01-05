@@ -4,7 +4,6 @@ read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
 ---
-<!-- {% raw %} -->
 # Building a personal assistant with CLAWDBOT (Clawd-style)
 
 CLAWDBOT is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
@@ -194,6 +193,9 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 - WebChat: [WebChat](./webchat.md)
 - Gateway ops: [Gateway runbook](./gateway.md)
 - Cron + wakeups: [Cron + wakeups](./cron.md)
-- macOS menu bar companion: [Clawdbot macOS app](./clawdbot-mac.md)
+- macOS menu bar companion: [Clawdbot macOS app](./macos.md)
+- iOS node app: [iOS app](./ios.md)
+- Android node app: [Android app](./android.md)
+- Windows status: [Windows app](./windows.md)
+- Linux status: [Linux app](./linux.md)
 - Security: [Security](./security.md)
-<!-- {% endraw %} -->

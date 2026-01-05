@@ -3,7 +3,6 @@ summary: "Agent runtime (embedded p-mono), workspace contract, and session boots
 read_when:
   - Changing agent runtime, workspace bootstrap, or session behavior
 ---
-<!-- {% raw %} -->
 # Agent Runtime 🤖
 
 CLAWDBOT runs a single embedded agent runtime derived from **p-mono** (internal name: **p**).
@@ -101,4 +100,3 @@ At minimum, set:
 ---
 
 *Next: [Group Chats](./group-messages.md)* 🦞
-<!-- {% endraw %} -->

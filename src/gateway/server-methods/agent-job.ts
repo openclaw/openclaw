@@ -1,50 +1,48 @@
 import { onAgentEvent } from "../../infra/agent-events.js";
 
-const AGENT_JOB_CACHE_TTL_MS = 10 * 60_000;
-const agentJobCache = new Map<string, AgentJobSnapshot>();
+const AGENT_RUN_CACHE_TTL_MS = 10 * 60_000;
+const agentRunCache = new Map<string, AgentRunSnapshot>();
 const agentRunStarts = new Map<string, number>();
-let agentJobListenerStarted = false;
+let agentRunListenerStarted = false;
 
-type AgentJobSnapshot = {
+type AgentRunSnapshot = {
   runId: string;
-  state: "done" | "error";
+  status: "ok" | "error";
   startedAt?: number;
   endedAt?: number;
   error?: string;
   ts: number;
 };
 
-function pruneAgentJobCache(now = Date.now()) {
-  for (const [runId, entry] of agentJobCache) {
-    if (now - entry.ts > AGENT_JOB_CACHE_TTL_MS) {
-      agentJobCache.delete(runId);
+function pruneAgentRunCache(now = Date.now()) {
+  for (const [runId, entry] of agentRunCache) {
+    if (now - entry.ts > AGENT_RUN_CACHE_TTL_MS) {
+      agentRunCache.delete(runId);
     }
   }
 }
 
-function recordAgentJobSnapshot(entry: AgentJobSnapshot) {
-  pruneAgentJobCache(entry.ts);
-  agentJobCache.set(entry.runId, entry);
+function recordAgentRunSnapshot(entry: AgentRunSnapshot) {
+  pruneAgentRunCache(entry.ts);
+  agentRunCache.set(entry.runId, entry);
 }
 
-function ensureAgentJobListener() {
-  if (agentJobListenerStarted) return;
-  agentJobListenerStarted = true;
+function ensureAgentRunListener() {
+  if (agentRunListenerStarted) return;
+  agentRunListenerStarted = true;
   onAgentEvent((evt) => {
     if (!evt) return;
-    if (evt.stream !== "job") return;
-    const state = evt.data?.state;
-    if (state === "started") {
+    if (evt.stream !== "lifecycle") return;
+    const phase = evt.data?.phase;
+    if (phase === "start") {
       const startedAt =
         typeof evt.data?.startedAt === "number"
           ? (evt.data.startedAt as number)
           : undefined;
-      if (startedAt !== undefined) {
-        agentRunStarts.set(evt.runId, startedAt);
-      }
+      agentRunStarts.set(evt.runId, startedAt ?? Date.now());
       return;
     }
-    if (state !== "done" && state !== "error") return;
+    if (phase !== "end" && phase !== "error") return;
     const startedAt =
       typeof evt.data?.startedAt === "number"
         ? (evt.data.startedAt as number)
@@ -58,9 +56,9 @@ function ensureAgentJobListener() {
         ? (evt.data.error as string)
         : undefined;
     agentRunStarts.delete(evt.runId);
-    recordAgentJobSnapshot({
+    recordAgentRunSnapshot({
       runId: evt.runId,
-      state: state === "error" ? "error" : "done",
+      status: phase === "error" ? "error" : "ok",
       startedAt,
       endedAt,
       error,
@@ -69,34 +67,24 @@ function ensureAgentJobListener() {
   });
 }
 
-function matchesAfterMs(entry: AgentJobSnapshot, afterMs?: number) {
-  if (afterMs === undefined) return true;
-  if (typeof entry.startedAt === "number") return entry.startedAt >= afterMs;
-  if (typeof entry.endedAt === "number") return entry.endedAt >= afterMs;
-  return false;
-}
-
-function getCachedAgentJob(runId: string, afterMs?: number) {
-  pruneAgentJobCache();
-  const cached = agentJobCache.get(runId);
-  if (!cached) return undefined;
-  return matchesAfterMs(cached, afterMs) ? cached : undefined;
+function getCachedAgentRun(runId: string) {
+  pruneAgentRunCache();
+  return agentRunCache.get(runId);
 }
 
 export async function waitForAgentJob(params: {
   runId: string;
-  afterMs?: number;
   timeoutMs: number;
-}): Promise<AgentJobSnapshot | null> {
-  const { runId, afterMs, timeoutMs } = params;
-  ensureAgentJobListener();
-  const cached = getCachedAgentJob(runId, afterMs);
+}): Promise<AgentRunSnapshot | null> {
+  const { runId, timeoutMs } = params;
+  ensureAgentRunListener();
+  const cached = getCachedAgentRun(runId);
   if (cached) return cached;
   if (timeoutMs <= 0) return null;
 
   return await new Promise((resolve) => {
     let settled = false;
-    const finish = (entry: AgentJobSnapshot | null) => {
+    const finish = (entry: AgentRunSnapshot | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -104,10 +92,15 @@ export async function waitForAgentJob(params: {
       resolve(entry);
     };
     const unsubscribe = onAgentEvent((evt) => {
-      if (!evt || evt.stream !== "job") return;
+      if (!evt || evt.stream !== "lifecycle") return;
       if (evt.runId !== runId) return;
-      const state = evt.data?.state;
-      if (state !== "done" && state !== "error") return;
+      const phase = evt.data?.phase;
+      if (phase !== "end" && phase !== "error") return;
+      const cached = getCachedAgentRun(runId);
+      if (cached) {
+        finish(cached);
+        return;
+      }
       const startedAt =
         typeof evt.data?.startedAt === "number"
           ? (evt.data.startedAt as number)
@@ -120,20 +113,19 @@ export async function waitForAgentJob(params: {
         typeof evt.data?.error === "string"
           ? (evt.data.error as string)
           : undefined;
-      const snapshot: AgentJobSnapshot = {
+      const snapshot: AgentRunSnapshot = {
         runId: evt.runId,
-        state: state === "error" ? "error" : "done",
+        status: phase === "error" ? "error" : "ok",
         startedAt,
         endedAt,
         error,
         ts: Date.now(),
       };
-      recordAgentJobSnapshot(snapshot);
-      if (!matchesAfterMs(snapshot, afterMs)) return;
+      recordAgentRunSnapshot(snapshot);
       finish(snapshot);
     });
     const timer = setTimeout(() => finish(null), Math.max(1, timeoutMs));
   });
 }
 
-ensureAgentJobListener();
+ensureAgentRunListener();

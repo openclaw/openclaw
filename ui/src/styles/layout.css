@@ -1,4 +1,6 @@
 .shell {
+  --shell-pad: 18px;
+  --shell-gap: 18px;
   min-height: 100vh;
   display: grid;
   grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
@@ -6,13 +8,16 @@
   grid-template-areas:
     "topbar topbar"
     "nav content";
-  gap: 18px;
-  padding: 18px;
+  gap: var(--shell-gap);
+  padding: var(--shell-pad);
   animation: dashboard-enter 0.6s ease-out;
 }
 
 .topbar {
   grid-area: topbar;
+  position: sticky;
+  top: var(--shell-pad);
+  z-index: 20;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -51,6 +56,16 @@
 
 .nav {
   grid-area: nav;
+  position: sticky;
+  top: calc(
+    var(--shell-pad) + var(--topbar-height, 0px) + var(--shell-gap)
+  );
+  align-self: start;
+  max-height: calc(
+    100vh - var(--topbar-height, 0px) - var(--shell-gap) -
+      var(--shell-pad) - var(--shell-pad)
+  );
+  overflow: auto;
   padding: 16px;
   border: 1px solid var(--border);
   border-radius: 20px;
@@ -132,6 +147,14 @@
   display: flex;
   flex-direction: column;
   gap: 20px;
+  min-height: 0;
+}
+
+.shell--chat .content {
+  min-height: calc(
+    100vh - var(--topbar-height, 0px) - var(--shell-gap) -
+      var(--shell-pad) - var(--shell-pad)
+  );
 }
 
 .content-header {
@@ -204,16 +227,19 @@
 
 @media (max-width: 1100px) {
   .shell {
+    --shell-pad: 12px;
+    --shell-gap: 12px;
     grid-template-columns: 1fr;
     grid-template-rows: auto auto 1fr;
     grid-template-areas:
       "topbar"
       "nav"
       "content";
-    padding: 12px;
   }
 
   .nav {
+    position: static;
+    max-height: none;
     display: flex;
     gap: 16px;
     overflow-x: auto;
@@ -234,6 +260,7 @@
   }
 
   .topbar {
+    position: static;
     flex-direction: column;
     align-items: flex-start;
     gap: 12px;

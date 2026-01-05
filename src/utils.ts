@@ -104,6 +104,15 @@ export function resolveUserPath(input: string): string {
   return path.resolve(trimmed);
 }
 
+export function resolveConfigDir(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  const override = env.CLAWDBOT_STATE_DIR?.trim();
+  if (override) return resolveUserPath(override);
+  return path.join(homedir(), ".clawdbot");
+}
+
 export function resolveHomeDir(): string | undefined {
   const envHome = process.env.HOME?.trim();
   if (envHome) return envHome;
@@ -133,5 +142,5 @@ export function shortenHomeInString(input: string): string {
   return input.split(home).join("~");
 }
 
-// Fixed configuration root; legacy ~/.clawdbot is no longer used.
-export const CONFIG_DIR = path.join(os.homedir(), ".clawdbot");
+// Configuration root; can be overridden via CLAWDBOT_STATE_DIR.
+export const CONFIG_DIR = resolveConfigDir();

@@ -1,18 +1,20 @@
 ---
-summary: "Runbook: connect/pair the Android node to a Clawdbot Gateway and use Canvas/Chat/Camera"
+summary: "Android app (node): connection runbook + Canvas/Chat/Camera"
 read_when:
   - Pairing or reconnecting the Android node
   - Debugging Android bridge discovery or auth
   - Verifying chat history parity across clients
 ---
 
-# Android Node Connection Runbook
+# Android App (Node)
+
+## Connection Runbook
 
 Android node app ⇄ (mDNS/NSD + TCP bridge) ⇄ **Gateway bridge** ⇄ (loopback WS) ⇄ **Gateway**
 
 The Gateway WebSocket stays loopback-only (`ws://127.0.0.1:18789`). Android talks to the LAN-facing **bridge** (default `tcp://0.0.0.0:18790`) and uses Gateway-owned pairing.
 
-## Prerequisites
+### Prerequisites
 
 - You can run the Gateway on the “master” machine.
 - Android device/emulator can reach the gateway bridge:
@@ -21,7 +23,7 @@ The Gateway WebSocket stays loopback-only (`ws://127.0.0.1:18789`). Android talk
   - Manual bridge host/port (fallback)
 - You can run the CLI (`clawdbot`) on the gateway machine (or via SSH).
 
-## 1) Start the Gateway (with bridge enabled)
+### 1) Start the Gateway (with bridge enabled)
 
 Bridge is enabled by default (disable via `CLAWDBOT_BRIDGE_ENABLED=0`).
 
@@ -37,7 +39,7 @@ For tailnet-only setups (recommended for Vienna ⇄ London), bind the bridge to 
 - Set `bridge.bind: "tailnet"` in `~/.clawdbot/clawdbot.json` on the gateway host.
 - Restart the Gateway / macOS menubar app.
 
-## 2) Verify discovery (optional)
+### 2) Verify discovery (optional)
 
 From the gateway machine:
 
@@ -47,7 +49,7 @@ dns-sd -B _clawdbot-bridge._tcp local.
 
 More debugging notes: `docs/bonjour.md`.
 
-### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
+#### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
 Android NSD/mDNS discovery won’t cross networks. If your Android node and the gateway are on different networks but connected via Tailscale, use Wide-Area Bonjour / unicast DNS-SD instead:
 
@@ -56,7 +58,7 @@ Android NSD/mDNS discovery won’t cross networks. If your Android node and the 
 
 Details and example CoreDNS config: `docs/bonjour.md`.
 
-## 3) Connect from Android
+### 3) Connect from Android
 
 In the Android app:
 
@@ -69,7 +71,7 @@ After the first successful pairing, Android auto-reconnects on launch:
 - Manual endpoint (if enabled), otherwise
 - The last discovered bridge (best-effort).
 
-## 4) Approve pairing (CLI)
+### 4) Approve pairing (CLI)
 
 On the gateway machine:
 
@@ -80,7 +82,7 @@ clawdbot nodes approve <requestId>
 
 Pairing details: `docs/gateway/pairing.md`.
 
-## 5) Verify the node is connected
+### 5) Verify the node is connected
 
 - Via nodes status:
   ```bash
@@ -91,7 +93,7 @@ Pairing details: `docs/gateway/pairing.md`.
   clawdbot gateway call node.list --params "{}"
   ```
 
-## 6) Chat + history
+### 6) Chat + history
 
 The Android node’s Chat sheet uses the gateway’s **primary session key** (`main`), so history and replies are shared with WebChat and other clients:
 
@@ -99,9 +101,9 @@ The Android node’s Chat sheet uses the gateway’s **primary session key** (`m
 - Send: `chat.send`
 - Push updates (best-effort): `chat.subscribe` → `event:"chat"`
 
-## 7) Canvas + camera
+### 7) Canvas + camera
 
-### Gateway Canvas Host (recommended for web content)
+#### Gateway Canvas Host (recommended for web content)
 
 If you want the node to show real HTML/CSS/JS that the agent can edit on disk, point the node at the Gateway canvas host.
 

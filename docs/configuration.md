@@ -3,7 +3,6 @@ summary: "All configuration options for ~/.clawdbot/clawdbot.json with examples"
 read_when:
   - Adding or modifying config fields
 ---
-<!-- {% raw %} -->
 # Configuration 🔧
 
 CLAWDBOT reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (comments + trailing commas allowed).
@@ -59,6 +58,51 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
 ```
 
 ## Common options
+
+### Env vars + `.env`
+
+CLAWDBOT reads env vars from the parent process (shell, launchd/systemd, CI, etc.).
+
+Additionally, it loads:
+- `.env` from the current working directory (if present)
+- a global fallback `.env` from `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`)
+
+Neither `.env` file overrides existing env vars.
+
+### `env.shellEnv` (optional)
+
+Opt-in convenience: if enabled and none of the expected keys are set yet, CLAWDBOT runs your login shell and imports only the missing expected keys (never overrides).
+This effectively sources your shell profile.
+
+```json5
+{
+  env: {
+    shellEnv: {
+      enabled: true,
+      timeoutMs: 15000
+    }
+  }
+}
+```
+
+Env var equivalent:
+- `CLAWDBOT_LOAD_SHELL_ENV=1`
+- `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
+
+### Auth storage (OAuth + API keys)
+
+Clawdbot stores **OAuth credentials** in:
+- `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
+
+Clawdbot stores **API keys** in the agent auth store:
+- `~/.clawdbot/agent/auth.json`
+
+Overrides:
+- OAuth dir: `CLAWDBOT_OAUTH_DIR`
+- Agent dir: `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
+
+On first use, Clawdbot imports `oauth.json` entries into `auth.json` so the embedded
+agent can use them. `oauth.json` remains the source of truth for OAuth refresh.
 
 ### `identity`
 
@@ -402,6 +446,9 @@ Controls inbound/outbound prefixes and timestamps.
 }
 ```
 
+`responsePrefix` is applied to **all outbound replies** (tool summaries, block
+streaming, final replies) across providers unless already present.
+
 ### `talk`
 
 Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID` when unset.
@@ -433,6 +480,17 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `modelFallbacks` lists ordered fallback models to try when the default fails.
 `imageModel` selects an image-capable model for the `image` tool.
 `imageModelFallbacks` lists ordered fallback image models for the `image` tool.
+
+Clawdbot also ships a few built-in `modelAliases` shorthands (when an `agent` section exists):
+
+- `opus` -> `anthropic/claude-opus-4-5`
+- `sonnet` -> `anthropic/claude-sonnet-4-5`
+- `gpt` -> `openai/gpt-5.2`
+- `gpt-mini` -> `openai/gpt-5-mini`
+- `gemini` -> `google/gemini-3-pro-preview`
+- `gemini-flash` -> `google/gemini-3-flash-preview`
+
+If you configure the same alias name (case-insensitive) yourself, your value wins (defaults never override).
 
 ```json5
 {
@@ -508,6 +566,20 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `backgroundMs`: time before auto-background (ms, default 10000)
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
+
+`agent.tools` configures a global tool allow/deny policy (deny wins).
+This is applied even when the Docker sandbox is **off**.
+
+Example (disable browser/canvas everywhere):
+```json5
+{
+  agent: {
+    tools: {
+      deny: ["browser", "canvas"]
+    }
+  }
+}
+```
 
 `agent.elevated` controls elevated (host) bash access:
 - `enabled`: allow elevated mode (default true)
@@ -963,9 +1035,15 @@ Requires full Gateway restart:
 
 To run multiple gateways on one host, isolate per-instance state + config and use unique ports:
 - `CLAWDBOT_CONFIG_PATH` (per-instance config)
-- `CLAWDBOT_STATE_DIR` (sessions/creds/logs)
+- `CLAWDBOT_STATE_DIR` (sessions/creds)
 - `agent.workspace` (memories)
 - `gateway.port` (unique per instance)
+
+Convenience flags (CLI):
+- `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
+- `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
+
+See `docs/gateway.md` for the derived port mapping (gateway/bridge/browser/canvas).
 
 Example:
 ```bash
@@ -1175,4 +1253,3 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wa
 ---
 
 *Next: [Agent Runtime](./agent.md)* 🦞
-<!-- {% endraw %} -->

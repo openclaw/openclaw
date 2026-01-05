@@ -352,17 +352,7 @@ export async function agentCommand(
   const sessionFile = resolveSessionTranscriptPath(sessionId);
 
   const startedAt = Date.now();
-  emitAgentEvent({
-    runId,
-    stream: "job",
-    data: {
-      state: "started",
-      startedAt,
-      to: opts.to ?? null,
-      sessionId,
-      isNewSession,
-    },
-  });
+  let lifecycleEnded = false;
 
   let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
@@ -399,6 +389,13 @@ export async function agentCommand(
           abortSignal: opts.abortSignal,
           extraSystemPrompt: opts.extraSystemPrompt,
           onAgentEvent: (evt) => {
+            if (
+              evt.stream === "lifecycle" &&
+              typeof evt.data?.phase === "string" &&
+              (evt.data.phase === "end" || evt.data.phase === "error")
+            ) {
+              lifecycleEnded = true;
+            }
             emitAgentEvent({
               runId,
               stream: evt.stream,
@@ -410,33 +407,31 @@ export async function agentCommand(
     result = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
     fallbackModel = fallbackResult.model;
-    emitAgentEvent({
-      runId,
-      stream: "job",
-      data: {
-        state: "done",
-        startedAt,
-        endedAt: Date.now(),
-        to: opts.to ?? null,
-        sessionId,
-        durationMs: Date.now() - startedAt,
-        aborted: result.meta.aborted ?? false,
-      },
-    });
+    if (!lifecycleEnded) {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          startedAt,
+          endedAt: Date.now(),
+          aborted: result.meta.aborted ?? false,
+        },
+      });
+    }
   } catch (err) {
-    emitAgentEvent({
-      runId,
-      stream: "job",
-      data: {
-        state: "error",
-        startedAt,
-        endedAt: Date.now(),
-        to: opts.to ?? null,
-        sessionId,
-        durationMs: Date.now() - startedAt,
-        error: String(err),
-      },
-    });
+    if (!lifecycleEnded) {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error: String(err),
+        },
+      });
+    }
     throw err;
   }
 

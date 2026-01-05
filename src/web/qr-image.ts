@@ -1,5 +1,6 @@
-import { createRequire } from "node:module";
 import { deflateSync } from "node:zlib";
+import QRCodeModule from "qrcode-terminal/vendor/QRCode/index.js";
+import QRErrorCorrectLevelModule from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel.js";
 
 type QRCodeConstructor = new (
   typeNumber: number,
@@ -11,13 +12,11 @@ type QRCodeConstructor = new (
   isDark: (row: number, col: number) => boolean;
 };
 
-const require = createRequire(import.meta.url);
-const QRCode = require("qrcode-terminal/vendor/QRCode") as QRCodeConstructor;
-const QRErrorCorrectLevel =
-  require("qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel") as Record<
-    string,
-    unknown
-  >;
+const QRCode = QRCodeModule as unknown as QRCodeConstructor;
+const QRErrorCorrectLevel = QRErrorCorrectLevelModule as Record<
+  string,
+  unknown
+>;
 
 function createQrMatrix(input: string) {
   const qr = new QRCode(-1, QRErrorCorrectLevel.L);
