@@ -146,6 +146,46 @@ WhatsApp / Telegram / Slack / Discord / Signal / iMessage / WebChat
 - **[Voice Wake](https://docs.clawdbot.com/voicewake) + [Talk Mode](https://docs.clawdbot.com/talk)** — always‑on speech and continuous conversation.
 - **[Nodes](https://docs.clawdbot.com/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
 
+## Tailscale access (Gateway dashboard)
+
+Clawdbot can auto-configure Tailscale **Serve** (tailnet-only) or **Funnel** (public) while the Gateway stays bound to loopback. Configure `gateway.tailscale.mode`:
+
+- `off`: no Tailscale automation (default).
+- `serve`: tailnet-only HTTPS via `tailscale serve` (uses Tailscale identity headers by default).
+- `funnel`: public HTTPS via `tailscale funnel` (requires shared password auth).
+
+Notes:
+- `gateway.bind` must stay `loopback` when Serve/Funnel is enabled (Clawdbot enforces this).
+- Serve can be forced to require a password by setting `gateway.auth.mode: "password"` or `gateway.auth.allowTailscale: false`.
+- Funnel refuses to start unless `gateway.auth.mode: "password"` is set.
+- Optional: `gateway.tailscale.resetOnExit` to undo Serve/Funnel on shutdown.
+
+Details: [Tailscale guide](https://docs.clawdbot.com/tailscale) · [Web surfaces](https://docs.clawdbot.com/web)
+
+## Remote Gateway (Linux is great)
+
+It’s perfectly fine to run the Gateway on a small Linux instance. Clients (macOS app, CLI, WebChat) can connect over **Tailscale Serve/Funnel** or **SSH tunnels**, and you can still pair device nodes (macOS/iOS/Android) to execute device‑local actions when needed.
+
+- **Gateway host** runs the bash tool and provider connections by default.
+- **Device nodes** run device‑local actions (`system.run`, camera, screen recording, notifications) via `node.invoke`.
+
+Details: [Remote access](https://docs.clawdbot.com/remote) · [Nodes](https://docs.clawdbot.com/nodes) · [Security](https://docs.clawdbot.com/security)
+
+## macOS permissions via the Gateway protocol
+
+The macOS app can run in **node mode** and advertises its capabilities + permission map over the Gateway WebSocket (`node.list` / `node.describe`). Clients can then execute local actions via `node.invoke`:
+
+- `system.run` runs a local command and returns stdout/stderr/exit code; set `needsScreenRecording: true` to require screen-recording permission (otherwise you’ll get `PERMISSION_MISSING`).
+- `system.notify` posts a user notification and fails if notifications are denied.
+- `canvas.*`, `camera.*`, `screen.record`, and `location.get` are also routed via `node.invoke` and follow TCC permission status.
+
+Elevated bash (host permissions) is separate from macOS TCC:
+
+- Use `/elevated on|off` to toggle per‑session elevated access when enabled + allowlisted.
+- Gateway persists the per‑session toggle via `sessions.patch` (WS method) alongside `thinkingLevel`, `verboseLevel`, `model`, `sendPolicy`, and `groupActivation`.
+
+Details: [Nodes](https://docs.clawdbot.com/nodes) · [macOS app](https://docs.clawdbot.com/macos) · [Gateway protocol](https://docs.clawdbot.com/architecture)
+
 ## Skills registry (ClawdHub)
 
 ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
