@@ -156,6 +156,17 @@ function formatUserTime(date: Date, timeZone: string): string | undefined {
   }
 }
 
+function describeUnknownError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "string") return error;
+  try {
+    const serialized = JSON.stringify(error);
+    return serialized ?? "Unknown error";
+  } catch {
+    return "Unknown error";
+  }
+}
+
 export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
 ): EmbeddedSandboxInfo | undefined {
@@ -601,10 +612,7 @@ export async function runEmbeddedPiAgent(params: {
           }
           if (promptError && !aborted) {
             const fallbackThinking = pickFallbackThinkingLevel({
-              message:
-                promptError instanceof Error
-                  ? promptError.message
-                  : String(promptError),
+              message: describeUnknownError(promptError),
               attempted: attemptedThinking,
             });
             if (fallbackThinking) {
