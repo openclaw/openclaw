@@ -78,7 +78,7 @@ This creates `~/.clawdbot/clawdbot.json` with your API keys, workspace path, and
 cp -r ~/.clawdbot ~/.clawdbot-backup
 
 # Remove config and credentials
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 
 # Re-run onboarding
 pnpm clawdbot onboard
@@ -531,10 +531,10 @@ sudo systemctl disable --now clawdbot
 pkill -f "clawdbot"
 
 # Remove data
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 
 # Remove repo and re-clone
-rm -rf ~/clawdbot
+trash ~/clawdbot
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot && pnpm install && pnpm build
 pnpm clawdbot onboard

@@ -100,7 +100,7 @@ If you’re logged out / unlinked:
 
 ```bash
 clawdbot logout
-rm -rf ~/.clawdbot/credentials # if logout can't cleanly remove everything
+trash ~/.clawdbot/credentials # if logout can't cleanly remove everything
 clawdbot login --verbose       # re-scan QR
 ```
 
@@ -203,7 +203,7 @@ tail -20 /tmp/clawdbot/clawdbot-*.log
 Nuclear option:
 
 ```bash
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 clawdbot login         # re-pair WhatsApp
 clawdbot gateway        # start the Gateway again
 ```

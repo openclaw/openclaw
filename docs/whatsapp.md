@@ -136,7 +136,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
-- Troubleshooting guide: `docs/refactor/web-gateway-troubleshooting.md`.
+- Troubleshooting guide: `docs/troubleshooting.md`.
 
 ## Tests
 - `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)
