@@ -831,8 +831,8 @@ describe("gateway server chat", () => {
 
     emitAgentEvent({
       runId: "sess-main",
-      stream: "job",
-      data: { state: "done" },
+      stream: "lifecycle",
+      data: { phase: "end" },
     });
 
     const final1 = await final1P;
@@ -853,8 +853,8 @@ describe("gateway server chat", () => {
 
     emitAgentEvent({
       runId: "sess-main",
-      stream: "job",
-      data: { state: "done" },
+      stream: "lifecycle",
+      data: { phase: "end" },
     });
 
     const final2 = await final2P;

@@ -218,7 +218,6 @@ export const AgentParamsSchema = Type.Object(
 export const AgentWaitParamsSchema = Type.Object(
   {
     runId: NonEmptyString,
-    afterMs: Type.Optional(Type.Integer({ minimum: 0 })),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },

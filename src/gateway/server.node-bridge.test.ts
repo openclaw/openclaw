@@ -699,8 +699,8 @@ describe("gateway server node/bridge", () => {
       runId: "sess-main",
       seq: 2,
       ts: Date.now(),
-      stream: "job",
-      data: { state: "done" },
+      stream: "lifecycle",
+      data: { phase: "end" },
     });
 
     await new Promise((r) => setTimeout(r, 25));
@@ -841,8 +841,8 @@ describe("gateway server node/bridge", () => {
       runId: "sess-main",
       seq: 2,
       ts: Date.now(),
-      stream: "job",
-      data: { state: "done" },
+      stream: "lifecycle",
+      data: { phase: "end" },
     });
 
     const evt = await finalChatP;

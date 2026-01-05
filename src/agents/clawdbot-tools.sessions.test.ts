@@ -261,12 +261,6 @@ describe("sessions tools", () => {
     ).toBe(true);
     expect(waitCalls).toHaveLength(8);
     expect(historyOnlyCalls).toHaveLength(8);
-    expect(
-      waitCalls.some(
-        (call) =>
-          typeof (call.params as { afterMs?: number })?.afterMs === "number",
-      ),
-    ).toBe(true);
     expect(sendCallCount).toBe(0);
   });
 

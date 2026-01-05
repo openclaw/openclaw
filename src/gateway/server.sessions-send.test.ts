@@ -14,7 +14,7 @@ import {
 installGatewayTestHooks();
 
 describe("sessions_send gateway loopback", () => {
-  it("returns reply when job finishes before agent.wait", async () => {
+  it("returns reply when lifecycle ends before agent.wait", async () => {
     const port = await getFreePort();
     const prevPort = process.env.CLAWDBOT_GATEWAY_PORT;
     process.env.CLAWDBOT_GATEWAY_PORT = String(port);
@@ -35,8 +35,8 @@ describe("sessions_send gateway loopback", () => {
       const startedAt = Date.now();
       emitAgentEvent({
         runId,
-        stream: "job",
-        data: { state: "started", startedAt, sessionId },
+        stream: "lifecycle",
+        data: { phase: "start", startedAt },
       });
 
       let text = "pong";
@@ -60,12 +60,11 @@ describe("sessions_send gateway loopback", () => {
 
       emitAgentEvent({
         runId,
-        stream: "job",
+        stream: "lifecycle",
         data: {
-          state: "done",
+          phase: "end",
           startedAt,
           endedAt: Date.now(),
-          sessionId,
         },
       });
     });
