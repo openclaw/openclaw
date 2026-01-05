@@ -562,16 +562,16 @@ Clawdbot ships a few default model shorthands (you can override them in config):
 ```json
 {
   "agent": {
-    "model": "anthropic/claude-opus-4-5-20251022",
+    "model": "anthropic/claude-opus-4-5",
     "allowedModels": [
-      "anthropic/claude-opus-4-5-20251022",
-      "anthropic/claude-sonnet-4-5-20251022",
-      "anthropic/claude-haiku-4-5-20251001"
+      "anthropic/claude-opus-4-5",
+      "anthropic/claude-sonnet-4-5",
+      "anthropic/claude-haiku-4-5"
     ],
     "modelAliases": {
-      "opus": "anthropic/claude-opus-4-5-20251022",
-      "sonnet": "anthropic/claude-sonnet-4-5-20251022",
-      "haiku": "anthropic/claude-haiku-4-5-20251001"
+      "opus": "anthropic/claude-opus-4-5",
+      "sonnet": "anthropic/claude-sonnet-4-5",
+      "haiku": "anthropic/claude-haiku-4-5"
     }
   }
 }
