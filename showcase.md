@@ -31,5 +31,3 @@ Highlights from #showcase (Jan 2–5, 2026). Curated for “wow” factor + conc
 - **StarSwap marketplace** — Full astronomy gear marketplace. https://star-swap.com/
 
 ---
-
-If you want more items (or tighter curation), tell me the target length and audience.

@@ -34,5 +34,3 @@ Real projects from the community. Highlights from #showcase (Jan 2–5, 2026).
 
 ## Community builds (non‑Clawdis but made with/around it)
 - **StarSwap marketplace** — Full astronomy gear marketplace. https://star-swap.com/
-
-If you want more items or a tighter curation, open an issue with links and a short blurb.
