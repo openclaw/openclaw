@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const access = vi.fn();
-const realpath = vi.fn();
+const fsMocks = vi.hoisted(() => ({
+  access: vi.fn(),
+  realpath: vi.fn(),
+}));
 
 vi.mock("node:fs/promises", () => ({
-  default: { access, realpath },
-  access,
-  realpath,
+  default: { access: fsMocks.access, realpath: fsMocks.realpath },
+  access: fsMocks.access,
+  realpath: fsMocks.realpath,
 }));
 
 import { resolveGatewayProgramArguments } from "./program-args.js";
@@ -24,10 +26,10 @@ describe("resolveGatewayProgramArguments", () => {
       "node",
       "/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot",
     ];
-    realpath.mockResolvedValue(
+    fsMocks.realpath.mockResolvedValue(
       "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/entry.js",
     );
-    access.mockImplementation(async (target: string) => {
+    fsMocks.access.mockImplementation(async (target: string) => {
       if (target === "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/entry.js") {
         return;
       }
@@ -50,8 +52,8 @@ describe("resolveGatewayProgramArguments", () => {
       "node",
       "/tmp/.npm/_npx/63c3/node_modules/.bin/clawdbot",
     ];
-    realpath.mockRejectedValue(new Error("no realpath"));
-    access.mockImplementation(async (target: string) => {
+    fsMocks.realpath.mockRejectedValue(new Error("no realpath"));
+    fsMocks.access.mockImplementation(async (target: string) => {
       if (target === "/tmp/.npm/_npx/63c3/node_modules/clawdbot/dist/index.js") {
         return;
       }
