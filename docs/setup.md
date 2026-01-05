@@ -115,4 +115,4 @@ pnpm clawdbot health
 - `docs/configuration.md` (config schema + examples)
 - `docs/discord.md` and `docs/telegram.md` (reply tags + replyToMode settings)
 - `docs/clawd.md` (personal assistant setup)
-- `docs/clawdbot-mac.md` (macOS app behavior; gateway lifecycle + “Attach only”)
+- `docs/macos.md` (macOS app behavior; gateway lifecycle + “Attach only”)

@@ -86,7 +86,7 @@ If `canvasHostUrl` is missing or unreachable:
    - TS: verify `/__clawdbot__/a2ui/` responds with HTML + JS.
    - Node: verify A2UI fails when host is unreachable and succeeds when reachable.
 4) Docs
-   - Update `docs/mac/canvas.md`, `docs/ios/spec.md`, `docs/android/connect.md`
+   - Update `docs/mac/canvas.md`, `docs/ios.md`, `docs/android.md`
      to remove local fallback assumptions and point to gateway-hosted A2UI.
 
 ## Notes

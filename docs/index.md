@@ -149,6 +149,12 @@ Example:
   - [WhatsApp group messages](./group-messages.md)
   - [Media: images](./images.md)
   - [Media: audio](./audio.md)
+- Companion apps:
+  - [macOS app](./macos.md)
+  - [iOS app](./ios.md)
+  - [Android app](./android.md)
+  - [Windows app](./windows.md)
+  - [Linux app](./linux.md)
 - Ops and safety:
   - [Sessions](./session.md)
   - [Cron + wakeups](./cron.md)
