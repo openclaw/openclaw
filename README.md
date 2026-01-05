@@ -111,6 +111,12 @@ Your surfaces
                └─ iOS node (Canvas + voice)
 ```
 
+## Skills registry (ClawdHub)
+
+ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
+
+https://clawdhub.com
+
 ## Quick start (from source)
 
 Runtime: **Node ≥22** + **pnpm**.
