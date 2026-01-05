@@ -650,23 +650,10 @@ export function subscribeEmbeddedPiSession(params: {
             if (evtType === "text_end" && blockReplyBreak === "text_end") {
               if (blockChunking && blockBuffer.length > 0) {
                 drainBlockBuffer(true);
-              } else if (next && next !== lastBlockReplyText) {
-                lastBlockReplyText = next || undefined;
-                if (next) assistantTexts.push(next);
-                if (next && params.onBlockReply) {
-                  const { text: cleanedText, mediaUrls } =
-                    splitMediaFromOutput(next);
-                  if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-                    void params.onBlockReply({
-                      text: cleanedText,
-                      mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
-                    });
-                  }
-                }
+              } else if (blockBuffer.length > 0) {
+                emitBlockChunk(blockBuffer);
               }
-              deltaBuffer = "";
               blockBuffer = "";
-              lastStreamedAssistant = undefined;
             }
           }
         }
