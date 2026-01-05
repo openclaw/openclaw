@@ -9,6 +9,7 @@
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Settings now use a sidebar layout to avoid toolbar overflow in Connections.
+- macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.

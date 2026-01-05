@@ -208,9 +208,9 @@ export function createAgentEventHandler({
     agentRunSeq.set(evt.runId, evt.seq);
     broadcast("agent", agentPayload);
 
-    const jobState =
-      evt.stream === "job" && typeof evt.data?.state === "string"
-        ? evt.data.state
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string"
+        ? evt.data.phase
         : null;
 
     if (sessionKey) {
@@ -218,7 +218,7 @@ export function createAgentEventHandler({
       if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
         const clientRunId = chatLink?.clientRunId ?? evt.runId;
         emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
-      } else if (jobState === "done" || jobState === "error") {
+      } else if (lifecyclePhase === "end" || lifecyclePhase === "error") {
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
           if (!finished) {
@@ -229,7 +229,7 @@ export function createAgentEventHandler({
             finished.sessionKey,
             finished.clientRunId,
             evt.seq,
-            jobState,
+            lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
           );
         } else {
@@ -237,14 +237,14 @@ export function createAgentEventHandler({
             sessionKey,
             evt.runId,
             evt.seq,
-            jobState,
+            lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
           );
         }
       }
     }
 
-    if (jobState === "done" || jobState === "error") {
+    if (lifecyclePhase === "end" || lifecyclePhase === "error") {
       clearAgentRunContext(evt.runId);
     }
   };

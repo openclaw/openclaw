@@ -424,21 +424,17 @@ public struct AgentParams: Codable, Sendable {
 
 public struct AgentWaitParams: Codable, Sendable {
     public let runid: String
-    public let afterms: Int?
     public let timeoutms: Int?
 
     public init(
         runid: String,
-        afterms: Int?,
         timeoutms: Int?
     ) {
         self.runid = runid
-        self.afterms = afterms
         self.timeoutms = timeoutms
     }
     private enum CodingKeys: String, CodingKey {
         case runid = "runId"
-        case afterms = "afterMs"
         case timeoutms = "timeoutMs"
     }
 }

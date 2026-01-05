@@ -375,11 +375,11 @@ export async function runTui(opts: TuiOptions) {
       tui.requestRender();
       return;
     }
-    if (evt.stream === "job") {
-      const state = typeof evt.data?.state === "string" ? evt.data.state : "";
-      if (state === "started") setStatus("running");
-      if (state === "done") setStatus("idle");
-      if (state === "error") setStatus("error");
+    if (evt.stream === "lifecycle") {
+      const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+      if (phase === "start") setStatus("running");
+      if (phase === "end") setStatus("idle");
+      if (phase === "error") setStatus("error");
       tui.requestRender();
     }
   };

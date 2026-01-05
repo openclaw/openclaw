@@ -173,9 +173,9 @@ describe("gateway server health/presence", () => {
         o.type === "event" &&
         o.event === "agent" &&
         o.payload?.runId === runId &&
-        o.payload?.stream === "job",
+        o.payload?.stream === "lifecycle",
     );
-    emitAgentEvent({ runId, stream: "job", data: { msg: "hi" } });
+    emitAgentEvent({ runId, stream: "lifecycle", data: { msg: "hi" } });
     const evt = await evtPromise;
     expect(evt.payload.runId).toBe(runId);
     expect(typeof evt.seq).toBe("number");

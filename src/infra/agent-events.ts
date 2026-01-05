@@ -1,5 +1,5 @@
 export type AgentEventStream =
-  | "job"
+  | "lifecycle"
   | "tool"
   | "assistant"
   | "error"

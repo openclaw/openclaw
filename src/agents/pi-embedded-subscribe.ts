@@ -616,6 +616,18 @@ export function subscribeEmbeddedPiSession(params: {
 
       if (evt.type === "agent_start") {
         log.debug(`embedded run agent start: runId=${params.runId}`);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "lifecycle",
+          data: {
+            phase: "start",
+            startedAt: Date.now(),
+          },
+        });
+        params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "start" },
+        });
       }
 
       if (evt.type === "auto_compaction_start") {
@@ -638,6 +650,18 @@ export function subscribeEmbeddedPiSession(params: {
 
       if (evt.type === "agent_end") {
         log.debug(`embedded run agent end: runId=${params.runId}`);
+        emitAgentEvent({
+          runId: params.runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: Date.now(),
+          },
+        });
+        params.onAgentEvent?.({
+          stream: "lifecycle",
+          data: { phase: "end" },
+        });
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {
