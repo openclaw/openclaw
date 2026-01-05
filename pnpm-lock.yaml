@@ -26,25 +26,25 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.32.3
-        version: 0.32.3(ws@8.18.3)(zod@4.3.4)
+        specifier: ^0.35.0
+        version: 0.35.0(ws@8.18.3)(zod@4.3.5)
       '@mariozechner/pi-ai':
-        specifier: ^0.32.3
-        version: 0.32.3(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.4)
+        specifier: ^0.35.0
+        version: 0.35.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.32.3
-        version: 0.32.3(ws@8.18.3)(zod@4.3.4)
+        specifier: ^0.35.0
+        version: 0.35.0(ws@8.18.3)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.32.3
-        version: 0.32.3
+        specifier: ^0.35.0
+        version: 0.35.0
       '@sinclair/typebox':
         specifier: 0.34.46
         version: 0.34.46
       '@slack/bolt':
-        specifier: ^4.5.0
+        specifier: ^4.6.0
         version: 4.6.0(@types/express@5.0.6)
       '@slack/web-api':
-        specifier: ^7.11.1
+        specifier: ^7.13.0
         version: 7.13.0
       '@whiskeysockets/baileys':
         specifier: 7.0.0-rc.9
@@ -74,7 +74,7 @@ importers:
         specifier: ^2.1.2
         version: 2.1.2
       discord-api-types:
-        specifier: ^0.38.33
+        specifier: ^0.38.37
         version: 0.38.37
       discord.js:
         specifier: ^14.25.1
@@ -86,8 +86,8 @@ importers:
         specifier: ^5.2.1
         version: 5.2.1
       file-type:
-        specifier: ^21.2.0
-        version: 21.2.0
+        specifier: ^21.3.0
+        version: 21.3.0
       grammy:
         specifier: ^1.39.2
         version: 1.39.2
@@ -116,12 +116,12 @@ importers:
         specifier: ^8.18.3
         version: 8.18.3
       zod:
-        specifier: ^4.3.4
-        version: 4.3.4
+        specifier: ^4.3.5
+        version: 4.3.5
     devDependencies:
       '@biomejs/biome':
-        specifier: ^2.3.10
-        version: 2.3.10
+        specifier: ^2.3.11
+        version: 2.3.11
       '@lit-labs/signals':
         specifier: ^0.2.0
         version: 0.2.0
@@ -266,55 +266,55 @@ packages:
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
 
-  '@biomejs/biome@2.3.10':
-    resolution: {integrity: sha512-/uWSUd1MHX2fjqNLHNL6zLYWBbrJeG412/8H7ESuK8ewoRoMPUgHDebqKrPTx/5n6f17Xzqc9hdg3MEqA5hXnQ==}
+  '@biomejs/biome@2.3.11':
+    resolution: {integrity: sha512-/zt+6qazBWguPG6+eWmiELqO+9jRsMZ/DBU3lfuU2ngtIQYzymocHhKiZRyrbra4aCOoyTg/BmY+6WH5mv9xmQ==}
     engines: {node: '>=14.21.3'}
     hasBin: true
 
-  '@biomejs/cli-darwin-arm64@2.3.10':
-    resolution: {integrity: sha512-M6xUjtCVnNGFfK7HMNKa593nb7fwNm43fq1Mt71kpLpb+4mE7odO8W/oWVDyBVO4ackhresy1ZYO7OJcVo/B7w==}
+  '@biomejs/cli-darwin-arm64@2.3.11':
+    resolution: {integrity: sha512-/uXXkBcPKVQY7rc9Ys2CrlirBJYbpESEDme7RKiBD6MmqR2w3j0+ZZXRIL2xiaNPsIMMNhP1YnA+jRRxoOAFrA==}
     engines: {node: '>=14.21.3'}
     cpu: [arm64]
     os: [darwin]
 
-  '@biomejs/cli-darwin-x64@2.3.10':
-    resolution: {integrity: sha512-Vae7+V6t/Avr8tVbFNjnFSTKZogZHFYl7MMH62P/J1kZtr0tyRQ9Fe0onjqjS2Ek9lmNLmZc/VR5uSekh+p1fg==}
+  '@biomejs/cli-darwin-x64@2.3.11':
+    resolution: {integrity: sha512-fh7nnvbweDPm2xEmFjfmq7zSUiox88plgdHF9OIW4i99WnXrAC3o2P3ag9judoUMv8FCSUnlwJCM1B64nO5Fbg==}
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [darwin]
 
-  '@biomejs/cli-linux-arm64-musl@2.3.10':
-    resolution: {integrity: sha512-B9DszIHkuKtOH2IFeeVkQmSMVUjss9KtHaNXquYYWCjH8IstNgXgx5B0aSBQNr6mn4RcKKRQZXn9Zu1rM3O0/A==}
+  '@biomejs/cli-linux-arm64-musl@2.3.11':
+    resolution: {integrity: sha512-XPSQ+XIPZMLaZ6zveQdwNjbX+QdROEd1zPgMwD47zvHV+tCGB88VH+aynyGxAHdzL+Tm/+DtKST5SECs4iwCLg==}
     engines: {node: '>=14.21.3'}
     cpu: [arm64]
     os: [linux]
 
-  '@biomejs/cli-linux-arm64@2.3.10':
-    resolution: {integrity: sha512-hhPw2V3/EpHKsileVOFynuWiKRgFEV48cLe0eA+G2wO4SzlwEhLEB9LhlSrVeu2mtSn205W283LkX7Fh48CaxA==}
+  '@biomejs/cli-linux-arm64@2.3.11':
+    resolution: {integrity: sha512-l4xkGa9E7Uc0/05qU2lMYfN1H+fzzkHgaJoy98wO+b/7Gl78srbCRRgwYSW+BTLixTBrM6Ede5NSBwt7rd/i6g==}
     engines: {node: '>=14.21.3'}
     cpu: [arm64]
     os: [linux]
 
-  '@biomejs/cli-linux-x64-musl@2.3.10':
-    resolution: {integrity: sha512-QTfHZQh62SDFdYc2nfmZFuTm5yYb4eO1zwfB+90YxUumRCR171tS1GoTX5OD0wrv4UsziMPmrePMtkTnNyYG3g==}
+  '@biomejs/cli-linux-x64-musl@2.3.11':
+    resolution: {integrity: sha512-vU7a8wLs5C9yJ4CB8a44r12aXYb8yYgBn+WeyzbMjaCMklzCv1oXr8x+VEyWodgJt9bDmhiaW/I0RHbn7rsNmw==}
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [linux]
 
-  '@biomejs/cli-linux-x64@2.3.10':
-    resolution: {integrity: sha512-wwAkWD1MR95u+J4LkWP74/vGz+tRrIQvr8kfMMJY8KOQ8+HMVleREOcPYsQX82S7uueco60L58Wc6M1I9WA9Dw==}
+  '@biomejs/cli-linux-x64@2.3.11':
+    resolution: {integrity: sha512-/1s9V/H3cSe0r0Mv/Z8JryF5x9ywRxywomqZVLHAoa/uN0eY7F8gEngWKNS5vbbN/BsfpCG5yeBT5ENh50Frxg==}
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [linux]
 
-  '@biomejs/cli-win32-arm64@2.3.10':
-    resolution: {integrity: sha512-o7lYc9n+CfRbHvkjPhm8s9FgbKdYZu5HCcGVMItLjz93EhgJ8AM44W+QckDqLA9MKDNFrR8nPbO4b73VC5kGGQ==}
+  '@biomejs/cli-win32-arm64@2.3.11':
+    resolution: {integrity: sha512-PZQ6ElCOnkYapSsysiTy0+fYX+agXPlWugh6+eQ6uPKI3vKAqNp6TnMhoM3oY2NltSB89hz59o8xIfOdyhi9Iw==}
     engines: {node: '>=14.21.3'}
     cpu: [arm64]
     os: [win32]
 
-  '@biomejs/cli-win32-x64@2.3.10':
-    resolution: {integrity: sha512-pHEFgq7dUEsKnqG9mx9bXihxGI49X+ar+UBrEIj3Wqj3UCZp1rNgV+OoyjFgcXsjCWpuEAF4VJdkZr3TrWdCbQ==}
+  '@biomejs/cli-win32-x64@2.3.11':
+    resolution: {integrity: sha512-43VrG813EW+b5+YbDbz31uUsheX+qFKCpXeY9kfdAx+ww3naKxeVkTD9zLIWxUPfJquANMHrmW3wbe/037G0Qg==}
     engines: {node: '>=14.21.3'}
     cpu: [x64]
     os: [win32]
@@ -337,6 +337,57 @@ packages:
 
   '@clack/prompts@0.11.0':
     resolution: {integrity: sha512-pMN5FcrEw9hUkZA4f+zLlzivQSeQf5dRGJjSUbvVYDLvpKCdQx5OaknvKzgbtXOizhP+SJJJjqEbOe55uKKfAw==}
+
+  '@crosscopy/clipboard-darwin-arm64@0.2.8':
+    resolution: {integrity: sha512-Y36ST9k5JZgtDE6SBT45bDNkPKBHd4UEIZgWnC0iC4kAWwdjPmsZ8Mn8e5W0YUKowJ/BDcO+EGm2tVTPQOQKXg==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@crosscopy/clipboard-darwin-universal@0.2.8':
+    resolution: {integrity: sha512-btGV1tLpJWZ4iKa66niahvpZpVRJzgQnYUE+PUX3YYZzaWD0ESuHuVtKVC8sR+b4dsXIiWW5skXbcRmLsF4rtA==}
+    engines: {node: '>= 10'}
+    os: [darwin]
+
+  '@crosscopy/clipboard-darwin-x64@0.2.8':
+    resolution: {integrity: sha512-0QMKf0XrLZrprYYXU4lgaTuzbnYPh9wH6PvsfDB1FZvWf6rOi0syTaBZYnoghbQe700qwLPEfBRjgljJ3Tn6oA==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@crosscopy/clipboard-linux-arm64-gnu@0.2.8':
+    resolution: {integrity: sha512-8YrU03MRsygymqEcHkNgqCqSCQbYRmJCnMXeS4i8FYeOkAxBEeRvPbHoNmI10uppXJZNZgfIKM7Qqk9tEHiwqQ==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@crosscopy/clipboard-linux-riscv64-gnu@0.2.8':
+    resolution: {integrity: sha512-/QWLhnb0QYVjEv5GOAC1q+1DaezYU8Th+IoDKUCsR5i43Cqm+g+N/I2K35yo3J+HHkK9XNbtIDZDXlFgK6tRUg==}
+    engines: {node: '>= 10'}
+    cpu: [riscv64]
+    os: [linux]
+
+  '@crosscopy/clipboard-linux-x64-gnu@0.2.8':
+    resolution: {integrity: sha512-j17eaF/onP/6VAGGKtxA1KmmkErmdjta9gMdMV/yUmgeBYzJ9fMpWUzbk2vmaOyXfhaSzR/sk1P6VLBmvCpqHg==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [linux]
+
+  '@crosscopy/clipboard-win32-arm64-msvc@0.2.8':
+    resolution: {integrity: sha512-MVkMyuYN3y5v0s4HrijM0iA8hZVmpUhHd8X4zKG30t4nE6MbOjOt/8EabMrVmGZlsLeOL2sa0o8Wo9bvhWU+vA==}
+    engines: {node: '>= 10'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@crosscopy/clipboard-win32-x64-msvc@0.2.8':
+    resolution: {integrity: sha512-/GpiB4B3lSgg7eCLDQw9NfFjtQFjo0S88IL+EK54Hx7ZgAP4Ad/ezP/8dw0cA+N/M6iPYy0reCIjW9st82/uxw==}
+    engines: {node: '>= 10'}
+    cpu: [x64]
+    os: [win32]
+
+  '@crosscopy/clipboard@0.2.8':
+    resolution: {integrity: sha512-0qRWscafAHzQ+DdfXX+YgPN2KDTIzWBNfN5Q6z1CgCWsRxtkwK8HfQUc00xIejfRWSGWPIxcCTg82hvg06bodg==}
+    engines: {node: '>= 10'}
 
   '@discordjs/builders@1.13.1':
     resolution: {integrity: sha512-cOU0UDHc3lp/5nKByDxkmRiNZBpdp0kx55aarbiAfakfKJHlxv/yFW1zmIqCAmwH5CRlrH9iMFKJMpvW4DPB+w==}
@@ -366,11 +417,11 @@ packages:
     resolution: {integrity: sha512-wPlQDxEmlDg5IxhJPuxXr3Vy9AjYq5xCvFWGJyD7w7Np8ZGu+Mc+97LCoEc/+AYCo2IDpKioiH0/c/mj5ZR9Uw==}
     engines: {node: '>=16.11.0'}
 
-  '@emnapi/core@1.7.1':
-    resolution: {integrity: sha512-o1uhUASyo921r2XtHYOHy7gdkGLge8ghBEQHMWmyJFoXlpU58kIrhhN3w26lpQb6dspetweapMn2CSNwQ8I4wg==}
+  '@emnapi/core@1.8.1':
+    resolution: {integrity: sha512-AvT9QFpxK0Zd8J0jopedNm+w/2fIzvtPKPjqyw9jwvBaReTTqPBk9Hixaz7KbjimP+QNz605/XnjFcDAL2pqBg==}
 
-  '@emnapi/runtime@1.7.1':
-    resolution: {integrity: sha512-PVtJr5CmLwYAU9PZDMITZoR5iAOShYREoR45EyyLrbntV50mdePTgUn4AmOw90Ifcj+x2kRjdzr1HP3RrNiHGA==}
+  '@emnapi/runtime@1.8.1':
+    resolution: {integrity: sha512-mehfKSMWjjNol8659Z8KxEMrdSJDDot5SXMq00dM8BN4o+CLNXQ0xH2V7EchNHV4RmbZLmmPdEaXZc5H2FXmDg==}
 
   '@emnapi/wasi-threads@1.1.0':
     resolution: {integrity: sha512-WI0DdZ8xFSbgMjR1sFsKABJ/C5OnRrjT06JXbZKexJGrDuPTzZdDYfFlsgcCXCyf+suG5QU2e/y1Wo2V/OapLQ==}
@@ -750,22 +801,22 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.32.3':
-    resolution: {integrity: sha512-NN/fd8eBISnRbQYblLjiaRbcFjz+SEFOGhZDZCXYgHJikTV8VyEon0nZFh7agBZJ7sXZaumMTjw/pGFrBFKcmA==}
+  '@mariozechner/pi-agent-core@0.35.0':
+    resolution: {integrity: sha512-fq8HLpX8wfA0vFfOd9aHfd9DSkQ0BD3H+FtQNcvZWTDvuEQ5jdfGwOGYUNXr5zZj8UZwz+easNuPjNv7Cs5LiQ==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.32.3':
-    resolution: {integrity: sha512-njaa4/pN7U1TbjI1PKqII3M/W1CQ/obPAu5A4KHsX74e8sKjDEiEELUWzLTa5xOj+l1OXp/FtzI0hfJDq682rQ==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
-
-  '@mariozechner/pi-coding-agent@0.32.3':
-    resolution: {integrity: sha512-kOuzflbWc8GWHGOu/7KJQ1P3IodDk4AdOvibkJDcAn2aw5kG+LZAjLGt72tIMQRQna51i9XzL4nSvbxqV+mgWw==}
+  '@mariozechner/pi-ai@0.35.0':
+    resolution: {integrity: sha512-hGsQUDogpXQz/QMBy7zHZ5RcgGdKMpO7ckHYx1qQNznXA7ZILl0ByNdICxAc1mcqJN+0ODMcSNyp9Kul574uAA==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.32.3':
-    resolution: {integrity: sha512-aq7e6qXcwSHvaTUKj5Ut9BY+ZezQ2rL+V4Sd2R5SnBW6JMCt5GnR/8uYBC2PcdxBQzGL9TnzjrC4av5jR+ilow==}
+  '@mariozechner/pi-coding-agent@0.35.0':
+    resolution: {integrity: sha512-QRGyXiCdw6d3TyaXigx3UcWb0El8MB2XuZLnIyKy5nsGJqZi9Vs7Ck1YfmmG+fe4WW2OQzAGWIuu6nSynEklsQ==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-tui@0.35.0':
+    resolution: {integrity: sha512-HZTOeenzM0DVSnEf9VGPuAeufvKEmJN0GnLVp+4Xk1g60eiB0VVnw+Xc+vNf2utFVY/VZ+RrgTsv5IFdQivG7Q==}
     engines: {node: '>=20.0.0'}
 
   '@mistralai/mistralai@1.10.0':
@@ -1756,8 +1807,8 @@ packages:
     resolution: {integrity: sha512-7yAQpD2UMJzLi1Dqv7qFYnPbaPx7ZfFK6PiIxQ4PfkGPyNyl2Ugx+a/umUonmKqjhM4DnfbMvdX6otXq83soQQ==}
     engines: {node: ^12.20 || >= 14.13}
 
-  file-type@21.2.0:
-    resolution: {integrity: sha512-vCYBgFOrJQLoTzDyAXAL/RFfKnXXpUYt4+tipVy26nJJhT7ftgGETf2tAQF59EEL61i3MrorV/PG6tf7LJK7eg==}
+  file-type@21.3.0:
+    resolution: {integrity: sha512-8kPJMIGz1Yt/aPEwOsrR97ZyZaD1Iqm8PClb1nYFclUCkBi0Ma5IsYNQzvSFS9ib51lWyIw5mIT9rWzI/xjpzA==}
     engines: {node: '>=20'}
 
   fill-range@7.1.1:
@@ -3059,16 +3110,16 @@ packages:
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
-  zod@4.3.4:
-    resolution: {integrity: sha512-Zw/uYiiyF6pUT1qmKbZziChgNPRu+ZRneAsMUDU6IwmXdWt5JwcUfy2bvLOCUtz5UniaN/Zx5aFttZYbYc7O/A==}
+  zod@4.3.5:
+    resolution: {integrity: sha512-k7Nwx6vuWx1IJ9Bjuf4Zt1PEllcwe7cls3VNzm4CQ1/hgtFUK2bRNG3rvnpPUhFjmqJKAKtjV576KnUkHocg/g==}
 
 snapshots:
 
-  '@anthropic-ai/sdk@0.71.2(zod@4.3.4)':
+  '@anthropic-ai/sdk@0.71.2(zod@4.3.5)':
     dependencies:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
-      zod: 4.3.4
+      zod: 4.3.5
 
   '@babel/code-frame@7.27.1':
     dependencies:
@@ -3094,39 +3145,39 @@ snapshots:
 
   '@bcoe/v8-coverage@1.0.2': {}
 
-  '@biomejs/biome@2.3.10':
+  '@biomejs/biome@2.3.11':
     optionalDependencies:
-      '@biomejs/cli-darwin-arm64': 2.3.10
-      '@biomejs/cli-darwin-x64': 2.3.10
-      '@biomejs/cli-linux-arm64': 2.3.10
-      '@biomejs/cli-linux-arm64-musl': 2.3.10
-      '@biomejs/cli-linux-x64': 2.3.10
-      '@biomejs/cli-linux-x64-musl': 2.3.10
-      '@biomejs/cli-win32-arm64': 2.3.10
-      '@biomejs/cli-win32-x64': 2.3.10
+      '@biomejs/cli-darwin-arm64': 2.3.11
+      '@biomejs/cli-darwin-x64': 2.3.11
+      '@biomejs/cli-linux-arm64': 2.3.11
+      '@biomejs/cli-linux-arm64-musl': 2.3.11
+      '@biomejs/cli-linux-x64': 2.3.11
+      '@biomejs/cli-linux-x64-musl': 2.3.11
+      '@biomejs/cli-win32-arm64': 2.3.11
+      '@biomejs/cli-win32-x64': 2.3.11
 
-  '@biomejs/cli-darwin-arm64@2.3.10':
+  '@biomejs/cli-darwin-arm64@2.3.11':
     optional: true
 
-  '@biomejs/cli-darwin-x64@2.3.10':
+  '@biomejs/cli-darwin-x64@2.3.11':
     optional: true
 
-  '@biomejs/cli-linux-arm64-musl@2.3.10':
+  '@biomejs/cli-linux-arm64-musl@2.3.11':
     optional: true
 
-  '@biomejs/cli-linux-arm64@2.3.10':
+  '@biomejs/cli-linux-arm64@2.3.11':
     optional: true
 
-  '@biomejs/cli-linux-x64-musl@2.3.10':
+  '@biomejs/cli-linux-x64-musl@2.3.11':
     optional: true
 
-  '@biomejs/cli-linux-x64@2.3.10':
+  '@biomejs/cli-linux-x64@2.3.11':
     optional: true
 
-  '@biomejs/cli-win32-arm64@2.3.10':
+  '@biomejs/cli-win32-arm64@2.3.11':
     optional: true
 
-  '@biomejs/cli-win32-x64@2.3.10':
+  '@biomejs/cli-win32-x64@2.3.11':
     optional: true
 
   '@borewit/text-codec@0.2.1': {}
@@ -3159,6 +3210,41 @@ snapshots:
       '@clack/core': 0.5.0
       picocolors: 1.1.1
       sisteransi: 1.0.5
+
+  '@crosscopy/clipboard-darwin-arm64@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-darwin-universal@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-darwin-x64@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-linux-arm64-gnu@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-linux-riscv64-gnu@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-linux-x64-gnu@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-win32-arm64-msvc@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard-win32-x64-msvc@0.2.8':
+    optional: true
+
+  '@crosscopy/clipboard@0.2.8':
+    optionalDependencies:
+      '@crosscopy/clipboard-darwin-arm64': 0.2.8
+      '@crosscopy/clipboard-darwin-universal': 0.2.8
+      '@crosscopy/clipboard-darwin-x64': 0.2.8
+      '@crosscopy/clipboard-linux-arm64-gnu': 0.2.8
+      '@crosscopy/clipboard-linux-riscv64-gnu': 0.2.8
+      '@crosscopy/clipboard-linux-x64-gnu': 0.2.8
+      '@crosscopy/clipboard-win32-arm64-msvc': 0.2.8
+      '@crosscopy/clipboard-win32-x64-msvc': 0.2.8
 
   '@discordjs/builders@1.13.1':
     dependencies:
@@ -3209,13 +3295,13 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@emnapi/core@1.7.1':
+  '@emnapi/core@1.8.1':
     dependencies:
       '@emnapi/wasi-threads': 1.1.0
       tslib: 2.8.1
     optional: true
 
-  '@emnapi/runtime@1.7.1':
+  '@emnapi/runtime@1.8.1':
     dependencies:
       tslib: 2.8.1
     optional: true
@@ -3423,7 +3509,7 @@ snapshots:
 
   '@img/sharp-wasm32@0.34.5':
     dependencies:
-      '@emnapi/runtime': 1.7.1
+      '@emnapi/runtime': 1.8.1
     optional: true
 
   '@img/sharp-win32-arm64@0.34.5':
@@ -3499,10 +3585,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.32.3(ws@8.18.3)(zod@4.3.4)':
+  '@mariozechner/pi-agent-core@0.35.0(ws@8.18.3)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.32.3(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.4)
-      '@mariozechner/pi-tui': 0.32.3
+      '@mariozechner/pi-ai': 0.35.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.35.0
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3511,18 +3597,18 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.32.3(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.4)':
+  '@mariozechner/pi-ai@0.35.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)':
     dependencies:
-      '@anthropic-ai/sdk': 0.71.2(zod@4.3.4)
+      '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@google/genai': 1.34.0
       '@mistralai/mistralai': 1.10.0
       '@sinclair/typebox': 0.34.46
       ajv: 8.17.1
       ajv-formats: 3.0.1(ajv@8.17.1)
       chalk: 5.6.2
-      openai: 6.10.0(ws@8.18.3)(zod@4.3.4)
+      openai: 6.10.0(ws@8.18.3)(zod@4.3.5)
       partial-json: 0.1.7
-      zod-to-json-schema: 3.25.1(zod@4.3.4)
+      zod-to-json-schema: 3.25.1(zod@4.3.5)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3531,15 +3617,16 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.32.3(ws@8.18.3)(zod@4.3.4)':
+  '@mariozechner/pi-coding-agent@0.35.0(ws@8.18.3)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-agent-core': 0.32.3(ws@8.18.3)(zod@4.3.4)
-      '@mariozechner/pi-ai': 0.32.3(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.4)
-      '@mariozechner/pi-tui': 0.32.3
+      '@crosscopy/clipboard': 0.2.8
+      '@mariozechner/pi-agent-core': 0.35.0(ws@8.18.3)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.35.0(patch_hash=628fb051b6f4886984a846a5ee7aa0a571c3360d35b8d114e4684e5edcd100c5)(ws@8.18.3)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.35.0
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.2
-      file-type: 21.2.0
+      file-type: 21.3.0
       glob: 11.1.0
       jiti: 2.6.1
       marked: 15.0.12
@@ -3552,7 +3639,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.32.3':
+  '@mariozechner/pi-tui@0.35.0':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
@@ -3567,8 +3654,8 @@ snapshots:
 
   '@napi-rs/wasm-runtime@1.1.1':
     dependencies:
-      '@emnapi/core': 1.7.1
-      '@emnapi/runtime': 1.7.1
+      '@emnapi/core': 1.8.1
+      '@emnapi/runtime': 1.8.1
       '@tybys/wasm-util': 0.10.1
     optional: true
 
@@ -4586,7 +4673,7 @@ snapshots:
       node-domexception: 1.0.0
       web-streams-polyfill: 3.3.3
 
-  file-type@21.2.0:
+  file-type@21.3.0:
     dependencies:
       '@tokenizer/inflate': 0.4.1
       strtok3: 10.3.4
@@ -5106,7 +5193,7 @@ snapshots:
       '@tokenizer/token': 0.3.0
       content-type: 1.0.5
       debug: 4.4.3
-      file-type: 21.2.0
+      file-type: 21.3.0
       media-typer: 1.1.0
       strtok3: 10.3.4
       token-types: 6.1.2
@@ -5169,10 +5256,10 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  openai@6.10.0(ws@8.18.3)(zod@4.3.4):
+  openai@6.10.0(ws@8.18.3)(zod@4.3.5):
     optionalDependencies:
       ws: 8.18.3
-      zod: 4.3.4
+      zod: 4.3.5
 
   opus-decoder@0.7.11:
     dependencies:
@@ -5930,10 +6017,10 @@ snapshots:
     dependencies:
       zod: 3.25.76
 
-  zod-to-json-schema@3.25.1(zod@4.3.4):
+  zod-to-json-schema@3.25.1(zod@4.3.5):
     dependencies:
-      zod: 4.3.4
+      zod: 4.3.5
 
   zod@3.25.76: {}
 
-  zod@4.3.4: {}
+  zod@4.3.5: {}
