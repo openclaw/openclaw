@@ -60,6 +60,36 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
 
 ## Common options
 
+### Env vars + `.env`
+
+CLAWDBOT reads env vars from the parent process (shell, launchd/systemd, CI, etc.).
+
+Additionally, it loads:
+- `.env` from the current working directory (if present)
+- a global fallback `.env` from `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`)
+
+Neither `.env` file overrides existing env vars.
+
+### `env.shellEnv` (optional)
+
+Opt-in convenience: if enabled and none of the expected keys are set yet, CLAWDBOT runs your login shell and imports only the missing expected keys (never overrides).
+This effectively sources your shell profile.
+
+```json5
+{
+  env: {
+    shellEnv: {
+      enabled: true,
+      timeoutMs: 15000
+    }
+  }
+}
+```
+
+Env var equivalent:
+- `CLAWDBOT_LOAD_SHELL_ENV=1`
+- `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
+
 ### `identity`
 
 Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.

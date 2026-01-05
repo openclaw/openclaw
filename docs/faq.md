@@ -118,6 +118,24 @@ pnpm clawdbot login
 
 **If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/` to your server. The auth is just a JSON file.
 
+### How are env vars loaded?
+
+CLAWDBOT reads env vars from the parent process (shell, launchd/systemd, CI, etc.). It also loads `.env` files:
+- `.env` in the current working directory
+- global fallback: `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`)
+
+Neither `.env` file overrides existing env vars.
+
+Optional convenience: import missing expected keys from your login shell env (sources your shell profile):
+
+```json5
+{
+  env: { shellEnv: { enabled: true, timeoutMs: 15000 } }
+}
+```
+
+Or set `CLAWDBOT_LOAD_SHELL_ENV=1` (timeout: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`).
+
 ### Does enterprise OAuth work?
 
 **Not currently.** Enterprise accounts use SSO which requires a different auth flow that pi-coding-agent doesn't support yet.

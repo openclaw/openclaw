@@ -216,7 +216,22 @@ Minimal `~/.clawdbot/clawdbot.json`:
 
 Env vars: loaded from `.env` in the current working directory, plus a global fallback at `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`) without overriding existing values.
 
-Optional: import missing keys from your login shell env (sources your shell profile) via `env.shellEnv.enabled` (or `CLAWDBOT_LOAD_SHELL_ENV=1`). Timeout default: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`.
+Optional: import missing keys from your login shell env (sources your shell profile) via config or env var:
+
+```json5
+{
+  env: {
+    shellEnv: {
+      enabled: true,
+      timeoutMs: 15000
+    }
+  }
+}
+```
+
+- Env var: `CLAWDBOT_LOAD_SHELL_ENV=1`
+- Timeout override: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
+- Behavior: only imports known/expected keys, never overrides existing `process.env`.
 
 ### WhatsApp
 
