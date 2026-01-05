@@ -156,3 +156,11 @@ create_*.sh
 update_*.py
 update_*.sh
 update_*_*.py
+
+# Development prompt/request artifacts
+*_prompt.txt
+*_request.txt
+
+# Generated HTML guides
+*_guide.html
+*-guide.html
