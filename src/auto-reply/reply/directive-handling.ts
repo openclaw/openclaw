@@ -93,6 +93,13 @@ const resolveAuthLabel = async (
   return { label: "missing", source: "missing" };
 };
 
+const formatAuthLabel = (auth: { label: string; source: string }) => {
+  if (!auth.source || auth.source === auth.label || auth.source === "missing") {
+    return auth.label;
+  }
+  return `${auth.label} (${auth.source})`;
+};
+
 export type InlineDirectives = {
   cleaned: string;
   hasThinkDirective: boolean;
@@ -272,7 +279,7 @@ export async function handleDirectiveOnly(params: {
           authStorage,
           authPaths,
         );
-        authByProvider.set(entry.provider, `${auth.label} (${auth.source})`);
+        authByProvider.set(entry.provider, formatAuthLabel(auth));
       }
       const current = `${params.provider}/${params.model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
