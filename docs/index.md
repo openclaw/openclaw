@@ -128,6 +128,7 @@ Example:
 ## Docs
 
 - Start here:
+  - [Docs hubs (all pages linked)](./hubs.md)
   - [FAQ](./faq.md) ← *common questions answered*
   - [Configuration](./configuration.md)
   - [Nix mode](./nix.md)
