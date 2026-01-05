@@ -1,4 +1,7 @@
 import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { resolveModelRefFromString } from "../agents/model-selection.js";
 import {
@@ -7,6 +10,7 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../agents/pi-embedded.js";
+import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -49,7 +53,7 @@ import {
   prependSystemEvents,
 } from "./reply/session-updates.js";
 import { createTypingController } from "./reply/typing.js";
-import type { MsgContext } from "./templating.js";
+import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
   normalizeThinkLevel,
@@ -478,6 +482,15 @@ export async function getReplyFromConfig(
     typing.cleanup();
     return commandResult.reply;
   }
+
+  await stageSandboxMedia({
+    ctx,
+    sessionCtx,
+    cfg,
+    sessionKey,
+    workspaceDir,
+  });
+
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
@@ -680,4 +693,66 @@ export async function getReplyFromConfig(
     sessionCtx,
     shouldInjectGroupIntro,
   });
+}
+
+async function stageSandboxMedia(params: {
+  ctx: MsgContext;
+  sessionCtx: TemplateContext;
+  cfg: ClawdbotConfig;
+  sessionKey?: string;
+  workspaceDir: string;
+}) {
+  const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
+  const rawPath = ctx.MediaPath?.trim();
+  if (!rawPath || !sessionKey) return;
+
+  const sandbox = await ensureSandboxWorkspaceForSession({
+    config: cfg,
+    sessionKey,
+    workspaceDir,
+  });
+  if (!sandbox) return;
+
+  let source = rawPath;
+  if (source.startsWith("file://")) {
+    try {
+      source = fileURLToPath(source);
+    } catch {
+      return;
+    }
+  }
+  if (!path.isAbsolute(source)) return;
+
+  const originalMediaPath = ctx.MediaPath;
+  const originalMediaUrl = ctx.MediaUrl;
+
+  try {
+    const fileName = path.basename(source);
+    if (!fileName) return;
+    const destDir = path.join(sandbox.workspaceDir, "media", "inbound");
+    await fs.mkdir(destDir, { recursive: true });
+    const dest = path.join(destDir, fileName);
+    await fs.copyFile(source, dest);
+
+    const relative = path.posix.join("media", "inbound", fileName);
+    ctx.MediaPath = relative;
+    sessionCtx.MediaPath = relative;
+
+    if (originalMediaUrl) {
+      let normalizedUrl = originalMediaUrl;
+      if (normalizedUrl.startsWith("file://")) {
+        try {
+          normalizedUrl = fileURLToPath(normalizedUrl);
+        } catch {
+          normalizedUrl = originalMediaUrl;
+        }
+      }
+      if (normalizedUrl === originalMediaPath || normalizedUrl === source) {
+        ctx.MediaUrl = relative;
+        sessionCtx.MediaUrl = relative;
+      }
+    }
+  } catch (err) {
+    logVerbose(`Failed to stage inbound media for sandbox: ${String(err)}`);
+  }
 }

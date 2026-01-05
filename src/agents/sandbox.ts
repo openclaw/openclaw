@@ -99,6 +99,11 @@ export type SandboxContext = {
   browser?: SandboxBrowserContext;
 };
 
+export type SandboxWorkspaceInfo = {
+  workspaceDir: string;
+  containerWorkdir: string;
+};
+
 const DEFAULT_SANDBOX_WORKSPACE_ROOT = path.join(
   os.homedir(),
   ".clawdbot",
@@ -864,5 +869,30 @@ export async function resolveSandboxContext(params: {
     docker: cfg.docker,
     tools: cfg.tools,
     browser: browser ?? undefined,
+  };
+}
+
+export async function ensureSandboxWorkspaceForSession(params: {
+  config?: ClawdbotConfig;
+  sessionKey?: string;
+  workspaceDir?: string;
+}): Promise<SandboxWorkspaceInfo | null> {
+  const rawSessionKey = params.sessionKey?.trim();
+  if (!rawSessionKey) return null;
+  const cfg = defaultSandboxConfig(params.config);
+  const mainKey = params.config?.session?.mainKey?.trim() || "main";
+  if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
+
+  const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
+  const workspaceDir = cfg.perSession
+    ? resolveSandboxWorkspaceDir(workspaceRoot, rawSessionKey)
+    : workspaceRoot;
+  const seedWorkspace =
+    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
+  await ensureSandboxWorkspace(workspaceDir, seedWorkspace);
+
+  return {
+    workspaceDir,
+    containerWorkdir: cfg.docker.workdir,
   };
 }

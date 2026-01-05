@@ -64,22 +64,26 @@ function makeProc(pid = 123) {
 
 const proc = makeProc();
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({
-    browser: {
-      enabled: true,
-      controlUrl: `http://127.0.0.1:${testPort}`,
-      color: "#FF4500",
-      attachOnly: cfgAttachOnly,
-      headless: true,
-      defaultProfile: "clawd",
-      profiles: {
-        clawd: { cdpPort: testPort + 1, color: "#FF4500" },
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => ({
+      browser: {
+        enabled: true,
+        controlUrl: `http://127.0.0.1:${testPort}`,
+        color: "#FF4500",
+        attachOnly: cfgAttachOnly,
+        headless: true,
+        defaultProfile: "clawd",
+        profiles: {
+          clawd: { cdpPort: testPort + 1, color: "#FF4500" },
+        },
       },
-    },
-  }),
-  writeConfigFile: vi.fn(async () => {}),
-}));
+    }),
+    writeConfigFile: vi.fn(async () => {}),
+  };
+});
 
 const launchCalls = vi.hoisted(() => [] as Array<{ port: number }>);
 vi.mock("./chrome.js", () => ({

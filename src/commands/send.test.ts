@@ -5,9 +5,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import { sendCommand } from "./send.js";
 
 let testConfig: Record<string, unknown> = {};
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => testConfig,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => testConfig,
+  };
+});
 
 const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({

@@ -9,10 +9,14 @@ let lastClientOptions: {
   onHelloOk?: () => void | Promise<void>;
 } | null = null;
 
-vi.mock("../config/config.js", () => ({
-  loadConfig,
-  resolveGatewayPort,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig,
+    resolveGatewayPort,
+  };
+});
 
 vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4,
