@@ -29,7 +29,7 @@ const CronToolSchema = Type.Union([
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    id: Type.String(),
     patch: Type.Object({}, { additionalProperties: true }),
   }),
   Type.Object({
@@ -37,21 +37,21 @@ const CronToolSchema = Type.Union([
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    id: Type.String(),
   }),
   Type.Object({
     action: Type.Literal("run"),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    id: Type.String(),
   }),
   Type.Object({
     action: Type.Literal("runs"),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    id: Type.String(),
   }),
   Type.Object({
     action: Type.Literal("wake"),
@@ -102,7 +102,7 @@ export function createCronTool(): AnyAgentTool {
           );
         }
         case "update": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id = readStringParam(params, "id", { required: true });
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
@@ -114,19 +114,19 @@ export function createCronTool(): AnyAgentTool {
           );
         }
         case "remove": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id = readStringParam(params, "id", { required: true });
           return jsonResult(
             await callGatewayTool("cron.remove", gatewayOpts, { id }),
           );
         }
         case "run": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id = readStringParam(params, "id", { required: true });
           return jsonResult(
             await callGatewayTool("cron.run", gatewayOpts, { id }),
           );
         }
         case "runs": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id = readStringParam(params, "id", { required: true });
           return jsonResult(
             await callGatewayTool("cron.runs", gatewayOpts, { id }),
           );

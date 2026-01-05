@@ -14,7 +14,7 @@
 - Control UI: render Markdown in tool result cards.
 - Control UI: prevent overlapping action buttons in Discord guild rules on narrow layouts.
 - Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
-- Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
+- Cron tool uses `id` for update/remove/run/runs (aligns with gateway params). (#180) — thanks @adamgall
 - Control UI: chat view uses page scroll with sticky header/sidebar and fixed composer (no inner scroll frame).
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
 - macOS: make generated gateway protocol models `Sendable` for Swift 6 strict concurrency. (#195) — thanks @andranik-sahakyan
