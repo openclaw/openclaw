@@ -20,6 +20,7 @@ import type { ReplyPayload } from "../types.js";
 import {
   type ElevatedLevel,
   extractElevatedDirective,
+  extractStatusDirective,
   extractThinkDirective,
   extractVerboseDirective,
   type ThinkLevel,
@@ -49,6 +50,7 @@ export type InlineDirectives = {
   hasElevatedDirective: boolean;
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
+  hasStatusDirective: boolean;
   hasModelDirective: boolean;
   rawModelDirective?: string;
   hasQueueDirective: boolean;
@@ -84,10 +86,14 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     hasDirective: hasElevatedDirective,
   } = extractElevatedDirective(verboseCleaned);
   const {
+    cleaned: statusCleaned,
+    hasDirective: hasStatusDirective,
+  } = extractStatusDirective(elevatedCleaned);
+  const {
     cleaned: modelCleaned,
     rawModel,
     hasDirective: hasModelDirective,
-  } = extractModelDirective(elevatedCleaned);
+  } = extractModelDirective(statusCleaned);
   const {
     cleaned: queueCleaned,
     queueMode,
@@ -114,6 +120,7 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     hasElevatedDirective,
     elevatedLevel,
     rawElevatedLevel,
+    hasStatusDirective,
     hasModelDirective,
     rawModelDirective: rawModel,
     hasQueueDirective,

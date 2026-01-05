@@ -1,3 +1,4 @@
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
@@ -168,15 +169,14 @@ export async function monitorIMessageProvider(
     const isGroup = Boolean(message.is_group);
     if (isGroup && !chatId) return;
 
-    if (
-      !isAllowedIMessageSender({
-        allowFrom,
-        sender,
-        chatId: chatId ?? undefined,
-        chatGuid,
-        chatIdentifier,
-      })
-    ) {
+    const commandAuthorized = isAllowedIMessageSender({
+      allowFrom,
+      sender,
+      chatId: chatId ?? undefined,
+      chatGuid,
+      chatIdentifier,
+    });
+    if (!commandAuthorized) {
       logVerbose(`Blocked iMessage sender ${sender} (not in allowFrom)`);
       return;
     }
@@ -184,7 +184,13 @@ export async function monitorIMessageProvider(
     const messageText = (message.text ?? "").trim();
     const mentioned = isGroup ? isMentioned(messageText, mentionRegexes) : true;
     const requireMention = resolveGroupRequireMention(cfg, opts, chatId);
-    if (isGroup && requireMention && !mentioned) {
+    const shouldBypassMention =
+      isGroup &&
+      requireMention &&
+      !mentioned &&
+      commandAuthorized &&
+      hasControlCommand(messageText);
+    if (isGroup && requireMention && !mentioned && !shouldBypassMention) {
       logVerbose(`imessage: skipping group message (no mention)`);
       return;
     }
@@ -228,6 +234,7 @@ export async function monitorIMessageProvider(
         ? (message.participants ?? []).filter(Boolean).join(", ")
         : undefined,
       SenderName: sender,
+      SenderId: sender,
       Surface: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
       Timestamp: createdAt,
@@ -235,6 +242,7 @@ export async function monitorIMessageProvider(
       MediaType: mediaType,
       MediaUrl: mediaPath,
       WasMentioned: mentioned,
+      CommandAuthorized: commandAuthorized,
     };
 
     if (!isGroup) {

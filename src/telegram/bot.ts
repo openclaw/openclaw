@@ -5,6 +5,7 @@ import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
 
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
@@ -114,10 +115,36 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
 
       const botUsername = ctx.me?.username?.toLowerCase();
+      const allowFromList = Array.isArray(allowFrom)
+        ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
+        : [];
+      const senderId = msg.from?.id ? String(msg.from.id) : "";
+      const senderUsername = msg.from?.username ?? "";
+      const commandAuthorized =
+        allowFromList.length === 0 ||
+        allowFromList.includes("*") ||
+        (senderId && allowFromList.includes(senderId)) ||
+        (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
+        (senderUsername &&
+          allowFromList.some(
+            (entry) =>
+              entry.toLowerCase() === senderUsername.toLowerCase() ||
+              entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
+          ));
       const wasMentioned =
         Boolean(botUsername) && hasBotMention(msg, botUsername);
+      const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
+        (ent) => ent.type === "mention",
+      );
+      const shouldBypassMention =
+        isGroup &&
+        resolveGroupRequireMention(chatId) &&
+        !wasMentioned &&
+        !hasAnyMention &&
+        commandAuthorized &&
+        hasControlCommand(msg.text ?? msg.caption ?? "");
       if (isGroup && resolveGroupRequireMention(chatId) && botUsername) {
-        if (!wasMentioned) {
+        if (!wasMentioned && !shouldBypassMention) {
           logger.info(
             { chatId, reason: "no-mention" },
             "skipping group message",
@@ -161,6 +188,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
         SenderName: buildSenderName(msg),
+        SenderId: senderId || undefined,
+        SenderUsername: senderUsername || undefined,
         Surface: "telegram",
         MessageSid: String(msg.message_id),
         ReplyToId: replyTarget?.id,
@@ -171,6 +200,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
+        CommandAuthorized: commandAuthorized,
       };
 
       if (replyTarget && shouldLogVerbose()) {

@@ -17,11 +17,13 @@ export type MsgContext = {
   GroupSpace?: string;
   GroupMembers?: string;
   SenderName?: string;
+  SenderId?: string;
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
   Surface?: string;
   WasMentioned?: boolean;
+  CommandAuthorized?: boolean;
 };
 
 export type TemplateContext = MsgContext & {

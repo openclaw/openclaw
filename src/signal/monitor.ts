@@ -287,7 +287,8 @@ export async function monitorSignalProvider(
       if (account && normalizeE164(sender) === normalizeE164(account)) {
         return;
       }
-      if (!isAllowedSender(sender, allowFrom)) {
+      const commandAuthorized = isAllowedSender(sender, allowFrom);
+      if (!commandAuthorized) {
         logVerbose(`Blocked signal sender ${sender} (not in allowFrom)`);
         return;
       }
@@ -349,12 +350,14 @@ export async function monitorSignalProvider(
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? (groupName ?? undefined) : undefined,
         SenderName: envelope.sourceName ?? sender,
+        SenderId: sender,
         Surface: "signal" as const,
         MessageSid: envelope.timestamp ? String(envelope.timestamp) : undefined,
         Timestamp: envelope.timestamp ?? undefined,
         MediaPath: mediaPath,
         MediaType: mediaType,
         MediaUrl: mediaPath,
+        CommandAuthorized: commandAuthorized,
       };
 
       if (!isGroup) {

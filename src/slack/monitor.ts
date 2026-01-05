@@ -4,6 +4,7 @@ import type {
 } from "@slack/bolt";
 import bolt from "@slack/bolt";
 
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
@@ -581,7 +582,25 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       opts.wasMentioned ??
       (!isDirectMessage &&
         Boolean(botUserId && message.text?.includes(`<@${botUserId}>`)));
-    if (isRoom && channelConfig?.requireMention && !wasMentioned) {
+    const sender = await resolveUserName(message.user);
+    const senderName = sender?.name ?? message.user;
+    const allowList = normalizeAllowListLower(allowFrom);
+    const commandAuthorized =
+      allowList.length === 0 ||
+      allowListMatches({
+        allowList,
+        id: message.user,
+        name: senderName,
+      });
+    const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
+    const shouldBypassMention =
+      isRoom &&
+      channelConfig?.requireMention &&
+      !wasMentioned &&
+      !hasAnyMention &&
+      commandAuthorized &&
+      hasControlCommand(message.text ?? "");
+    if (isRoom && channelConfig?.requireMention && !wasMentioned && !shouldBypassMention) {
       logger.info(
         { channel: message.channel, reason: "no-mention" },
         "skipping room message",
@@ -597,7 +616,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
 
-    const sender = await resolveUserName(message.user);
     const senderName = sender?.name ?? message.user;
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
@@ -642,6 +660,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
       GroupSubject: isRoomish ? roomLabel : undefined,
       SenderName: senderName,
+      SenderId: message.user,
       Surface: "slack" as const,
       MessageSid: message.ts,
       ReplyToId: message.thread_ts ?? message.ts,
@@ -650,6 +669,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       MediaPath: media?.path,
       MediaType: media?.contentType,
       MediaUrl: media?.path,
+      CommandAuthorized: commandAuthorized,
     };
 
     const replyTarget = ctxPayload.To ?? undefined;

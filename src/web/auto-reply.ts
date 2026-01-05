@@ -1,3 +1,4 @@
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import {
@@ -848,35 +849,23 @@ export async function monitorWebProvider(
     );
   };
 
-  const resolveOwnerList = (selfE164?: string | null) => {
+  const resolveCommandAllowFrom = () => {
     const allowFrom = mentionConfig.allowFrom;
     const raw =
-      Array.isArray(allowFrom) && allowFrom.length > 0
-        ? allowFrom
-        : selfE164
-          ? [selfE164]
-          : [];
+      Array.isArray(allowFrom) && allowFrom.length > 0 ? allowFrom : [];
     return raw
       .filter((entry): entry is string => Boolean(entry && entry !== "*"))
       .map((entry) => normalizeE164(entry))
       .filter((entry): entry is string => Boolean(entry));
   };
 
-  const isOwnerSender = (msg: WebInboundMsg) => {
+  const isCommandAuthorized = (msg: WebInboundMsg) => {
+    const allowFrom = resolveCommandAllowFrom();
+    if (allowFrom.length === 0) return true;
+    if (mentionConfig.allowFrom?.includes("*")) return true;
     const sender = normalizeE164(msg.senderE164 ?? "");
     if (!sender) return false;
-    const owners = resolveOwnerList(msg.selfE164 ?? undefined);
-    return owners.includes(sender);
-  };
-
-  const isStatusCommand = (body: string) => {
-    const trimmed = body.trim().toLowerCase();
-    if (!trimmed) return false;
-    return (
-      trimmed === "/status" ||
-      trimmed === "status" ||
-      trimmed.startsWith("/status ")
-    );
+    return allowFrom.includes(sender);
   };
 
   const stripMentionsForCommand = (text: string, selfE164?: string | null) => {
@@ -1193,6 +1182,7 @@ export async function monitorWebProvider(
           SenderName: msg.senderName,
           SenderE164: msg.senderE164,
           WasMentioned: msg.wasMentioned,
+          CommandAuthorized: isCommandAuthorized(msg),
           Surface: "whatsapp",
         },
         {
@@ -1333,12 +1323,15 @@ export async function monitorWebProvider(
           noteGroupMember(conversationId, msg.senderE164, msg.senderName);
           const commandBody = stripMentionsForCommand(msg.body, msg.selfE164);
           const activationCommand = parseActivationCommand(commandBody);
-          const isOwner = isOwnerSender(msg);
-          const statusCommand = isStatusCommand(commandBody);
+          const commandAuthorized = isCommandAuthorized(msg);
+          const statusCommand = hasControlCommand(commandBody);
+          const hasAnyMention = (msg.mentionedJids?.length ?? 0) > 0;
           const shouldBypassMention =
-            isOwner && (activationCommand.hasCommand || statusCommand);
+            commandAuthorized &&
+            (activationCommand.hasCommand || statusCommand) &&
+            !hasAnyMention;
 
-          if (activationCommand.hasCommand && !isOwner) {
+          if (activationCommand.hasCommand && !commandAuthorized) {
             logVerbose(
               `Ignoring /activation from non-owner in group ${conversationId}`,
             );

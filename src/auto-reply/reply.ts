@@ -25,6 +25,7 @@ import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
 import { applySessionHints } from "./reply/body.js";
 import { buildCommandContext, handleCommands } from "./reply/commands.js";
+import { hasControlCommand } from "./command-detection.js";
 import {
   handleDirectiveOnly,
   isDirectiveOnly,
@@ -252,11 +253,22 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
   } = sessionState;
 
-  const directives = parseInlineDirectives(
-    sessionCtx.BodyStripped ?? sessionCtx.Body ?? "",
-  );
-  sessionCtx.Body = directives.cleaned;
-  sessionCtx.BodyStripped = directives.cleaned;
+  const rawBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const commandAuthorized = ctx.CommandAuthorized ?? true;
+  const parsedDirectives = parseInlineDirectives(rawBody);
+  const directives = commandAuthorized
+    ? parsedDirectives
+    : {
+        ...parsedDirectives,
+        hasThinkDirective: false,
+        hasVerboseDirective: false,
+        hasStatusDirective: false,
+        hasModelDirective: false,
+        hasQueueDirective: false,
+        queueReset: false,
+      };
+  sessionCtx.Body = parsedDirectives.cleaned;
+  sessionCtx.BodyStripped = parsedDirectives.cleaned;
 
   const surfaceKey =
     sessionCtx.Surface?.trim().toLowerCase() ??
@@ -424,6 +436,7 @@ export async function getReplyFromConfig(
     sessionKey,
     isGroup,
     triggerBodyNormalized,
+    commandAuthorized,
   });
   const isEmptyConfig = Object.keys(cfg).length === 0;
   if (
@@ -445,6 +458,7 @@ export async function getReplyFromConfig(
     ctx,
     cfg,
     command,
+    directives,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -484,6 +498,14 @@ export async function getReplyFromConfig(
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
+  if (
+    !commandAuthorized &&
+    !baseBodyTrimmedRaw &&
+    hasControlCommand(rawBody)
+  ) {
+    typing.cleanup();
+    return undefined;
+  }
   const isBareSessionReset =
     isNewSession &&
     baseBodyTrimmedRaw.length === 0 &&

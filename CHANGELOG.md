@@ -27,6 +27,7 @@
 - Discord/Slack: route reaction + system notifications to the correct session (no main-session bleed).
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
+- Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
 
 ## 2026.1.5
 

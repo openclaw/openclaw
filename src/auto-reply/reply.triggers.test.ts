@@ -107,6 +107,23 @@ describe("trigger handling", () => {
     });
   });
 
+  it("reports status when /status appears inline", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /status now",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Status");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("allows owner to set send policy", async () => {
     await withTempHome(async (home) => {
       const cfg = {

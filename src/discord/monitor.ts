@@ -1,10 +1,7 @@
 import {
-  ApplicationCommandOptionType,
   type Attachment,
   ChannelType,
-  type ChatInputCommandInteraction,
   Client,
-  type CommandInteractionOption,
   Events,
   GatewayIntentBits,
   type Guild,
@@ -19,22 +16,19 @@ import {
   type User,
 } from "discord.js";
 
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type {
-  DiscordSlashCommandConfig,
-  ReplyToMode,
-} from "../config/config.js";
+import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveSessionKey,
   resolveStorePath,
   updateLastRoute,
 } from "../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose, warn } from "../globals.js";
+import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
@@ -47,7 +41,6 @@ export type MonitorDiscordOpts = {
   token?: string;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
-  slashCommand?: DiscordSlashCommandConfig;
   mediaMaxMb?: number;
   historyLimit?: number;
   replyToMode?: ReplyToMode;
@@ -140,9 +133,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const dmConfig = cfg.discord?.dm;
   const guildEntries = cfg.discord?.guilds;
   const allowFrom = dmConfig?.allowFrom;
-  const slashCommand = resolveSlashCommandConfig(
-    opts.slashCommand ?? cfg.discord?.slashCommand,
-  );
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord");
@@ -183,9 +173,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   client.once(Events.ClientReady, () => {
     runtime.log?.(`logged in as ${client.user?.tag ?? "unknown"}`);
-    if (slashCommand.enabled) {
-      void ensureSlashCommand(client, slashCommand, runtime);
-    }
   });
 
   client.on(Events.Error, (err) => {
@@ -299,8 +286,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
       const resolvedRequireMention =
         channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
+      const hasAnyMention = Boolean(
+        !isDirectMessage &&
+          (message.mentions?.everyone ||
+            (message.mentions?.users?.size ?? 0) > 0 ||
+            (message.mentions?.roles?.size ?? 0) > 0),
+      );
+      const commandAuthorized = resolveDiscordCommandAuthorized({
+        isDirectMessage,
+        allowFrom,
+        guildInfo,
+        author: message.author,
+      });
+      const shouldBypassMention =
+        isGuildMessage &&
+        resolvedRequireMention &&
+        !wasMentioned &&
+        !hasAnyMention &&
+        commandAuthorized &&
+        hasControlCommand(baseText);
       if (isGuildMessage && resolvedRequireMention) {
-        if (botId && !wasMentioned) {
+        if (botId && !wasMentioned && !shouldBypassMention) {
           logVerbose(
             `discord: drop guild message (mention required, botId=${botId})`,
           );
@@ -480,11 +486,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           : `channel:${message.channelId}`,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
+        SenderId: message.author.id,
         SenderUsername: message.author.username,
         SenderTag: message.author.tag,
         GroupSubject: groupSubject,
         GroupRoom: groupRoom,
-        GroupSpace: isGuildMessage ? guildSlug || undefined : undefined,
+        GroupSpace: isGuildMessage
+          ? guildInfo?.id ?? guildSlug || undefined
+          : undefined,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
@@ -492,6 +501,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
+        CommandAuthorized: commandAuthorized,
       };
       const replyTarget = ctxPayload.To ?? undefined;
       if (!replyTarget) {
@@ -693,179 +703,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   client.on(Events.MessageReactionRemove, async (reaction, user) => {
     await handleReactionEvent(reaction, user, "removed");
-  });
-
-  client.on(Events.InteractionCreate, async (interaction) => {
-    try {
-      if (!slashCommand.enabled) return;
-      if (!interaction.isChatInputCommand()) return;
-      if (interaction.commandName !== slashCommand.name) return;
-      if (interaction.user?.bot) return;
-
-      const channelType = interaction.channel?.type as ChannelType | undefined;
-      const isGroupDm = channelType === ChannelType.GroupDM;
-      const isDirectMessage =
-        !interaction.inGuild() && channelType === ChannelType.DM;
-      const isGuildMessage = interaction.inGuild();
-
-      if (isGroupDm && !groupDmEnabled) {
-        logVerbose("discord: drop slash (group dms disabled)");
-        return;
-      }
-      if (isDirectMessage && !dmEnabled) {
-        logVerbose("discord: drop slash (dms disabled)");
-        return;
-      }
-      if (shouldLogVerbose()) {
-        logVerbose(
-          `discord: slash inbound guild=${interaction.guildId ?? "dm"} channel=${interaction.channelId} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"}`,
-        );
-      }
-
-      if (isGuildMessage) {
-        const guildInfo = resolveDiscordGuildEntry({
-          guild: interaction.guild ?? null,
-          guildEntries,
-        });
-        if (
-          guildEntries &&
-          Object.keys(guildEntries).length > 0 &&
-          !guildInfo
-        ) {
-          logVerbose(
-            `Blocked discord guild ${interaction.guildId ?? "unknown"} (not in discord.guilds)`,
-          );
-          return;
-        }
-        const channelName =
-          interaction.channel &&
-          "name" in interaction.channel &&
-          typeof interaction.channel.name === "string"
-            ? interaction.channel.name
-            : undefined;
-        const channelSlug = channelName
-          ? normalizeDiscordSlug(channelName)
-          : "";
-        const channelConfig = resolveDiscordChannelConfig({
-          guildInfo,
-          channelId: interaction.channelId,
-          channelName,
-          channelSlug,
-        });
-        if (channelConfig?.allowed === false) {
-          logVerbose(
-            `Blocked discord channel ${interaction.channelId} not in guild channel allowlist`,
-          );
-          return;
-        }
-        const userAllow = guildInfo?.users;
-        if (Array.isArray(userAllow) && userAllow.length > 0) {
-          const users = normalizeDiscordAllowList(userAllow, [
-            "discord:",
-            "user:",
-          ]);
-          const userOk =
-            !users ||
-            allowListMatches(users, {
-              id: interaction.user.id,
-              name: interaction.user.username,
-              tag: interaction.user.tag,
-            });
-          if (!userOk) {
-            logVerbose(
-              `Blocked discord guild sender ${interaction.user.id} (not in guild users allowlist)`,
-            );
-            return;
-          }
-        }
-      } else if (isGroupDm) {
-        const channelName =
-          interaction.channel &&
-          "name" in interaction.channel &&
-          typeof interaction.channel.name === "string"
-            ? interaction.channel.name
-            : undefined;
-        const channelSlug = channelName
-          ? normalizeDiscordSlug(channelName)
-          : "";
-        const groupDmAllowed = resolveGroupDmAllow({
-          channels: groupDmChannels,
-          channelId: interaction.channelId,
-          channelName,
-          channelSlug,
-        });
-        if (!groupDmAllowed) return;
-      } else if (isDirectMessage) {
-        if (Array.isArray(allowFrom) && allowFrom.length > 0) {
-          const allowList = normalizeDiscordAllowList(allowFrom, [
-            "discord:",
-            "user:",
-          ]);
-          const permitted =
-            allowList &&
-            allowListMatches(allowList, {
-              id: interaction.user.id,
-              name: interaction.user.username,
-              tag: interaction.user.tag,
-            });
-          if (!permitted) {
-            logVerbose(
-              `Blocked unauthorized discord sender ${interaction.user.id} (not in allowFrom)`,
-            );
-            return;
-          }
-        }
-      }
-
-      const prompt = resolveSlashPrompt(interaction.options.data);
-      if (!prompt) {
-        await interaction.reply({
-          content: "Message required.",
-          ephemeral: true,
-        });
-        return;
-      }
-
-      await interaction.deferReply({ ephemeral: slashCommand.ephemeral });
-
-      const userId = interaction.user.id;
-      const ctxPayload = {
-        Body: prompt,
-        From: `discord:${userId}`,
-        To: `slash:${userId}`,
-        ChatType: "direct",
-        SenderName: interaction.user.username,
-        Surface: "discord" as const,
-        WasMentioned: true,
-        MessageSid: interaction.id,
-        Timestamp: interaction.createdTimestamp,
-        SessionKey: `${slashCommand.sessionPrefix}:${userId}`,
-      };
-
-      const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-
-      await deliverSlashReplies({
-        replies,
-        interaction,
-        ephemeral: slashCommand.ephemeral,
-        textLimit,
-      });
-    } catch (err) {
-      runtime.error?.(danger(`slash handler failed: ${String(err)}`));
-      if (interaction.isRepliable()) {
-        const content = "Sorry, something went wrong handling that command.";
-        if (interaction.deferred || interaction.replied) {
-          await interaction.followUp({ content, ephemeral: true });
-        } else {
-          await interaction.reply({ content, ephemeral: true });
-        }
-      }
-    }
   });
 
   await client.login(token);
@@ -1164,6 +1001,37 @@ export function allowListMatches(
   return false;
 }
 
+function resolveDiscordCommandAuthorized(params: {
+  isDirectMessage: boolean;
+  allowFrom?: Array<string | number>;
+  guildInfo?: DiscordGuildEntryResolved | null;
+  author: User;
+}): boolean {
+  const { isDirectMessage, allowFrom, guildInfo, author } = params;
+  if (isDirectMessage) {
+    if (!Array.isArray(allowFrom) || allowFrom.length === 0) return true;
+    const allowList = normalizeDiscordAllowList(allowFrom, [
+      "discord:",
+      "user:",
+    ]);
+    if (!allowList) return true;
+    return allowListMatches(allowList, {
+      id: author.id,
+      name: author.username,
+      tag: author.tag,
+    });
+  }
+  const users = guildInfo?.users;
+  if (!Array.isArray(users) || users.length === 0) return true;
+  const allowList = normalizeDiscordAllowList(users, ["discord:", "user:"]);
+  if (!allowList) return true;
+  return allowListMatches(allowList, {
+    id: author.id,
+    name: author.username,
+    tag: author.tag,
+  });
+}
+
 export function shouldEmitDiscordReactionNotification(params: {
   mode: "off" | "own" | "all" | "allowlist" | undefined;
   botId?: string | null;
@@ -1297,86 +1165,6 @@ export function resolveGroupDmAllow(params: {
   });
 }
 
-async function ensureSlashCommand(
-  client: Client,
-  slashCommand: Required<DiscordSlashCommandConfig>,
-  runtime: RuntimeEnv,
-) {
-  try {
-    const appCommands = client.application?.commands;
-    if (!appCommands) {
-      runtime.error?.(danger("discord slash commands unavailable"));
-      return;
-    }
-    const existing = await appCommands.fetch();
-    const hasCommand = Array.from(existing.values()).some(
-      (entry) => entry.name === slashCommand.name,
-    );
-    if (hasCommand) return;
-    await appCommands.create({
-      name: slashCommand.name,
-      description: "Ask Clawdbot a question",
-      options: [
-        {
-          name: "prompt",
-          description: "What should Clawdbot help with?",
-          type: ApplicationCommandOptionType.String,
-          required: true,
-        },
-      ],
-    });
-    runtime.log?.(`registered discord slash command /${slashCommand.name}`);
-  } catch (err) {
-    const status = (err as { status?: number | string })?.status;
-    const code = (err as { code?: number | string })?.code;
-    const message = String(err);
-    const isRateLimit =
-      status === 429 || code === 429 || /rate ?limit/i.test(message);
-    const text = `discord slash command setup failed: ${message}`;
-    if (isRateLimit) {
-      logVerbose(text);
-      runtime.error?.(warn(text));
-    } else {
-      runtime.error?.(danger(text));
-    }
-  }
-}
-
-function resolveSlashCommandConfig(
-  raw: DiscordSlashCommandConfig | undefined,
-): Required<DiscordSlashCommandConfig> {
-  return {
-    enabled: raw ? raw.enabled !== false : false,
-    name: raw?.name?.trim() || "clawd",
-    sessionPrefix: raw?.sessionPrefix?.trim() || "discord:slash",
-    ephemeral: raw?.ephemeral !== false,
-  };
-}
-
-function resolveSlashPrompt(
-  options: readonly CommandInteractionOption[],
-): string | undefined {
-  const direct = findFirstStringOption(options);
-  if (direct) return direct;
-  return undefined;
-}
-
-function findFirstStringOption(
-  options: readonly CommandInteractionOption[],
-): string | undefined {
-  for (const option of options) {
-    if (typeof option.value === "string") {
-      const trimmed = option.value.trim();
-      if (trimmed) return trimmed;
-    }
-    if (option.options && option.options.length > 0) {
-      const nested = findFirstStringOption(option.options);
-      if (nested) return nested;
-    }
-  }
-  return undefined;
-}
-
 async function sendTyping(message: Message) {
   try {
     const channel = message.channel;
@@ -1447,50 +1235,5 @@ async function deliverReplies({
       }
     }
     runtime.log?.(`delivered reply to ${target}`);
-  }
-}
-
-async function deliverSlashReplies({
-  replies,
-  interaction,
-  ephemeral,
-  textLimit,
-}: {
-  replies: ReplyPayload[];
-  interaction: ChatInputCommandInteraction;
-  ephemeral: boolean;
-  textLimit: number;
-}) {
-  const messages: string[] = [];
-  const chunkLimit = Math.min(textLimit, 2000);
-  for (const payload of replies) {
-    const textRaw = payload.text?.trim() ?? "";
-    const text =
-      textRaw && textRaw !== SILENT_REPLY_TOKEN ? textRaw : undefined;
-    const mediaList =
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-    const combined = [
-      text ?? "",
-      ...mediaList.map((url) => url.trim()).filter(Boolean),
-    ]
-      .filter(Boolean)
-      .join("\n");
-    if (!combined) continue;
-    for (const chunk of chunkText(combined, chunkLimit)) {
-      messages.push(chunk);
-    }
-  }
-
-  if (messages.length === 0) {
-    await interaction.editReply({
-      content: "No response was generated for that command.",
-    });
-    return;
-  }
-
-  const [first, ...rest] = messages;
-  await interaction.editReply({ content: first });
-  for (const message of rest) {
-    await interaction.followUp({ content: message, ephemeral });
   }
 }
