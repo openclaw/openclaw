@@ -18,6 +18,7 @@ import {
 import type { ClawdbotConfig } from "../../config/config.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
@@ -53,28 +54,43 @@ const maskApiKey = (value: string): string => {
 const resolveAuthLabel = async (
   provider: string,
   authStorage: ReturnType<typeof discoverAuthStorage>,
-): Promise<string> => {
+  authPaths: { authPath: string; modelsPath: string },
+): Promise<{ label: string; source: string }> => {
+  const formatPath = (value: string) => shortenHomePath(value);
   const stored = authStorage.get(provider);
   if (stored?.type === "oauth") {
     const email = stored.email?.trim();
-    return email ? `OAuth ${email}` : "OAuth (unknown)";
+    return {
+      label: email ? `OAuth ${email}` : "OAuth (unknown)",
+      source: `auth.json: ${formatPath(authPaths.authPath)}`,
+    };
   }
   if (stored?.type === "api_key") {
-    return maskApiKey(stored.key);
+    return {
+      label: maskApiKey(stored.key),
+      source: `auth.json: ${formatPath(authPaths.authPath)}`,
+    };
   }
   const envKey = getEnvApiKey(provider);
-  if (envKey) return maskApiKey(envKey);
+  if (envKey) return { label: maskApiKey(envKey), source: "env" };
   if (provider === "anthropic") {
     const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
-    if (oauthEnv) return "OAuth (env)";
+    if (oauthEnv) {
+      return { label: "OAuth (env)", source: "env: ANTHROPIC_OAUTH_TOKEN" };
+    }
   }
   try {
     const key = await authStorage.getApiKey(provider);
-    if (key) return maskApiKey(key);
+    if (key) {
+      return {
+        label: maskApiKey(key),
+        source: `models.json: ${formatPath(authPaths.modelsPath)}`,
+      };
+    }
   } catch {
     // ignore missing auth
   }
-  return "missing";
+  return { label: "missing", source: "missing" };
 };
 
 export type InlineDirectives = {
@@ -241,14 +257,24 @@ export async function handleDirectiveOnly(params: {
       if (allowedModelCatalog.length === 0) {
         return { text: "No models available." };
       }
-      const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
+      const agentDir = resolveClawdbotAgentDir();
+      const authStorage = discoverAuthStorage(agentDir);
+      const authPaths = {
+        authPath: `${agentDir}/auth.json`,
+        modelsPath: `${agentDir}/models.json`,
+      };
       hydrateAuthStorage(authStorage);
       const authByProvider = new Map<string, string>();
       for (const entry of allowedModelCatalog) {
         if (authByProvider.has(entry.provider)) continue;
+        const auth = await resolveAuthLabel(
+          entry.provider,
+          authStorage,
+          authPaths,
+        );
         authByProvider.set(
           entry.provider,
-          await resolveAuthLabel(entry.provider, authStorage),
+          `${auth.label} (${auth.source})`,
         );
       }
       const current = `${params.provider}/${params.model}`;
