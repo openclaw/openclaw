@@ -616,7 +616,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
 
-    const senderName = sender?.name ?? message.user;
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
