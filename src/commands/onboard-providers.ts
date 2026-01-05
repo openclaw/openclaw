@@ -330,7 +330,7 @@ export async function setupProviders(
       await prompter.note(
         [
           "Scan the QR with WhatsApp on your phone.",
-          "Credentials are stored under ~/.clawdbot/credentials/ for future runs.",
+          `Credentials are stored under ${resolveWebAuthDir()}/ for future runs.`,
         ].join("\n"),
         "WhatsApp linking",
       );

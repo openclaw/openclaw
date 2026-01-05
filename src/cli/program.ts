@@ -35,7 +35,18 @@ export function buildProgram() {
   const TAGLINE =
     "Send, receive, and auto-reply on WhatsApp (web) and Telegram (bot).";
 
-  program.name("clawdbot").description("").version(PROGRAM_VERSION);
+  program
+    .name("clawdbot")
+    .description("")
+    .version(PROGRAM_VERSION)
+    .option(
+      "--dev",
+      "Dev profile: isolate config/state under ~/.clawdbot-dev and default gateway port 19001",
+    )
+    .option(
+      "--profile <name>",
+      "Use a named profile (isolates CLAWDBOT_STATE_DIR/CLAWDBOT_CONFIG_PATH under ~/.clawdbot-<name>)",
+    );
 
   const formatIntroLine = (version: string, rich = true) => {
     const base = `📡 clawdbot ${version} — ${TAGLINE}`;
@@ -96,6 +107,10 @@ export function buildProgram() {
       "Send via your web session and print JSON result.",
     ],
     ["clawdbot gateway --port 18789", "Run the WebSocket Gateway locally."],
+    [
+      "clawdbot --dev gateway",
+      "Run a dev Gateway (isolated state/config) on ws://127.0.0.1:19001.",
+    ],
     [
       "clawdbot gateway --force",
       "Kill anything bound to the default gateway port, then start it.",

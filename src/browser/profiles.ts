@@ -1,8 +1,9 @@
 /**
  * CDP port allocation for browser profiles.
  *
- * Port range: 18800-18899 (100 profiles max)
+ * Default port range: 18800-18899 (100 profiles max)
  * Ports are allocated once at profile creation and persisted in config.
+ * Multi-instance: callers may pass an explicit range to avoid collisions.
  *
  * Reserved ports (do not use for CDP):
  *   18789 - Gateway WebSocket
@@ -21,8 +22,22 @@ export function isValidProfileName(name: string): boolean {
   return PROFILE_NAME_REGEX.test(name);
 }
 
-export function allocateCdpPort(usedPorts: Set<number>): number | null {
-  for (let port = CDP_PORT_RANGE_START; port <= CDP_PORT_RANGE_END; port++) {
+export function allocateCdpPort(
+  usedPorts: Set<number>,
+  range?: { start: number; end: number },
+): number | null {
+  const start = range?.start ?? CDP_PORT_RANGE_START;
+  const end = range?.end ?? CDP_PORT_RANGE_END;
+  if (
+    !Number.isFinite(start) ||
+    !Number.isFinite(end) ||
+    start <= 0 ||
+    end <= 0
+  ) {
+    return null;
+  }
+  if (start > end) return null;
+  for (let port = start; port <= end; port++) {
     if (!usedPorts.has(port)) return port;
   }
   return null;

@@ -24,6 +24,28 @@ const defaultRuntime = {
   },
 };
 
+async function withEnvOverride<T>(
+  overrides: Record<string, string | undefined>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(overrides)) {
+    saved[key] = process.env[key];
+    if (overrides[key] === undefined) delete process.env[key];
+    else process.env[key] = overrides[key];
+  }
+  vi.resetModules();
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(saved)) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+    vi.resetModules();
+  }
+}
+
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGateway(opts),
   randomIdempotencyKey: () => randomIdempotencyKey(),
@@ -204,5 +226,27 @@ describe("gateway-cli coverage", () => {
       if (!beforeSigint.has(listener))
         process.removeListener("SIGINT", listener);
     }
+  });
+
+  it("uses env/config port when --port is omitted", async () => {
+    await withEnvOverride({ CLAWDBOT_GATEWAY_PORT: "19001" }, async () => {
+      runtimeLogs.length = 0;
+      runtimeErrors.length = 0;
+      startGatewayServer.mockClear();
+
+      const { registerGatewayCli } = await import("./gateway-cli.js");
+      const program = new Command();
+      program.exitOverride();
+      registerGatewayCli(program);
+
+      startGatewayServer.mockRejectedValueOnce(new Error("nope"));
+      await expect(
+        program.parseAsync(["gateway", "--allow-unconfigured"], {
+          from: "user",
+        }),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
+    });
   });
 });

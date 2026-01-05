@@ -1,5 +1,9 @@
 import type { BrowserConfig, BrowserProfileConfig } from "../config/config.js";
 import {
+  deriveDefaultBrowserCdpPortRange,
+  deriveDefaultBrowserControlPort,
+} from "../config/port-defaults.js";
+import {
   DEFAULT_CLAWD_BROWSER_COLOR,
   DEFAULT_CLAWD_BROWSER_CONTROL_URL,
   DEFAULT_CLAWD_BROWSER_ENABLED,
@@ -89,11 +93,12 @@ function ensureDefaultProfile(
   profiles: Record<string, BrowserProfileConfig> | undefined,
   defaultColor: string,
   legacyCdpPort?: number,
+  derivedDefaultCdpPort?: number,
 ): Record<string, BrowserProfileConfig> {
   const result = { ...profiles };
   if (!result[DEFAULT_CLAWD_BROWSER_PROFILE_NAME]) {
     result[DEFAULT_CLAWD_BROWSER_PROFILE_NAME] = {
-      cdpPort: legacyCdpPort ?? CDP_PORT_RANGE_START,
+      cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START,
       color: defaultColor,
     };
   }
@@ -103,12 +108,29 @@ export function resolveBrowserConfig(
   cfg: BrowserConfig | undefined,
 ): ResolvedBrowserConfig {
   const enabled = cfg?.enabled ?? DEFAULT_CLAWD_BROWSER_ENABLED;
+  const envControlUrl = process.env.CLAWDBOT_BROWSER_CONTROL_URL?.trim();
+  const derivedControlPort = (() => {
+    const raw = process.env.CLAWDBOT_GATEWAY_PORT?.trim();
+    if (!raw) return null;
+    const gatewayPort = Number.parseInt(raw, 10);
+    if (!Number.isFinite(gatewayPort) || gatewayPort <= 0) return null;
+    return deriveDefaultBrowserControlPort(gatewayPort);
+  })();
+  const derivedControlUrl = derivedControlPort
+    ? `http://127.0.0.1:${derivedControlPort}`
+    : null;
+
   const controlInfo = parseHttpUrl(
-    cfg?.controlUrl ?? DEFAULT_CLAWD_BROWSER_CONTROL_URL,
+    cfg?.controlUrl ??
+      envControlUrl ??
+      derivedControlUrl ??
+      DEFAULT_CLAWD_BROWSER_CONTROL_URL,
     "browser.controlUrl",
   );
   const controlPort = controlInfo.port;
   const defaultColor = normalizeHexColor(cfg?.color);
+
+  const derivedCdpRange = deriveDefaultBrowserCdpPortRange(controlPort);
 
   const rawCdpUrl = (cfg?.cdpUrl ?? "").trim();
   let cdpInfo:
@@ -149,6 +171,7 @@ export function resolveBrowserConfig(
     cfg?.profiles,
     defaultColor,
     legacyCdpPort,
+    derivedCdpRange.start,
   );
   const cdpProtocol = cdpInfo.parsed.protocol === "https:" ? "https" : "http";
 

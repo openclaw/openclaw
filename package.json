@@ -5,7 +5,7 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "clawdbot": "dist/index.js"
+    "clawdbot": "dist/entry.js"
   },
   "files": [
     "dist/agents/**",
@@ -36,7 +36,7 @@
     "LICENSE"
   ],
   "scripts": {
-    "dev": "tsx src/index.ts",
+    "dev": "tsx src/entry.ts",
     "docs:list": "tsx scripts/docs-list.ts",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx mint broken-links",
@@ -45,10 +45,10 @@
     "ui:install": "pnpm -C ui install",
     "ui:dev": "pnpm -C ui dev",
     "ui:build": "pnpm -C ui build",
-    "start": "tsx src/index.ts",
-    "clawdbot": "tsx src/index.ts",
-    "gateway:watch": "tsx watch --clear-screen=false --include 'src/**/*.ts' src/index.ts gateway --force",
-    "clawdbot:rpc": "tsx src/index.ts agent --mode rpc --json",
+    "start": "tsx src/entry.ts",
+    "clawdbot": "tsx src/entry.ts",
+    "gateway:watch": "tsx watch --clear-screen=false --include 'src/**/*.ts' src/entry.ts gateway --force",
+    "clawdbot:rpc": "tsx src/entry.ts agent --mode rpc --json",
     "lint": "biome check src test && oxlint --type-aware src test --ignore-pattern src/canvas-host/a2ui/a2ui.bundle.js",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
     "lint:fix": "biome check --write --unsafe src && biome format --write src",

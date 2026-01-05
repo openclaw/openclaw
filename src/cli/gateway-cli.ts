@@ -153,7 +153,7 @@ export function registerGatewayCli(program: Command) {
   program
     .command("gateway-daemon")
     .description("Run the WebSocket Gateway as a long-lived daemon")
-    .option("--port <port>", "Port for the gateway WebSocket", "18789")
+    .option("--port <port>", "Port for the gateway WebSocket")
     .option(
       "--bind <mode>",
       'Bind mode ("loopback"|"tailnet"|"lan"|"auto"). Defaults to config gateway.bind (or loopback).',
@@ -298,7 +298,7 @@ export function registerGatewayCli(program: Command) {
   const gateway = program
     .command("gateway")
     .description("Run the WebSocket Gateway")
-    .option("--port <port>", "Port for the gateway WebSocket", "18789")
+    .option("--port <port>", "Port for the gateway WebSocket")
     .option(
       "--bind <mode>",
       'Bind mode ("loopback"|"tailnet"|"lan"|"auto"). Defaults to config gateway.bind (or loopback).',
