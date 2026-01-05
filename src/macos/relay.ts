@@ -32,6 +32,13 @@ async function main() {
     process.exit(0);
   }
 
+  if (process.env.CLAWDBOT_SMOKE_QR === "1") {
+    const { renderQrPngBase64 } = await import("../web/qr-image.js");
+    await renderQrPngBase64("clawdbot-smoke");
+    console.log("smoke: qr ok");
+    return;
+  }
+
   await patchBunLongForProtobuf();
 
   const { loadDotEnv } = await import("../infra/dotenv.js");
