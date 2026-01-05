@@ -7,6 +7,11 @@
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 
+## 2026.1.5-3
+
+### Fixes
+- NPM package: include missing runtime dist folders (slack/signal/imessage/tui/wizard/control-ui/daemon) to avoid `ERR_MODULE_NOT_FOUND` in Node 25 npx installs.
+
 ## 2026.1.5-2
 
 ### Fixes
