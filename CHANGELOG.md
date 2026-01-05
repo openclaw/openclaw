@@ -24,6 +24,8 @@
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
+- Skills: add CodexBar model usage helper with macOS requirement metadata.
+- Lint: organize imports and wrap long lines in reply commands.
 
 ## 2026.1.5-3
 
