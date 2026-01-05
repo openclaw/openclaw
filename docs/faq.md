@@ -471,7 +471,7 @@ codex --full-auto "debug why clawdbot gateway won't start"
 Linux installs use a systemd **user** service. By default, systemd stops user
 services on logout/idle, which kills the Gateway.
 
-Fix:
+Onboarding attempts to enable lingering; if it’s still off, run:
 ```bash
 sudo loginctl enable-linger $USER
 ```

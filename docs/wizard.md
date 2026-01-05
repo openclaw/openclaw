@@ -74,8 +74,8 @@ It does **not** install or change anything on the remote host.
    - macOS: LaunchAgent
      - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
    - Linux: systemd user unit
-     - Wizard enables lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
-     - Requires sudo (writes `/var/lib/systemd/linger`).
+     - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
+     - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
    - Windows: Scheduled Task
      - Runs on user logon; headless/system services are not configured by default.
 

@@ -112,7 +112,8 @@ pnpm clawdbot health
 ## Linux (systemd user service)
 
 Linux installs use a systemd **user** service. By default, systemd stops user
-services on logout/idle, which kills the Gateway. Enable lingering:
+services on logout/idle, which kills the Gateway. Onboarding attempts to enable
+lingering for you (may prompt for sudo). If it’s still off, run:
 
 ```bash
 sudo loginctl enable-linger $USER
