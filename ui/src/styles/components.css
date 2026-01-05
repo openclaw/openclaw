@@ -334,6 +334,7 @@
 .list {
   display: grid;
   gap: 12px;
+  container-type: inline-size;
 }
 
 .list-item {
@@ -371,10 +372,25 @@
   min-width: 220px;
 }
 
+.list-meta .btn {
+  padding: 6px 10px;
+}
+
 .list-meta .field input,
 .list-meta .field textarea,
 .list-meta .field select {
   width: 100%;
+}
+
+@container (max-width: 560px) {
+  .list-item {
+    grid-template-columns: 1fr;
+  }
+
+  .list-meta {
+    min-width: 0;
+    text-align: left;
+  }
 }
 
 .chip-row {
