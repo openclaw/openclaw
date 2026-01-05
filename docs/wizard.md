@@ -26,7 +26,7 @@ clawdbot configure
 ## What the wizard does
 
 **Local mode (default)** walks you through:
-- Model/auth (Anthropic OAuth recommended, API key optional, Minimax M2.1 via LM Studio)
+- Model/auth (Anthropic or OpenAI Codex OAuth recommended, API key optional, Minimax M2.1 via LM Studio)
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
 - Providers (WhatsApp, Telegram, Discord, Signal)
@@ -48,9 +48,11 @@ It does **not** install or change anything on the remote host.
 
 2) **Model/Auth**
    - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
+   - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
    - **API key**: stores the key for you.
    - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
+   - OAuth + API keys are stored in `~/.clawdbot/agent/auth.json`.
 
 3) **Workspace**
    - Default `~/clawd` (configurable).
