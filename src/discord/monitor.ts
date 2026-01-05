@@ -492,7 +492,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         GroupSubject: groupSubject,
         GroupRoom: groupRoom,
         GroupSpace: isGuildMessage
-          ? guildInfo?.id ?? guildSlug || undefined
+          ? (guildInfo?.id ?? guildSlug) || undefined
           : undefined,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
