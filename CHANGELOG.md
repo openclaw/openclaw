@@ -7,6 +7,7 @@
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
+- macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Connections removes the sidebar toggle from the Settings toolbar to avoid overflow.
 - macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.

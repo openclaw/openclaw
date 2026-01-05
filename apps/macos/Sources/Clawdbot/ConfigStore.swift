@@ -34,10 +34,13 @@ enum ConfigStore {
             if let override = overrides.loadRemote {
                 return await override()
             }
-            return await self.loadFromGateway()
+            return await self.loadFromGateway() ?? [:]
         }
         if let override = overrides.loadLocal {
             return override()
+        }
+        if let gateway = await self.loadFromGateway() {
+            return gateway
         }
         return ClawdbotConfigFile.loadDict()
     }
@@ -55,13 +58,17 @@ enum ConfigStore {
             if let override = overrides.saveLocal {
                 override(root)
             } else {
-                ClawdbotConfigFile.saveDict(root)
+                do {
+                    try await self.saveToGateway(root)
+                } catch {
+                    ClawdbotConfigFile.saveDict(root)
+                }
             }
         }
     }
 
     @MainActor
-    private static func loadFromGateway() async -> [String: Any] {
+    private static func loadFromGateway() async -> [String: Any]? {
         do {
             let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
                 method: .configGet,
@@ -69,7 +76,7 @@ enum ConfigStore {
                 timeoutMs: 8000)
             return snap.config?.mapValues { $0.foundationValue } ?? [:]
         } catch {
-            return [:]
+            return nil
         }
     }
 
