@@ -7,6 +7,7 @@ import { Bot, InputFile, webhookCallback } from "grammy";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
@@ -228,37 +229,33 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         );
       }
 
-      let blockSendChain: Promise<void> = Promise.resolve();
-      const sendBlockReply = (payload: ReplyPayload) => {
-        if (
-          !payload?.text &&
-          !payload?.mediaUrl &&
-          !(payload?.mediaUrls?.length ?? 0)
-        ) {
-          return;
-        }
-        blockSendChain = blockSendChain
-          .then(async () => {
-            await deliverReplies({
-              replies: [payload],
-              chatId: String(chatId),
-              token: opts.token,
-              runtime,
-              bot,
-              replyToMode,
-              textLimit,
-            });
-          })
-          .catch((err) => {
-            runtime.error?.(
-              danger(`telegram block reply failed: ${String(err)}`),
-            );
+      const dispatcher = createReplyDispatcher({
+        responsePrefix: cfg.messages?.responsePrefix,
+        deliver: async (payload) => {
+          await deliverReplies({
+            replies: [payload],
+            chatId: String(chatId),
+            token: opts.token,
+            runtime,
+            bot,
+            replyToMode,
+            textLimit,
           });
-      };
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            danger(`telegram ${info.kind} reply failed: ${String(err)}`),
+          );
+        },
+      });
 
       const replyResult = await getReplyFromConfig(
         ctxPayload,
-        { onReplyStart: sendTyping, onBlockReply: sendBlockReply },
+        {
+          onReplyStart: sendTyping,
+          onToolResult: dispatcher.sendToolResult,
+          onBlockReply: dispatcher.sendBlockReply,
+        },
         cfg,
       );
       const replies = replyResult
@@ -266,18 +263,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           ? replyResult
           : [replyResult]
         : [];
-      await blockSendChain;
-      if (replies.length === 0) return;
-
-      await deliverReplies({
-        replies,
-        chatId: String(chatId),
-        token: opts.token,
-        runtime,
-        bot,
-        replyToMode,
-        textLimit,
-      });
+      let queuedFinal = false;
+      for (const reply of replies) {
+        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+      }
+      await dispatcher.waitForIdle();
+      if (!queuedFinal) return;
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));
     }

@@ -1,6 +1,7 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
@@ -267,36 +268,35 @@ export async function monitorIMessageProvider(
       );
     }
 
-    let blockSendChain: Promise<void> = Promise.resolve();
-    const sendBlockReply = (payload: ReplyPayload) => {
-      if (
-        !payload?.text &&
-        !payload?.mediaUrl &&
-        !(payload?.mediaUrls?.length ?? 0)
-      ) {
-        return;
-      }
-      blockSendChain = blockSendChain
-        .then(async () => {
-          await deliverReplies({
-            replies: [payload],
-            target: ctxPayload.To,
-            client,
-            runtime,
-            maxBytes: mediaMaxBytes,
-            textLimit,
-          });
-        })
-        .catch((err) => {
-          runtime.error?.(
-            danger(`imessage block reply failed: ${String(err)}`),
-          );
+    const dispatcher = createReplyDispatcher({
+      responsePrefix: cfg.messages?.responsePrefix,
+      deliver: async (payload) => {
+        await deliverReplies({
+          replies: [payload],
+          target: ctxPayload.To,
+          client,
+          runtime,
+          maxBytes: mediaMaxBytes,
+          textLimit,
         });
-    };
+      },
+      onError: (err, info) => {
+        runtime.error?.(
+          danger(`imessage ${info.kind} reply failed: ${String(err)}`),
+        );
+      },
+    });
 
     const replyResult = await getReplyFromConfig(
       ctxPayload,
-      { onBlockReply: sendBlockReply },
+      {
+        onToolResult: (payload) => {
+          dispatcher.sendToolResult(payload);
+        },
+        onBlockReply: (payload) => {
+          dispatcher.sendBlockReply(payload);
+        },
+      },
       cfg,
     );
     const replies = replyResult
@@ -304,17 +304,12 @@ export async function monitorIMessageProvider(
         ? replyResult
         : [replyResult]
       : [];
-    await blockSendChain;
-    if (replies.length === 0) return;
-
-    await deliverReplies({
-      replies,
-      target: ctxPayload.To,
-      client,
-      runtime,
-      maxBytes: mediaMaxBytes,
-      textLimit,
-    });
+    let queuedFinal = false;
+    for (const reply of replies) {
+      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+    }
+    await dispatcher.waitForIdle();
+    if (!queuedFinal) return;
   };
 
   const client = await createIMessageRpcClient({
