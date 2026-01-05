@@ -141,6 +141,9 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
+- Tool summaries can be redacted to avoid leaking secrets:
+  - `logging.redactSensitive` (`off` | `tools`, default: `tools`)
+  - `logging.redactPatterns` (array of regex strings; overrides defaults)
 
 ```json5
 {
@@ -148,7 +151,13 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
     level: "info",
     file: "/tmp/clawdbot/clawdbot.log",
     consoleLevel: "info",
-    consoleStyle: "pretty"
+    consoleStyle: "pretty",
+    redactSensitive: "tools",
+    redactPatterns: [
+      // Example: override defaults with your own rules.
+      "\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1",
+      "/\\bsk-[A-Za-z0-9_-]{8,}\\b/gi"
+    ]
   }
 }
 ```

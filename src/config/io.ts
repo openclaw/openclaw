@@ -10,6 +10,7 @@ import {
 } from "../infra/shell-env.js";
 import {
   applyIdentityDefaults,
+  applyLoggingDefaults,
   applyModelAliasDefaults,
   applySessionDefaults,
   applyTalkApiKey,
@@ -115,7 +116,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const cfg = applyModelAliasDefaults(
         applySessionDefaults(
-          applyIdentityDefaults(validated.data as ClawdbotConfig),
+          applyLoggingDefaults(
+            applyIdentityDefaults(validated.data as ClawdbotConfig),
+          ),
         ),
       );
 
@@ -201,7 +204,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         parsed: parsedRes.parsed,
         valid: true,
         config: applyTalkApiKey(
-          applyModelAliasDefaults(applySessionDefaults(validated.config)),
+          applyModelAliasDefaults(
+            applySessionDefaults(applyLoggingDefaults(validated.config)),
+          ),
         ),
         issues: [],
         legacyIssues,

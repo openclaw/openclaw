@@ -44,6 +44,10 @@ export type LoggingConfig = {
     | "debug"
     | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
+  /** Redact sensitive tokens in tool summaries. Default: "tools". */
+  redactSensitive?: "off" | "tools";
+  /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
+  redactPatterns?: string[];
 };
 
 export type WebReconnectConfig = {
