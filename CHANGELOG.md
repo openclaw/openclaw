@@ -9,7 +9,7 @@
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
 - macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
-- macOS: Connections removes the sidebar toggle from the Settings toolbar to avoid overflow.
+- macOS: Connections settings now use a custom sidebar to avoid toolbar toggle issues, with rounded styling and full-width row hit targets.
 - macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.
 - Auth: add OpenAI Codex OAuth support and migrate legacy oauth.json into auth.json.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
