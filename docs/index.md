@@ -12,7 +12,7 @@ read_when:
 </p>
 
 <p align="center">
-  <strong>WhatsApp + Telegram + Discord + iMessage gateway for AI agents (Pi).</strong><br />
+  <strong>Any OS + WhatsApp/Telegram/Discord/iMessage gateway for AI agents (Pi).</strong><br />
   Send a message, get an agent response — from your pocket.
 </p>
 
@@ -63,6 +63,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 🎮 **Discord Bot** — DMs + guild channels via discord.js
 - 💬 **iMessage** — Local imsg CLI integration (macOS)
 - 🤖 **Agent bridge** — Pi (RPC mode) with tool streaming
+- 🔐 **Subscription auth** — Anthropic (Claude Pro/Max) + OpenAI (ChatGPT/Codex) via OAuth
 - 💬 **Sessions** — Direct chats collapse into shared `main` (default); groups are isolated
 - 👥 **Group Chat Support** — Mention-based by default; owner can toggle `/activation always|mention`
 - 📎 **Media Support** — Send and receive images, audio, documents

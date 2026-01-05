@@ -24,7 +24,7 @@ Website: https://clawd.me · Docs: https://docs.clawdbot.com/ · FAQ: [`docs/faq
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
-Using Claude Pro/Max subscription? See `docs/onboarding.md` for the Anthropic OAuth setup.
+Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See `docs/onboarding.md`.
 
 ## Highlights
 
