@@ -16,15 +16,19 @@
 </p>
 
 **Clawdbot** is a *personal AI assistant* you run on your own devices.
-It answers you on the surfaces you already use (WhatsApp, Telegram, Slack, Discord, iMessage, WebChat), can speak and listen on macOS/iOS, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the surfaces you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: [clawdbot.com](https://clawdbot.com) · Docs: [docs.clawdbot.com](https://docs.clawdbot.com/) · FAQ: [FAQ](https://docs.clawdbot.com/faq) · Wizard: [Wizard](https://docs.clawdbot.com/wizard) · Nix: [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [Docker](https://docs.clawdbot.com/docker) · Discord: [discord.gg/clawd](https://discord.gg/clawd)
+Website: [https://clawdbot.com](https://clawdbot.com) · Docs: [https://docs.clawdbot.com](https://docs.clawdbot.com/) · FAQ: [https://docs.clawdbot.com/faq](https://docs.clawdbot.com/faq) · Wizard: [https://docs.clawdbot.com/wizard](https://docs.clawdbot.com/wizard) · Nix: [https://github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [https://docs.clawdbot.com/docker](https://docs.clawdbot.com/docker) · Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
-Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See [Onboarding](https://docs.clawdbot.com/onboarding).
+**Subscriptions (OAuth):**
+- **Anthropic** (Claude Pro/Max)
+- **OpenAI** (ChatGPT/Codex)
+
+Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.clawdbot.com/onboarding).
 
 ## Recommended setup (from source)
 
@@ -75,63 +79,73 @@ If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
 
 ## Highlights
 
-- **Local-first Gateway** — single control plane for sessions, providers, tools, and events.
-- **Multi-surface inbox** — WhatsApp, Telegram, Slack, Discord, iMessage, WebChat, macOS, iOS/Android.
-- **Voice Wake + Talk Mode** — always-on speech for macOS/iOS/Android with ElevenLabs.
-- **Live Canvas** — agent-driven visual workspace with A2UI.
-- **First-class tools** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
-- **Companion apps** — macOS menu bar app + iOS/Android nodes.
-- **Onboarding + skills** — wizard-driven setup with bundled/managed/workspace skills.
+- **[Local-first Gateway](https://docs.clawdbot.com/gateway)** — single control plane for sessions, providers, tools, and events.
+- **[Multi-surface inbox](https://docs.clawdbot.com/surface)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat, macOS, iOS/Android.
+- **[Voice Wake](https://docs.clawdbot.com/voicewake) + [Talk Mode](https://docs.clawdbot.com/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
+- **[Live Canvas](https://docs.clawdbot.com/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.clawdbot.com/refactor/canvas-a2ui).
+- **[First-class tools](https://docs.clawdbot.com/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
+- **[Companion apps](https://docs.clawdbot.com/clawdbot-mac)** — macOS menu bar app + iOS/Android [nodes](https://docs.clawdbot.com/nodes).
+- **[Onboarding](https://docs.clawdbot.com/wizard) + [skills](https://docs.clawdbot.com/skills)** — wizard-driven setup with bundled/managed/workspace skills.
 
 ## Everything we built so far
 
 ### Core platform
-- Gateway WS control plane with sessions, presence, config, cron, webhooks, control UI, and Canvas host.
-- CLI surface: gateway, agent, send, wizard, doctor/update, and TUI.
-- Pi agent runtime in RPC mode with tool streaming and block streaming.
-- Session model: `main` for direct chats, group isolation, activation modes, queue modes, reply-back.
-- Media pipeline: images/audio/video, transcription hooks, size caps, temp file lifecycle.
+- [Gateway WS control plane](https://docs.clawdbot.com/gateway) with sessions, presence, config, cron, webhooks, [Control UI](https://docs.clawdbot.com/web), and [Canvas host](https://docs.clawdbot.com/refactor/canvas-a2ui).
+- [CLI surface](https://docs.clawdbot.com/agent-send): gateway, agent, send, [wizard](https://docs.clawdbot.com/wizard), [doctor](https://docs.clawdbot.com/doctor), and [TUI](https://docs.clawdbot.com/tui).
+- [Pi agent runtime](https://docs.clawdbot.com/agent) in RPC mode with tool streaming and block streaming.
+- [Session model](https://docs.clawdbot.com/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.clawdbot.com/groups).
+- [Media pipeline](https://docs.clawdbot.com/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawdbot.com/audio).
 
 ### Surfaces + providers
-- WhatsApp (Baileys), Telegram (grammY), Slack (Bolt), Discord (discord.js), Signal (signal-cli), iMessage (imsg), WebChat.
-- Group mention gating, reply tags, per-surface chunking and routing.
+- [Providers](https://docs.clawdbot.com/surface): [WhatsApp](https://docs.clawdbot.com/whatsapp) (Baileys), [Telegram](https://docs.clawdbot.com/telegram) (grammY), [Slack](https://docs.clawdbot.com/slack) (Bolt), [Discord](https://docs.clawdbot.com/discord) (discord.js), [Signal](https://docs.clawdbot.com/signal) (signal-cli), [iMessage](https://docs.clawdbot.com/imessage) (imsg), [WebChat](https://docs.clawdbot.com/webchat).
+- [Group routing](https://docs.clawdbot.com/group-messages): mention gating, reply tags, per-surface chunking and routing. Surface rules: [Surface routing](https://docs.clawdbot.com/surface).
 
 ### Apps + nodes
-- macOS app: menu bar control plane, Voice Wake/PTT, Talk Mode overlay, WebChat, Debug tools, SSH remote gateway control.
-- iOS node: Canvas, Voice Wake, Talk Mode, camera, screen recording, Bonjour pairing.
-- Android node: Canvas, Talk Mode, camera, screen recording, optional SMS.
-- macOS node mode: system.run/notify + canvas/camera exposure.
+- [macOS app](https://docs.clawdbot.com/clawdbot-mac): menu bar control plane, [Voice Wake](https://docs.clawdbot.com/voicewake)/PTT, [Talk Mode](https://docs.clawdbot.com/talk) overlay, [WebChat](https://docs.clawdbot.com/webchat), debug tools, [remote gateway](https://docs.clawdbot.com/remote) control.
+- [iOS node](https://docs.clawdbot.com/ios/connect): [Canvas](https://docs.clawdbot.com/mac/canvas), [Voice Wake](https://docs.clawdbot.com/voicewake), [Talk Mode](https://docs.clawdbot.com/talk), camera, screen recording, Bonjour pairing.
+- [Android node](https://docs.clawdbot.com/android/connect): [Canvas](https://docs.clawdbot.com/mac/canvas), [Talk Mode](https://docs.clawdbot.com/talk), camera, screen recording, optional SMS.
+- [macOS node mode](https://docs.clawdbot.com/nodes): system.run/notify + canvas/camera exposure.
 
 ### Tools + automation
-- Browser control: dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
-- Canvas: A2UI push/reset, eval, snapshot.
-- Nodes: camera snap/clip, screen record, location.get, notifications.
-- Cron + wakeups; webhooks; Gmail Pub/Sub triggers.
-- Skills platform: bundled, managed, and workspace skills with install gating + UI.
+- [Browser control](https://docs.clawdbot.com/browser): dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
+- [Canvas](https://docs.clawdbot.com/mac/canvas): [A2UI](https://docs.clawdbot.com/refactor/canvas-a2ui) push/reset, eval, snapshot.
+- [Nodes](https://docs.clawdbot.com/nodes): camera snap/clip, screen record, [location.get](https://docs.clawdbot.com/location-command), notifications.
+- [Cron + wakeups](https://docs.clawdbot.com/cron); [webhooks](https://docs.clawdbot.com/webhook); [Gmail Pub/Sub](https://docs.clawdbot.com/gmail-pubsub).
+- [Skills platform](https://docs.clawdbot.com/skills): bundled, managed, and workspace skills with install gating + UI.
 
 ### Ops + packaging
-- Control UI + WebChat served directly from the Gateway.
-- Tailscale Serve/Funnel or SSH tunnels with token/password auth.
-- Nix mode for declarative config; Docker-based installs.
-- Health, doctor migrations, structured logging, release tooling.
+- [Control UI](https://docs.clawdbot.com/web) + [WebChat](https://docs.clawdbot.com/webchat) served directly from the Gateway.
+- [Tailscale Serve/Funnel](https://docs.clawdbot.com/tailscale) or [SSH tunnels](https://docs.clawdbot.com/remote) with token/password auth.
+- [Nix mode](https://docs.clawdbot.com/nix) for declarative config; [Docker](https://docs.clawdbot.com/docker)-based installs.
+- [Doctor](https://docs.clawdbot.com/doctor) migrations, [logging](https://docs.clawdbot.com/logging), release tooling: [Releasing](https://docs.clawdbot.com/releasing).
 
 ## How it works (short)
 
 ```
-Your surfaces
-   │
-   ▼
+WhatsApp / Telegram / Slack / Discord / Signal
+iMessage / WebChat
+               │
+               ▼
 ┌───────────────────────────────┐
 │            Gateway            │  ws://127.0.0.1:18789
-│       (control plane)         │  tcp://0.0.0.0:18790 (optional Bridge)
+│       (control plane)         │  bridge: tcp://0.0.0.0:18790
 └──────────────┬────────────────┘
                │
                ├─ Pi agent (RPC)
                ├─ CLI (clawdbot …)
-               ├─ WebChat (browser)
-               ├─ macOS app (Clawdbot.app)
-               └─ iOS node (Canvas + voice)
+               ├─ WebChat UI
+               ├─ macOS app
+               └─ iOS/Android nodes
 ```
+
+## Key subsystems
+
+- **[Gateway WebSocket network](https://docs.clawdbot.com/architecture)** — single WS control plane for clients, tools, and events (plus ops: [Gateway runbook](https://docs.clawdbot.com/gateway)).
+- **[Tailscale exposure](https://docs.clawdbot.com/tailscale)** — Serve/Funnel for the Gateway dashboard + WS (remote access: [Remote](https://docs.clawdbot.com/remote)).
+- **[Browser control](https://docs.clawdbot.com/browser)** — clawd‑managed Chrome/Chromium with CDP control.
+- **[Canvas + A2UI](https://docs.clawdbot.com/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.clawdbot.com/refactor/canvas-a2ui)).
+- **[Voice Wake](https://docs.clawdbot.com/voicewake) + [Talk Mode](https://docs.clawdbot.com/talk)** — always‑on speech and continuous conversation.
+- **[Nodes](https://docs.clawdbot.com/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
 
 ## Skills registry (ClawdHub)
 
@@ -153,6 +167,12 @@ Send these in WhatsApp/Telegram/Slack/WebChat (group commands are owner-only):
 ## macOS app (optional)
 
 The Gateway alone delivers a great experience. All apps are optional and add extra features.
+
+If you plan to build/run companion apps, initialize submodules first:
+
+```bash
+git submodule update --init --recursive
+```
 
 ### macOS (Clawdbot.app) (optional)
 
@@ -197,16 +217,20 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 
 [Full configuration reference (all keys + examples).](https://docs.clawdbot.com/configuration)
 
-### WhatsApp
+## Security model (important)
 
-[Read the WhatsApp provider guide in docs/whatsapp.md.](docs/whatsapp.md)
+- **Default:** tools run on the host for the **main** session, so the agent has full access when it’s just you.
+- **Group/channel safety:** set `agent.sandbox.mode: "non-main"` to run **non‑main sessions** (groups/channels) inside per‑session Docker sandboxes; bash then runs in Docker for those sessions.
+- **Sandbox defaults:** allowlist `bash`, `process`, `read`, `write`, `edit`; denylist `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
+
+Details: [Security guide](https://docs.clawdbot.com/security) · [Docker + sandboxing](https://docs.clawdbot.com/docker) · [Sandbox config](https://docs.clawdbot.com/configuration)
+
+### [WhatsApp](docs/whatsapp.md)
 
 - Link the device: `pnpm clawdbot login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
 
-### Telegram
-
-[Read the Telegram provider guide in docs/telegram.md.](docs/telegram.md)
+### [Telegram](docs/telegram.md)
 
 - Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
 - Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`), `telegram.allowFrom`, or `telegram.webhookUrl` as needed.
@@ -219,15 +243,11 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 }
 ```
 
-### Slack
-
-[Read the Slack provider guide in docs/slack.md.](docs/slack.md)
+### [Slack](docs/slack.md)
 
 - Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `slack.botToken` + `slack.appToken`).
 
-### Discord
-
-[Read the Discord provider guide in docs/discord.md.](docs/discord.md)
+### [Discord](docs/discord.md)
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
 - Optional: set `discord.slashCommand`, `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
@@ -240,21 +260,15 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 }
 ```
 
-### Signal
-
-[Read the Signal provider guide in docs/signal.md.](docs/signal.md)
+### [Signal](docs/signal.md)
 
 - Requires `signal-cli` and a `signal` config section.
 
-### iMessage
-
-[Read the iMessage provider guide in docs/imessage.md.](docs/imessage.md)
+### [iMessage](docs/imessage.md)
 
 - macOS only; Messages must be signed in.
 
-### WebChat
-
-[Read the WebChat guide in docs/webchat.md.](docs/webchat.md)
+### [WebChat](docs/webchat.md)
 
 - Uses the Gateway WebSocket; no separate WebChat port/config.
 
@@ -281,7 +295,8 @@ Browser control (optional):
 - [Follow the onboarding wizard flow for a guided setup.](https://docs.clawdbot.com/wizard)
 - [Wire external triggers via the webhook surface.](https://docs.clawdbot.com/webhook)
 - [Set up Gmail Pub/Sub triggers.](https://docs.clawdbot.com/gmail-pubsub)
-- [Learn the macOS menu bar companion details.](https://clawdbot.com/clawdbot-mac.html)
+- [Learn the macOS menu bar companion details.](https://docs.clawdbot.com/macos)
+- [Platform guides: Windows](https://docs.clawdbot.com/windows), [Linux](https://docs.clawdbot.com/linux), [macOS](https://docs.clawdbot.com/macos), [iOS](https://docs.clawdbot.com/ios), [Android](https://docs.clawdbot.com/android)
 - [Debug common failures with the troubleshooting guide.](https://docs.clawdbot.com/troubleshooting)
 - [Review security guidance before exposing anything.](https://docs.clawdbot.com/security)
 
