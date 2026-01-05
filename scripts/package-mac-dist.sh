@@ -22,7 +22,12 @@ VERSION=$(/usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" "$APP/Co
 ZIP="$ROOT_DIR/dist/Clawdbot-$VERSION.zip"
 DMG="$ROOT_DIR/dist/Clawdbot-$VERSION.dmg"
 NOTARY_ZIP="$ROOT_DIR/dist/Clawdbot-$VERSION.notary.zip"
-NOTARIZE="${NOTARIZE:-0}"
+SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
+NOTARIZE=1
+
+if [[ "$SKIP_NOTARIZE" == "1" ]]; then
+  NOTARIZE=0
+fi
 
 if [[ "$NOTARIZE" == "1" ]]; then
   echo "📦 Notary zip: $NOTARY_ZIP"
