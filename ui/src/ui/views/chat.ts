@@ -289,7 +289,9 @@ function renderToolCard(card: ToolCard) {
         ? html`<div class="chat-tool-card__detail">${detail}</div>`
         : nothing}
       ${card.text
-        ? html`<div class="chat-tool-card__output">${card.text}</div>`
+        ? html`<div class="chat-tool-card__output chat-text">
+            ${unsafeHTML(toSanitizedMarkdownHtml(card.text))}
+          </div>`
         : nothing}
     </div>
   `;

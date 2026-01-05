@@ -11,6 +11,7 @@
 - Docs: document built-in model shorthands + precedence (user config wins).
 
 ### Fixes
+- Control UI: render Markdown in tool result cards.
 - Control UI: prevent overlapping action buttons in Discord guild rules on narrow layouts.
 - Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
 - Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
