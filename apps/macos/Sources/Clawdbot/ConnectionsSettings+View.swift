@@ -7,6 +7,7 @@ extension ConnectionsSettings {
         } detail: {
             self.detail
         }
+        .navigationSplitViewStyle(.balanced)
         .onAppear {
             self.store.start()
             self.ensureSelection()
@@ -38,7 +39,7 @@ extension ConnectionsSettings {
             }
         }
         .listStyle(.sidebar)
-        .frame(minWidth: 210, idealWidth: 230, maxWidth: 260)
+        .frame(minWidth: 220, idealWidth: 240, maxWidth: 280)
     }
 
     private var detail: some View {
@@ -49,7 +50,7 @@ extension ConnectionsSettings {
                 self.emptyDetail
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var emptyDetail: some View {

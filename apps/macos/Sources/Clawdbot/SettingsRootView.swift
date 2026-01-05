@@ -72,6 +72,7 @@ struct SettingsRootView: View {
                     .tabItem { Label("About", systemImage: "info.circle") }
                     .tag(SettingsTab.about)
             }
+            .tabViewStyle(.sidebar)
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
