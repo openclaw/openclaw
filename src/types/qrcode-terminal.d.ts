@@ -1,0 +1,9 @@
+declare module "qrcode-terminal/vendor/QRCode" {
+  const QRCode: unknown;
+  export default QRCode;
+}
+
+declare module "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel" {
+  const QRErrorCorrectLevel: Record<string, unknown>;
+  export default QRErrorCorrectLevel;
+}
