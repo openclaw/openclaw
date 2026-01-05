@@ -109,3 +109,12 @@ export function formatAssistantErrorText(
   // Keep it short for WhatsApp.
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
+
+export function isRateLimitAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
+  if (!msg || msg.stopReason !== "error") return false;
+  const raw = (msg.errorMessage ?? "").toLowerCase();
+  if (!raw) return false;
+  return /rate[_ ]limit|too many requests|429/.test(raw);
+}

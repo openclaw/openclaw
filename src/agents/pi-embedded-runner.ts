@@ -32,6 +32,7 @@ import {
   buildBootstrapContextFiles,
   ensureSessionHeader,
   formatAssistantErrorText,
+  isRateLimitAssistantError,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
 import {
@@ -550,6 +551,16 @@ export async function runEmbeddedPiAgent(params: {
           .find((m) => (m as AgentMessage)?.role === "assistant") as
           | AssistantMessage
           | undefined;
+
+        const fallbackConfigured =
+          (params.config?.agent?.modelFallbacks?.length ?? 0) > 0;
+        if (fallbackConfigured && isRateLimitAssistantError(lastAssistant)) {
+          const message =
+            lastAssistant?.errorMessage?.trim() ||
+            (lastAssistant ? formatAssistantErrorText(lastAssistant) : "") ||
+            "LLM request rate limited.";
+          throw new Error(message);
+        }
 
         const usage = lastAssistant?.usage;
         const agentMeta: EmbeddedPiAgentMeta = {
