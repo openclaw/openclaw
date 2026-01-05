@@ -64,7 +64,7 @@ export function buildCommandContext(params: {
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const allowFromList =
-    configuredAllowFrom?.filter((entry) => entry && entry.trim()) ?? [];
+    configuredAllowFrom?.filter((entry) => entry?.trim()) ?? [];
   const allowAll =
     !isWhatsAppSurface ||
     allowFromList.length === 0 ||
@@ -163,18 +163,15 @@ export async function handleCommands(params: {
         reply: { text: "⚙️ Group activation only applies to group chats." },
       };
     }
-    const activationOwnerList =
-      command.ownerList.length > 0
-        ? command.ownerList
-        : command.isWhatsAppSurface && command.to
-          ? [normalizeE164(command.to)]
-          : [];
+    const activationOwnerList = command.ownerList;
     const activationSenderE164 = command.senderE164
       ? normalizeE164(command.senderE164)
       : "";
     const isActivationOwner =
-      Boolean(activationSenderE164) &&
-      activationOwnerList.includes(activationSenderE164);
+      !command.isWhatsAppSurface || activationOwnerList.length === 0
+        ? command.isAuthorizedSender
+        : Boolean(activationSenderE164) &&
+          activationOwnerList.includes(activationSenderE164);
 
     if (
       !command.isAuthorizedSender ||
