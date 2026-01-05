@@ -369,22 +369,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         await editWorkingMessage(chatIdStr, displayText, opts);
       };
 
-      const onPartialReply = async (payload: ReplyPayload) => {
-        if (!payload.text) return;
-        streamedText = payload.text;
-        await updateWorkingMessage(streamedText);
-      };
-
-      const onToolResult = async (payload: ReplyPayload) => {
-        if (!payload.text) return;
-        statusLines.push(`_${payload.text}_`);
-        await updateWorkingMessage(streamedText);
-      };
-
       const dispatcher = createReplyDispatcher({
         responsePrefix: cfg.messages?.responsePrefix,
         deliver: async (payload, info) => {
-          if (info.kind !== "final") return;
+          if (info.kind === "tool") {
+            if (!payload.text) return;
+            statusLines.push(`_${payload.text}_`);
+            await updateWorkingMessage(streamedText);
+            return;
+          }
+
+          if (info.kind === "block") {
+            if (!payload.text) return;
+            streamedText = payload.text;
+            await updateWorkingMessage(streamedText);
+            return;
+          }
+
           const hasMedia =
             Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
@@ -429,8 +430,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ctxPayload,
         {
           onReplyStart: sendTyping,
-          onPartialReply,
-          onToolResult,
+          onPartialReply: dispatcher.sendBlockReply,
+          onToolResult: dispatcher.sendToolResult,
         },
         cfg,
       );
