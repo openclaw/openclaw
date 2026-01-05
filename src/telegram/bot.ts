@@ -62,6 +62,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
+  const mentionRegexes = resolveTelegramMentionRegexes(cfg);
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
   const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
   const mediaMaxBytes =
@@ -132,7 +133,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
           ));
       const wasMentioned =
-        Boolean(botUsername) && hasBotMention(msg, botUsername);
+        (Boolean(botUsername) && hasBotMention(msg, botUsername)) ||
+        isMentionedByPatterns(msg, mentionRegexes);
       const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
         (ent) => ent.type === "mention",
       );
@@ -143,7 +145,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(msg.text ?? msg.caption ?? "");
-      if (isGroup && resolveGroupRequireMention(chatId) && botUsername) {
+      const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
+      if (isGroup && resolveGroupRequireMention(chatId) && canDetectMention) {
         if (!wasMentioned && !shouldBypassMention) {
           logger.info(
             { chatId, reason: "no-mention" },
@@ -196,7 +199,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ReplyToBody: replyTarget?.body,
         ReplyToSender: replyTarget?.sender,
         Timestamp: msg.date ? msg.date * 1000 : undefined,
-        WasMentioned: isGroup && botUsername ? wasMentioned : undefined,
+        WasMentioned: isGroup ? wasMentioned : undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,
@@ -389,6 +392,33 @@ function buildGroupLabel(msg: TelegramMessage, chatId: number | string) {
   const title = msg.chat?.title;
   if (title) return `${title} id:${chatId}`;
   return `group:${chatId}`;
+}
+
+function resolveTelegramMentionRegexes(cfg: ReturnType<typeof loadConfig>) {
+  const patterns = cfg.routing?.groupChat?.mentionPatterns ?? [];
+  return patterns
+    .map((pattern) => {
+      try {
+        return new RegExp(pattern, "i");
+      } catch {
+        return null;
+      }
+    })
+    .filter((val): val is RegExp => Boolean(val));
+}
+
+function normalizeTelegramMentionText(text: string): string {
+  return (text ?? "")
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
+    .toLowerCase();
+}
+
+function isMentionedByPatterns(msg: TelegramMessage, mentionRegexes: RegExp[]) {
+  if (mentionRegexes.length === 0) return false;
+  const raw = msg.text ?? msg.caption ?? "";
+  if (!raw) return false;
+  const cleaned = normalizeTelegramMentionText(raw);
+  return mentionRegexes.some((re) => re.test(cleaned));
 }
 
 function hasBotMention(msg: TelegramMessage, botUsername: string) {
