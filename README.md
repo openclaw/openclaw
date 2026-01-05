@@ -16,15 +16,15 @@
 </p>
 
 **Clawdbot** is a *personal AI assistant* you run on your own devices.
-It answers you on the surfaces you already use (WhatsApp, Telegram, Discord, iMessage, WebChat), can speak and listen on macOS/iOS, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the surfaces you already use (WhatsApp, Telegram, Slack, Discord, iMessage, WebChat), can speak and listen on macOS/iOS, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: https://clawd.me · Docs: https://docs.clawdbot.com/ · FAQ: [`docs/faq.md`](docs/faq.md) · Wizard: [`docs/wizard.md`](docs/wizard.md) · Nix: [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [`docs/docker.md`](docs/docker.md) · Discord: https://discord.gg/clawd
+Website: [clawdbot.com](https://clawdbot.com) · Docs: [docs.clawdbot.com](https://docs.clawdbot.com/) · FAQ: [FAQ](docs/faq.md) · Wizard: [Wizard](docs/wizard.md) · Nix: [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [Docker](docs/docker.md) · Discord: [discord.gg/clawd](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
-Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See `docs/onboarding.md`.
+Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See [Onboarding](docs/onboarding.md).
 
 ## Recommended setup (from source)
 
@@ -40,97 +40,6 @@ pnpm build
 pnpm ui:build
 pnpm clawdbot onboard
 ```
-
-## Highlights
-
-- **Local-first Gateway** — single control plane for sessions, providers, tools, and events.
-- **Multi-surface inbox** — WhatsApp, Telegram, Discord, iMessage, WebChat, macOS, iOS/Android.
-- **Voice Wake + Talk Mode** — always-on speech for macOS/iOS/Android with ElevenLabs.
-- **Live Canvas** — agent-driven visual workspace with A2UI.
-- **First-class tools** — browser, canvas, nodes, cron, sessions, and Discord actions.
-- **Companion apps** — macOS menu bar app + iOS/Android nodes.
-- **Onboarding + skills** — wizard-driven setup with bundled/managed/workspace skills.
-
-## Everything we built so far
-
-### Core platform
-- Gateway WS control plane with sessions, presence, config, cron, webhooks, control UI, and Canvas host.
-- CLI surface: gateway, agent, send, wizard, doctor/update, and TUI.
-- Pi agent runtime in RPC mode with tool streaming and block streaming.
-- Session model: `main` for direct chats, group isolation, activation modes, queue modes, reply-back.
-- Media pipeline: images/audio/video, transcription hooks, size caps, temp file lifecycle.
-
-### Surfaces + providers
-- WhatsApp (Baileys), Telegram (grammY), Discord (discord.js), Signal (signal-cli), iMessage (imsg), WebChat.
-- Group mention gating, reply tags, per-surface chunking and routing.
-
-### Apps + nodes
-- macOS app: menu bar control plane, Voice Wake/PTT, Talk Mode overlay, WebChat, Debug tools, SSH remote gateway control.
-- iOS node: Canvas, Voice Wake, Talk Mode, camera, screen recording, Bonjour pairing.
-- Android node: Canvas, Talk Mode, camera, screen recording, optional SMS.
-- macOS node mode: system.run/notify + canvas/camera exposure.
-
-### Tools + automation
-- Browser control: dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
-- Canvas: A2UI push/reset, eval, snapshot.
-- Nodes: camera snap/clip, screen record, location.get, notifications.
-- Cron + wakeups; webhooks; Gmail Pub/Sub triggers.
-- Skills platform: bundled, managed, and workspace skills with install gating + UI.
-
-### Ops + packaging
-- Control UI + WebChat served directly from the Gateway.
-- Tailscale Serve/Funnel or SSH tunnels with token/password auth.
-- Nix mode for declarative config; Docker-based installs.
-- Health, doctor migrations, structured logging, release tooling.
-
-## Changes since 2026.1.4 (2026-01-04)
-
-### Highlights
-- Project rename completed: CLIs, paths, bundle IDs, env vars, and docs unified on Clawdbot.
-- Agent-to-agent relay: `sessions_send` ping‑pong with `REPLY_SKIP` plus announce step with `ANNOUNCE_SKIP`.
-- Gateway config hot reload, configurable port, and Control UI base-path support.
-- Sandbox options: per-session Docker sandbox with hardened limits + optional sandboxed Chromium.
-- New node capability: `location.get` across macOS/iOS/Android (CLI + tools).
-
-### Fixes
-- Presence beacons keep node lists fresh; Instances view stays accurate.
-- Block streaming + chunking reliability (Telegram/Discord ordering, fewer duplicates).
-- WhatsApp GIF playback for MP4-based GIFs.
-- Onboarding/Control UI basePath handling fixes + UI polish.
-- Cleaner logging + clearer tool summaries.
-
-### Breaking
-- Tool names drop the `clawdbot_` prefix (`browser`, `canvas`, `nodes`, `cron`, `gateway`).
-- Bash tool removed `stdinMode: "pty"` support (use tmux for real TTYs).
-- Primary session key is fixed to `main` (or `global` for global scope).
-
-## Project rename + changelog format
-
-Clawdis → Clawdbot. The rename touched every surface, path, and bundle ID. To make that transition explicit, releases now use **date-based versions** (`YYYY.M.D`), and the changelog is compressed into milestone summaries instead of long semver trains. Full detail still lives in git history and the docs.
-
-## How it works (short)
-
-```
-Your surfaces
-   │
-   ▼
-┌───────────────────────────────┐
-│            Gateway            │  ws://127.0.0.1:18789
-│       (control plane)         │  tcp://0.0.0.0:18790 (optional Bridge)
-└──────────────┬────────────────┘
-               │
-               ├─ Pi agent (RPC)
-               ├─ CLI (clawdbot …)
-               ├─ WebChat (browser)
-               ├─ macOS app (Clawdbot.app)
-               └─ iOS node (Canvas + voice)
-```
-
-## Skills registry (ClawdHub)
-
-ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
-
-https://clawdhub.com
 
 ## Quick start (from source)
 
@@ -156,15 +65,81 @@ pnpm gateway:watch
 # Send a message
 pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 
-# Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Discord)
+# Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
 pnpm clawdbot agent --message "Ship checklist" --thinking high
 ```
 
 If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
 
+## Highlights
+
+- **Local-first Gateway** — single control plane for sessions, providers, tools, and events.
+- **Multi-surface inbox** — WhatsApp, Telegram, Slack, Discord, iMessage, WebChat, macOS, iOS/Android.
+- **Voice Wake + Talk Mode** — always-on speech for macOS/iOS/Android with ElevenLabs.
+- **Live Canvas** — agent-driven visual workspace with A2UI.
+- **First-class tools** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
+- **Companion apps** — macOS menu bar app + iOS/Android nodes.
+- **Onboarding + skills** — wizard-driven setup with bundled/managed/workspace skills.
+
+## Everything we built so far
+
+### Core platform
+- Gateway WS control plane with sessions, presence, config, cron, webhooks, control UI, and Canvas host.
+- CLI surface: gateway, agent, send, wizard, doctor/update, and TUI.
+- Pi agent runtime in RPC mode with tool streaming and block streaming.
+- Session model: `main` for direct chats, group isolation, activation modes, queue modes, reply-back.
+- Media pipeline: images/audio/video, transcription hooks, size caps, temp file lifecycle.
+
+### Surfaces + providers
+- WhatsApp (Baileys), Telegram (grammY), Slack (Bolt), Discord (discord.js), Signal (signal-cli), iMessage (imsg), WebChat.
+- Group mention gating, reply tags, per-surface chunking and routing.
+
+### Apps + nodes
+- macOS app: menu bar control plane, Voice Wake/PTT, Talk Mode overlay, WebChat, Debug tools, SSH remote gateway control.
+- iOS node: Canvas, Voice Wake, Talk Mode, camera, screen recording, Bonjour pairing.
+- Android node: Canvas, Talk Mode, camera, screen recording, optional SMS.
+- macOS node mode: system.run/notify + canvas/camera exposure.
+
+### Tools + automation
+- Browser control: dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
+- Canvas: A2UI push/reset, eval, snapshot.
+- Nodes: camera snap/clip, screen record, location.get, notifications.
+- Cron + wakeups; webhooks; Gmail Pub/Sub triggers.
+- Skills platform: bundled, managed, and workspace skills with install gating + UI.
+
+### Ops + packaging
+- Control UI + WebChat served directly from the Gateway.
+- Tailscale Serve/Funnel or SSH tunnels with token/password auth.
+- Nix mode for declarative config; Docker-based installs.
+- Health, doctor migrations, structured logging, release tooling.
+
+## How it works (short)
+
+```
+Your surfaces
+   │
+   ▼
+┌───────────────────────────────┐
+│            Gateway            │  ws://127.0.0.1:18789
+│       (control plane)         │  tcp://0.0.0.0:18790 (optional Bridge)
+└──────────────┬────────────────┘
+               │
+               ├─ Pi agent (RPC)
+               ├─ CLI (clawdbot …)
+               ├─ WebChat (browser)
+               ├─ macOS app (Clawdbot.app)
+               └─ iOS node (Canvas + voice)
+```
+
+## Skills registry (ClawdHub)
+
+ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
+
+https://clawdhub.com
+
 ## Chat commands
 
-Send these in WhatsApp/Telegram/WebChat (group commands are owner-only):
+Send these in WhatsApp/Telegram/Slack/WebChat (group commands are owner-only):
 
 - `/status` — health + session info (group shows activation mode)
 - `/new` or `/reset` — reset the session
@@ -209,13 +184,13 @@ Build/run: `./scripts/restart-mac.sh` (packages + launches).
 - Voice trigger forwarding + Canvas surface.
 - Controlled via `clawdbot nodes …`.
 
-Runbook: `docs/ios/connect.md`.
+Runbook: [iOS connect](docs/ios/connect.md).
 
 ### Android node (internal)
 
 - Pairs via the same Bridge + pairing flow as iOS.
 - Exposes Canvas, Camera, and Screen capture commands.
-- Runbook: `docs/android/connect.md`.
+- Runbook: [Android connect](docs/android/connect.md).
 
 ## Agent workspace + skills
 

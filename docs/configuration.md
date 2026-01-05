@@ -446,6 +446,9 @@ Controls inbound/outbound prefixes and timestamps.
 }
 ```
 
+`responsePrefix` is applied to **all outbound replies** (tool summaries, block
+streaming, final replies) across providers unless already present.
+
 ### `talk`
 
 Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_VOICE_ID` or `SAG_VOICE_ID` when unset.
