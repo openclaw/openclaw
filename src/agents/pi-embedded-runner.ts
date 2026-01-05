@@ -1,12 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 
-import type {
-  AgentMessage,
-  AgentToolResult,
-  AgentToolUpdateCallback,
-  ThinkingLevel,
-} from "@mariozechner/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
@@ -16,7 +11,6 @@ import {
   SessionManager,
   SettingsManager,
   type Skill,
-  type ToolDefinition,
 } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
@@ -45,6 +39,7 @@ import {
   subscribeEmbeddedPiSession,
 } from "./pi-embedded-subscribe.js";
 import { extractAssistantText } from "./pi-embedded-utils.js";
+import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 import { resolveSandboxContext } from "./sandbox.js";
 import {
@@ -57,35 +52,6 @@ import {
 } from "./skills.js";
 import { buildAgentSystemPromptAppend } from "./system-prompt.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
-
-function toToolDefinitions(tools: { execute: unknown }[]): ToolDefinition[] {
-  return tools.map((tool) => {
-    const record = tool as {
-      name?: unknown;
-      label?: unknown;
-      description?: unknown;
-      parameters?: unknown;
-      execute: (
-        toolCallId: string,
-        params: unknown,
-        signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback<unknown>,
-      ) => Promise<AgentToolResult<unknown>>;
-    };
-    const name = typeof record.name === "string" ? record.name : "tool";
-    return {
-      name,
-      label: typeof record.label === "string" ? record.label : name,
-      description:
-        typeof record.description === "string" ? record.description : "",
-      // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema from pi-agent-core uses a different module instance.
-      parameters: record.parameters as any,
-      execute: async (toolCallId, params, onUpdate, _ctx, signal) => {
-        return await record.execute(toolCallId, params, signal, onUpdate);
-      },
-    } satisfies ToolDefinition;
-  });
-}
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
