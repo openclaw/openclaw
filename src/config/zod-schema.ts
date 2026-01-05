@@ -330,7 +330,9 @@ export const ClawdbotSchema = z.object({
       consoleStyle: z
         .union([z.literal("pretty"), z.literal("compact"), z.literal("json")])
         .optional(),
-      redactSensitive: z.union([z.literal("off"), z.literal("tools")]).optional(),
+      redactSensitive: z
+        .union([z.literal("off"), z.literal("tools")])
+        .optional(),
       redactPatterns: z.array(z.string()).optional(),
     })
     .optional(),

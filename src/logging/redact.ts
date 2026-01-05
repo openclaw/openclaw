@@ -1,5 +1,4 @@
 import { loadConfig } from "../config/config.js";
-import type { LoggingConfig } from "../config/types.js";
 
 export type RedactSensitiveMode = "off" | "tools";
 
@@ -88,10 +87,8 @@ function redactMatch(match: string, groups: string[]): string {
 function redactText(text: string, patterns: RegExp[]): string {
   let next = text;
   for (const pattern of patterns) {
-    next = next.replace(
-      pattern,
-      (...args: string[]) =>
-        redactMatch(args[0], args.slice(1, args.length - 2)),
+    next = next.replace(pattern, (...args: string[]) =>
+      redactMatch(args[0], args.slice(1, args.length - 2)),
     );
   }
   return next;
