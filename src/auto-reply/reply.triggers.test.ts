@@ -126,6 +126,24 @@ describe("trigger handling", () => {
     });
   });
 
+  it("returns help without invoking the agent", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/help",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Help");
+      expect(text).toContain("Shortcuts");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("allows owner to set send policy", async () => {
     await withTempHome(async (home) => {
       const cfg = {

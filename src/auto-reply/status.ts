@@ -15,11 +15,12 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   resolveSessionTranscriptPath,
+  resolveMainSessionKey,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import { shortenHomePath } from "../utils.js";
-import type { ThinkLevel, VerboseLevel } from "./thinking.js";
+import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
 
 type AgentConfig = NonNullable<ClawdbotConfig["agent"]>;
 
@@ -33,6 +34,7 @@ type StatusArgs = {
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
+  resolvedElevated?: ElevatedLevel;
   now?: number;
   webLinked?: boolean;
   webAuthAgeMs?: number | null;
@@ -164,7 +166,28 @@ export function buildStatusMessage(args: StatusArgs): string {
   const verboseLevel =
     args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
   const elevatedLevel =
+    args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ?? args.agent?.elevatedDefault ?? "on";
+
+  const runtime = (() => {
+    const sandboxMode = args.agent?.sandbox?.mode ?? "off";
+    if (sandboxMode === "off")
+      return { line: "Runtime: direct", sandboxed: false };
+    const sessionScope = args.sessionScope ?? "per-sender";
+    const mainKey = resolveMainSessionKey({
+      session: { scope: sessionScope },
+    });
+    const sessionKey = args.sessionKey?.trim();
+    const sandboxed = sessionKey
+      ? sandboxMode === "all" || sessionKey !== mainKey.trim()
+      : false;
+    const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
+    const suffix = sandboxed ? ` • elevated ${elevatedLevel}` : "";
+    return {
+      line: `Runtime: ${runtime} (sandbox ${sandboxMode})${suffix}`,
+      sandboxed,
+    };
+  })();
 
   const webLine = (() => {
     if (args.webLinked === false) {
@@ -204,7 +227,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     contextTokens ?? null,
   )}${entry?.abortedLastRun ? " • last run aborted" : ""}`;
 
-  const optionsLine = `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel} (set with /think <level>, /verbose on|off, /elevated on|off, /model <id>)`;
+  const optionsLine = runtime.sandboxed
+    ? `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel} (set with /think <level>, /verbose on|off, /elevated on|off, /model <id>)`
+    : `Options: thinking=${thinkLevel} | verbose=${verboseLevel} (set with /think <level>, /verbose on|off, /model <id>)`;
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
 
@@ -214,17 +239,21 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? `Workspace: ${shortenHomePath(args.workspaceDir)}`
     : undefined;
 
-  const helpersLine = "Shortcuts: /new reset | /restart relink";
-
   return [
     "⚙️ Status",
     webLine,
     agentLine,
+    runtime.line,
     workspaceLine,
     contextLine,
     sessionLine,
     groupActivationLine,
     optionsLine,
-    helpersLine,
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function buildHelpMessage(): string {
+  return ["ℹ️ Help", "Shortcuts: /new reset | /restart relink"].join("\n");
 }
