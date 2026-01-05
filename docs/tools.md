@@ -73,7 +73,7 @@ Common parameters:
 - `controlUrl` (defaults from config)
 - `profile` (optional; defaults to `browser.defaultProfile`)
 Notes:
-- Requires `browser.enabled=true` in `~/.clawdbot/clawdbot.json`.
+- Requires `browser.enabled=true` (default is `true`; set `false` to disable).
 - Uses `browser.controlUrl` unless `controlUrl` is passed explicitly.
 - All actions accept optional `profile` parameter for multi-instance support.
 - When `profile` is omitted, uses `browser.defaultProfile` (defaults to "clawd").
