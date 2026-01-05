@@ -530,7 +530,14 @@ Use `/model` to switch without restarting:
 /model sonnet
 /model haiku
 /model opus
+/model gpt
+/model gpt-mini
+/model gemini
+/model gemini-flash
 ```
+
+Clawdbot ships a few default model shorthands (you can override them in config):
+`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`.
 
 **Setup:** Configure allowed models and aliases in `clawdbot.json`:
 

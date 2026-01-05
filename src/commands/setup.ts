@@ -8,6 +8,7 @@ import {
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
 import { type ClawdbotConfig, CONFIG_PATH_CLAWDBOT } from "../config/config.js";
+import { applyModelAliasDefaults } from "../config/defaults.js";
 import { resolveSessionTranscriptsDir } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -30,7 +31,9 @@ async function readConfigFileRaw(): Promise<{
 
 async function writeConfigFile(cfg: ClawdbotConfig) {
   await fs.mkdir(path.dirname(CONFIG_PATH_CLAWDBOT), { recursive: true });
-  const json = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
+  const json = JSON.stringify(applyModelAliasDefaults(cfg), null, 2)
+    .trimEnd()
+    .concat("\n");
   await fs.writeFile(CONFIG_PATH_CLAWDBOT, json, "utf-8");
 }
 

@@ -8,6 +8,7 @@
 - Models: add image-specific model config (`agent.imageModel` + fallbacks) and scan support.
 - Agent tools: new `image` tool routed to the image model (when configured).
 - Config: default model shorthands (`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`).
+- Docs: document built-in model shorthands + precedence (user config wins).
 
 ### Fixes
 - Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
