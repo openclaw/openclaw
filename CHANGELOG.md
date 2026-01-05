@@ -6,6 +6,7 @@
 
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
+- Linux: prompt to enable systemd lingering when installing/restarting the gateway user service (prevents logout/idle shutdowns).
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
 - macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
@@ -22,6 +23,7 @@
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
 - Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.
+- Docs: document systemd lingering and logged-in session requirements on macOS/Windows.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.

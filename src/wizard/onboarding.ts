@@ -34,6 +34,7 @@ import {
 import { setupProviders } from "../commands/onboard-providers.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
+import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -537,6 +538,17 @@ export async function runOnboardingWizard(
         environment,
       });
     }
+
+    await ensureSystemdUserLingerInteractive({
+      runtime,
+      prompter: {
+        confirm: prompter.confirm,
+        note: prompter.note,
+      },
+      reason:
+        "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
+      requireConfirm: true,
+    });
   }
 
   await sleep(1500);
