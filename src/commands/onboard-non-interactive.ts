@@ -99,9 +99,17 @@ export async function runNonInteractiveOnboarding(
     await setAnthropicApiKey(key);
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
-  } else if (authChoice === "oauth" || authChoice === "antigravity") {
+  } else if (
+    authChoice === "oauth" ||
+    authChoice === "openai-codex" ||
+    authChoice === "antigravity"
+  ) {
     runtime.error(
-      `${authChoice === "oauth" ? "OAuth" : "Antigravity"} requires interactive mode.`,
+      `${
+        authChoice === "oauth" || authChoice === "openai-codex"
+          ? "OAuth"
+          : "Antigravity"
+      } requires interactive mode.`,
     );
     runtime.exit(1);
     return;
