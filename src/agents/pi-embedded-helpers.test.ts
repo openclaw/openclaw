@@ -1,14 +1,17 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import {
   isRateLimitAssistantError,
   pickFallbackThinkingLevel,
 } from "./pi-embedded-helpers.js";
-import type { ThinkLevel } from "../auto-reply/thinking.js";
 
 const asAssistant = (overrides: Partial<AssistantMessage>) =>
-  ({ role: "assistant", stopReason: "error", ...overrides }) as AssistantMessage;
+  ({
+    role: "assistant",
+    stopReason: "error",
+    ...overrides,
+  }) as AssistantMessage;
 
 describe("isRateLimitAssistantError", () => {
   it("detects 429 rate limit payloads", () => {
@@ -57,8 +60,7 @@ describe("pickFallbackThinkingLevel", () => {
   it("skips already attempted levels", () => {
     const attempted = new Set<ThinkLevel>(["low", "medium"]);
     const next = pickFallbackThinkingLevel({
-      message:
-        "Supported values are: 'medium', 'high', and 'xhigh'.",
+      message: "Supported values are: 'medium', 'high', and 'xhigh'.",
       attempted,
     });
     expect(next).toBe("high");

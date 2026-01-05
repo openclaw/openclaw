@@ -5,6 +5,7 @@ import {
   parseActivationCommand,
 } from "../auto-reply/group-activation.js";
 import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_PROMPT,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
@@ -369,9 +370,13 @@ export async function runWebHeartbeatOnce(opts: {
     const hasMedia = Boolean(
       replyPayload.mediaUrl || (replyPayload.mediaUrls?.length ?? 0) > 0,
     );
+    const ackMaxChars = Math.max(
+      0,
+      cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    );
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",
-      maxAckChars: 30,
+      maxAckChars: ackMaxChars,
     });
     if (stripped.shouldSkip && !hasMedia) {
       // Don't let heartbeats keep sessions alive: restore previous updatedAt so idle expiry still works.

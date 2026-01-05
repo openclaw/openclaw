@@ -6,7 +6,10 @@ import type {
   AgentToolResult,
 } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  normalizeThinkLevel,
+  type ThinkLevel,
+} from "../auto-reply/thinking.js";
 
 import { sanitizeContentBlocksImages } from "./tool-images.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
