@@ -10,9 +10,13 @@ import { getHealthSnapshot } from "./health.js";
 let testConfig: Record<string, unknown> = {};
 let testStore: Record<string, { updatedAt?: number }> = {};
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => testConfig,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => testConfig,
+  };
+});
 
 vi.mock("../config/sessions.js", () => ({
   resolveStorePath: () => "/tmp/sessions.json",

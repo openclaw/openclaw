@@ -31,9 +31,13 @@ vi.mock("@grammyjs/transformer-throttler", () => ({
   apiThrottler: () => throttlerSpy(),
 }));
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({}),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => ({}),
+  };
+});
 
 vi.mock("../auto-reply/reply.js", () => {
   const replySpy = vi.fn(async (_ctx, opts) => {

@@ -20,9 +20,13 @@ const mockLoadConfig = vi.fn().mockReturnValue({
   },
 });
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => mockLoadConfig(),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => mockLoadConfig(),
+  };
+});
 
 vi.mock("./session.js", () => {
   const { EventEmitter } = require("node:events");

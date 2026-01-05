@@ -31,9 +31,13 @@ vi.mock("../web/session.js", () => ({
   readWebSelfId: mocks.readWebSelfId,
   logWebSelfId: mocks.logWebSelfId,
 }));
-vi.mock("../config/config.js", () => ({
-  loadConfig: () => ({ session: {} }),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: () => ({ session: {} }),
+  };
+});
 
 import { statusCommand } from "./status.js";
 

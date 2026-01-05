@@ -5,9 +5,13 @@ import { createTelegramBot } from "./bot.js";
 const { loadConfig } = vi.hoisted(() => ({
   loadConfig: vi.fn(() => ({})),
 }));
-vi.mock("../config/config.js", () => ({
-  loadConfig,
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig,
+  };
+});
 
 const useSpy = vi.fn();
 const onSpy = vi.fn();

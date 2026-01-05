@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -14,6 +14,8 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
+import { resolveSessionKey } from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -710,6 +712,81 @@ describe("trigger handling", () => {
       expect(text).toBe("ok");
       expect(text).not.toMatch(/Thinking level set/i);
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("stages inbound media into the sandbox workspace", async () => {
+    await withTempHome(async (home) => {
+      const inboundDir = join(home, ".clawdbot", "media", "inbound");
+      await fs.mkdir(inboundDir, { recursive: true });
+      const mediaPath = join(inboundDir, "photo.jpg");
+      await fs.writeFile(mediaPath, "test");
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          sandbox: {
+            mode: "non-main" as const,
+            workspaceRoot: join(home, "sandboxes"),
+          },
+        },
+        whatsapp: {
+          allowFrom: ["*"],
+        },
+        session: {
+          store: join(home, "sessions.json"),
+        },
+      };
+
+      const ctx = {
+        Body: "hi",
+        From: "group:whatsapp:demo",
+        To: "+2000",
+        ChatType: "group" as const,
+        Surface: "whatsapp" as const,
+        MediaPath: mediaPath,
+        MediaType: "image/jpeg",
+        MediaUrl: mediaPath,
+      };
+
+      const res = await getReplyFromConfig(ctx, {}, cfg);
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("ok");
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      const stagedPath = `media/inbound/${basename(mediaPath)}`;
+      expect(prompt).toContain(stagedPath);
+      expect(prompt).not.toContain(mediaPath);
+
+      const sessionKey = resolveSessionKey(
+        cfg.session?.scope ?? "per-sender",
+        ctx,
+        cfg.session?.mainKey,
+      );
+      const sandbox = await ensureSandboxWorkspaceForSession({
+        config: cfg,
+        sessionKey,
+        workspaceDir: cfg.agent.workspace,
+      });
+      expect(sandbox).not.toBeNull();
+      const stagedFullPath = join(
+        sandbox!.workspaceDir,
+        "media",
+        "inbound",
+        basename(mediaPath),
+      );
+      await expect(fs.stat(stagedFullPath)).resolves.toBeTruthy();
     });
   });
 });

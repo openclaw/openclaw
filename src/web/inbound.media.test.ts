@@ -5,18 +5,22 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-vi.mock("../config/config.js", () => ({
-  loadConfig: vi.fn().mockReturnValue({
-    whatsapp: {
-      allowFrom: ["*"], // Allow all in tests
-    },
-    messages: {
-      messagePrefix: undefined,
-      responsePrefix: undefined,
-      timestampPrefix: false,
-    },
-  }),
-}));
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn().mockReturnValue({
+      whatsapp: {
+        allowFrom: ["*"], // Allow all in tests
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    }),
+  };
+});
 
 const HOME = path.join(
   os.tmpdir(),
