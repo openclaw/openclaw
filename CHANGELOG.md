@@ -9,6 +9,7 @@
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Settings now use a sidebar layout to avoid toolbar overflow in Connections.
+- macOS: Settings window hides the preferences toolbar row to keep a clean sidebar layout.
 - macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.
 - Auth: add OpenAI Codex OAuth support and migrate legacy oauth.json into auth.json.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.

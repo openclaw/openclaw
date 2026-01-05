@@ -28,6 +28,7 @@ struct SettingsRootView: View {
                 }
             }
             .listStyle(.sidebar)
+            .toolbar(removing: .sidebarToggle)
             .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
         } detail: {
             VStack(alignment: .leading, spacing: 12) {
@@ -41,6 +42,8 @@ struct SettingsRootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .navigationSplitViewStyle(.balanced)
+        .navigationTitle("Settings")
+        .background(SettingsWindowChrome(title: "Clawdbot Settings"))
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .clawdbotSelectSettingsTab)) { note in
