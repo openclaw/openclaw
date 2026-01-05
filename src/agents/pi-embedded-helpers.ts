@@ -117,7 +117,10 @@ export function isRateLimitAssistantError(
   if (!msg || msg.stopReason !== "error") return false;
   const raw = (msg.errorMessage ?? "").toLowerCase();
   if (!raw) return false;
-  return /rate[_ ]limit|too many requests|429/.test(raw);
+  return (
+    /rate[_ ]limit|too many requests|429/.test(raw) ||
+    raw.includes("exceeded your current quota")
+  );
 }
 
 function extractSupportedValues(raw: string): string[] {

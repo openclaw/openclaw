@@ -26,6 +26,14 @@ describe("isRateLimitAssistantError", () => {
     expect(isRateLimitAssistantError(msg)).toBe(true);
   });
 
+  it("detects quota exceeded messages", () => {
+    const msg = asAssistant({
+      errorMessage:
+        "You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.",
+    });
+    expect(isRateLimitAssistantError(msg)).toBe(true);
+  });
+
   it("returns false for non-error messages", () => {
     const msg = asAssistant({
       stopReason: "end_turn",
