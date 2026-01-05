@@ -1,7 +1,11 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 
-import { isRateLimitAssistantError } from "./pi-embedded-helpers.js";
+import {
+  isRateLimitAssistantError,
+  pickFallbackThinkingLevel,
+} from "./pi-embedded-helpers.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 
 const asAssistant = (overrides: Partial<AssistantMessage>) =>
   ({ role: "assistant", stopReason: "error", ...overrides }) as AssistantMessage;
@@ -28,5 +32,36 @@ describe("isRateLimitAssistantError", () => {
       errorMessage: "rate limit",
     });
     expect(isRateLimitAssistantError(msg)).toBe(false);
+  });
+});
+
+describe("pickFallbackThinkingLevel", () => {
+  it("selects the first supported thinking level", () => {
+    const attempted = new Set<ThinkLevel>(["low"]);
+    const next = pickFallbackThinkingLevel({
+      message:
+        "Unsupported value: 'low' is not supported with the 'gpt-5.2-pro' model. Supported values are: 'medium', 'high', and 'xhigh'.",
+      attempted,
+    });
+    expect(next).toBe("medium");
+  });
+
+  it("skips already attempted levels", () => {
+    const attempted = new Set<ThinkLevel>(["low", "medium"]);
+    const next = pickFallbackThinkingLevel({
+      message:
+        "Supported values are: 'medium', 'high', and 'xhigh'.",
+      attempted,
+    });
+    expect(next).toBe("high");
+  });
+
+  it("returns undefined when no supported values are found", () => {
+    const attempted = new Set<ThinkLevel>(["low"]);
+    const next = pickFallbackThinkingLevel({
+      message: "Request failed.",
+      attempted,
+    });
+    expect(next).toBeUndefined();
   });
 });

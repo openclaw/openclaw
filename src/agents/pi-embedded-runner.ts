@@ -33,6 +33,7 @@ import {
   ensureSessionHeader,
   formatAssistantErrorText,
   isRateLimitAssistantError,
+  pickFallbackThinkingLevel,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
 import {
@@ -319,22 +320,27 @@ export async function runEmbeddedPiAgent(params: {
       const apiKey = await getApiKeyForModel(model, authStorage);
       authStorage.setRuntimeApiKey(model.provider, apiKey);
 
-      const thinkingLevel = mapThinkingLevel(params.thinkLevel);
+      let thinkLevel = params.thinkLevel ?? "off";
+      const attemptedThinking = new Set<ThinkLevel>();
 
-      log.debug(
-        `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} surface=${params.surface ?? "unknown"}`,
-      );
+      while (true) {
+        const thinkingLevel = mapThinkingLevel(thinkLevel);
+        attemptedThinking.add(thinkLevel);
 
-      await fs.mkdir(resolvedWorkspace, { recursive: true });
-      await ensureSessionHeader({
-        sessionFile: params.sessionFile,
-        sessionId: params.sessionId,
-        cwd: resolvedWorkspace,
-      });
+        log.debug(
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} surface=${params.surface ?? "unknown"}`,
+        );
 
-      let restoreSkillEnv: (() => void) | undefined;
-      process.chdir(resolvedWorkspace);
-      try {
+        await fs.mkdir(resolvedWorkspace, { recursive: true });
+        await ensureSessionHeader({
+          sessionFile: params.sessionFile,
+          sessionId: params.sessionId,
+          cwd: resolvedWorkspace,
+        });
+
+        let restoreSkillEnv: (() => void) | undefined;
+        process.chdir(resolvedWorkspace);
+        try {
         const shouldLoadSkillEntries =
           !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
         const skillEntries = shouldLoadSkillEntries
@@ -391,7 +397,7 @@ export async function runEmbeddedPiAgent(params: {
         const systemPrompt = buildSystemPrompt({
           appendPrompt: buildAgentSystemPromptAppend({
             workspaceDir: resolvedWorkspace,
-            defaultThinkLevel: params.thinkLevel,
+            defaultThinkLevel: thinkLevel,
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
@@ -542,6 +548,20 @@ export async function runEmbeddedPiAgent(params: {
           params.abortSignal?.removeEventListener?.("abort", onAbort);
         }
         if (promptError && !aborted) {
+          const fallbackThinking = pickFallbackThinkingLevel({
+            message:
+              promptError instanceof Error
+                ? promptError.message
+                : String(promptError),
+            attempted: attemptedThinking,
+          });
+          if (fallbackThinking) {
+            log.warn(
+              `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
+            );
+            thinkLevel = fallbackThinking;
+            continue;
+          }
           throw promptError;
         }
 
@@ -551,6 +571,18 @@ export async function runEmbeddedPiAgent(params: {
           .find((m) => (m as AgentMessage)?.role === "assistant") as
           | AssistantMessage
           | undefined;
+
+        const fallbackThinking = pickFallbackThinkingLevel({
+          message: lastAssistant?.errorMessage,
+          attempted: attemptedThinking,
+        });
+        if (fallbackThinking && !aborted) {
+          log.warn(
+            `unsupported thinking level for ${provider}/${modelId}; retrying with ${fallbackThinking}`,
+          );
+          thinkLevel = fallbackThinking;
+          continue;
+        }
 
         const fallbackConfigured =
           (params.config?.agent?.modelFallbacks?.length ?? 0) > 0;
@@ -631,9 +663,10 @@ export async function runEmbeddedPiAgent(params: {
             aborted,
           },
         };
-      } finally {
-        restoreSkillEnv?.();
-        process.chdir(prevCwd);
+        } finally {
+          restoreSkillEnv?.();
+          process.chdir(prevCwd);
+        }
       }
     }),
   );
