@@ -20,11 +20,11 @@ It answers you on the surfaces you already use (WhatsApp, Telegram, Slack, Disco
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: [clawdbot.com](https://clawdbot.com) · Docs: [docs.clawdbot.com](https://docs.clawdbot.com/) · FAQ: [FAQ](docs/faq.md) · Wizard: [Wizard](docs/wizard.md) · Nix: [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [Docker](docs/docker.md) · Discord: [discord.gg/clawd](https://discord.gg/clawd)
+Website: [clawdbot.com](https://clawdbot.com) · Docs: [docs.clawdbot.com](https://docs.clawdbot.com/) · FAQ: [FAQ](https://docs.clawdbot.com/faq) · Wizard: [Wizard](https://docs.clawdbot.com/wizard) · Nix: [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [Docker](https://docs.clawdbot.com/docker) · Discord: [discord.gg/clawd](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 
-Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See [Onboarding](docs/onboarding.md).
+Subscriptions: **Anthropic (Claude Pro/Max)** and **OpenAI (ChatGPT/Codex)** are supported via OAuth. See [Onboarding](https://docs.clawdbot.com/onboarding).
 
 ## Recommended setup (from source)
 
@@ -68,6 +68,8 @@ pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 # Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
 pnpm clawdbot agent --message "Ship checklist" --thinking high
 ```
+
+Upgrading? `clawdbot doctor`.
 
 If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
 
@@ -148,28 +150,11 @@ Send these in WhatsApp/Telegram/Slack/WebChat (group commands are owner-only):
 - `/restart` — restart the gateway (owner-only in groups)
 - `/activation mention|always` — group activation toggle (groups only)
 
-## Architecture
+## macOS app (optional)
 
-### TypeScript Gateway (src/gateway/server.ts)
-- **Single HTTP+WS server** on `ws://127.0.0.1:18789` (bind policy: loopback/lan/tailnet/auto). The first frame must be `connect`; AJV validates frames against TypeBox schemas (`src/gateway/protocol`).
-- **Single source of truth** for sessions, providers, cron, voice wake, and presence. Methods cover `send`, `agent`, `chat.*`, `sessions.*`, `config.*`, `cron.*`, `voicewake.*`, `node.*`, `system-*`, `wake`.
-- **Events + snapshot**: handshake returns a snapshot (presence/health) and declares event types; runtime events include `agent`, `chat`, `presence`, `tick`, `health`, `heartbeat`, `cron`, `node.pair.*`, `voicewake.changed`, `shutdown`.
-- **Idempotency & safety**: `send`/`agent`/`chat.send` require idempotency keys with a TTL cache (5 min, cap 1000) to avoid double‑sends on reconnects; payload sizes are capped per connection.
-- **Bridge for nodes**: optional TCP bridge (`src/infra/bridge/server.ts`) is newline‑delimited JSON frames (`hello`, pairing, RPC, `invoke`); node connect/disconnect is surfaced into presence.
-- **Control UI + Canvas Host**: HTTP serves Control UI assets (default `/`, optional base path) and can host a live‑reload Canvas host for nodes (`src/canvas-host/server.ts`), injecting the A2UI postMessage bridge.
+The Gateway alone delivers a great experience. All apps are optional and add extra features.
 
-### iOS app (apps/ios)
-- **Discovery + pairing**: Bonjour discovery via `BridgeDiscoveryModel` (NWBrowser). `BridgeConnectionController` auto‑connects using Keychain token or allows manual host/port.
-- **Node runtime**: `BridgeSession` (actor) maintains the `NWConnection`, hello handshake, ping/pong, RPC requests, and `invoke` callbacks.
-- **Capabilities + commands**: advertises `canvas`, `screen`, `camera`, `voiceWake` (settings‑driven) and executes `canvas.*`, `canvas.a2ui.*`, `camera.*`, `screen.record` (`NodeAppModel.handleInvoke`).
-- **Canvas**: `WKWebView` with bundled Canvas scaffold + A2UI, JS eval, snapshot capture, and `clawdbot://` deep‑link interception (`ScreenController`).
-- **Voice + deep links**: voice wake sends `voice.transcript` events; `clawdbot://agent` links emit `agent.request`. Voice wake triggers sync via `voicewake.get` + `voicewake.changed`.
-
-## Companion apps
-
-The **macOS app is critical**: it runs the menu‑bar control plane, owns local permissions (TCC), hosts Voice Wake, exposes WebChat/debug tools, and coordinates local/remote gateway mode. Most “assistant” UX lives here.
-
-### macOS (Clawdbot.app)
+### macOS (Clawdbot.app) (optional)
 
 - Menu bar control for the Gateway and health.
 - Voice Wake + push-to-talk overlay.
@@ -178,19 +163,19 @@ The **macOS app is critical**: it runs the menu‑bar control plane, owns local 
 
 Build/run: `./scripts/restart-mac.sh` (packages + launches).
 
-### iOS node (internal)
+### iOS node (optional)
 
 - Pairs as a node via the Bridge.
 - Voice trigger forwarding + Canvas surface.
 - Controlled via `clawdbot nodes …`.
 
-Runbook: [iOS connect](docs/ios/connect.md).
+Runbook: [iOS connect](https://docs.clawdbot.com/ios/connect).
 
-### Android node (internal)
+### Android node (optional)
 
 - Pairs via the same Bridge + pairing flow as iOS.
 - Exposes Canvas, Camera, and Screen capture commands.
-- Runbook: [Android connect](docs/android/connect.md).
+- Runbook: [Android connect](https://docs.clawdbot.com/android/connect).
 
 ## Agent workspace + skills
 
@@ -200,34 +185,17 @@ Runbook: [iOS connect](docs/ios/connect.md).
 
 ## Configuration
 
-Minimal `~/.clawdbot/clawdbot.json`:
+Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 
 ```json5
 {
-  whatsapp: {
-    allowFrom: ["+1234567890"]
+  agent: {
+    model: "anthropic/claude-opus-4-5"
   }
 }
 ```
 
-Env vars: loaded from `.env` in the current working directory, plus a global fallback at `~/.clawdbot/.env` (aka `$CLAWDBOT_STATE_DIR/.env`) without overriding existing values.
-
-Optional: import missing keys from your login shell env (sources your shell profile) via config or env var:
-
-```json5
-{
-  env: {
-    shellEnv: {
-      enabled: true,
-      timeoutMs: 15000
-    }
-  }
-}
-```
-
-- Env var: `CLAWDBOT_LOAD_SHELL_ENV=1`
-- Timeout override: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
-- Behavior: only imports known/expected keys, never overrides existing `process.env`.
+[Full configuration reference (all keys + examples).](https://docs.clawdbot.com/configuration)
 
 ### WhatsApp
 
@@ -274,17 +242,18 @@ Browser control (optional):
 
 ## Docs
 
-- [`docs/index.md`](docs/index.md) (overview)
-- [`docs/configuration.md`](docs/configuration.md)
-- [`docs/group-messages.md`](docs/group-messages.md)
-- [`docs/gateway.md`](docs/gateway.md)
-- [`docs/web.md`](docs/web.md)
-- [`docs/discovery.md`](docs/discovery.md)
-- [`docs/agent.md`](docs/agent.md)
-- [`docs/discord.md`](docs/discord.md)
-- [`docs/wizard.md`](docs/wizard.md)
-- Webhooks + external triggers: [`docs/webhook.md`](docs/webhook.md)
-- Gmail hooks (email → wake): [`docs/gmail-pubsub.md`](docs/gmail-pubsub.md)
+[Start with the docs index for navigation and “what’s where.”](https://docs.clawdbot.com/)  
+[Read the architecture overview for the gateway + protocol model.](https://docs.clawdbot.com/architecture)  
+[Use the full configuration reference when you need every key and example.](https://docs.clawdbot.com/configuration)  
+[Run the Gateway by the book with the operational runbook.](https://docs.clawdbot.com/gateway)  
+[Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.clawdbot.com/web)  
+[Understand remote access over SSH tunnels or tailnets.](https://docs.clawdbot.com/remote)  
+[Follow the onboarding wizard flow for a guided setup.](https://docs.clawdbot.com/wizard)  
+[Wire external triggers via the webhook surface.](https://docs.clawdbot.com/webhook)  
+[Set up Gmail Pub/Sub triggers.](https://docs.clawdbot.com/gmail-pubsub)  
+[Learn the macOS menu bar companion details.](https://clawdbot.com/clawdbot-mac.html)  
+[Debug common failures with the troubleshooting guide.](https://docs.clawdbot.com/troubleshooting)  
+[Review security guidance before exposing anything.](https://docs.clawdbot.com/security)
 
 ## Email hooks (Gmail)
 
@@ -292,10 +261,6 @@ Browser control (optional):
 clawdbot hooks gmail setup --account you@gmail.com
 clawdbot hooks gmail run
 ```
-- [`docs/security.md`](docs/security.md)
-- [`docs/troubleshooting.md`](docs/troubleshooting.md)
-- [`docs/ios/connect.md`](docs/ios/connect.md)
-- [`docs/clawdbot-mac.md`](docs/clawdbot-mac.md)
 
 ## Contributing
 
@@ -305,7 +270,7 @@ AI/vibe-coded PRs welcome! 🤖
 
 ## Clawd
 
-Clawdbot was built for **Clawd**, a space lobster AI assistant.
+Clawdbot was built for **Clawd**, a space lobster AI assistant. 🦞
 
 - https://clawd.me
 - https://soul.md
