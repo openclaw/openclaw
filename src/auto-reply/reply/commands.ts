@@ -20,8 +20,8 @@ import type { MsgContext } from "../templating.js";
 import type { ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
-import { stripMentions } from "./mentions.js";
 import type { InlineDirectives } from "./directive-handling.js";
+import { stripMentions } from "./mentions.js";
 
 export type CommandContext = {
   surface: string;

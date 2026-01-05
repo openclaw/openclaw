@@ -20,12 +20,12 @@ import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
+import { hasControlCommand } from "./command-detection.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
 import { applySessionHints } from "./reply/body.js";
 import { buildCommandContext, handleCommands } from "./reply/commands.js";
-import { hasControlCommand } from "./command-detection.js";
 import {
   handleDirectiveOnly,
   isDirectiveOnly,
@@ -498,11 +498,7 @@ export async function getReplyFromConfig(
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
-  if (
-    !commandAuthorized &&
-    !baseBodyTrimmedRaw &&
-    hasControlCommand(rawBody)
-  ) {
+  if (!commandAuthorized && !baseBodyTrimmedRaw && hasControlCommand(rawBody)) {
     typing.cleanup();
     return undefined;
   }

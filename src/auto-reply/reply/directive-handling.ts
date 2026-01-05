@@ -85,10 +85,8 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     rawLevel: rawElevatedLevel,
     hasDirective: hasElevatedDirective,
   } = extractElevatedDirective(verboseCleaned);
-  const {
-    cleaned: statusCleaned,
-    hasDirective: hasStatusDirective,
-  } = extractStatusDirective(elevatedCleaned);
+  const { cleaned: statusCleaned, hasDirective: hasStatusDirective } =
+    extractStatusDirective(elevatedCleaned);
   const {
     cleaned: modelCleaned,
     rawModel,

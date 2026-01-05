@@ -3,9 +3,8 @@ import type {
   SlackEventMiddlewareArgs,
 } from "@slack/bolt";
 import bolt from "@slack/bolt";
-
-import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -600,7 +599,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(message.text ?? "");
-    if (isRoom && channelConfig?.requireMention && !wasMentioned && !shouldBypassMention) {
+    if (
+      isRoom &&
+      channelConfig?.requireMention &&
+      !wasMentioned &&
+      !shouldBypassMention
+    ) {
       logger.info(
         { channel: message.channel, reason: "no-mention" },
         "skipping room message",
