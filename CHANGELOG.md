@@ -36,6 +36,7 @@
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
+- Skills: add 1Password CLI skill with op examples.
 - Lint: organize imports and wrap long lines in reply commands.
 - Deps: update to latest across the repo.
 
