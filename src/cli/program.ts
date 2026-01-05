@@ -41,7 +41,7 @@ export function buildProgram() {
     .version(PROGRAM_VERSION)
     .option(
       "--dev",
-      "Dev profile: isolate config/state under ~/.clawdbot-dev and default gateway port 19001",
+      "Dev profile: isolate state under ~/.clawdbot-dev, default gateway port 19001, and shift derived ports (bridge/browser/canvas)",
     )
     .option(
       "--profile <name>",

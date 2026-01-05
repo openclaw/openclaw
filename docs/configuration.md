@@ -1024,6 +1024,8 @@ Convenience flags (CLI):
 - `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
+See `docs/gateway.md` for the derived port mapping (gateway/bridge/browser/canvas).
+
 Example:
 ```bash
 CLAWDBOT_CONFIG_PATH=~/.clawdbot/a.json \
