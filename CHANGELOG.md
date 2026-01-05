@@ -13,6 +13,7 @@
 ### Fixes
 - Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids
 - Cron tool passes `id` to the gateway for update/remove/run/runs (keeps `jobId` input). (#180) — thanks @adamgall
+- Control UI: chat view uses page scroll with sticky header/sidebar and fixed composer (no inner scroll frame).
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
 - macOS: make generated gateway protocol models `Sendable` for Swift 6 strict concurrency. (#195) — thanks @andranik-sahakyan
 - WhatsApp: suppress typing indicator during heartbeat background tasks. (#190) — thanks @mcinteerj

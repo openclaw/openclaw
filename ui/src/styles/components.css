@@ -429,6 +429,16 @@
   background: rgba(0, 0, 0, 0.2);
 }
 
+.chat {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.shell--chat .chat {
+  flex: 1;
+}
+
 .chat-header {
   display: flex;
   justify-content: space-between;
@@ -460,8 +470,9 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
-  max-height: 60vh;
-  overflow: auto;
+  flex: 1;
+  max-height: none;
+  overflow: visible;
   padding: 14px 12px;
   min-width: 0;
   border-radius: 16px;
@@ -729,6 +740,16 @@
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
   gap: 10px;
+}
+
+.shell--chat .chat-compose {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  margin-top: 0;
+  padding-top: 12px;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, var(--panel) 35%);
+  border-top: 1px solid var(--border);
 }
 
 .chat-compose__field {
