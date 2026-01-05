@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 
@@ -29,6 +30,14 @@ export async function callGateway<T = unknown>(
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const authToken = config.gateway?.auth?.token;
   const localPort = resolveGatewayPort(config);
+  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const bindMode = config.gateway?.bind ?? "loopback";
+  const preferTailnet =
+    bindMode === "tailnet" || (bindMode === "auto" && !!tailnetIPv4);
+  const localUrl =
+    preferTailnet && tailnetIPv4
+      ? `ws://${tailnetIPv4}:${localPort}`
+      : `ws://127.0.0.1:${localPort}`;
   const url =
     (typeof opts.url === "string" && opts.url.trim().length > 0
       ? opts.url.trim()
@@ -36,7 +45,7 @@ export async function callGateway<T = unknown>(
     (typeof remote?.url === "string" && remote.url.trim().length > 0
       ? remote.url.trim()
       : undefined) ||
-    `ws://127.0.0.1:${localPort}`;
+    localUrl;
   const token =
     (typeof opts.token === "string" && opts.token.trim().length > 0
       ? opts.token.trim()
