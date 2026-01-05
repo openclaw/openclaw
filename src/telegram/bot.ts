@@ -304,7 +304,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     isGroup?: boolean,
   ): Promise<boolean> => {
     let cmdRaw = text.trim().toLowerCase().split(/\s+/)[0];
-    // Strip @botusername suffix (e.g., /model@clawdis_kitze_bot -> /model)
+    // Strip @botusername suffix (e.g., /model@yourbot -> /model)
     if (botUsername && cmdRaw.includes("@")) {
       cmdRaw = cmdRaw.split("@")[0];
     }
@@ -535,11 +535,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         { message_thread_id: topicId },
       );
       // Trigger cron jobs after a short delay
+      // Note: Configure CLAWDBOT_RETRY_CRON_IDS env var with comma-separated cron IDs
       setTimeout(async () => {
         const { exec } = await import("node:child_process");
-        exec(`cd /Users/kitze/clawdis-source && node dist/index.js cron run 9fa5dd1f-c100-478d-8d3c-b17c38d6e445 --force &
-              node dist/index.js cron run b2e8f3a1-9c4d-4e5f-8a6b-c7d8e9f0a1b2 --force &
-              node dist/index.js cron run e8c444fd-338b-4043-bb06-459d1302d36d --force &`);
+        const cronIds = process.env.CLAWDBOT_RETRY_CRON_IDS?.split(",").filter(Boolean) ?? [];
+        const sourceDir = process.env.CLAWDBOT_SOURCE_DIR ?? process.cwd();
+        if (cronIds.length === 0) {
+          logger.warn("No cron IDs configured for /retry command (set CLAWDBOT_RETRY_CRON_IDS)");
+          return;
+        }
+        const cmds = cronIds.map(id => `node dist/index.js cron run ${id.trim()} --force`).join(" & ");
+        exec(`cd ${sourceDir} && ${cmds}`);
       }, 3000);
       return true;
     }

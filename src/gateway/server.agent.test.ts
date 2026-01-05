@@ -23,7 +23,7 @@ installGatewayTestHooks();
 
 describe("gateway server agent", () => {
   test("agent falls back to allowFrom when lastTo is stale", async () => {
-    testState.allowFrom = ["+436769770569"];
+    testState.allowFrom = ["+15555550199"];
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
     await fs.writeFile(
@@ -58,7 +58,7 @@ describe("gateway server agent", () => {
     const spy = vi.mocked(agentCommand);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call.provider).toBe("whatsapp");
-    expect(call.to).toBe("+436769770569");
+    expect(call.to).toBe("+15555550199");
     expect(call.sessionId).toBe("sess-main-stale");
 
     ws.close();
