@@ -401,11 +401,9 @@ final class AppState {
     private func syncGatewayConfigIfNeeded() {
         guard !self.isPreview, !self.isInitializing else { return }
 
-        var root = ClawdbotConfigFile.loadDict()
-        var gateway = root["gateway"] as? [String: Any] ?? [:]
-        var changed = false
-
-        let desiredMode: String? = switch self.connectionMode {
+        let connectionMode = self.connectionMode
+        let remoteTarget = self.remoteTarget
+        let desiredMode: String? = switch connectionMode {
         case .local:
             "local"
         case .remote:
@@ -413,37 +411,44 @@ final class AppState {
         case .unconfigured:
             nil
         }
+        let remoteHost = connectionMode == .remote
+            ? CommandResolver.parseSSHTarget(remoteTarget)?.host
+            : nil
 
-        let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let desiredMode {
-            if currentMode != desiredMode {
-                gateway["mode"] = desiredMode
+        Task { @MainActor in
+            var root = await ConfigStore.load()
+            var gateway = root["gateway"] as? [String: Any] ?? [:]
+            var changed = false
+
+            let currentMode = (gateway["mode"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let desiredMode {
+                if currentMode != desiredMode {
+                    gateway["mode"] = desiredMode
+                    changed = true
+                }
+            } else if currentMode != nil {
+                gateway.removeValue(forKey: "mode")
                 changed = true
             }
-        } else if currentMode != nil {
-            gateway.removeValue(forKey: "mode")
-            changed = true
-        }
 
-        if self.connectionMode == .remote,
-           let host = CommandResolver.parseSSHTarget(self.remoteTarget)?.host
-        {
-            var remote = gateway["remote"] as? [String: Any] ?? [:]
-            let existingUrl = (remote["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
-            let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
-            let port = parsedExisting?.port ?? 18789
-            let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
-            if existingUrl != desiredUrl {
-                remote["url"] = desiredUrl
-                gateway["remote"] = remote
-                changed = true
+            if connectionMode == .remote, let host = remoteHost {
+                var remote = gateway["remote"] as? [String: Any] ?? [:]
+                let existingUrl = (remote["url"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let parsedExisting = existingUrl.isEmpty ? nil : URL(string: existingUrl)
+                let scheme = parsedExisting?.scheme?.isEmpty == false ? parsedExisting?.scheme : "ws"
+                let port = parsedExisting?.port ?? 18789
+                let desiredUrl = "\(scheme ?? "ws")://\(host):\(port)"
+                if existingUrl != desiredUrl {
+                    remote["url"] = desiredUrl
+                    gateway["remote"] = remote
+                    changed = true
+                }
             }
-        }
 
-        guard changed else { return }
-        root["gateway"] = gateway
-        ClawdbotConfigFile.saveDict(root)
+            guard changed else { return }
+            root["gateway"] = gateway
+            try? await ConfigStore.save(root)
+        }
     }
 
     func triggerVoiceEars(ttl: TimeInterval? = 5) {
