@@ -37,6 +37,7 @@ CLAWDBOT is now **web-only** (Baileys). This document captures the current media
 - When inbound web messages include media, CLAWDBOT downloads to a temp file and exposes templating variables:
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
+- When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a relative path like `media/inbound/<filename>`.
 - Audio transcription (if configured) runs before templating and can replace `Body` with the transcript.
 
 ## Limits & Errors
