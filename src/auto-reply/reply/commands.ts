@@ -165,7 +165,23 @@ export async function handleCommands(params: {
         reply: { text: "⚙️ Group activation only applies to group chats." },
       };
     }
-    if (!command.isAuthorizedSender) {
+    const activationOwnerList =
+      command.ownerList.length > 0
+        ? command.ownerList
+        : command.isWhatsAppSurface && command.to
+          ? [normalizeE164(command.to)]
+          : [];
+    const activationSenderE164 = command.senderE164
+      ? normalizeE164(command.senderE164)
+      : "";
+    const isActivationOwner =
+      Boolean(activationSenderE164) &&
+      activationOwnerList.includes(activationSenderE164);
+
+    if (
+      !command.isAuthorizedSender ||
+      (command.isWhatsAppSurface && !isActivationOwner)
+    ) {
       logVerbose(
         `Ignoring /activation from unauthorized sender in group: ${command.senderE164 || "<unknown>"}`,
       );
