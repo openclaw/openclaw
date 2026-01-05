@@ -798,8 +798,11 @@ describe("trigger handling", () => {
         workspaceDir: cfg.agent.workspace,
       });
       expect(sandbox).not.toBeNull();
+      if (!sandbox) {
+        throw new Error("Expected sandbox to be set");
+      }
       const stagedFullPath = join(
-        sandbox!.workspaceDir,
+        sandbox.workspaceDir,
         "media",
         "inbound",
         basename(mediaPath),

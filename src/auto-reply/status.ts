@@ -14,8 +14,8 @@ import {
 } from "../agents/usage.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
-  resolveSessionTranscriptPath,
   resolveMainSessionKey,
+  resolveSessionTranscriptPath,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -167,7 +167,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
-    args.sessionEntry?.elevatedLevel ?? args.agent?.elevatedDefault ?? "on";
+    args.sessionEntry?.elevatedLevel ??
+    args.agent?.elevatedDefault ??
+    "on";
 
   const runtime = (() => {
     const sandboxMode = args.agent?.sandbox?.mode ?? "off";

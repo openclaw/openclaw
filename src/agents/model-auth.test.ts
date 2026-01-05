@@ -1,11 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
-import { describe, expect, it, vi } from "vitest";
-
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it, vi } from "vitest";
 
 const oauthFixture = {
   access: "access-token",
@@ -17,9 +15,7 @@ const oauthFixture = {
 describe("getApiKeyForModel", () => {
   it("migrates legacy oauth.json into auth.json", async () => {
     const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-oauth-"),
-    );
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-oauth-"));
 
     try {
       process.env.CLAWDBOT_STATE_DIR = tempDir;
