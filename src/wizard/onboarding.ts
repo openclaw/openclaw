@@ -549,7 +549,6 @@ export async function runOnboardingWizard(
         environment,
       });
     }
-
   }
 
   await sleep(1500);
