@@ -425,7 +425,8 @@ export async function runEmbeddedPiAgent(params: {
           // Built-in tools recognized by pi-coding-agent SDK
           tools: builtInTools,
           // Custom clawdbot tools (browser, canvas, nodes, cron, etc.)
-          customTools,
+          // Cast to any to work around type mismatch between AnyAgentTool and ToolDefinition
+          customTools: customTools as any,
           sessionManager,
           settingsManager,
           skills: promptSkills,
