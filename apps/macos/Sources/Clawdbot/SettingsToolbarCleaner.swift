@@ -9,9 +9,14 @@ struct SettingsToolbarCleaner: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {
         DispatchQueue.main.async {
             guard let toolbar = nsView.window?.toolbar else { return }
-            toolbar.items.removeAll {
-                $0.itemIdentifier == .toggleSidebar
-                    || $0.itemIdentifier.rawValue == "com.apple.NSToolbarShowSidebarItem"
+            let items = toolbar.items
+            for (index, item) in items.enumerated().reversed() {
+                let isSidebarToggle =
+                    item.itemIdentifier == .toggleSidebar
+                        || item.itemIdentifier.rawValue == "com.apple.NSToolbarShowSidebarItem"
+                if isSidebarToggle {
+                    toolbar.removeItem(at: index)
+                }
             }
         }
     }
