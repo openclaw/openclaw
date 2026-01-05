@@ -89,7 +89,11 @@ export function buildCommandContext(params: {
   const ownerList = ownerCandidates
     .map((entry) => normalizeE164(entry))
     .filter((entry): entry is string => Boolean(entry));
-  const isAuthorizedSender = commandAuthorized;
+  const isOwner =
+    !isWhatsAppSurface ||
+    ownerList.length === 0 ||
+    (senderE164 ? ownerList.includes(senderE164) : false);
+  const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
     surface,

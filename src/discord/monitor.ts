@@ -20,7 +20,10 @@ import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ReplyToMode } from "../config/config.js";
+import type {
+  DiscordSlashCommandConfig,
+  ReplyToMode,
+} from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveSessionKey,
@@ -43,6 +46,7 @@ export type MonitorDiscordOpts = {
   mediaMaxMb?: number;
   historyLimit?: number;
   replyToMode?: ReplyToMode;
+  slashCommand?: DiscordSlashCommandConfig;
 };
 
 type DiscordMediaInfo = {
