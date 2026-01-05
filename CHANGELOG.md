@@ -7,6 +7,12 @@
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 
+## 2026.1.5-2
+
+### Fixes
+- NPM package: include `dist/sessions` so `clawdbot agent` resolves session helpers in npx installs.
+- Node 25: avoid unsupported directory import by targeting `qrcode-terminal/vendor/QRCode/*.js` modules.
+
 ## 2026.1.5-1
 
 ### Fixes
