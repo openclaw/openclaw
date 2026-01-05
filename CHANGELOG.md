@@ -7,6 +7,7 @@
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
+- macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
