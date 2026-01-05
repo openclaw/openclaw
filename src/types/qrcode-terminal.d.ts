@@ -1,4 +1,4 @@
-declare module "qrcode-terminal/vendor/QRCode" {
+declare module "qrcode-terminal/vendor/QRCode/index.js" {
   const QRCode: unknown;
   export default QRCode;
 }

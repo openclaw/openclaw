@@ -17,5 +17,6 @@ describe("renderQrPngBase64", () => {
     const source = await readFile(sourcePath, "utf-8");
     expect(source).not.toContain("createRequire(");
     expect(source).not.toContain('require("qrcode-terminal/vendor/QRCode")');
+    expect(source).toContain("qrcode-terminal/vendor/QRCode/index.js");
   });
 });

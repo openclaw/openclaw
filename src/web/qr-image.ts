@@ -1,5 +1,5 @@
 import { deflateSync } from "node:zlib";
-import QRCodeModule from "qrcode-terminal/vendor/QRCode";
+import QRCodeModule from "qrcode-terminal/vendor/QRCode/index.js";
 import QRErrorCorrectLevelModule from "qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel";
 
 type QRCodeConstructor = new (
