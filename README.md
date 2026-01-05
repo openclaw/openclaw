@@ -23,6 +23,7 @@ If you want a personal, single-user assistant that feels local, fast, and always
 Website: [https://clawdbot.com](https://clawdbot.com) · Docs: [https://docs.clawdbot.com](https://docs.clawdbot.com/) · FAQ: [https://docs.clawdbot.com/faq](https://docs.clawdbot.com/faq) · Wizard: [https://docs.clawdbot.com/wizard](https://docs.clawdbot.com/wizard) · Nix: [https://github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [https://docs.clawdbot.com/docker](https://docs.clawdbot.com/docker) · Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
+Works with npm, pnpm, or bun.
 
 **Subscriptions (OAuth):**
 - **Anthropic** (Claude Pro/Max)
@@ -185,6 +186,14 @@ Elevated bash (host permissions) is separate from macOS TCC:
 - Gateway persists the per‑session toggle via `sessions.patch` (WS method) alongside `thinkingLevel`, `verboseLevel`, `model`, `sendPolicy`, and `groupActivation`.
 
 Details: [Nodes](https://docs.clawdbot.com/nodes) · [macOS app](https://docs.clawdbot.com/macos) · [Gateway protocol](https://docs.clawdbot.com/architecture)
+
+## Agent to Agent (sessions_* tools)
+
+- `sessions_list` — discover active sessions (agents) and their metadata.
+- `sessions_history` — fetch transcript logs for a session.
+- `sessions_send` — message another session; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
+
+Details: [Session tools](https://docs.clawdbot.com/session-tool)
 
 ## Skills registry (ClawdHub)
 
