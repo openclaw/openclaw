@@ -27,8 +27,8 @@ export function splitMediaFromOutput(raw: string): {
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
 } {
-  const trimmedRaw = raw.trim();
-  if (!trimmedRaw) return { text: "" };
+  const trimmedRaw = raw.trimEnd();
+  if (!trimmedRaw.trim()) return { text: "" };
 
   const media: string[] = [];
   let foundMediaToken = false;

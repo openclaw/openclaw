@@ -24,6 +24,7 @@
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
 - Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.
+- Block streaming: preserve leading indentation in block replies (lists, indented fences).
 - Docs: document systemd lingering and logged-in session requirements on macOS/Windows.
 
 ### Maintenance

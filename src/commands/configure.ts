@@ -424,7 +424,11 @@ async function maybeInstallDaemon(params: {
   if (shouldCheckLinger) {
     await ensureSystemdUserLingerInteractive({
       runtime: params.runtime,
-      prompter: { confirm, note },
+      prompter: {
+        confirm: async (p) =>
+          guardCancel(await confirm(p), params.runtime) === true,
+        note,
+      },
       reason:
         "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
       requireConfirm: true,

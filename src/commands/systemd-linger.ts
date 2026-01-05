@@ -7,9 +7,10 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 
 export type LingerPrompter = {
-  confirm?: (params: { message: string; initialValue?: boolean }) => Promise<
-    boolean
-  >;
+  confirm?: (params: {
+    message: string;
+    initialValue?: boolean;
+  }) => Promise<boolean>;
   note: (message: string, title?: string) => Promise<void> | void;
 };
 
@@ -43,10 +44,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
   const actionNote = params.requireConfirm
     ? "We can enable lingering now (needs sudo; writes /var/lib/systemd/linger)."
     : "Enabling lingering now (needs sudo; writes /var/lib/systemd/linger).";
-  await prompter.note(
-    `${reason}\n${actionNote}`,
-    title,
-  );
+  await prompter.note(`${reason}\n${actionNote}`, title);
 
   if (params.requireConfirm && prompter.confirm) {
     const ok = await prompter.confirm({
@@ -68,10 +66,7 @@ export async function ensureSystemdUserLingerInteractive(params: {
     sudoMode: "prompt",
   });
   if (result.ok) {
-    await prompter.note(
-      `Enabled systemd lingering for ${status.user}.`,
-      title,
-    );
+    await prompter.note(`Enabled systemd lingering for ${status.user}.`, title);
     return;
   }
 

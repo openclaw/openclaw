@@ -284,30 +284,42 @@ export function subscribeEmbeddedPiSession(params: {
   const isSafeBreak = (spans: FenceSpan[], index: number): boolean =>
     !findFenceSpanAt(spans, index);
 
-  const pickSoftBreakIndex = (buffer: string): BreakResult => {
+  const stripLeadingNewlines = (value: string): string => {
+    let i = 0;
+    while (i < value.length && value[i] === "\n") i++;
+    return i > 0 ? value.slice(i) : value;
+  };
+
+  const pickSoftBreakIndex = (
+    buffer: string,
+    minCharsOverride?: number,
+  ): BreakResult => {
     if (!blockChunking) return { index: -1 };
-    const minChars = Math.max(1, Math.floor(blockChunking.minChars));
+    const minChars = Math.max(
+      1,
+      Math.floor(minCharsOverride ?? blockChunking.minChars),
+    );
     if (buffer.length < minChars) return { index: -1 };
     const fenceSpans = parseFenceSpans(buffer);
     const preference = blockChunking.breakPreference ?? "paragraph";
 
     if (preference === "paragraph") {
-      let paragraphIdx = buffer.lastIndexOf("\n\n");
-      while (paragraphIdx >= minChars) {
-        if (isSafeBreak(fenceSpans, paragraphIdx)) {
+      let paragraphIdx = buffer.indexOf("\n\n");
+      while (paragraphIdx !== -1) {
+        if (paragraphIdx >= minChars && isSafeBreak(fenceSpans, paragraphIdx)) {
           return { index: paragraphIdx };
         }
-        paragraphIdx = buffer.lastIndexOf("\n\n", paragraphIdx - 1);
+        paragraphIdx = buffer.indexOf("\n\n", paragraphIdx + 2);
       }
     }
 
     if (preference === "paragraph" || preference === "newline") {
-      let newlineIdx = buffer.lastIndexOf("\n");
-      while (newlineIdx >= minChars) {
-        if (isSafeBreak(fenceSpans, newlineIdx)) {
+      let newlineIdx = buffer.indexOf("\n");
+      while (newlineIdx !== -1) {
+        if (newlineIdx >= minChars && isSafeBreak(fenceSpans, newlineIdx)) {
           return { index: newlineIdx };
         }
-        newlineIdx = buffer.lastIndexOf("\n", newlineIdx - 1);
+        newlineIdx = buffer.indexOf("\n", newlineIdx + 1);
       }
     }
 
@@ -422,7 +434,7 @@ export function subscribeEmbeddedPiSession(params: {
     ) {
       const breakResult =
         force && blockBuffer.length <= maxChars
-          ? pickSoftBreakIndex(blockBuffer)
+          ? pickSoftBreakIndex(blockBuffer, 1)
           : pickBreakIndex(blockBuffer);
       if (breakResult.index <= 0) {
         if (force) {
@@ -434,7 +446,9 @@ export function subscribeEmbeddedPiSession(params: {
       const breakIdx = breakResult.index;
       let rawChunk = blockBuffer.slice(0, breakIdx);
       if (rawChunk.trim().length === 0) {
-        blockBuffer = blockBuffer.slice(breakIdx).trimStart();
+        blockBuffer = stripLeadingNewlines(
+          blockBuffer.slice(breakIdx),
+        ).trimStart();
         continue;
       }
       let nextBuffer = blockBuffer.slice(breakIdx);
@@ -457,7 +471,7 @@ export function subscribeEmbeddedPiSession(params: {
           breakIdx < blockBuffer.length && /\s/.test(blockBuffer[breakIdx])
             ? breakIdx + 1
             : breakIdx;
-        blockBuffer = blockBuffer.slice(nextStart).trimStart();
+        blockBuffer = stripLeadingNewlines(blockBuffer.slice(nextStart));
       }
       if (blockBuffer.length < minChars && !force) return;
       if (blockBuffer.length < maxChars && !force) return;
