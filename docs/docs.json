@@ -26,6 +26,7 @@
         "group": "Getting Started",
         "pages": [
           "index",
+          "showcase",
           "hubs",
           "onboarding",
           "clawd",
