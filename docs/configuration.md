@@ -89,6 +89,21 @@ Env var equivalent:
 - `CLAWDBOT_LOAD_SHELL_ENV=1`
 - `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`
 
+### Auth storage (OAuth + API keys)
+
+Clawdbot keeps subscription OAuth tokens + API keys in the **agent auth store**:
+- `~/.clawdbot/agent/auth.json`
+
+The agent directory can be overridden with:
+- `CLAWDBOT_AGENT_DIR` (preferred)
+- `PI_CODING_AGENT_DIR` (legacy)
+
+Legacy OAuth storage is still supported for migration:
+- Default: `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
+- Override: `CLAWDBOT_OAUTH_DIR`
+
+On first use, Clawdbot auto‑migrates legacy `oauth.json` entries into `auth.json`.
+
 ### `identity`
 
 Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.

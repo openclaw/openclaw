@@ -14,7 +14,9 @@ Everything lives under `~/.clawdbot/`:
 | Path | Purpose |
 |------|---------|
 | `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
+| `~/.clawdbot/agent/auth.json` | OAuth + API key store (Anthropic/OpenAI, etc.) |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
+| `~/.clawdbot/credentials/oauth.json` | Legacy OAuth store (auto‑migrated) |
 | `~/.clawdbot/sessions/` | Conversation history & state |
 | `~/.clawdbot/sessions/sessions.json` | Session metadata |
 
@@ -105,18 +107,18 @@ The macOS app onboarding is still being polished and can have quirks (e.g., What
 
 ### OAuth vs API key — what's the difference?
 
-- **OAuth** — Uses your Claude Pro/Max subscription ($20-100/mo flat). No per-token charges. ✅ Recommended!
-- **API key** — Pay-per-token via console.anthropic.com. Can get expensive fast.
+- **OAuth** — Uses your **subscription** (Anthropic Claude Pro/Max or OpenAI ChatGPT/Codex). No per‑token charges. ✅ Recommended!
+- **API key** — Pay‑per‑token via the provider’s API billing. Can get expensive fast.
 
 They're **separate billing**! An API key does NOT use your subscription.
 
-**For OAuth:** During onboarding, pick "Anthropic OAuth", log in to your Claude account, paste the code back. Or just run:
+**For OAuth:** During onboarding, pick **Anthropic OAuth** or **OpenAI Codex OAuth**, log in, paste the code/URL when prompted. Or just run:
 
 ```bash
 pnpm clawdbot login
 ```
 
-**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/` to your server. The auth is just a JSON file.
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/agent/auth.json` to your server. The auth is just a JSON file.
 
 ### How are env vars loaded?
 
@@ -146,7 +148,7 @@ Or set `CLAWDBOT_LOAD_SHELL_ENV=1` (timeout: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=1500
 
 OAuth needs the callback to reach the machine running the CLI. Options:
 
-1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/` to the container.
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/agent/auth.json` to the container.
 2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
 3. **Tailscale** — Put both machines on your tailnet.
 

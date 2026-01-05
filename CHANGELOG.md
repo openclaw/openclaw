@@ -8,10 +8,10 @@
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
-- macOS: Settings now use a sidebar layout to avoid toolbar overflow in Connections.
-- macOS: Settings window hides the preferences toolbar row to keep a clean sidebar layout.
+- macOS: Connections removes the sidebar toggle from the Settings toolbar to avoid overflow.
 - macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.
 - Auth: add OpenAI Codex OAuth support and migrate legacy oauth.json into auth.json.
+- Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 
 ### Maintenance
