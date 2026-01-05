@@ -242,8 +242,7 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
   // object-ish fields, force `type: "object"` so OpenAI accepts the schema.
   if (
     !("type" in schema) &&
-    (typeof schema.properties === "object" ||
-      Array.isArray(schema.required)) &&
+    (typeof schema.properties === "object" || Array.isArray(schema.required)) &&
     !Array.isArray(schema.anyOf) &&
     !Array.isArray(schema.oneOf)
   ) {
@@ -311,7 +310,9 @@ function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
     // Merging properties preserves useful enums like `action` while keeping schemas portable.
     parameters: cleanSchemaForGemini({
       type: "object",
-      ...(typeof nextSchema.title === "string" ? { title: nextSchema.title } : {}),
+      ...(typeof nextSchema.title === "string"
+        ? { title: nextSchema.title }
+        : {}),
       ...(typeof nextSchema.description === "string"
         ? { description: nextSchema.description }
         : {}),
