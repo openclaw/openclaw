@@ -42,7 +42,8 @@ WhatsApp / Telegram / Discord
               ├─ CLI (clawdbot …)
               ├─ Chat UI (SwiftUI)
               ├─ macOS app (Clawdbot.app)
-              └─ iOS node via Bridge + pairing
+              ├─ iOS node via Bridge + pairing
+              └─ Android node via Bridge + pairing
 ```
 
 Most operations flow through the **Gateway** (`clawdbot gateway`), a single long-running process that owns provider connections and the WebSocket control plane.
@@ -70,6 +71,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 - 🎤 **Voice notes** — Optional transcription hook
 - 🖥️ **WebChat + macOS app** — Local UI + menu bar companion for ops and voice wake
 - 📱 **iOS node** — Pairs as a node and exposes a Canvas surface
+- 📱 **Android node** — Pairs as a node and exposes Canvas + Chat + Camera
 
 Note: legacy Claude/Codex/Gemini/Opencode paths have been removed; Pi is the only coding-agent path.
 

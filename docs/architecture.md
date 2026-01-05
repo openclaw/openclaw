@@ -32,6 +32,12 @@ Last updated: 2026-01-05
 - Canvas + actions: `WKWebView` with A2UI action bridge; accepts actions from local-network or trusted file URLs; intercepts `clawdbot://` deep links and forwards `agent.request` to the bridge.
 - Voice/talk: voice wake sends `voice.transcript` events and syncs triggers via `voicewake.get` + `voicewake.changed`; Talk Mode attaches to the bridge.
 
+### Android node (`apps/android`)
+- Discovery + pairing: `BridgeDiscovery` uses mDNS/NSD to find `_clawdbot-bridge._tcp`, with manual host/port fallback.
+- Auto-connect: `NodeRuntime` restores a stored token, performs `pair-and-hello`, and reconnects to the last discovered or manual bridge.
+- Bridge runtime: `BridgeSession` owns the TCP JSONL session (`hello`/`hello-ok`, ping/pong, `req/res`, `event`, `invoke`); stores `canvasHostUrl`.
+- Commands: `NodeRuntime` executes `canvas.*`, `canvas.a2ui.*`, `camera.*`, and chat/session events; foreground-only for canvas/camera.
+
 ## Components and flows
 - **Gateway (daemon)**  
   - Maintains WhatsApp (Baileys), Telegram (grammY), Slack (Bolt), Discord (discord.js), Signal (signal-cli), and iMessage (imsg) connections.  
