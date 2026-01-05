@@ -296,12 +296,6 @@ clawdbot hooks gmail setup --account you@gmail.com
 clawdbot hooks gmail run
 ```
 
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
-
-AI/vibe-coded PRs welcome! 🤖
-
 ## Clawd
 
 Clawdbot was built for **Clawd**, a space lobster AI assistant. 🦞  
@@ -312,6 +306,9 @@ by Peter Steinberger and the community.
 - https://steipete.me
 
 ## Community
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.  
+AI/vibe-coded PRs welcome! 🤖
 
 Thanks to everyone who has contributed:
 
