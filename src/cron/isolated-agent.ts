@@ -18,6 +18,7 @@ import {
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -55,6 +56,25 @@ function pickSummaryFromPayloads(
     if (summary) return summary;
   }
   return undefined;
+}
+
+/**
+ * Check if all payloads are just heartbeat ack responses (HEARTBEAT_OK).
+ * Returns true if delivery should be skipped because there's no real content.
+ */
+function isHeartbeatOnlyResponse(
+  payloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>,
+) {
+  if (payloads.length === 0) return true;
+  return payloads.every((payload) => {
+    // If there's media, we should deliver regardless of text content.
+    const hasMedia =
+      (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl);
+    if (hasMedia) return false;
+    // Use heartbeat mode to check if text is just HEARTBEAT_OK or short ack.
+    const result = stripHeartbeatToken(payload.text, { mode: "heartbeat" });
+    return result.shouldSkip;
+  });
 }
 
 function resolveDeliveryTarget(
@@ -343,7 +363,12 @@ export async function runCronIsolatedAgentTurn(params: {
   const summary =
     pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
 
-  if (delivery) {
+  // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
+  // This allows cron jobs to silently ack when nothing to report but still deliver
+  // actual content when there is something to say.
+  const skipHeartbeatDelivery = delivery && isHeartbeatOnlyResponse(payloads);
+
+  if (delivery && !skipHeartbeatDelivery) {
     if (resolvedDelivery.channel === "whatsapp") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
