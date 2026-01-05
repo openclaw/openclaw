@@ -91,18 +91,18 @@ Env var equivalent:
 
 ### Auth storage (OAuth + API keys)
 
-Clawdbot keeps subscription OAuth tokens + API keys in the **agent auth store**:
+Clawdbot stores **OAuth credentials** in:
+- `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
+
+Clawdbot stores **API keys** in the agent auth store:
 - `~/.clawdbot/agent/auth.json`
 
-The agent directory can be overridden with:
-- `CLAWDBOT_AGENT_DIR` (preferred)
-- `PI_CODING_AGENT_DIR` (legacy)
+Overrides:
+- OAuth dir: `CLAWDBOT_OAUTH_DIR`
+- Agent dir: `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
-Legacy OAuth storage is still supported for migration:
-- Default: `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
-- Override: `CLAWDBOT_OAUTH_DIR`
-
-On first use, Clawdbot auto‑migrates legacy `oauth.json` entries into `auth.json`.
+On first use, Clawdbot imports `oauth.json` entries into `auth.json` so the embedded
+agent can use them. `oauth.json` remains the source of truth for OAuth refresh.
 
 ### `identity`
 
