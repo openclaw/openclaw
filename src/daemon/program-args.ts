@@ -16,18 +16,14 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   if (!argv1) throw new Error("Unable to resolve CLI entrypoint path");
 
   const normalized = path.resolve(argv1);
-  const looksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(normalized);
+  const resolvedPath = await resolveRealpathSafe(normalized);
+  const looksLikeDist = /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(resolvedPath);
   if (looksLikeDist) {
-    await fs.access(normalized);
-    return normalized;
+    await fs.access(resolvedPath);
+    return resolvedPath;
   }
 
-  const distCandidates = [
-    path.resolve(path.dirname(normalized), "..", "dist", "index.js"),
-    path.resolve(path.dirname(normalized), "..", "dist", "index.mjs"),
-    path.resolve(path.dirname(normalized), "dist", "index.js"),
-    path.resolve(path.dirname(normalized), "dist", "index.mjs"),
-  ];
+  const distCandidates = buildDistCandidates(resolvedPath, normalized);
 
   for (const candidate of distCandidates) {
     try {
@@ -41,6 +37,63 @@ async function resolveCliEntrypointPathForService(): Promise<string> {
   throw new Error(
     `Cannot find built CLI at ${distCandidates.join(" or ")}. Run "pnpm build" first, or use dev mode.`,
   );
+}
+
+async function resolveRealpathSafe(inputPath: string): Promise<string> {
+  try {
+    return await fs.realpath(inputPath);
+  } catch {
+    return inputPath;
+  }
+}
+
+function buildDistCandidates(...inputs: string[]): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  for (const inputPath of inputs) {
+    if (!inputPath) continue;
+    const baseDir = path.dirname(inputPath);
+    appendDistCandidates(candidates, seen, path.resolve(baseDir, ".."));
+    appendDistCandidates(candidates, seen, baseDir);
+    appendNodeModulesBinCandidates(candidates, seen, inputPath);
+  }
+
+  return candidates;
+}
+
+function appendDistCandidates(
+  candidates: string[],
+  seen: Set<string>,
+  baseDir: string,
+): void {
+  const distDir = path.resolve(baseDir, "dist");
+  const distEntries = [
+    path.join(distDir, "index.js"),
+    path.join(distDir, "index.mjs"),
+    path.join(distDir, "entry.js"),
+    path.join(distDir, "entry.mjs"),
+  ];
+  for (const entry of distEntries) {
+    if (seen.has(entry)) continue;
+    seen.add(entry);
+    candidates.push(entry);
+  }
+}
+
+function appendNodeModulesBinCandidates(
+  candidates: string[],
+  seen: Set<string>,
+  inputPath: string,
+): void {
+  const parts = inputPath.split(path.sep);
+  const binIndex = parts.lastIndexOf(".bin");
+  if (binIndex <= 0) return;
+  if (parts[binIndex - 1] !== "node_modules") return;
+  const binName = path.basename(inputPath);
+  const nodeModulesDir = parts.slice(0, binIndex).join(path.sep);
+  const packageRoot = path.join(nodeModulesDir, binName);
+  appendDistCandidates(candidates, seen, packageRoot);
 }
 
 function resolveRepoRootForDev(): string {

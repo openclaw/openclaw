@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Fixes
+- Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
+
 ## 2026.1.5
 
 ### Highlights
