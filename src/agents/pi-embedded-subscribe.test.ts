@@ -736,6 +736,205 @@ describe("subscribeEmbeddedPiSession", () => {
     }
   });
 
+  it("avoids splitting inside tilde fences", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 40,
+        breakPreference: "paragraph",
+      },
+    });
+
+    const text = "Intro\n\n~~~sh\nline1\nline2\n~~~\n\nOutro";
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: text,
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(3);
+    expect(onBlockReply.mock.calls[1][0].text).toBe(
+      "~~~sh\nline1\nline2\n~~~",
+    );
+  });
+
+  it("keeps indented fenced blocks intact", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 45,
+        breakPreference: "paragraph",
+      },
+    });
+
+    const text = "Intro\n\n  ```js\n  const x = 1;\n  ```\n\nOutro";
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: text,
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(3);
+    expect(onBlockReply.mock.calls[1][0].text).toBe(
+      "  ```js\n  const x = 1;\n  ```",
+    );
+  });
+
+  it("accepts longer fence markers for close", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      blockReplyChunking: {
+        minChars: 10,
+        maxChars: 50,
+        breakPreference: "paragraph",
+      },
+    });
+
+    const text = "Intro\n\n````md\nline1\nline2\n````\n\nOutro";
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: text,
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(3);
+    expect(onBlockReply.mock.calls[1][0].text).toBe(
+      "````md\nline1\nline2\n````",
+    );
+  });
+
+  it("splits long single-line fenced blocks with reopen/close", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      blockReplyChunking: {
+        minChars: 10,
+        maxChars: 40,
+        breakPreference: "paragraph",
+      },
+    });
+
+    const text = `\`\`\`json\n${"x".repeat(120)}\n\`\`\``;
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: text,
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply.mock.calls.length).toBeGreaterThan(1);
+    for (const call of onBlockReply.mock.calls) {
+      const chunk = call[0].text as string;
+      expect(chunk.startsWith("```json")).toBe(true);
+      const fenceCount = chunk.match(/```/g)?.length ?? 0;
+      expect(fenceCount).toBeGreaterThanOrEqual(2);
+    }
+  });
+
   it("waits for auto-compaction retry and clears buffered text", async () => {
     const listeners: SessionEventHandler[] = [];
     const session = {
