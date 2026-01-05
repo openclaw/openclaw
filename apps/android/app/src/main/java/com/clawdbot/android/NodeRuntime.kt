@@ -515,7 +515,6 @@ class NodeRuntime(context: Context) {
   }
 
   private fun hasBackgroundLocationPermission(): Boolean {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return true
     return (
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
         PackageManager.PERMISSION_GRANTED

@@ -1,10 +1,12 @@
 package com.clawdbot.android.node
 
-import android.annotation.SuppressLint
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.location.Location
 import android.location.LocationManager
 import android.os.CancellationSignal
+import androidx.core.content.ContextCompat
 import java.time.Instant
 import java.time.format.DateTimeFormatter
 import kotlinx.coroutines.Dispatchers
@@ -64,6 +66,15 @@ class LocationCaptureManager(private val context: Context) {
     providers: List<String>,
     maxAgeMs: Long?,
   ): Location? {
+    val fineOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!fineOk && !coarseOk) {
+      throw IllegalStateException("LOCATION_PERMISSION_REQUIRED: grant Location permission")
+    }
     val now = System.currentTimeMillis()
     val candidates =
       providers.mapNotNull { provider -> manager.getLastKnownLocation(provider) }
@@ -72,12 +83,20 @@ class LocationCaptureManager(private val context: Context) {
     return freshest
   }
 
-  @SuppressLint("MissingPermission")
   private suspend fun requestCurrent(
     manager: LocationManager,
     providers: List<String>,
     timeoutMs: Long,
   ): Location {
+    val fineOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    val coarseOk =
+      ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
+        PackageManager.PERMISSION_GRANTED
+    if (!fineOk && !coarseOk) {
+      throw IllegalStateException("LOCATION_PERMISSION_REQUIRED: grant Location permission")
+    }
     val resolved =
       providers.firstOrNull { manager.isProviderEnabled(it) }
         ?: throw IllegalStateException("LOCATION_UNAVAILABLE: no providers available")

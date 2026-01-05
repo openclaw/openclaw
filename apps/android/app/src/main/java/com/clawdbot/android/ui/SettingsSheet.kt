@@ -133,7 +133,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
 
       if (requestedMode != null) {
         viewModel.setLocationMode(requestedMode)
-        if (requestedMode == LocationMode.Always && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (requestedMode == LocationMode.Always) {
           val backgroundOk =
             ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
               PackageManager.PERMISSION_GRANTED
@@ -191,7 +191,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
         PackageManager.PERMISSION_GRANTED
     if (fineOk || coarseOk) {
       viewModel.setLocationMode(targetMode)
-      if (targetMode == LocationMode.Always && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      if (targetMode == LocationMode.Always) {
         val backgroundOk =
           ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION) ==
             PackageManager.PERMISSION_GRANTED
