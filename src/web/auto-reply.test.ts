@@ -465,9 +465,6 @@ describe("web auto-reply", () => {
       };
 
       setLoadConfigMock(() => ({
-        messages: {
-          timestampPrefix: "UTC",
-        },
         session: { store: store.storePath },
       }));
 
@@ -500,11 +497,11 @@ describe("web auto-reply", () => {
       const firstArgs = resolver.mock.calls[0][0];
       const secondArgs = resolver.mock.calls[1][0];
       expect(firstArgs.Body).toContain(
-        "[WhatsApp +1 2025-01-01T01:00+01:00{Europe/Vienna}] [clawdbot] first",
+        "[WhatsApp +1 2025-01-01T00:00Z] [clawdbot] first",
       );
       expect(firstArgs.Body).not.toContain("second");
       expect(secondArgs.Body).toContain(
-        "[WhatsApp +1 2025-01-01T02:00+01:00{Europe/Vienna}] [clawdbot] second",
+        "[WhatsApp +1 2025-01-01T01:00Z] [clawdbot] second",
       );
       expect(secondArgs.Body).not.toContain("first");
 
@@ -1350,7 +1347,6 @@ describe("web auto-reply", () => {
       messages: {
         messagePrefix: "[same-phone]",
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     }));
 
@@ -1475,7 +1471,6 @@ describe("web auto-reply", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
-        timestampPrefix: false,
       },
     }));
 
@@ -1520,7 +1515,6 @@ describe("web auto-reply", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
-        timestampPrefix: false,
       },
     }));
 
@@ -1565,7 +1559,6 @@ describe("web auto-reply", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
-        timestampPrefix: false,
       },
     }));
 
@@ -1611,7 +1604,6 @@ describe("web auto-reply", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: "🦞",
-        timestampPrefix: false,
       },
     }));
 

@@ -16,7 +16,6 @@ const mockLoadConfig = vi.fn().mockReturnValue({
   messages: {
     messagePrefix: undefined,
     responsePrefix: undefined,
-    timestampPrefix: false,
   },
 });
 
@@ -480,7 +479,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -536,7 +534,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -576,7 +573,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -592,7 +588,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -628,7 +623,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -643,7 +637,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -685,7 +678,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -720,7 +712,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -737,7 +728,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -773,7 +763,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -840,7 +829,6 @@ it("defaults to self-only when no config is present", async () => {
     messages: {
       messagePrefix: undefined,
       responsePrefix: undefined,
-      timestampPrefix: false,
     },
   });
 

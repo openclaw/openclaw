@@ -116,6 +116,46 @@ function resolveGlobalLane(lane?: string) {
   return cleaned ? cleaned : "main";
 }
 
+function resolveUserTimezone(configured?: string): string {
+  const trimmed = configured?.trim();
+  if (trimmed) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: trimmed }).format(
+        new Date(),
+      );
+      return trimmed;
+    } catch {
+      // ignore invalid timezone
+    }
+  }
+  const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return host?.trim() || "UTC";
+}
+
+function formatUserTime(date: Date, timeZone: string): string | undefined {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(date);
+    const map: Record<string, string> = {};
+    for (const part of parts) {
+      if (part.type !== "literal") map[part.type] = part.value;
+    }
+    if (!map.year || !map.month || !map.day || !map.hour || !map.minute) {
+      return undefined;
+    }
+    return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
 ): EmbeddedSandboxInfo | undefined {
@@ -398,6 +438,10 @@ export async function runEmbeddedPiAgent(params: {
           };
           const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
           const reasoningTagHint = provider === "ollama";
+          const userTimezone = resolveUserTimezone(
+            params.config?.agent?.userTimezone,
+          );
+          const userTime = formatUserTime(new Date(), userTimezone);
           const systemPrompt = buildSystemPrompt({
             appendPrompt: buildAgentSystemPromptAppend({
               workspaceDir: resolvedWorkspace,
@@ -408,6 +452,8 @@ export async function runEmbeddedPiAgent(params: {
               runtimeInfo,
               sandboxInfo,
               toolNames: tools.map((tool) => tool.name),
+              userTimezone,
+              userTime,
             }),
             contextFiles,
             skills: promptSkills,

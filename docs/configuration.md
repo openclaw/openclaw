@@ -432,16 +432,26 @@ Default: `~/clawd`.
 If `agent.sandbox` is enabled, non-main sessions can override this with their
 own per-session workspaces under `agent.sandbox.workspaceRoot`.
 
+### `agent.userTimezone`
+
+Sets the user’s timezone for **system prompt context** (not for timestamps in
+message envelopes). If unset, Clawdbot uses the host timezone at runtime.
+
+```json5
+{
+  agent: { userTimezone: "America/Chicago" }
+}
+```
+
 ### `messages`
 
-Controls inbound/outbound prefixes and timestamps.
+Controls inbound/outbound prefixes.
 
 ```json5
 {
   messages: {
     messagePrefix: "[clawdbot]",
-    responsePrefix: "🦞",
-    timestampPrefix: "Europe/London"
+    responsePrefix: "🦞"
   }
 }
 ```
