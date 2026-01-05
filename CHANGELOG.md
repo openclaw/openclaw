@@ -16,6 +16,7 @@
 - Model: `/model` list shows auth source (masked key or OAuth email) per provider.
 - Model: `/model list` is an alias for `/model`.
 - Model: `/model` output now includes auth source location (env/auth.json/models.json).
+- Model: avoid duplicate `missing (missing)` auth labels in `/model` list output.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Control UI: show a reading indicator bubble while the assistant is responding.
