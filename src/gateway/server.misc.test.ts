@@ -1,7 +1,7 @@
 import { createServer } from "node:net";
 import { describe, expect, test } from "vitest";
-import { GatewayLockError } from "../infra/gateway-lock.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
+import { GatewayLockError } from "../infra/gateway-lock.js";
 import {
   connectOk,
   getFreePort,
