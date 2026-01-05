@@ -20,7 +20,7 @@ enum ClawdbotConfigFile {
         guard FileManager.default.fileExists(atPath: url.path) else { return [:] }
         do {
             let data = try Data(contentsOf: url)
-            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            guard let root = self.parseConfigData(data) else {
                 self.logger.warning("config JSON root invalid")
                 return [:]
             }
@@ -119,6 +119,21 @@ enum ClawdbotConfigFile {
            parsed > 0
         {
             return parsed
+        }
+        return nil
+    }
+
+    private static func parseConfigData(_ data: Data) -> [String: Any]? {
+        if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return root
+        }
+        let decoder = JSONDecoder()
+        if #available(macOS 12.0, *) {
+            decoder.allowsJSON5 = true
+        }
+        if let decoded = try? decoder.decode([String: AnyCodable].self, from: data) {
+            self.logger.notice("config parsed with JSON5 decoder")
+            return decoded.mapValues { $0.foundationValue }
         }
         return nil
     }
