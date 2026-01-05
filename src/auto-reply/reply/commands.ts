@@ -297,7 +297,7 @@ export async function handleCommands(params: {
       : undefined;
     const statusText = buildStatusMessage({
       agent: {
-        ...(cfg.agent ?? {}),
+        ...cfg.agent,
         model,
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,
