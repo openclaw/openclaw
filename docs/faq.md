@@ -42,10 +42,10 @@ Some features are platform-specific:
 - **CPU:** 1 core is fine for personal use
 - **Disk:** ~500MB for Clawdbot + deps, plus space for logs/media
 
-The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. You can also use **Bun** instead of Node for even lower memory footprint:
+The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. For the CLI, prefer the Node runtime (most stable):
 
 ```bash
-bun clawdbot gateway
+pnpm clawdbot gateway
 ```
 
 ### How do I install on Linux without Homebrew?
@@ -229,7 +229,7 @@ Yes! The terminal QR code login works fine over SSH. For long-running operation:
 ### bun binary vs Node runtime?
 
 Clawdbot can run as:
-- **bun binary** — Single executable, easy distribution, auto-restarts via launchd
+- **bun binary (macOS app)** — Single executable, easy distribution, auto-restarts via launchd
 - **Node runtime** (`pnpm clawdbot gateway`) — More stable for WhatsApp
 
 If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys).
