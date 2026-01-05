@@ -4,6 +4,8 @@
 
 ## Unreleased
 
+## 2026.1.5
+
 ### Highlights
 - Models: add image-specific model config (`agent.imageModel` + fallbacks) and scan support.
 - Agent tools: new `image` tool routed to the image model (when configured).
@@ -31,10 +33,6 @@
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 - Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
-
-## 2026.1.5
-
-### Fixes
 - Control UI: render Markdown in chat messages (sanitized).
 
 
