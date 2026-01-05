@@ -726,6 +726,8 @@ export type ClawdbotConfig = {
       to?: string;
       /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
       prompt?: string;
+      /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
+      ackMaxChars?: number;
     };
     /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
     maxConcurrent?: number;

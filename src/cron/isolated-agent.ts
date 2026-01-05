@@ -18,7 +18,10 @@ import {
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
-import { stripHeartbeatToken } from "../auto-reply/heartbeat.js";
+import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  stripHeartbeatToken,
+} from "../auto-reply/heartbeat.js";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -64,6 +67,7 @@ function pickSummaryFromPayloads(
  */
 function isHeartbeatOnlyResponse(
   payloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>,
+  ackMaxChars: number,
 ) {
   if (payloads.length === 0) return true;
   return payloads.every((payload) => {
@@ -72,11 +76,13 @@ function isHeartbeatOnlyResponse(
       (payload.mediaUrls?.length ?? 0) > 0 || Boolean(payload.mediaUrl);
     if (hasMedia) return false;
     // Use heartbeat mode to check if text is just HEARTBEAT_OK or short ack.
-    const result = stripHeartbeatToken(payload.text, { mode: "heartbeat" });
+    const result = stripHeartbeatToken(payload.text, {
+      mode: "heartbeat",
+      maxAckChars: ackMaxChars,
+    });
     return result.shouldSkip;
   });
 }
-
 function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
   jobPayload: {
@@ -366,7 +372,10 @@ export async function runCronIsolatedAgentTurn(params: {
   // Skip delivery for heartbeat-only responses (HEARTBEAT_OK with no real content).
   // This allows cron jobs to silently ack when nothing to report but still deliver
   // actual content when there is something to say.
-  const skipHeartbeatDelivery = delivery && isHeartbeatOnlyResponse(payloads);
+  const ackMaxChars =
+    params.cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+  const skipHeartbeatDelivery =
+    delivery && isHeartbeatOnlyResponse(payloads, Math.max(0, ackMaxChars));
 
   if (delivery && !skipHeartbeatDelivery) {
     if (resolvedDelivery.channel === "whatsapp") {

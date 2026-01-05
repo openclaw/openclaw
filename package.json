@@ -111,8 +111,8 @@
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
     "tslog": "^4.10.2",
-    "undici": "^7.16.0",
-    "ws": "^8.18.3",
+    "undici": "^7.18.0",
+    "ws": "^8.19.0",
     "zod": "^4.3.5"
   },
   "devDependencies": {
@@ -133,7 +133,7 @@
     "lucide": "^0.562.0",
     "markdown-it": "^14.1.0",
     "ollama": "^0.6.3",
-    "oxlint": "^1.36.0",
+    "oxlint": "^1.37.0",
     "oxlint-tsgolint": "^0.10.1",
     "quicktype-core": "^23.2.6",
     "rolldown": "1.0.0-beta.58",

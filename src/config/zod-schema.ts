@@ -172,6 +172,7 @@ const HeartbeatSchema = z
       .optional(),
     to: z.string().optional(),
     prompt: z.string().optional(),
+    ackMaxChars: z.number().int().nonnegative().optional(),
   })
   .superRefine((val, ctx) => {
     if (!val.every) return;
