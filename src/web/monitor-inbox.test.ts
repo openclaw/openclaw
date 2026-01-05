@@ -701,7 +701,11 @@ describe("web monitor inbox", () => {
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "authorized message", from: "+999" }),
+      expect.objectContaining({
+        body: "authorized message",
+        from: "+999",
+        senderE164: "+999",
+      }),
     );
 
     // Reset mock for other tests
