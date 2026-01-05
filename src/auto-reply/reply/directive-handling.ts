@@ -234,8 +234,9 @@ export async function handleDirectiveOnly(params: {
   } = params;
 
   if (directives.hasModelDirective) {
+    const modelDirective = directives.rawModelDirective?.trim().toLowerCase();
     const isModelListAlias =
-      directives.rawModelDirective?.trim().toLowerCase() === "status";
+      modelDirective === "status" || modelDirective === "list";
     if (!directives.rawModelDirective || isModelListAlias) {
       if (allowedModelCatalog.length === 0) {
         return { text: "No models available." };

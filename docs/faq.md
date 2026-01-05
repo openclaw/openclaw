@@ -556,6 +556,8 @@ Use `/model` to switch without restarting:
 /model gemini-flash
 ```
 
+List available models with `/model`, `/model list`, or `/model status`.
+
 Clawdbot ships a few default model shorthands (you can override them in config):
 `opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`.
 

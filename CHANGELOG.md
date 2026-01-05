@@ -13,6 +13,7 @@
 - macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.
 - Auth: add OpenAI Codex OAuth support and migrate legacy oauth.json into auth.json.
 - Model: `/model` list shows auth source (masked key or OAuth email) per provider.
+- Model: `/model list` is an alias for `/model`.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
