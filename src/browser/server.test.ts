@@ -128,14 +128,17 @@ vi.mock("./screenshot.js", () => ({
 }));
 
 async function getFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const s = createServer();
-    s.once("error", reject);
-    s.listen(0, "127.0.0.1", () => {
-      const port = (s.address() as AddressInfo).port;
-      s.close((err) => (err ? reject(err) : resolve(port)));
+  while (true) {
+    const port = await new Promise<number>((resolve, reject) => {
+      const s = createServer();
+      s.once("error", reject);
+      s.listen(0, "127.0.0.1", () => {
+        const assigned = (s.address() as AddressInfo).port;
+        s.close((err) => (err ? reject(err) : resolve(assigned)));
+      });
     });
-  });
+    if (port < 65535) return port;
+  }
 }
 
 function makeResponse(
