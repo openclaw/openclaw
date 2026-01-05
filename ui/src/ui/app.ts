@@ -348,6 +348,7 @@ export class ClawdbotApp extends LitElement {
   private popStateHandler = () => this.onPopState();
   private themeMedia: MediaQueryList | null = null;
   private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
+  private topbarObserver: ResizeObserver | null = null;
 
   createRenderRoot() {
     return this;
@@ -365,10 +366,16 @@ export class ClawdbotApp extends LitElement {
     this.startNodesPolling();
   }
 
+  protected firstUpdated() {
+    this.observeTopbar();
+  }
+
   disconnectedCallback() {
     window.removeEventListener("popstate", this.popStateHandler);
     this.stopNodesPolling();
     this.detachThemeListener();
+    this.topbarObserver?.disconnect();
+    this.topbarObserver = null;
     super.disconnectedCallback();
   }
 
@@ -435,6 +442,19 @@ export class ClawdbotApp extends LitElement {
         latest.scrollTop = latest.scrollHeight;
       }, 120);
     });
+  }
+
+  private observeTopbar() {
+    if (typeof ResizeObserver === "undefined") return;
+    const topbar = this.querySelector(".topbar");
+    if (!topbar) return;
+    const update = () => {
+      const { height } = topbar.getBoundingClientRect();
+      this.style.setProperty("--topbar-height", `${height}px`);
+    };
+    update();
+    this.topbarObserver = new ResizeObserver(() => update());
+    this.topbarObserver.observe(topbar);
   }
 
   private startNodesPolling() {
