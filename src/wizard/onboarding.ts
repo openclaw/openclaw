@@ -1,6 +1,10 @@
 import path from "node:path";
 
-import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
+import {
+  loginAnthropic,
+  type OAuthCredentials,
+  type OAuthProvider,
+} from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
@@ -247,7 +251,8 @@ export async function runOnboardingWizard(
     try {
       const agentDir = resolveClawdbotAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      await authStorage.login("openai-codex", {
+      const provider = "openai-codex" as unknown as OAuthProvider;
+      await authStorage.login(provider, {
         onAuth: async ({ url }) => {
           if (isRemote) {
             spin.stop("OAuth URL ready");
