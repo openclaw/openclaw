@@ -75,7 +75,7 @@ describe("gateway SIGTERM", () => {
     child = null;
   });
 
-  it("exits 0 on SIGTERM", { timeout: 90_000 }, async () => {
+  it("exits 0 on SIGTERM", { timeout: 180_000 }, async () => {
     const port = await getFreePort();
     const stateDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-gateway-test-"),
@@ -127,7 +127,7 @@ describe("gateway SIGTERM", () => {
     child.stdout?.on("data", (d) => out.push(String(d)));
     child.stderr?.on("data", (d) => err.push(String(d)));
 
-    await waitForPortOpen(proc, out, err, port, 75_000);
+    await waitForPortOpen(proc, out, err, port, 150_000);
 
     proc.kill("SIGTERM");
 

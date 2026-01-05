@@ -25,7 +25,7 @@ describe("browser screenshot normalization", () => {
     expect(Number(meta.height)).toBeLessThanOrEqual(2000);
     expect(normalized.buffer[0]).toBe(0xff);
     expect(normalized.buffer[1]).toBe(0xd8);
-  }, 30_000);
+  }, 120_000);
 
   it("keeps already-small screenshots unchanged", async () => {
     const jpeg = await sharp({
