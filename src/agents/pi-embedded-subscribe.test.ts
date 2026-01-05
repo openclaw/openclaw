@@ -780,9 +780,7 @@ describe("subscribeEmbeddedPiSession", () => {
     handler?.({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls[1][0].text).toBe(
-      "~~~sh\nline1\nline2\n~~~",
-    );
+    expect(onBlockReply.mock.calls[1][0].text).toBe("~~~sh\nline1\nline2\n~~~");
   });
 
   it("keeps indented fenced blocks intact", () => {

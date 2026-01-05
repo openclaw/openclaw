@@ -34,7 +34,6 @@ import {
 import { setupProviders } from "../commands/onboard-providers.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
-import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -42,6 +41,7 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
+import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,

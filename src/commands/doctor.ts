@@ -31,13 +31,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { healthCommand } from "./health.js";
-import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
   guardCancel,
   printWizardHeader,
 } from "./onboard-helpers.js";
+import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -612,7 +612,7 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
       await ensureSystemdUserLingerInteractive({
         runtime,
         prompter: {
-          confirm: (params) => guardCancel(confirm(params), runtime),
+          confirm: async (p) => guardCancel(await confirm(p), runtime) === true,
           note,
         },
         reason:

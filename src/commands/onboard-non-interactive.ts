@@ -13,7 +13,6 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
-import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 import { healthCommand } from "./health.js";
 import { applyMinimaxConfig, setAnthropicApiKey } from "./onboard-auth.js";
 import {
@@ -27,6 +26,7 @@ import type {
   OnboardMode,
   OnboardOptions,
 } from "./onboard-types.js";
+import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 
 export async function runNonInteractiveOnboarding(
   opts: OnboardOptions,

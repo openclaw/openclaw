@@ -3,12 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-
+import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import {
   GATEWAY_SYSTEMD_SERVICE_NAME,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
 } from "./constants.js";
-import { runCommandWithTimeout, runExec } from "../process/exec.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -89,12 +88,7 @@ export async function enableSystemdUserLinger(params: {
     needsSudo && params.sudoMode !== undefined
       ? ["sudo", ...(params.sudoMode === "non-interactive" ? ["-n"] : [])]
       : [];
-  const argv = [
-    ...sudoArgs,
-    "loginctl",
-    "enable-linger",
-    user,
-  ];
+  const argv = [...sudoArgs, "loginctl", "enable-linger", user];
   try {
     const result = await runCommandWithTimeout(argv, { timeoutMs: 30_000 });
     return {
