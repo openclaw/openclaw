@@ -1,9 +1,13 @@
+import { getEnvApiKey } from "@mariozechner/pi-ai";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../../agents/defaults.js";
+import { hydrateAuthStorage } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   type ModelAliasIndex,
@@ -38,6 +42,40 @@ import {
 } from "./queue.js";
 
 const SYSTEM_MARK = "⚙️";
+
+const maskApiKey = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "missing";
+  if (trimmed.length <= 12) return trimmed;
+  return `${trimmed.slice(0, 6)}...${trimmed.slice(-6)}`;
+};
+
+const resolveAuthLabel = async (
+  provider: string,
+  authStorage: ReturnType<typeof discoverAuthStorage>,
+): Promise<string> => {
+  const stored = authStorage.get(provider);
+  if (stored?.type === "oauth") {
+    const email = stored.email?.trim();
+    return email ? `OAuth ${email}` : "OAuth (unknown)";
+  }
+  if (stored?.type === "api_key") {
+    return maskApiKey(stored.key);
+  }
+  const envKey = getEnvApiKey(provider);
+  if (envKey) return maskApiKey(envKey);
+  if (provider === "anthropic") {
+    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN?.trim();
+    if (oauthEnv) return "OAuth (env)";
+  }
+  try {
+    const key = await authStorage.getApiKey(provider);
+    if (key) return maskApiKey(key);
+  } catch {
+    // ignore missing auth
+  }
+  return "missing";
+};
 
 export type InlineDirectives = {
   cleaned: string;
@@ -202,6 +240,16 @@ export async function handleDirectiveOnly(params: {
       if (allowedModelCatalog.length === 0) {
         return { text: "No models available." };
       }
+      const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
+      hydrateAuthStorage(authStorage);
+      const authByProvider = new Map<string, string>();
+      for (const entry of allowedModelCatalog) {
+        if (authByProvider.has(entry.provider)) continue;
+        authByProvider.set(
+          entry.provider,
+          await resolveAuthLabel(entry.provider, authStorage),
+        );
+      }
       const current = `${params.provider}/${params.model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
       const header =
@@ -219,9 +267,11 @@ export async function handleDirectiveOnly(params: {
           aliases && aliases.length > 0
             ? ` (alias: ${aliases.join(", ")})`
             : "";
-        const suffix =
+        const nameSuffix =
           entry.name && entry.name !== entry.id ? ` — ${entry.name}` : "";
-        lines.push(`- ${label}${aliasSuffix}${suffix}`);
+        const authLabel = authByProvider.get(entry.provider) ?? "missing";
+        const authSuffix = ` — auth: ${authLabel}`;
+        lines.push(`- ${label}${aliasSuffix}${nameSuffix}${authSuffix}`);
       }
       return { text: lines.join("\n") };
     }
