@@ -98,9 +98,15 @@ export function ensureOAuthStorage(): void {
   importLegacyOAuthIfNeeded(oauthPath);
 }
 
-function isValidOAuthCredential(entry: OAuthCredentials | undefined): entry is OAuthCredentials {
+function isValidOAuthCredential(
+  entry: OAuthCredentials | undefined,
+): entry is OAuthCredentials {
   if (!entry) return false;
-  return Boolean(entry.access?.trim() && entry.refresh?.trim() && Number.isFinite(entry.expires));
+  return Boolean(
+    entry.access?.trim() &&
+      entry.refresh?.trim() &&
+      Number.isFinite(entry.expires),
+  );
 }
 
 function migrateOAuthStorageToAuthStorage(

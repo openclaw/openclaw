@@ -2,6 +2,7 @@ import path from "node:path";
 
 import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
 import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
