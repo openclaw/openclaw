@@ -12,6 +12,8 @@ Goals
 - Model selection via `/model` with sensible fallback
 - Global (not per-session) fallback logic
 - Keep last-known-good auth profile when switching models
+- Profile override only when explicitly requested
+- Image routing override only when explicitly configured
 
 Non-goals (v1)
 - Auto-discovery of provider capabilities beyond catalog input tags
@@ -77,7 +79,7 @@ Login
 Model selection
 - `/model Opus` → resolve alias to full id.
 - `/model anthropic/claude-opus-4-5` → explicit.
-- Optional: `/model Opus@anthropic:work` (pin auth profile for session override).
+- Optional: `/model Opus@anthropic:work` (explicit profile override for session only).
 
 Model listing
 - `/model` list shows:
@@ -109,8 +111,8 @@ Model not found / capability mismatch
 ## Image routing
 
 Rule
-- If current text model supports image input, use it.
-- Else use `agent.imageModel` (primary then fallbacks).
+- Only use `agent.imageModel` when explicitly configured.
+- If `agent.imageModel` is configured and the current text model lacks image input, use it.
 
 Support detection
 - From model catalog `input` tags when available (e.g. `image` in models.json).
@@ -143,11 +145,10 @@ Auto-run
 - Alternative: allow `agent.models[...].authOrder` override.
 
 2) /model auth pinning
-- Do we support `/model Opus@profile`? If not, keep purely automatic rotation.
+- Keep `/model Opus@profile` for explicit session override only.
 
 3) Image routing
-- If model catalog lacks input tags, should we require explicit `agent.imageModel` or probe at runtime?
+- Only apply image routing override when `agent.imageModel` is explicitly configured.
 
 4) Legacy compatibility
 - Keep reading old keys if migration fails, or hard-break?
-
