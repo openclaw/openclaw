@@ -169,6 +169,7 @@ It’s perfectly fine to run the Gateway on a small Linux instance. Clients (mac
 
 - **Gateway host** runs the bash tool and provider connections by default.
 - **Device nodes** run device‑local actions (`system.run`, camera, screen recording, notifications) via `node.invoke`.
+In short: bash runs where the Gateway lives; device actions run where the device lives.
 
 Details: [Remote access](https://docs.clawdbot.com/remote) · [Nodes](https://docs.clawdbot.com/nodes) · [Security](https://docs.clawdbot.com/security)
 
@@ -189,6 +190,7 @@ Details: [Nodes](https://docs.clawdbot.com/nodes) · [macOS app](https://docs.cl
 
 ## Agent to Agent (sessions_* tools)
 
+- Use these to coordinate work across sessions without jumping between chat surfaces.
 - `sessions_list` — discover active sessions (agents) and their metadata.
 - `sessions_history` — fetch transcript logs for a session.
 - `sessions_send` — message another session; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
@@ -335,6 +337,7 @@ Browser control (optional):
 
 ## Docs
 
+Use these when you’re past the onboarding flow and want the deeper reference.
 - [Start with the docs index for navigation and “what’s where.”](https://docs.clawdbot.com/)
 - [Read the architecture overview for the gateway + protocol model.](https://docs.clawdbot.com/architecture)
 - [Use the full configuration reference when you need every key and example.](https://docs.clawdbot.com/configuration)
