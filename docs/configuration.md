@@ -1016,9 +1016,13 @@ Requires full Gateway restart:
 
 To run multiple gateways on one host, isolate per-instance state + config and use unique ports:
 - `CLAWDBOT_CONFIG_PATH` (per-instance config)
-- `CLAWDBOT_STATE_DIR` (sessions/creds/logs)
+- `CLAWDBOT_STATE_DIR` (sessions/creds)
 - `agent.workspace` (memories)
 - `gateway.port` (unique per instance)
+
+Convenience flags (CLI):
+- `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
+- `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
 Example:
 ```bash

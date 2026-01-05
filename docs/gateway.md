@@ -49,6 +49,27 @@ pnpm gateway:watch
 
 Supported if you isolate state + config and use unique ports.
 
+### Dev profile (`--dev`)
+
+Fast path: run a fully-isolated dev instance (config/state/workspace) without touching your primary setup.
+
+```bash
+clawdbot --dev setup
+clawdbot --dev gateway --allow-unconfigured
+# then target the dev instance:
+clawdbot --dev status
+clawdbot --dev health
+```
+
+Defaults (can be overridden via env/flags/config):
+- `CLAWDBOT_STATE_DIR=~/.clawdbot-dev`
+- `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/clawdbot.json`
+- `CLAWDBOT_GATEWAY_PORT=19001` (Gateway WS + HTTP)
+- `bridge.port=19002` (derived: `gateway.port+1`)
+- `browser.controlUrl=http://127.0.0.1:19003` (derived: `gateway.port+2`)
+- `canvasHost.port=19005` (derived: `gateway.port+4`)
+- `agent.workspace` default becomes `~/clawd-dev` when you run `setup`/`onboard` under `--dev`.
+
 Checklist per instance:
 - unique `gateway.port`
 - unique `CLAWDBOT_CONFIG_PATH`
