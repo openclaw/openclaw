@@ -395,6 +395,7 @@ export async function runEmbeddedPiAgent(params: {
             reasoningTagHint,
             runtimeInfo,
             sandboxInfo,
+            toolNames: tools.map((tool) => tool.name),
           }),
           contextFiles,
           skills: promptSkills,

@@ -33,4 +33,17 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("<think>...</think>");
     expect(prompt).toContain("<final>...</final>");
   });
+
+  it("lists available and unavailable tools when provided", () => {
+    const prompt = buildAgentSystemPromptAppend({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["bash", "sessions_list", "sessions_history", "sessions_send"],
+    });
+
+    expect(prompt).toContain("Tool availability (filtered by policy):");
+    expect(prompt).toContain("sessions_list");
+    expect(prompt).toContain("sessions_history");
+    expect(prompt).toContain("sessions_send");
+    expect(prompt).toContain("Unavailable tools (do not call):");
+  });
 });

@@ -6,6 +6,7 @@ export function buildAgentSystemPromptAppend(params: {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   reasoningTagHint?: boolean;
+  toolNames?: string[];
   runtimeInfo?: {
     host?: string;
     os?: string;
@@ -20,6 +21,69 @@ export function buildAgentSystemPromptAppend(params: {
     browserNoVncUrl?: string;
   };
 }) {
+  const toolSummaries: Record<string, string> = {
+    read: "Read file contents",
+    write: "Create or overwrite files",
+    edit: "Make precise edits to files",
+    grep: "Search file contents for patterns",
+    find: "Find files by glob pattern",
+    ls: "List directory contents",
+    bash: "Run shell commands",
+    process: "Manage background bash sessions",
+    whatsapp_login: "Generate and wait for WhatsApp QR login",
+    browser: "Control the dedicated clawd browser",
+    canvas: "Present/eval/snapshot the Canvas",
+    nodes: "List/describe/notify/camera/screen on paired nodes",
+    cron: "Manage cron jobs and wake events",
+    gateway: "Restart the running Gateway process",
+    sessions_list: "List sessions with filters and last messages",
+    sessions_history: "Fetch message history for a session",
+    sessions_send: "Send a message into another session",
+    image: "Analyze an image with the configured image model",
+    discord: "Send Discord reactions/messages and manage threads",
+    slack: "Send Slack messages and manage channels",
+  };
+
+  const toolOrder = [
+    "read",
+    "write",
+    "edit",
+    "grep",
+    "find",
+    "ls",
+    "bash",
+    "process",
+    "whatsapp_login",
+    "browser",
+    "canvas",
+    "nodes",
+    "cron",
+    "gateway",
+    "sessions_list",
+    "sessions_history",
+    "sessions_send",
+    "image",
+    "discord",
+    "slack",
+  ];
+
+  const normalizedTools = (params.toolNames ?? [])
+    .map((tool) => tool.trim().toLowerCase())
+    .filter(Boolean);
+  const availableTools = new Set(normalizedTools);
+  const extraTools = Array.from(
+    new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
+  );
+  const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
+  const disabledTools = toolOrder.filter((tool) => !availableTools.has(tool));
+  const toolLines = enabledTools.map((tool) => {
+    const summary = toolSummaries[tool];
+    return summary ? `- ${tool}: ${summary}` : `- ${tool}`;
+  });
+  for (const tool of extraTools.sort()) {
+    toolLines.push(`- ${tool}`);
+  }
+
   const thinkHint =
     params.defaultThinkLevel && params.defaultThinkLevel !== "off"
       ? `Default thinking level: ${params.defaultThinkLevel}.`
@@ -61,17 +125,28 @@ export function buildAgentSystemPromptAppend(params: {
     "You are Clawd, a personal assistant running inside Clawdbot.",
     "",
     "## Tooling",
-    "Pi lists the standard tools above. This runtime enables:",
-    "- grep: search file contents for patterns",
-    "- find: find files by glob pattern",
-    "- ls: list directory contents",
-    "- bash: run shell commands (supports background via yieldMs/background)",
-    "- process: manage background bash sessions",
-    "- whatsapp_login: generate a WhatsApp QR code and wait for linking",
-    "- browser: control clawd's dedicated browser",
-    "- canvas: present/eval/snapshot the Canvas",
-    "- nodes: list/describe/notify/camera/screen on paired nodes",
-    "- cron: manage cron jobs and wake events",
+    "Tool availability (filtered by policy):",
+    toolLines.length > 0
+      ? toolLines.join("\n")
+      : [
+          "Pi lists the standard tools above. This runtime enables:",
+          "- grep: search file contents for patterns",
+          "- find: find files by glob pattern",
+          "- ls: list directory contents",
+          "- bash: run shell commands (supports background via yieldMs/background)",
+          "- process: manage background bash sessions",
+          "- whatsapp_login: generate a WhatsApp QR code and wait for linking",
+          "- browser: control clawd's dedicated browser",
+          "- canvas: present/eval/snapshot the Canvas",
+          "- nodes: list/describe/notify/camera/screen on paired nodes",
+          "- cron: manage cron jobs and wake events",
+          "- sessions_list: list sessions",
+          "- sessions_history: fetch session history",
+          "- sessions_send: send to another session",
+        ].join("\n"),
+    disabledTools.length > 0
+      ? `Unavailable tools (do not call): ${disabledTools.join(", ")}`
+      : "",
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "",
     "## Workspace",
