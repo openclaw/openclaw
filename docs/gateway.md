@@ -188,6 +188,14 @@ Then enable the service:
 systemctl --user enable --now clawdbot-gateway.service
 ```
 
+**Alternative (system service)** - for always-on or multi-user servers, you can
+install a systemd **system** unit instead of a user unit (no lingering needed).
+Create `/etc/systemd/system/clawdbot-gateway.service`, set `User=` and
+`WorkingDirectory=`, then enable with:
+```
+sudo systemctl enable --now clawdbot-gateway.service
+```
+
 ## Supervision (Windows scheduled task)
 - Onboarding installs a Scheduled Task named `Clawdbot Gateway` (runs on user logon).
 - Requires a logged-in user session; for headless setups use a system service or a task configured to run without a logged-in user (not shipped).

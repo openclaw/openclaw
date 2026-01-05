@@ -109,6 +109,18 @@ pnpm clawdbot health
 - Keep `~/clawd` and `~/.clawdbot/` as “your stuff”; don’t put personal prompts/config into the `clawdbot` repo.
 - Updating source: `git pull` + `pnpm install` (when lockfile changed) + keep using `pnpm gateway:watch`.
 
+## Linux (systemd user service)
+
+Linux installs use a systemd **user** service. By default, systemd stops user
+services on logout/idle, which kills the Gateway. Enable lingering:
+
+```bash
+sudo loginctl enable-linger $USER
+```
+
+For always-on or multi-user servers, consider a **system** service instead of a
+user service (no lingering needed). See `docs/gateway.md` for the systemd notes.
+
 ## Related docs
 
 - `docs/gateway.md` (Gateway runbook; flags, supervision, ports)
