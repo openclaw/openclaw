@@ -349,6 +349,52 @@ Browser control (optional):
 - [Debug common failures with the troubleshooting guide.](https://docs.clawdbot.com/troubleshooting)
 - [Review security guidance before exposing anything.](https://docs.clawdbot.com/security)
 
+## Advanced docs (discovery + control)
+
+- [Discovery + transports](https://docs.clawdbot.com/discovery)
+- [Bonjour/mDNS](https://docs.clawdbot.com/bonjour)
+- [Gateway pairing](https://docs.clawdbot.com/gateway/pairing)
+- [Remote gateway README](https://docs.clawdbot.com/remote-gateway-readme)
+- [Control UI](https://docs.clawdbot.com/control-ui)
+- [Dashboard](https://docs.clawdbot.com/dashboard)
+
+## Operations & troubleshooting
+
+- [Health checks](https://docs.clawdbot.com/health)
+- [Gateway lock](https://docs.clawdbot.com/gateway-lock)
+- [Background process](https://docs.clawdbot.com/background-process)
+- [Browser troubleshooting (Linux)](https://docs.clawdbot.com/browser-linux-troubleshooting)
+- [Logging](https://docs.clawdbot.com/logging)
+
+## Deep dives
+
+- [Agent loop](https://docs.clawdbot.com/agent-loop)
+- [Presence](https://docs.clawdbot.com/presence)
+- [TypeBox schemas](https://docs.clawdbot.com/typebox)
+- [RPC adapters](https://docs.clawdbot.com/rpc)
+- [Queue](https://docs.clawdbot.com/queue)
+
+## Workspace & skills
+
+- [Skills config](https://docs.clawdbot.com/skills-config)
+- [Default AGENTS](https://docs.clawdbot.com/AGENTS.default)
+- [Templates: AGENTS](https://docs.clawdbot.com/templates/AGENTS)
+- [Templates: BOOTSTRAP](https://docs.clawdbot.com/templates/BOOTSTRAP)
+- [Templates: IDENTITY](https://docs.clawdbot.com/templates/IDENTITY)
+- [Templates: SOUL](https://docs.clawdbot.com/templates/SOUL)
+- [Templates: TOOLS](https://docs.clawdbot.com/templates/TOOLS)
+- [Templates: USER](https://docs.clawdbot.com/templates/USER)
+
+## Platform internals
+
+- [macOS dev setup](https://docs.clawdbot.com/mac/dev-setup)
+- [macOS menu bar](https://docs.clawdbot.com/mac/menu-bar)
+- [macOS voice wake](https://docs.clawdbot.com/mac/voicewake)
+- [iOS node](https://docs.clawdbot.com/ios)
+- [Android node](https://docs.clawdbot.com/android)
+- [Windows app](https://docs.clawdbot.com/windows)
+- [Linux app](https://docs.clawdbot.com/linux)
+
 ## Email hooks (Gmail)
 
 [Gmail Pub/Sub wiring (gcloud + gogcli), hook tokens, and auto-watch behavior are documented here.](https://docs.clawdbot.com/gmail-pubsub)
