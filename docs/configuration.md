@@ -434,6 +434,17 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `imageModel` selects an image-capable model for the `image` tool.
 `imageModelFallbacks` lists ordered fallback image models for the `image` tool.
 
+Clawdbot also ships a few built-in `modelAliases` shorthands (when an `agent` section exists):
+
+- `opus` -> `anthropic/claude-opus-4-5`
+- `sonnet` -> `anthropic/claude-sonnet-4-5`
+- `gpt` -> `openai/gpt-5.2`
+- `gpt-mini` -> `openai/gpt-5-mini`
+- `gemini` -> `google/gemini-3-pro-preview`
+- `gemini-flash` -> `google/gemini-3-flash-preview`
+
+If you configure the same alias name (case-insensitive) yourself, your value wins (defaults never override).
+
 ```json5
 {
   agent: {

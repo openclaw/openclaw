@@ -5,6 +5,20 @@ type WarnState = { warned: boolean };
 
 let defaultWarnState: WarnState = { warned: false };
 
+const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
+  opus: "anthropic/claude-opus-4-5",
+  sonnet: "anthropic/claude-sonnet-4-5",
+
+  // OpenAI
+  gpt: "openai/gpt-5.2",
+  "gpt-mini": "openai/gpt-5-mini",
+
+  // Google Gemini (3.x are preview ids in the catalog)
+  gemini: "google/gemini-3-pro-preview",
+  "gemini-flash": "google/gemini-3-flash-preview",
+};
+
 export type SessionDefaultsOptions = {
   warn?: (message: string) => void;
   warnState?: WarnState;
@@ -74,6 +88,56 @@ export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
     talk: {
       ...config.talk,
       apiKey: resolved,
+    },
+  };
+}
+
+function normalizeAliasKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+export function applyModelAliasDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const existingAgent = cfg.agent;
+  if (!existingAgent) return cfg;
+  const existingAliases = existingAgent?.modelAliases ?? {};
+
+  const byNormalized = new Map<string, string>();
+  for (const key of Object.keys(existingAliases)) {
+    const norm = normalizeAliasKey(key);
+    if (!norm) continue;
+    if (!byNormalized.has(norm)) byNormalized.set(norm, key);
+  }
+
+  let mutated = false;
+  const nextAliases: Record<string, string> = { ...existingAliases };
+
+  for (const [canonicalKey, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+    const norm = normalizeAliasKey(canonicalKey);
+    const existingKey = byNormalized.get(norm);
+
+    if (!existingKey) {
+      nextAliases[canonicalKey] = target;
+      byNormalized.set(norm, canonicalKey);
+      mutated = true;
+      continue;
+    }
+
+    const existingValue = String(existingAliases[existingKey] ?? "");
+    if (existingKey !== canonicalKey && existingValue === target) {
+      delete nextAliases[existingKey];
+      nextAliases[canonicalKey] = target;
+      byNormalized.set(norm, canonicalKey);
+      mutated = true;
+    }
+  }
+
+  if (!mutated) return cfg;
+
+  return {
+    ...cfg,
+    agent: {
+      ...existingAgent,
+      modelAliases: nextAliases,
     },
   };
 }
