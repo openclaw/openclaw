@@ -19,6 +19,7 @@
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Control UI: show a reading indicator bubble while the assistant is responding.
+- Control UI: animate reading indicator dots (honors reduced-motion).
 - Control UI: stabilize chat streaming during tool runs (no flicker/vanishing text; correct run scoping).
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
