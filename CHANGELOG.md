@@ -20,6 +20,7 @@
 - Control UI: show a reading indicator bubble while the assistant is responding.
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
+- Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
