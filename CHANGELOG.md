@@ -52,6 +52,7 @@
 - macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639
 - macOS: make generated gateway protocol models `Sendable` for Swift 6 strict concurrency. (#195) — thanks @andranik-sahakyan
 - macOS: bundle QR code renderer modules so DMG gateway boot doesn't crash on missing qrcode-terminal vendor files.
+- macOS: parse JSON5 config safely to avoid wiping user settings when comments are present.
 - WhatsApp: suppress typing indicator during heartbeat background tasks. (#190) — thanks @mcinteerj
 - WhatsApp: mark offline history sync messages as read without auto-reply. (#193) — thanks @mcinteerj
 - Discord: avoid duplicate replies when a provider emits late streaming `text_end` events (OpenAI/GPT).
