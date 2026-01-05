@@ -738,7 +738,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     // Only thread replies if the incoming message was in a thread.
     const incomingThreadTs = message.thread_ts;
-
     const dispatcher = createReplyDispatcher({
       responsePrefix: cfg.messages?.responsePrefix,
       deliver: async (payload) => {
