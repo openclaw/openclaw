@@ -63,16 +63,12 @@ export function buildCommandContext(params: {
     : undefined;
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
-  const defaultAllowFrom =
-    isWhatsAppSurface &&
-    (!configuredAllowFrom || configuredAllowFrom.length === 0) &&
-    to
-      ? [to]
-      : undefined;
-  const allowFrom =
-    configuredAllowFrom && configuredAllowFrom.length > 0
-      ? configuredAllowFrom
-      : defaultAllowFrom;
+  const allowFromList =
+    configuredAllowFrom?.filter((entry) => entry && entry.trim()) ?? [];
+  const allowAll =
+    !isWhatsAppSurface ||
+    allowFromList.length === 0 ||
+    allowFromList.some((entry) => entry.trim() === "*");
 
   const abortKey = sessionKey ?? (from || undefined) ?? (to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
@@ -80,10 +76,11 @@ export function buildCommandContext(params: {
     ? stripMentions(rawBodyNormalized, ctx, cfg)
     : rawBodyNormalized;
   const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
-  const ownerCandidates = isWhatsAppSurface
-    ? (allowFrom ?? []).filter((entry) => entry && entry !== "*")
-    : [];
-  if (isWhatsAppSurface && ownerCandidates.length === 0 && to) {
+  const ownerCandidates =
+    isWhatsAppSurface && !allowAll
+      ? allowFromList.filter((entry) => entry !== "*")
+      : [];
+  if (isWhatsAppSurface && !allowAll && ownerCandidates.length === 0 && to) {
     ownerCandidates.push(to);
   }
   const ownerList = ownerCandidates
@@ -91,6 +88,7 @@ export function buildCommandContext(params: {
     .filter((entry): entry is string => Boolean(entry));
   const isOwner =
     !isWhatsAppSurface ||
+    allowAll ||
     ownerList.length === 0 ||
     (senderE164 ? ownerList.includes(senderE164) : false);
   const isAuthorizedSender = commandAuthorized && isOwner;
