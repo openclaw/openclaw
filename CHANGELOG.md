@@ -18,6 +18,7 @@
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
+- Status: show model auth source (api-key/oauth).
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
