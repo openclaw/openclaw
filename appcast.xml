@@ -3,6 +3,22 @@
     <channel>
         <title>Clawdis</title>
         <item>
+            <title>2026.1.5-3</title>
+            <pubDate>Mon, 05 Jan 2026 03:57:59 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>3091</sparkle:version>
+            <sparkle:shortVersionString>2026.1.5-3</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.5-3</h2>
+<h3>Fixes</h3>
+<ul>
+<li>NPM package: include missing runtime dist folders (slack/signal/imessage/tui/wizard/control-ui/daemon) to avoid <code>ERR_MODULE_NOT_FOUND</code> in Node 25 npx installs.</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5-3/Clawdbot-2026.1.5-3.zip" length="160797048" type="application/octet-stream" sparkle:edSignature="5KYFg0SW7liwLxLJbfzd2KsAxbX06gMH0rH/W3a4V0p4N48hjz4AsSrfFLdGZSnW+6XaJjC3MN6Ynh+l7kffDQ=="/>
+        </item>
+        <item>
             <title>2026.1.5-2</title>
             <pubDate>Mon, 05 Jan 2026 03:51:30 +0100</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
@@ -35,49 +51,6 @@
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5-1/Clawdbot-2026.1.5-1.zip" length="150253493" type="application/octet-stream" sparkle:edSignature="gmb6ubX9AobT8OjraFY2zrS7qch050lSWA0Wuwzr68/kcCySG+GXzxSqvFp2DHTAMH3OsvkiCqQtET8qFuv9DQ=="/>
-        </item>
-        <item>
-            <title>2026.1.5</title>
-            <pubDate>Mon, 05 Jan 2026 03:00:34 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
-            <sparkle:version>3085</sparkle:version>
-            <sparkle:shortVersionString>2026.1.5</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.5</h2>
-<h3>Highlights</h3>
-<ul>
-<li>Models: add image-specific model config (<code>agent.imageModel</code> + fallbacks) and scan support.</li>
-<li>Agent tools: new <code>image</code> tool routed to the image model (when configured).</li>
-<li>Config: default model shorthands (<code>opus</code>, <code>sonnet</code>, <code>gpt</code>, <code>gpt-mini</code>, <code>gemini</code>, <code>gemini-flash</code>).</li>
-<li>Docs: document built-in model shorthands + precedence (user config wins).</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>Control UI: render Markdown in tool result cards.</li>
-<li>Control UI: prevent overlapping action buttons in Discord guild rules on narrow layouts.</li>
-<li>Android: tapping the foreground service notification brings the app to the front. (#179) — thanks @Syhids</li>
-<li>Cron tool uses <code>id</code> for update/remove/run/runs (aligns with gateway params). (#180) — thanks @adamgall</li>
-<li>Control UI: chat view uses page scroll with sticky header/sidebar and fixed composer (no inner scroll frame).</li>
-<li>macOS: treat location permission as always-only to avoid iOS-only enums. (#165) — thanks @Nachx639</li>
-<li>macOS: make generated gateway protocol models <code>Sendable</code> for Swift 6 strict concurrency. (#195) — thanks @andranik-sahakyan</li>
-<li>macOS: bundle QR code renderer modules so DMG gateway boot doesn't crash on missing qrcode-terminal vendor files.</li>
-<li>WhatsApp: suppress typing indicator during heartbeat background tasks. (#190) — thanks @mcinteerj</li>
-<li>WhatsApp: mark offline history sync messages as read without auto-reply. (#193) — thanks @mcinteerj</li>
-<li>Discord: avoid duplicate replies when a provider emits late streaming <code>text_end</code> events (OpenAI/GPT).</li>
-<li>CLI: use tailnet IP for local gateway calls when bind is tailnet/auto (fixes #176).</li>
-<li>Env: load global <code>$CLAWDBOT_STATE_DIR/.env</code> (<code>~/.clawdbot/.env</code>) as a fallback after CWD <code>.env</code>.</li>
-<li>Env: optional login-shell env fallback (opt-in; imports expected keys without overriding existing env).</li>
-<li>Agent tools: OpenAI-compatible tool JSON Schemas (fix <code>browser</code>, normalize union schemas).</li>
-<li>Onboarding: when running from source, auto-build missing Control UI assets (<code>pnpm ui:build</code>).</li>
-<li>Discord/Slack: route reaction + system notifications to the correct session (no main-session bleed).</li>
-<li>Agent tools: honor <code>agent.tools</code> allow/deny policy even when sandbox is off.</li>
-<li>Discord: avoid duplicate replies when OpenAI emits repeated <code>message_end</code> events.</li>
-<li>Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.</li>
-<li>Control UI: render Markdown in chat messages (sanitized).</li>
-</ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5/Clawdbot-2026.1.5.zip" length="150249505" type="application/octet-stream" sparkle:edSignature="1ogyZdbfVm1YSFOpcbSU6G++JnXjqAenXWavRc6szzgdc0hQYyR4/fLRj0DkJPgqQW8imWAPGoJnmhgXGjQcAg=="/>
         </item>
     </channel>
 </rss>
