@@ -3,6 +3,23 @@
     <channel>
         <title>Clawdis</title>
         <item>
+            <title>2026.1.5-1</title>
+            <pubDate>Mon, 05 Jan 2026 03:32:13 +0100</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>3087</sparkle:version>
+            <sparkle:shortVersionString>2026.1.5-1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.5-1</h2>
+<h3>Fixes</h3>
+<ul>
+<li>NPM package: include <code>dist/sessions</code> so <code>clawdbot agent</code> resolves session helpers in npx installs.</li>
+<li>Node 25: avoid unsupported directory import by targeting <code>qrcode-terminal/vendor/QRCode/index.js</code>.</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.5-1/Clawdbot-2026.1.5-1.zip" length="150253493" type="application/octet-stream" sparkle:edSignature="gmb6ubX9AobT8OjraFY2zrS7qch050lSWA0Wuwzr68/kcCySG+GXzxSqvFp2DHTAMH3OsvkiCqQtET8qFuv9DQ=="/>
+        </item>
+        <item>
             <title>2026.1.5</title>
             <pubDate>Mon, 05 Jan 2026 03:00:34 +0100</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
@@ -57,15 +74,6 @@
                 <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta3/Clawdis2024-2.0.0-beta3.delta" sparkle:deltaFrom="2.0.0-beta3" length="9166434" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="860528" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="2QuKayKEtBAhG+ObjovPjhPvGDfEEDW25ing2OWC8uVMhPhyr2Ndec58xxJqx5+wZzlhyroCP8nEQN6baa7dDA=="/>
                 <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta3/Clawdis2024-2.0.0-beta2.delta" sparkle:deltaFrom="2.0.0-beta2" length="7291386" type="application/octet-stream" sparkle:deltaFromSparkleExecutableSize="860528" sparkle:deltaFromSparkleLocales="de,he,ar,el,ja,fa,uk" sparkle:edSignature="IBisZ9lU/8vQQ/EDbHk1kzYrYnrigkSVkrQsMBdOnSx+EkBCuTGGvQMf+LbHAbfPNdg674Wbt7oizcvTyVWwDQ=="/>
             </sparkle:deltas>
-        </item>
-        <item>
-            <title>2.0.0-beta2</title>
-            <pubDate>Sun, 21 Dec 2025 04:04:20 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/steipete/clawdis/main/appcast.xml</link>
-            <sparkle:version>2.0.0-beta2</sparkle:version>
-            <sparkle:shortVersionString>2.0.0-beta2</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <enclosure url="https://github.com/steipete/clawdis/releases/download/v2.0.0-beta3/Clawdis-2.0.0-beta2.dSYM.zip" length="67404637" type="application/octet-stream" sparkle:edSignature="sVup4e9DryEYUDQ7tTuoy7DR1IyDnbJmIp+P37DQsv6qa7VH1jcjiuz9u51OFGwyfKRJ8lWsxx+SGXMKiPr6AQ=="/>
         </item>
     </channel>
 </rss>
