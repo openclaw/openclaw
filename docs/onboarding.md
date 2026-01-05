@@ -19,7 +19,7 @@ This doc describes the intended **first-run onboarding** for Clawdbot. The goal 
 
 First question: where does the **Gateway** run?
 
-- **Local (this Mac):** onboarding can run OAuth flows and write the Clawdbot auth store locally.
+- **Local (this Mac):** onboarding can run OAuth flows and write OAuth credentials locally.
 - **Remote (over SSH/tailnet):** onboarding must not run OAuth locally, because credentials must exist on the **gateway host**.
 
 Gateway auth tip:
@@ -38,10 +38,10 @@ The macOS app should:
 - Start the Anthropic OAuth (PKCE) flow in the user’s browser.
 - Ask the user to paste the `code#state` value.
 - Exchange it for tokens and write credentials to:
-  - `~/.clawdbot/agent/auth.json` (file mode `0600`, directory mode `0700`)
+  - `~/.clawdbot/credentials/oauth.json` (file mode `0600`, directory mode `0700`)
 
-Why this location matters: it’s the Clawdbot-owned auth store (OAuth + API keys).
-Clawdbot auto-migrates legacy OAuth tokens from `~/.clawdbot/credentials/oauth.json` (and older pi/Claude locations) into `auth.json` on first use.
+Why this location matters: it’s the Clawdbot-owned OAuth store.
+Clawdbot also imports `oauth.json` into the agent auth store (`~/.clawdbot/agent/auth.json`) on first use.
 
 ### Recommended: OAuth (OpenAI Codex)
 
@@ -49,7 +49,7 @@ The macOS app should:
 - Start the OpenAI Codex OAuth (PKCE) flow in the user’s browser.
 - Auto-capture the callback on `http://127.0.0.1:1455/auth/callback` when possible.
 - If the callback fails, prompt the user to paste the redirect URL or code.
-- Store credentials in `~/.clawdbot/agent/auth.json` (same auth store as Anthropic).
+- Store credentials in `~/.clawdbot/credentials/oauth.json` (same OAuth store as Anthropic).
 
 ### Alternative: API key (instructions only)
 
@@ -148,12 +148,12 @@ If the Gateway runs on another machine, OAuth credentials must be created/stored
 
 For now, remote onboarding should:
 - explain why OAuth isn't shown
-- point the user at the credential location (`~/.clawdbot/agent/auth.json`) and the workspace location on the gateway host
+- point the user at the credential location (`~/.clawdbot/credentials/oauth.json`) and the workspace location on the gateway host
 - mention that the **bootstrap ritual happens on the gateway host** (same BOOTSTRAP/IDENTITY/USER files)
 
 ### Manual credential setup
 
-On the gateway host, create `~/.clawdbot/agent/auth.json` with this exact format:
+On the gateway host, create `~/.clawdbot/credentials/oauth.json` with this exact format:
 
 ```json
 {
@@ -162,7 +162,7 @@ On the gateway host, create `~/.clawdbot/agent/auth.json` with this exact format
 }
 ```
 
-Set permissions: `chmod 600 ~/.clawdbot/agent/auth.json`
+Set permissions: `chmod 600 ~/.clawdbot/credentials/oauth.json`
 
 **Note:** Clawdbot auto-imports from legacy pi-coding-agent paths (`~/.pi/agent/oauth.json`, etc.) but this does NOT work with Claude Code credentials — different file and format.
 
@@ -177,8 +177,8 @@ cat ~/.claude/.credentials.json | jq '{
     refresh: .claudeAiOauth.refreshToken,
     expires: .claudeAiOauth.expiresAt
   }
-}' > ~/.clawdbot/agent/auth.json
-chmod 600 ~/.clawdbot/agent/auth.json
+}' > ~/.clawdbot/credentials/oauth.json
+chmod 600 ~/.clawdbot/credentials/oauth.json
 ```
 
 | Claude Code field | Clawdbot field |

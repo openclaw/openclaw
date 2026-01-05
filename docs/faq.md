@@ -14,9 +14,9 @@ Everything lives under `~/.clawdbot/`:
 | Path | Purpose |
 |------|---------|
 | `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
-| `~/.clawdbot/agent/auth.json` | OAuth + API key store (Anthropic/OpenAI, etc.) |
+| `~/.clawdbot/credentials/oauth.json` | OAuth credentials (Anthropic/OpenAI, etc.) |
+| `~/.clawdbot/agent/auth.json` | API key store |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
-| `~/.clawdbot/credentials/oauth.json` | Legacy OAuth store (auto‑migrated) |
 | `~/.clawdbot/sessions/` | Conversation history & state |
 | `~/.clawdbot/sessions/sessions.json` | Session metadata |
 
@@ -118,7 +118,7 @@ They're **separate billing**! An API key does NOT use your subscription.
 pnpm clawdbot login
 ```
 
-**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/agent/auth.json` to your server. The auth is just a JSON file.
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/credentials/oauth.json` to your server. The auth is just a JSON file.
 
 ### How are env vars loaded?
 
@@ -148,7 +148,7 @@ Or set `CLAWDBOT_LOAD_SHELL_ENV=1` (timeout: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=1500
 
 OAuth needs the callback to reach the machine running the CLI. Options:
 
-1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/agent/auth.json` to the container.
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/oauth.json` to the container.
 2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
 3. **Tailscale** — Put both machines on your tailnet.
 
