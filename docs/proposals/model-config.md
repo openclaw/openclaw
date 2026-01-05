@@ -138,17 +138,9 @@ Outputs
 Auto-run
 - Gateway start detects legacy keys and runs doctor migration.
 
-## Open questions
+## Decisions
 
-1) Per-provider vs per-model auth order
-- Proposed: per-provider only (`auth.order`).
-- Alternative: allow `agent.models[...].authOrder` override.
-
-2) /model auth pinning
-- Keep `/model Opus@profile` for explicit session override only.
-
-3) Image routing
-- Only apply image routing override when `agent.imageModel` is explicitly configured.
-
-4) Legacy compatibility
-- Keep reading old keys if migration fails, or hard-break?
+- Auth order is per-provider (`auth.order`).
+- Doctor migration is required; gateway will auto-run on startup when legacy keys detected.
+- `/model Opus@profile` is explicit session override only.
+- Image routing override only when `agent.imageModel` is explicitly configured.
