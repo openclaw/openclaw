@@ -1,6 +1,10 @@
 import fs from "node:fs";
 
+import { getEnvApiKey } from "@mariozechner/pi-ai";
+import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
+import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import type { ClawdbotConfig } from "../../config/config.js";
+import { resolveOAuthPath } from "../../config/paths.js";
 import {
   type SessionEntry,
   type SessionScope,
@@ -12,10 +16,6 @@ import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
 import { resolveHeartbeatSeconds } from "../../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../../web/session.js";
-import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
-import { resolveOAuthPath } from "../../config/paths.js";
-import { getEnvApiKey } from "@mariozechner/pi-ai";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -61,7 +61,8 @@ function hasOAuthCredentials(provider: string): boolean {
     if (!entry) return false;
     const refresh =
       entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
-    const access = entry.access ?? entry.access_token ?? entry.accessToken ?? "";
+    const access =
+      entry.access ?? entry.access_token ?? entry.accessToken ?? "";
     return Boolean(refresh.trim() && access.trim());
   } catch {
     return false;
