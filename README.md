@@ -220,6 +220,7 @@ If you plan to build/run companion apps, initialize submodules first:
 
 ```bash
 git submodule update --init --recursive
+./scripts/restart-mac.sh
 ```
 
 ### macOS (Clawdbot.app) (optional)
@@ -229,7 +230,7 @@ git submodule update --init --recursive
 - WebChat + debug tools.
 - Remote gateway control over SSH.
 
-Build/run: `./scripts/restart-mac.sh` (packages + launches).
+Note: signed builds required for macOS permissions to stick across rebuilds (see `docs/mac/permissions.md`).
 
 ### iOS node (optional)
 
