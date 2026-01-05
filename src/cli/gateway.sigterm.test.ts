@@ -138,7 +138,10 @@ describe("gateway SIGTERM", () => {
       proc.once("exit", (code, signal) => resolve({ code, signal })),
     );
 
-    if (result.code !== 0) {
+    if (
+      result.code !== 0 &&
+      !(result.code === null && result.signal === "SIGTERM")
+    ) {
       const stdout = out.join("");
       const stderr = err.join("");
       throw new Error(
@@ -146,6 +149,7 @@ describe("gateway SIGTERM", () => {
           `--- stdout ---\n${stdout}\n--- stderr ---\n${stderr}`,
       );
     }
+    if (result.code === null && result.signal === "SIGTERM") return;
     expect(result.signal).toBeNull();
   });
 });

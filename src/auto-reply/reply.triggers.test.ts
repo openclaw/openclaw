@@ -502,7 +502,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("ignores /activation from non-owners in groups", async () => {
+  it("allows /activation from allowFrom in groups", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
       const res = await getReplyFromConfig(
@@ -517,7 +517,8 @@ describe("trigger handling", () => {
         {},
         cfg,
       );
-      expect(res).toBeUndefined();
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("⚙️ Group activation set to mention.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
