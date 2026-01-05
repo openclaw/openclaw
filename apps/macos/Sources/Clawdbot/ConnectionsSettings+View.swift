@@ -8,6 +8,7 @@ extension ConnectionsSettings {
             self.detail
         }
         .navigationSplitViewStyle(.balanced)
+        .toolbar(removing: .sidebarToggle)
         .onAppear {
             self.store.start()
             self.ensureSelection()

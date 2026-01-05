@@ -18,32 +18,64 @@ struct SettingsRootView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: self.$selectedTab) {
-                Section("Settings") {
-                    ForEach(self.sidebarTabs, id: \.self) { tab in
-                        Label(tab.title, systemImage: tab.systemImage)
-                            .tag(tab)
-                    }
-                }
+        VStack(alignment: .leading, spacing: 12) {
+            if self.isNixMode {
+                self.nixManagedBanner
             }
-            .listStyle(.sidebar)
-            .toolbar(removing: .sidebarToggle)
-            .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
-        } detail: {
-            VStack(alignment: .leading, spacing: 12) {
-                if self.isNixMode {
-                    self.nixManagedBanner
+            TabView(selection: self.$selectedTab) {
+                GeneralSettings(state: self.state)
+                    .tabItem { Label("General", systemImage: "gearshape") }
+                    .tag(SettingsTab.general)
+
+                ConnectionsSettings()
+                    .tabItem { Label("Connections", systemImage: "link") }
+                    .tag(SettingsTab.connections)
+
+                VoiceWakeSettings(state: self.state)
+                    .tabItem { Label("Voice Wake", systemImage: "waveform.circle") }
+                    .tag(SettingsTab.voiceWake)
+
+                ConfigSettings()
+                    .tabItem { Label("Config", systemImage: "slider.horizontal.3") }
+                    .tag(SettingsTab.config)
+
+                InstancesSettings()
+                    .tabItem { Label("Instances", systemImage: "network") }
+                    .tag(SettingsTab.instances)
+
+                SessionsSettings()
+                    .tabItem { Label("Sessions", systemImage: "clock.arrow.circlepath") }
+                    .tag(SettingsTab.sessions)
+
+                CronSettings()
+                    .tabItem { Label("Cron", systemImage: "calendar") }
+                    .tag(SettingsTab.cron)
+
+                SkillsSettings(state: self.state)
+                    .tabItem { Label("Skills", systemImage: "sparkles") }
+                    .tag(SettingsTab.skills)
+
+                PermissionsSettings(
+                    status: self.permissionMonitor.status,
+                    refresh: self.refreshPerms,
+                    showOnboarding: { OnboardingController.shared.show() })
+                    .tabItem { Label("Permissions", systemImage: "lock.shield") }
+                    .tag(SettingsTab.permissions)
+
+                if self.state.debugPaneEnabled {
+                    DebugSettings(state: self.state)
+                        .tabItem { Label("Debug", systemImage: "ant") }
+                        .tag(SettingsTab.debug)
                 }
-                self.detailView(for: self.selectedTab)
+
+                AboutSettings(updater: self.updater)
+                    .tabItem { Label("About", systemImage: "info.circle") }
+                    .tag(SettingsTab.about)
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 22)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .navigationSplitViewStyle(.balanced)
-        .navigationTitle("Settings")
-        .background(SettingsWindowChrome(title: "Clawdbot Settings"))
+        .padding(.horizontal, 28)
+        .padding(.vertical, 22)
+        .background(SettingsToolbarCleaner())
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .clawdbotSelectSettingsTab)) { note in
@@ -111,56 +143,6 @@ struct SettingsRootView: View {
     private func validTab(for requested: SettingsTab) -> SettingsTab {
         if requested == .debug, !self.state.debugPaneEnabled { return .general }
         return requested
-    }
-
-    private var sidebarTabs: [SettingsTab] {
-        var tabs: [SettingsTab] = [
-            .general,
-            .connections,
-            .voiceWake,
-            .config,
-            .instances,
-            .sessions,
-            .cron,
-            .skills,
-            .permissions,
-        ]
-        if self.state.debugPaneEnabled {
-            tabs.append(.debug)
-        }
-        tabs.append(.about)
-        return tabs
-    }
-
-    @ViewBuilder
-    private func detailView(for tab: SettingsTab) -> some View {
-        switch tab {
-        case .general:
-            GeneralSettings(state: self.state)
-        case .connections:
-            ConnectionsSettings()
-        case .voiceWake:
-            VoiceWakeSettings(state: self.state)
-        case .config:
-            ConfigSettings()
-        case .instances:
-            InstancesSettings()
-        case .sessions:
-            SessionsSettings()
-        case .cron:
-            CronSettings()
-        case .skills:
-            SkillsSettings(state: self.state)
-        case .permissions:
-            PermissionsSettings(
-                status: self.permissionMonitor.status,
-                refresh: self.refreshPerms,
-                showOnboarding: { OnboardingController.shared.show() })
-        case .debug:
-            DebugSettings(state: self.state)
-        case .about:
-            AboutSettings(updater: self.updater)
-        }
     }
 
     @MainActor
