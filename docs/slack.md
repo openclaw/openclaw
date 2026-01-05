@@ -1,3 +1,8 @@
+---
+summary: "Slack socket mode setup and Clawdbot config"
+read_when: "Setting up Slack or debugging Slack socket mode"
+---
+
 # Slack (socket mode)
 
 ## Setup

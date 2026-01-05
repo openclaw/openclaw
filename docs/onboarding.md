@@ -102,7 +102,7 @@ Once setup is complete, the user can switch to the normal chat (`main`) via the 
 
 We no longer collect identity in the onboarding wizard. Instead, the **first agent run** performs a playful bootstrap ritual using files in the workspace:
 
-- Workspace is created implicitly (default `~/.clawdbot/workspace`) when local is selected,
+- Workspace is created implicitly (default `~/clawd`, configurable via `agent.workspace`) when local is selected,
   but only if the folder is empty or already contains `AGENTS.md`.
 - Files are seeded: `AGENTS.md`, `BOOTSTRAP.md`, `IDENTITY.md`, `USER.md`.
 - `BOOTSTRAP.md` tells the agent to keep it conversational:
@@ -131,7 +131,7 @@ The workspace is created automatically as part of agent bootstrap (no dedicated 
 Recommendation: treat the workspace as the agent’s “memory” and make it a git repo (ideally private) so identity + memories are backed up:
 
 ```bash
-cd ~/.clawdbot/workspace
+cd ~/clawd
 git init
 git add AGENTS.md
 git commit -m "Add agent workspace"
