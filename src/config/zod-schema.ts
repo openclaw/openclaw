@@ -150,7 +150,6 @@ const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
-    timestampPrefix: z.union([z.boolean(), z.string()]).optional(),
   })
   .optional();
 
@@ -376,6 +375,7 @@ export const ClawdbotSchema = z.object({
       model: z.string().optional(),
       imageModel: z.string().optional(),
       workspace: z.string().optional(),
+      userTimezone: z.string().optional(),
       allowedModels: z.array(z.string()).optional(),
       modelAliases: z.record(z.string(), z.string()).optional(),
       modelFallbacks: z.array(z.string()).optional(),

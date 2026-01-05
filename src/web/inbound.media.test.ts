@@ -16,7 +16,6 @@ vi.mock("../config/config.js", async (importOriginal) => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     }),
   };

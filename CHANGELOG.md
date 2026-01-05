@@ -4,6 +4,9 @@
 
 ## Unreleased
 
+### Breaking
+- Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
+
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - Linux: auto-attempt lingering during onboarding (try without sudo, fallback to sudo) and prompt on install/restart to keep the gateway alive after logout/idle. Thanks @tobiasbischoff for PR #237.
