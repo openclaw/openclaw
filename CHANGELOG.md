@@ -17,6 +17,7 @@
 - Model: `/model` output now includes auth source location (env/auth.json/models.json).
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
+- Control UI: show a reading indicator bubble while the assistant is responding.
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
 

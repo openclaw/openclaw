@@ -78,15 +78,17 @@ export function renderChat(props: ChatProps) {
       <div class="chat-thread" role="log" aria-live="polite">
         ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
         ${props.messages.map((m) => renderMessage(m))}
-        ${props.stream
-          ? renderMessage(
-              {
-                role: "assistant",
-                content: [{ type: "text", text: props.stream }],
-                timestamp: Date.now(),
-              },
-              { streaming: true },
-            )
+        ${props.stream !== null
+          ? props.stream.trim().length > 0
+            ? renderMessage(
+                {
+                  role: "assistant",
+                  content: [{ type: "text", text: props.stream }],
+                  timestamp: Date.now(),
+                },
+                { streaming: true },
+              )
+            : renderReadingIndicator()
           : nothing}
       </div>
 
@@ -169,6 +171,20 @@ function resolveSessionOptions(
   }
 
   return result;
+}
+
+function renderReadingIndicator() {
+  return html`
+    <div class="chat-line assistant">
+      <div class="chat-msg">
+        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+          <span class="chat-reading-indicator__dots">
+            <span></span><span></span><span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 function renderMessage(message: unknown, opts?: { streaming?: boolean }) {
