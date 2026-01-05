@@ -19,6 +19,7 @@ read_when:
 <p align="center">
   <a href="https://github.com/clawdbot/clawdbot">GitHub</a> ·
   <a href="https://github.com/clawdbot/clawdbot/releases">Releases</a> ·
+  <a href="https://docs.clawdbot.com/">Docs</a> ·
   <a href="./clawd.md">Clawd setup</a>
 </p>
 
