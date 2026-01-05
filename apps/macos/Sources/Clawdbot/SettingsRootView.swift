@@ -75,7 +75,6 @@ struct SettingsRootView: View {
         }
         .padding(.horizontal, 28)
         .padding(.vertical, 22)
-        .background(SettingsToolbarCleaner())
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onReceive(NotificationCenter.default.publisher(for: .clawdbotSelectSettingsTab)) { note in
