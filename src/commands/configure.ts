@@ -323,7 +323,7 @@ async function promptAuthConfig(
       if (oauthCreds) {
         await writeOAuthCredentials("google-antigravity", oauthCreds);
         next = applyAuthProfileConfig(next, {
-          profileId: "google-antigravity:default",
+          profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
           provider: "google-antigravity",
           mode: "oauth",
         });

@@ -24,7 +24,7 @@ import {
 } from "../process/command-queue.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { markAuthProfileGood } from "./auth-profiles.js";
+import { markAuthProfileGood, markAuthProfileUsed, markAuthProfileCooldown } from "./auth-profiles.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -808,8 +808,10 @@ export async function runEmbeddedPiAgent(params: {
             session.agent.replaceMessages(prior);
           }
           let aborted = Boolean(params.abortSignal?.aborted);
-          const abortRun = () => {
+          let timedOut = false;
+          const abortRun = (isTimeout = false) => {
             aborted = true;
+            if (isTimeout) timedOut = true;
             void session.abort();
           };
           const subscription = subscribeEmbeddedPiSession({
@@ -848,7 +850,7 @@ export async function runEmbeddedPiAgent(params: {
               log.warn(
                 `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
               );
-              abortRun();
+              abortRun(true);
               if (!abortWarnTimer) {
                 abortWarnTimer = setTimeout(() => {
                   if (!session.isStreaming) return;
@@ -953,12 +955,25 @@ export async function runEmbeddedPiAgent(params: {
             (params.config?.agent?.model?.fallbacks?.length ?? 0) > 0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
-          if (!aborted && (authFailure || rateLimitFailure)) {
+          
+          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
+          const shouldRotate = (!aborted && (authFailure || rateLimitFailure)) || timedOut;
+          
+          if (shouldRotate) {
+            // Mark current profile for cooldown before rotating
+            if (lastProfileId) {
+              markAuthProfileCooldown({ store: authStore, profileId: lastProfileId });
+              if (timedOut) {
+                log.warn(
+                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
+                );
+              }
+            }
             const rotated = await advanceAuthProfile();
             if (rotated) {
               continue;
             }
-            if (fallbackConfigured) {
+            if (fallbackConfigured && !timedOut) {
               const message =
                 lastAssistant?.errorMessage?.trim() ||
                 (lastAssistant
@@ -1040,6 +1055,8 @@ export async function runEmbeddedPiAgent(params: {
               provider,
               profileId: lastProfileId,
             });
+            // Track usage for round-robin rotation
+            markAuthProfileUsed({ store: authStore, profileId: lastProfileId });
           }
           return {
             payloads: payloads.length ? payloads : undefined,
