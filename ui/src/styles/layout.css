@@ -19,10 +19,15 @@
 }
 
 .shell--chat-focus {
-  --shell-pad: 10px;
-  --shell-gap: 12px;
+  --shell-pad: 8px;
+  --shell-gap: 0px;
   --shell-nav-col: 0px;
   --shell-topbar-row: 0px;
+}
+
+.shell--chat-focus .content {
+  padding-top: 0;
+  gap: 0;
 }
 
 .topbar {

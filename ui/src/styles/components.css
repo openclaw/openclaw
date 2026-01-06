@@ -826,8 +826,8 @@
 }
 
 .shell--chat-focus .chat-compose {
-  bottom: var(--shell-pad);
-  padding-bottom: calc(var(--shell-pad) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--shell-pad) + 8px);
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
   border-bottom-left-radius: 18px;
   border-bottom-right-radius: 18px;
 }
