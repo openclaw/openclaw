@@ -57,6 +57,7 @@
 - Control UI: let config-form enums select empty-string values. Thanks @sreekaransrinath for PR #268.
 - Control UI: scroll chat to bottom on initial load. Thanks @kiranjd for PR #274.
 - Control UI: add Chat focus mode toggle to collapse header + sidebar.
+- Control UI: standardize UI build instructions on `bun run ui:*` (fallback supported).
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
 - Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.
