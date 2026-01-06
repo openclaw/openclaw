@@ -545,10 +545,10 @@ pkill -f "clawdbot"
 # Remove data
 trash ~/.clawdbot
 
-# Remove repo and re-clone
-trash ~/clawdbot
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot && pnpm install && pnpm build
+# Remove repo and re-clone (adjust path if you cloned elsewhere)
+trash ~/Projects/clawdbot
+git clone https://github.com/clawdbot/clawdbot.git ~/Projects/clawdbot
+cd ~/Projects/clawdbot && pnpm install && pnpm build
 pnpm clawdbot onboard
 ```
 
