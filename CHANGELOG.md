@@ -18,6 +18,7 @@
 ### Fixes
 - Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
+- Telegram: stop typing after tool results. Thanks @AbhisekBasu1 for PR #322.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
