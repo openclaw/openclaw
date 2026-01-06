@@ -11,6 +11,14 @@ import { detectBinary } from "./onboard-helpers.js";
 import type { ProviderChoice } from "./onboard-types.js";
 import { installSignalCli } from "./signal-install.js";
 
+function addWildcardAllowFrom(
+  allowFrom?: Array<string | number> | null,
+): Array<string | number> {
+  const next = (allowFrom ?? []).map((v) => String(v).trim()).filter(Boolean);
+  if (!next.includes("*")) next.push("*");
+  return next;
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath);
@@ -176,6 +184,154 @@ function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]) {
       allowFrom,
     },
   };
+}
+
+function setTelegramDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+  const allowFrom =
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.telegram?.allowFrom)
+      : undefined;
+  return {
+    ...cfg,
+    telegram: {
+      ...cfg.telegram,
+      dmPolicy,
+      ...(allowFrom ? { allowFrom } : {}),
+    },
+  };
+}
+
+function setDiscordDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+  const allowFrom =
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.discord?.dm?.allowFrom)
+      : undefined;
+  return {
+    ...cfg,
+    discord: {
+      ...cfg.discord,
+      dm: {
+        ...cfg.discord?.dm,
+        enabled: cfg.discord?.dm?.enabled ?? true,
+        policy: dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
+      },
+    },
+  };
+}
+
+function setSlackDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+  const allowFrom =
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.slack?.dm?.allowFrom)
+      : undefined;
+  return {
+    ...cfg,
+    slack: {
+      ...cfg.slack,
+      dm: {
+        ...cfg.slack?.dm,
+        enabled: cfg.slack?.dm?.enabled ?? true,
+        policy: dmPolicy,
+        ...(allowFrom ? { allowFrom } : {}),
+      },
+    },
+  };
+}
+
+function setSignalDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+  const allowFrom =
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.signal?.allowFrom)
+      : undefined;
+  return {
+    ...cfg,
+    signal: {
+      ...cfg.signal,
+      dmPolicy,
+      ...(allowFrom ? { allowFrom } : {}),
+    },
+  };
+}
+
+function setIMessageDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
+  const allowFrom =
+    dmPolicy === "open"
+      ? addWildcardAllowFrom(cfg.imessage?.allowFrom)
+      : undefined;
+  return {
+    ...cfg,
+    imessage: {
+      ...cfg.imessage,
+      dmPolicy,
+      ...(allowFrom ? { allowFrom } : {}),
+    },
+  };
+}
+
+async function maybeConfigureDmPolicies(params: {
+  cfg: ClawdbotConfig;
+  selection: ProviderChoice[];
+  prompter: WizardPrompter;
+}): Promise<ClawdbotConfig> {
+  const { selection, prompter } = params;
+  const supportsDmPolicy = selection.some((p) =>
+    ["telegram", "discord", "slack", "signal", "imessage"].includes(p),
+  );
+  if (!supportsDmPolicy) return params.cfg;
+
+  const wants = await prompter.confirm({
+    message: "Configure DM access policies now? (default: pairing)",
+    initialValue: false,
+  });
+  if (!wants) return params.cfg;
+
+  let cfg = params.cfg;
+  const selectPolicy = async (label: string, keyHint: string) => {
+    await prompter.note(
+      [
+        "Default: pairing (unknown DMs get a pairing code).",
+        `Approve: clawdbot pairing approve --provider ${label.toLowerCase()} <code>`,
+        `Public DMs: ${keyHint}="open" + allowFrom includes "*".`,
+      ].join("\n"),
+      `${label} DM access`,
+    );
+    return (await prompter.select({
+      message: `${label} DM policy`,
+      options: [
+        { value: "pairing", label: "Pairing (recommended)" },
+        { value: "open", label: "Open (public inbound DMs)" },
+        { value: "disabled", label: "Disabled (ignore DMs)" },
+      ],
+    })) as DmPolicy;
+  };
+
+  if (selection.includes("telegram")) {
+    const current = cfg.telegram?.dmPolicy ?? "pairing";
+    const policy = await selectPolicy("Telegram", "telegram.dmPolicy");
+    if (policy !== current) cfg = setTelegramDmPolicy(cfg, policy);
+  }
+  if (selection.includes("discord")) {
+    const current = cfg.discord?.dm?.policy ?? "pairing";
+    const policy = await selectPolicy("Discord", "discord.dm.policy");
+    if (policy !== current) cfg = setDiscordDmPolicy(cfg, policy);
+  }
+  if (selection.includes("slack")) {
+    const current = cfg.slack?.dm?.policy ?? "pairing";
+    const policy = await selectPolicy("Slack", "slack.dm.policy");
+    if (policy !== current) cfg = setSlackDmPolicy(cfg, policy);
+  }
+  if (selection.includes("signal")) {
+    const current = cfg.signal?.dmPolicy ?? "pairing";
+    const policy = await selectPolicy("Signal", "signal.dmPolicy");
+    if (policy !== current) cfg = setSignalDmPolicy(cfg, policy);
+  }
+  if (selection.includes("imessage")) {
+    const current = cfg.imessage?.dmPolicy ?? "pairing";
+    const policy = await selectPolicy("iMessage", "imessage.dmPolicy");
+    if (policy !== current) cfg = setIMessageDmPolicy(cfg, policy);
+  }
+  return cfg;
 }
 
 async function promptWhatsAppAllowFrom(
@@ -720,6 +876,8 @@ export async function setupProviders(
       "iMessage next steps",
     );
   }
+
+  next = await maybeConfigureDmPolicies({ cfg: next, selection, prompter });
 
   if (options?.allowDisable) {
     if (!selection.includes("telegram") && telegramConfigured) {
