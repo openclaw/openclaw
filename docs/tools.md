@@ -126,7 +126,7 @@ Core parameters:
 - `maxBytesMb` (optional size cap)
 
 Notes:
-- Only available when `agent.imageModel` or `agent.imageModelFallbacks` is set.
+- Only available when `agent.imageModel` is configured (primary or fallbacks).
 - Uses the image model directly (independent of the main chat model).
 
 ### `cron`

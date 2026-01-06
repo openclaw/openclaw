@@ -120,10 +120,38 @@ export function isRateLimitAssistantError(
   if (!msg || msg.stopReason !== "error") return false;
   const raw = (msg.errorMessage ?? "").toLowerCase();
   if (!raw) return false;
+  return isRateLimitErrorMessage(raw);
+}
+
+export function isRateLimitErrorMessage(raw: string): boolean {
+  const value = raw.toLowerCase();
   return (
-    /rate[_ ]limit|too many requests|429/.test(raw) ||
-    raw.includes("exceeded your current quota")
+    /rate[_ ]limit|too many requests|429/.test(value) ||
+    value.includes("exceeded your current quota")
   );
+}
+
+export function isAuthErrorMessage(raw: string): boolean {
+  const value = raw.toLowerCase();
+  if (!value) return false;
+  return (
+    /invalid[_ ]?api[_ ]?key/.test(value) ||
+    value.includes("incorrect api key") ||
+    value.includes("invalid token") ||
+    value.includes("authentication") ||
+    value.includes("unauthorized") ||
+    value.includes("forbidden") ||
+    value.includes("access denied") ||
+    /\b401\b/.test(value) ||
+    /\b403\b/.test(value)
+  );
+}
+
+export function isAuthAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
+  if (!msg || msg.stopReason !== "error") return false;
+  return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
 function extractSupportedValues(raw: string): string[] {

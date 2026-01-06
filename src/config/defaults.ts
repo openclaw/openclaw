@@ -92,43 +92,23 @@ export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
-function normalizeAliasKey(value: string): string {
-  return value.trim().toLowerCase();
-}
-
-export function applyModelAliasDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   const existingAgent = cfg.agent;
   if (!existingAgent) return cfg;
-  const existingAliases = existingAgent?.modelAliases ?? {};
-
-  const byNormalized = new Map<string, string>();
-  for (const key of Object.keys(existingAliases)) {
-    const norm = normalizeAliasKey(key);
-    if (!norm) continue;
-    if (!byNormalized.has(norm)) byNormalized.set(norm, key);
-  }
+  const existingModels = existingAgent.models ?? {};
+  if (Object.keys(existingModels).length === 0) return cfg;
 
   let mutated = false;
-  const nextAliases: Record<string, string> = { ...existingAliases };
+  const nextModels: Record<string, { alias?: string }> = {
+    ...existingModels,
+  };
 
-  for (const [canonicalKey, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
-    const norm = normalizeAliasKey(canonicalKey);
-    const existingKey = byNormalized.get(norm);
-
-    if (!existingKey) {
-      nextAliases[canonicalKey] = target;
-      byNormalized.set(norm, canonicalKey);
-      mutated = true;
-      continue;
-    }
-
-    const existingValue = String(existingAliases[existingKey] ?? "");
-    if (existingKey !== canonicalKey && existingValue === target) {
-      delete nextAliases[existingKey];
-      nextAliases[canonicalKey] = target;
-      byNormalized.set(norm, canonicalKey);
-      mutated = true;
-    }
+  for (const [alias, target] of Object.entries(DEFAULT_MODEL_ALIASES)) {
+    const entry = nextModels[target];
+    if (!entry) continue;
+    if (entry.alias !== undefined) continue;
+    nextModels[target] = { ...entry, alias };
+    mutated = true;
   }
 
   if (!mutated) return cfg;
@@ -137,7 +117,7 @@ export function applyModelAliasDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
     ...cfg,
     agent: {
       ...existingAgent,
-      modelAliases: nextAliases,
+      models: nextModels,
     },
   };
 }

@@ -18,7 +18,7 @@ export async function modelsImageFallbacksListCommand(
 ) {
   ensureFlagCompatibility(opts);
   const cfg = loadConfig();
-  const fallbacks = cfg.agent?.imageModelFallbacks ?? [];
+  const fallbacks = cfg.agent?.imageModel?.fallbacks ?? [];
 
   if (opts.json) {
     runtime.log(JSON.stringify({ fallbacks }, null, 2));
@@ -44,11 +44,13 @@ export async function modelsImageFallbacksAddCommand(
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
+    const nextModels = { ...cfg.agent?.models };
+    if (!nextModels[targetKey]) nextModels[targetKey] = {};
     const aliasIndex = buildModelAliasIndex({
       cfg,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = cfg.agent?.imageModelFallbacks ?? [];
+    const existing = cfg.agent?.imageModel?.fallbacks ?? [];
     const existingKeys = existing
       .map((entry) =>
         resolveModelRefFromString({
@@ -66,14 +68,21 @@ export async function modelsImageFallbacksAddCommand(
       ...cfg,
       agent: {
         ...cfg.agent,
-        imageModelFallbacks: [...existing, targetKey],
+        imageModel: {
+          ...((cfg.agent?.imageModel as {
+            primary?: string;
+            fallbacks?: string[];
+          }) ?? {}),
+          fallbacks: [...existing, targetKey],
+        },
+        models: nextModels,
       },
     };
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   runtime.log(
-    `Image fallbacks: ${(updated.agent?.imageModelFallbacks ?? []).join(", ")}`,
+    `Image fallbacks: ${(updated.agent?.imageModel?.fallbacks ?? []).join(", ")}`,
   );
 }
 
@@ -88,7 +97,7 @@ export async function modelsImageFallbacksRemoveCommand(
       cfg,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = cfg.agent?.imageModelFallbacks ?? [];
+    const existing = cfg.agent?.imageModel?.fallbacks ?? [];
     const filtered = existing.filter((entry) => {
       const resolvedEntry = resolveModelRefFromString({
         raw: String(entry ?? ""),
@@ -110,14 +119,20 @@ export async function modelsImageFallbacksRemoveCommand(
       ...cfg,
       agent: {
         ...cfg.agent,
-        imageModelFallbacks: filtered,
+        imageModel: {
+          ...((cfg.agent?.imageModel as {
+            primary?: string;
+            fallbacks?: string[];
+          }) ?? {}),
+          fallbacks: filtered,
+        },
       },
     };
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   runtime.log(
-    `Image fallbacks: ${(updated.agent?.imageModelFallbacks ?? []).join(", ")}`,
+    `Image fallbacks: ${(updated.agent?.imageModel?.fallbacks ?? []).join(", ")}`,
   );
 }
 
@@ -126,7 +141,13 @@ export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
     ...cfg,
     agent: {
       ...cfg.agent,
-      imageModelFallbacks: [],
+      imageModel: {
+        ...((cfg.agent?.imageModel as {
+          primary?: string;
+          fallbacks?: string[];
+        }) ?? {}),
+        fallbacks: [],
+      },
     },
   }));
 

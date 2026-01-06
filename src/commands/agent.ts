@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -289,7 +290,8 @@ export async function agentCommand(
     });
   let provider = defaultProvider;
   let model = defaultModel;
-  const hasAllowlist = (agentCfg?.allowedModels?.length ?? 0) > 0;
+  const hasAllowlist =
+    agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const hasStoredOverride = Boolean(
     sessionEntry?.modelOverride || sessionEntry?.providerOverride,
   );
@@ -333,6 +335,18 @@ export async function agentCommand(
     if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
       provider = candidateProvider;
       model = storedModelOverride;
+    }
+  }
+  if (sessionEntry?.authProfileOverride) {
+    const store = ensureAuthProfileStore();
+    const profile = store.profiles[sessionEntry.authProfileOverride];
+    if (!profile || profile.provider !== provider) {
+      delete sessionEntry.authProfileOverride;
+      sessionEntry.updatedAt = Date.now();
+      if (sessionStore && sessionKey) {
+        sessionStore[sessionKey] = sessionEntry;
+        await saveSessionStore(storePath, sessionStore);
+      }
     }
   }
 
@@ -381,6 +395,7 @@ export async function agentCommand(
           prompt: body,
           provider: providerOverride,
           model: modelOverride,
+          authProfileId: sessionEntry?.authProfileOverride,
           thinkLevel: resolvedThinkLevel,
           verboseLevel: resolvedVerboseLevel,
           timeoutMs,

@@ -24,15 +24,23 @@ import {
 } from "../process/command-queue.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { markAuthProfileGood } from "./auth-profiles.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { getApiKeyForModel } from "./model-auth.js";
+import {
+  ensureAuthProfileStore,
+  getApiKeyForModel,
+  resolveAuthProfileOrder,
+} from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
   ensureSessionHeader,
   formatAssistantErrorText,
+  isAuthAssistantError,
+  isAuthErrorMessage,
   isRateLimitAssistantError,
+  isRateLimitErrorMessage,
   pickFallbackThinkingLevel,
   sanitizeSessionMessagesImages,
 } from "./pi-embedded-helpers.js";
@@ -311,6 +319,7 @@ export async function runEmbeddedPiAgent(params: {
   prompt: string;
   provider?: string;
   model?: string;
+  authProfileId?: string;
   thinkLevel?: ThinkLevel;
   verboseLevel?: VerboseLevel;
   bashElevated?: BashElevatedDefaults;
@@ -368,11 +377,67 @@ export async function runEmbeddedPiAgent(params: {
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
-      const apiKey = await getApiKeyForModel(model, authStorage);
-      authStorage.setRuntimeApiKey(model.provider, apiKey);
-
-      let thinkLevel = params.thinkLevel ?? "off";
+      const authStore = ensureAuthProfileStore();
+      const explicitProfileId = params.authProfileId?.trim();
+      const profileOrder = resolveAuthProfileOrder({
+        cfg: params.config,
+        store: authStore,
+        provider,
+        preferredProfile: explicitProfileId,
+      });
+      if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
+        throw new Error(
+          `Auth profile "${explicitProfileId}" is not configured for ${provider}.`,
+        );
+      }
+      const profileCandidates =
+        profileOrder.length > 0 ? profileOrder : [undefined];
+      let profileIndex = 0;
+      const initialThinkLevel = params.thinkLevel ?? "off";
+      let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
+      let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null =
+        null;
+
+      const resolveApiKeyForCandidate = async (candidate?: string) => {
+        return getApiKeyForModel({
+          model,
+          cfg: params.config,
+          profileId: candidate,
+          store: authStore,
+        });
+      };
+
+      const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
+        apiKeyInfo = await resolveApiKeyForCandidate(candidate);
+        authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+      };
+
+      const advanceAuthProfile = async (): Promise<boolean> => {
+        let nextIndex = profileIndex + 1;
+        while (nextIndex < profileCandidates.length) {
+          const candidate = profileCandidates[nextIndex];
+          try {
+            await applyApiKeyInfo(candidate);
+            profileIndex = nextIndex;
+            thinkLevel = initialThinkLevel;
+            attemptedThinking.clear();
+            return true;
+          } catch (err) {
+            if (candidate && candidate === explicitProfileId) throw err;
+            nextIndex += 1;
+          }
+        }
+        return false;
+      };
+
+      try {
+        await applyApiKeyInfo(profileCandidates[profileIndex]);
+      } catch (err) {
+        if (profileCandidates[profileIndex] === explicitProfileId) throw err;
+        const advanced = await advanceAuthProfile();
+        if (!advanced) throw err;
+      }
 
       while (true) {
         const thinkingLevel = mapThinkingLevel(thinkLevel);
@@ -611,8 +676,16 @@ export async function runEmbeddedPiAgent(params: {
             params.abortSignal?.removeEventListener?.("abort", onAbort);
           }
           if (promptError && !aborted) {
+            const errorText = describeUnknownError(promptError);
+            if (
+              (isAuthErrorMessage(errorText) ||
+                isRateLimitErrorMessage(errorText)) &&
+              (await advanceAuthProfile())
+            ) {
+              continue;
+            }
             const fallbackThinking = pickFallbackThinkingLevel({
-              message: describeUnknownError(promptError),
+              message: errorText,
               attempted: attemptedThinking,
             });
             if (fallbackThinking) {
@@ -645,13 +718,25 @@ export async function runEmbeddedPiAgent(params: {
           }
 
           const fallbackConfigured =
-            (params.config?.agent?.modelFallbacks?.length ?? 0) > 0;
-          if (fallbackConfigured && isRateLimitAssistantError(lastAssistant)) {
-            const message =
-              lastAssistant?.errorMessage?.trim() ||
-              (lastAssistant ? formatAssistantErrorText(lastAssistant) : "") ||
-              "LLM request rate limited.";
-            throw new Error(message);
+            (params.config?.agent?.model?.fallbacks?.length ?? 0) > 0;
+          const authFailure = isAuthAssistantError(lastAssistant);
+          const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
+          if (!aborted && (authFailure || rateLimitFailure)) {
+            const rotated = await advanceAuthProfile();
+            if (rotated) {
+              continue;
+            }
+            if (fallbackConfigured) {
+              const message =
+                lastAssistant?.errorMessage?.trim() ||
+                (lastAssistant
+                  ? formatAssistantErrorText(lastAssistant)
+                  : "") ||
+                (rateLimitFailure
+                  ? "LLM request rate limited."
+                  : "LLM request unauthorized.");
+              throw new Error(message);
+            }
           }
 
           const usage = lastAssistant?.usage;
@@ -717,6 +802,13 @@ export async function runEmbeddedPiAgent(params: {
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
+          if (apiKeyInfo?.profileId) {
+            markAuthProfileGood({
+              store: authStore,
+              provider,
+              profileId: apiKeyInfo.profileId,
+            });
+          }
           return {
             payloads: payloads.length ? payloads : undefined,
             meta: {

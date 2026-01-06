@@ -361,7 +361,9 @@ export async function getReplyFromConfig(
       : `Model switched to ${label}.`;
   const isModelListAlias =
     directives.hasModelDirective &&
-    directives.rawModelDirective?.trim().toLowerCase() === "status";
+    ["status", "list"].includes(
+      directives.rawModelDirective?.trim().toLowerCase() ?? "",
+    );
   const effectiveModelDirective = isModelListAlias
     ? undefined
     : directives.rawModelDirective;
@@ -376,6 +378,7 @@ export async function getReplyFromConfig(
     })
   ) {
     const directiveReply = await handleDirectiveOnly({
+      cfg,
       directives,
       sessionEntry,
       sessionStore,
@@ -401,6 +404,7 @@ export async function getReplyFromConfig(
   const persisted = await persistInlineDirectives({
     directives,
     effectiveModelDirective,
+    cfg,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -634,6 +638,7 @@ export async function getReplyFromConfig(
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
+  const authProfileId = sessionEntry?.authProfileOverride;
   const followupRun = {
     prompt: queuedBody,
     summaryLine: baseBodyTrimmedRaw,
@@ -648,6 +653,7 @@ export async function getReplyFromConfig(
       skillsSnapshot,
       provider,
       model,
+      authProfileId,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
       elevatedLevel: resolvedElevatedLevel,

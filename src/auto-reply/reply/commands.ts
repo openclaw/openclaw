@@ -1,10 +1,12 @@
-import fs from "node:fs";
-
-import { getEnvApiKey } from "@mariozechner/pi-ai";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
-import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../../agents/auth-profiles.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { resolveOAuthPath } from "../../config/paths.js";
 import {
   type SessionEntry,
   type SessionScope,
@@ -42,55 +44,32 @@ export type CommandContext = {
   to?: string;
 };
 
-function hasOAuthCredentials(provider: string): boolean {
-  try {
-    const oauthPath = resolveOAuthPath();
-    if (!fs.existsSync(oauthPath)) return false;
-    const raw = fs.readFileSync(oauthPath, "utf8");
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const entry = parsed?.[provider] as
-      | {
-          refresh?: string;
-          refresh_token?: string;
-          refreshToken?: string;
-          access?: string;
-          access_token?: string;
-          accessToken?: string;
-        }
-      | undefined;
-    if (!entry) return false;
-    const refresh =
-      entry.refresh ?? entry.refresh_token ?? entry.refreshToken ?? "";
-    const access =
-      entry.access ?? entry.access_token ?? entry.accessToken ?? "";
-    return Boolean(refresh.trim() && access.trim());
-  } catch {
-    return false;
-  }
-}
-
-function resolveModelAuthLabel(provider?: string): string | undefined {
+function resolveModelAuthLabel(
+  provider?: string,
+  cfg?: ClawdbotConfig,
+): string | undefined {
   const resolved = provider?.trim();
   if (!resolved) return undefined;
 
-  try {
-    const authStorage = discoverAuthStorage(resolveClawdbotAgentDir());
-    const stored = authStorage.get(resolved);
-    if (stored?.type === "oauth") return "oauth";
-    if (stored?.type === "api_key") return "api-key";
-  } catch {
-    // ignore auth storage errors
+  const store = ensureAuthProfileStore();
+  const profiles = listProfilesForProvider(store, resolved);
+  if (profiles.length > 0) {
+    const modes = new Set(
+      profiles
+        .map((id) => store.profiles[id]?.type)
+        .filter((mode): mode is "api_key" | "oauth" => Boolean(mode)),
+    );
+    if (modes.has("oauth") && modes.has("api_key")) return "mixed";
+    if (modes.has("oauth")) return "oauth";
+    if (modes.has("api_key")) return "api-key";
   }
 
-  if (resolved === "anthropic") {
-    const oauthEnv = process.env.ANTHROPIC_OAUTH_TOKEN;
-    if (oauthEnv?.trim()) return "oauth";
+  const envKey = resolveEnvApiKey(resolved);
+  if (envKey?.apiKey) {
+    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
 
-  if (hasOAuthCredentials(resolved)) return "oauth";
-
-  const envKey = getEnvApiKey(resolved);
-  if (envKey?.trim()) return "api-key";
+  if (getCustomProviderApiKey(cfg, resolved)) return "api-key";
 
   return "unknown";
 }
@@ -374,7 +353,7 @@ export async function handleCommands(params: {
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
       resolvedElevated: resolvedElevatedLevel,
-      modelAuth: resolveModelAuthLabel(provider),
+      modelAuth: resolveModelAuthLabel(provider, cfg),
       webLinked,
       webAuthAgeMs,
       heartbeatSeconds,

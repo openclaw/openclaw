@@ -91,18 +91,40 @@ Env var equivalent:
 
 ### Auth storage (OAuth + API keys)
 
-Clawdbot stores **OAuth credentials** in:
+Clawdbot stores **auth profiles** (OAuth + API keys) in:
+- `~/.clawdbot/agent/auth-profiles.json`
+
+Legacy OAuth imports:
 - `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
 
-Clawdbot stores **API keys** in the agent auth store:
-- `~/.clawdbot/agent/auth.json`
+The embedded Pi agent maintains a runtime cache at:
+- `~/.clawdbot/agent/auth.json` (managed automatically; don’t edit manually)
 
 Overrides:
-- OAuth dir: `CLAWDBOT_OAUTH_DIR`
+- OAuth dir (legacy import only): `CLAWDBOT_OAUTH_DIR`
 - Agent dir: `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
-On first use, Clawdbot imports `oauth.json` entries into `auth.json` so the embedded
-agent can use them. `oauth.json` remains the source of truth for OAuth refresh.
+On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
+
+### `auth`
+
+Optional metadata for auth profiles. This does **not** store secrets; it maps
+profile IDs to a provider + mode (and optional email) and defines the provider
+rotation order used for failover.
+
+```json5
+{
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" }
+    },
+    order: {
+      anthropic: ["anthropic:default", "anthropic:work"]
+    }
+  }
+}
+```
 
 ### `identity`
 
@@ -494,14 +516,12 @@ Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_V
 ### `agent`
 
 Controls the embedded agent runtime (model/thinking/verbose/timeouts).
-`allowedModels` lets `/model` list/filter and enforce a per-session allowlist
-(omit to show the full catalog).
-`modelAliases` adds short names for `/model` (alias -> provider/model).
-`modelFallbacks` lists ordered fallback models to try when the default fails.
-`imageModel` selects an image-capable model for the `image` tool.
-`imageModelFallbacks` lists ordered fallback image models for the `image` tool.
+`agent.models` defines the configured model catalog (and acts as the allowlist for `/model`).
+`agent.model.primary` sets the default model; `agent.model.fallbacks` are global failovers.
+`agent.imageModel` is optional and is **only used if the primary model lacks image input**.
 
-Clawdbot also ships a few built-in `modelAliases` shorthands (when an `agent` section exists):
+Clawdbot also ships a few built-in alias shorthands. Defaults only apply when the model
+is already present in `agent.models`:
 
 - `opus` -> `anthropic/claude-opus-4-5`
 - `sonnet` -> `anthropic/claude-sonnet-4-5`
@@ -515,23 +535,24 @@ If you configure the same alias name (case-insensitive) yourself, your value win
 ```json5
 {
   agent: {
-    model: "anthropic/claude-opus-4-5",
-    allowedModels: [
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-1"
-    ],
-    modelAliases: {
-      Opus: "anthropic/claude-opus-4-5",
-      Sonnet: "anthropic/claude-sonnet-4-1"
+    models: {
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
+      "openrouter/deepseek/deepseek-r1:free": {}
     },
-    modelFallbacks: [
-      "openrouter/deepseek/deepseek-r1:free",
-      "openrouter/meta-llama/llama-3.3-70b-instruct:free"
-    ],
-    imageModel: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
-    imageModelFallbacks: [
-      "openrouter/google/gemini-2.0-flash-vision:free"
-    ],
+    model: {
+      primary: "anthropic/claude-opus-4-5",
+      fallbacks: [
+        "openrouter/deepseek/deepseek-r1:free",
+        "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+      ]
+    },
+    imageModel: {
+      primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
+      fallbacks: [
+        "openrouter/google/gemini-2.0-flash-vision:free"
+      ]
+    },
     thinkingDefault: "low",
     verboseDefault: "off",
     elevatedDefault: "on",
@@ -566,8 +587,8 @@ Block streaming:
   }
   ```
 
-`agent.model` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
-If `modelAliases` is configured, you may also use the alias key (e.g. `Opus`).
+`agent.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
+Aliases come from `agent.models.*.alias` (e.g. `Opus`).
 If you omit the provider, CLAWDBOT currently assumes `anthropic` as a temporary
 deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
@@ -729,11 +750,16 @@ When `models.providers` is present, Clawdbot writes/merges a `models.json` into
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
 
-Select the model via `agent.model` (provider/model).
+Select the model via `agent.model.primary` (provider/model).
 
 ```json5
 {
-  agent: { model: "custom-proxy/llama-3.1-8b" },
+  agent: {
+    model: { primary: "custom-proxy/llama-3.1-8b" },
+    models: {
+      "custom-proxy/llama-3.1-8b": {}
+    }
+  },
   models: {
     mode: "merge",
     providers: {
@@ -766,14 +792,10 @@ via **LM Studio** using the **Responses API**.
 ```json5
 {
   agent: {
-    model: "Minimax",
-    allowedModels: [
-      "anthropic/claude-opus-4-5",
-      "lmstudio/minimax-m2.1-gs32"
-    ],
-    modelAliases: {
-      Opus: "anthropic/claude-opus-4-5",
-      Minimax: "lmstudio/minimax-m2.1-gs32"
+    model: { primary: "lmstudio/minimax-m2.1-gs32" },
+    models: {
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" }
     }
   },
   models: {

@@ -34,6 +34,7 @@ export type SessionEntry = {
   elevatedLevel?: string;
   providerOverride?: string;
   modelOverride?: string;
+  authProfileOverride?: string;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
   sendPolicy?: "allow" | "deny";

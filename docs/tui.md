@@ -48,7 +48,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/help`
 - `/status`
 - `/session <key>` (or `/sessions`)
-- `/model <provider/model>` (or `/models`)
+- `/model <provider/model>` (or `/model list`, `/models`)
 - `/think <off|minimal|low|medium|high>`
 - `/verbose <on|off>`
 - `/elevated <on|off>`

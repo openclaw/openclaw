@@ -2,17 +2,17 @@ import path from "node:path";
 
 import {
   loginAnthropic,
+  loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
-import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
 } from "../commands/antigravity-oauth.js";
 import { healthCommand } from "../commands/health.js";
 import {
+  applyAuthProfileConfig,
   applyMinimaxConfig,
   setAnthropicApiKey,
   writeOAuthCredentials,
@@ -227,6 +227,11 @@ export async function runOnboardingWizard(
       spin.stop("OAuth complete");
       if (oauthCreds) {
         await writeOAuthCredentials("anthropic", oauthCreds);
+        nextConfig = applyAuthProfileConfig(nextConfig, {
+          profileId: "anthropic:default",
+          provider: "anthropic",
+          mode: "oauth",
+        });
       }
     } catch (err) {
       spin.stop("OAuth failed");
@@ -250,10 +255,7 @@ export async function runOnboardingWizard(
     );
     const spin = prompter.progress("Starting OAuth flow…");
     try {
-      const agentDir = resolveClawdbotAgentDir();
-      const authStorage = discoverAuthStorage(agentDir);
-      const provider = "openai-codex" as unknown as OAuthProvider;
-      await authStorage.login(provider, {
+      const creds = await loginOpenAICodex({
         onAuth: async ({ url }) => {
           if (isRemote) {
             spin.stop("OAuth URL ready");
@@ -275,6 +277,17 @@ export async function runOnboardingWizard(
         onProgress: (msg) => spin.update(msg),
       });
       spin.stop("OpenAI OAuth complete");
+      if (creds) {
+        await writeOAuthCredentials(
+          "openai-codex" as unknown as OAuthProvider,
+          creds,
+        );
+        nextConfig = applyAuthProfileConfig(nextConfig, {
+          profileId: "openai-codex:default",
+          provider: "openai-codex",
+          mode: "oauth",
+        });
+      }
     } catch (err) {
       spin.stop("OpenAI OAuth failed");
       runtime.error(String(err));
@@ -314,11 +327,29 @@ export async function runOnboardingWizard(
       spin.stop("Antigravity OAuth complete");
       if (oauthCreds) {
         await writeOAuthCredentials("google-antigravity", oauthCreds);
+        nextConfig = applyAuthProfileConfig(nextConfig, {
+          profileId: "google-antigravity:default",
+          provider: "google-antigravity",
+          mode: "oauth",
+        });
         nextConfig = {
           ...nextConfig,
           agent: {
             ...nextConfig.agent,
-            model: "google-antigravity/claude-opus-4-5-thinking",
+            model: {
+              ...((nextConfig.agent?.model as {
+                primary?: string;
+                fallbacks?: string[];
+              }) ?? {}),
+              primary: "google-antigravity/claude-opus-4-5-thinking",
+            },
+            models: {
+              ...nextConfig.agent?.models,
+              "google-antigravity/claude-opus-4-5-thinking":
+                nextConfig.agent?.models?.[
+                  "google-antigravity/claude-opus-4-5-thinking"
+                ] ?? {},
+            },
           },
         };
         await prompter.note(
@@ -336,6 +367,11 @@ export async function runOnboardingWizard(
       validate: (value) => (value?.trim() ? undefined : "Required"),
     });
     await setAnthropicApiKey(String(key).trim());
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "anthropic:default",
+      provider: "anthropic",
+      mode: "api_key",
+    });
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
   }

@@ -18,7 +18,7 @@ export async function modelsFallbacksListCommand(
 ) {
   ensureFlagCompatibility(opts);
   const cfg = loadConfig();
-  const fallbacks = cfg.agent?.modelFallbacks ?? [];
+  const fallbacks = cfg.agent?.model?.fallbacks ?? [];
 
   if (opts.json) {
     runtime.log(JSON.stringify({ fallbacks }, null, 2));
@@ -44,11 +44,13 @@ export async function modelsFallbacksAddCommand(
   const updated = await updateConfig((cfg) => {
     const resolved = resolveModelTarget({ raw: modelRaw, cfg });
     const targetKey = modelKey(resolved.provider, resolved.model);
+    const nextModels = { ...cfg.agent?.models };
+    if (!nextModels[targetKey]) nextModels[targetKey] = {};
     const aliasIndex = buildModelAliasIndex({
       cfg,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = cfg.agent?.modelFallbacks ?? [];
+    const existing = cfg.agent?.model?.fallbacks ?? [];
     const existingKeys = existing
       .map((entry) =>
         resolveModelRefFromString({
@@ -66,13 +68,22 @@ export async function modelsFallbacksAddCommand(
       ...cfg,
       agent: {
         ...cfg.agent,
-        modelFallbacks: [...existing, targetKey],
+        model: {
+          ...((cfg.agent?.model as {
+            primary?: string;
+            fallbacks?: string[];
+          }) ?? {}),
+          fallbacks: [...existing, targetKey],
+        },
+        models: nextModels,
       },
     };
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  runtime.log(`Fallbacks: ${(updated.agent?.modelFallbacks ?? []).join(", ")}`);
+  runtime.log(
+    `Fallbacks: ${(updated.agent?.model?.fallbacks ?? []).join(", ")}`,
+  );
 }
 
 export async function modelsFallbacksRemoveCommand(
@@ -86,7 +97,7 @@ export async function modelsFallbacksRemoveCommand(
       cfg,
       defaultProvider: DEFAULT_PROVIDER,
     });
-    const existing = cfg.agent?.modelFallbacks ?? [];
+    const existing = cfg.agent?.model?.fallbacks ?? [];
     const filtered = existing.filter((entry) => {
       const resolvedEntry = resolveModelRefFromString({
         raw: String(entry ?? ""),
@@ -108,13 +119,21 @@ export async function modelsFallbacksRemoveCommand(
       ...cfg,
       agent: {
         ...cfg.agent,
-        modelFallbacks: filtered,
+        model: {
+          ...((cfg.agent?.model as {
+            primary?: string;
+            fallbacks?: string[];
+          }) ?? {}),
+          fallbacks: filtered,
+        },
       },
     };
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  runtime.log(`Fallbacks: ${(updated.agent?.modelFallbacks ?? []).join(", ")}`);
+  runtime.log(
+    `Fallbacks: ${(updated.agent?.model?.fallbacks ?? []).join(", ")}`,
+  );
 }
 
 export async function modelsFallbacksClearCommand(runtime: RuntimeEnv) {
@@ -122,7 +141,11 @@ export async function modelsFallbacksClearCommand(runtime: RuntimeEnv) {
     ...cfg,
     agent: {
       ...cfg.agent,
-      modelFallbacks: [],
+      model: {
+        ...((cfg.agent?.model as { primary?: string; fallbacks?: string[] }) ??
+          {}),
+        fallbacks: [],
+      },
     },
   }));
 

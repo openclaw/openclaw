@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { discoverAuthStorage } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 
 const oauthFixture = {
@@ -13,12 +12,16 @@ const oauthFixture = {
 };
 
 describe("getApiKeyForModel", () => {
-  it("migrates legacy oauth.json into auth.json", async () => {
+  it("migrates legacy oauth.json into auth-profiles.json", async () => {
     const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-oauth-"));
 
     try {
       process.env.CLAWDBOT_STATE_DIR = tempDir;
+      process.env.CLAWDBOT_AGENT_DIR = path.join(tempDir, "agent");
+      process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
       const oauthDir = path.join(tempDir, "credentials");
       await fs.mkdir(oauthDir, { recursive: true, mode: 0o700 });
@@ -27,10 +30,6 @@ describe("getApiKeyForModel", () => {
         `${JSON.stringify({ "openai-codex": oauthFixture }, null, 2)}\n`,
         "utf8",
       );
-
-      const agentDir = path.join(tempDir, "agent");
-      await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-      const authStorage = discoverAuthStorage(agentDir);
 
       vi.resetModules();
       const { getApiKeyForModel } = await import("./model-auth.js");
@@ -41,24 +40,37 @@ describe("getApiKeyForModel", () => {
         api: "openai-codex-responses",
       } as Model<Api>;
 
-      const apiKey = await getApiKeyForModel(model, authStorage);
-      expect(apiKey).toBe(oauthFixture.access);
+      const apiKey = await getApiKeyForModel({ model });
+      expect(apiKey.apiKey).toBe(oauthFixture.access);
 
-      const authJson = await fs.readFile(
-        path.join(agentDir, "auth.json"),
+      const authProfiles = await fs.readFile(
+        path.join(tempDir, "agent", "auth-profiles.json"),
         "utf8",
       );
-      const authData = JSON.parse(authJson) as Record<string, unknown>;
-      expect(authData["openai-codex"]).toMatchObject({
-        type: "oauth",
-        access: oauthFixture.access,
-        refresh: oauthFixture.refresh,
+      const authData = JSON.parse(authProfiles) as Record<string, unknown>;
+      expect(authData.profiles).toMatchObject({
+        "openai-codex:default": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: oauthFixture.access,
+          refresh: oauthFixture.refresh,
+        },
       });
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.CLAWDBOT_STATE_DIR;
       } else {
         process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+      }
+      if (previousAgentDir === undefined) {
+        delete process.env.CLAWDBOT_AGENT_DIR;
+      } else {
+        process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+      }
+      if (previousPiAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
       }
       await fs.rm(tempDir, { recursive: true, force: true });
     }

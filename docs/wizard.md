@@ -52,7 +52,7 @@ It does **not** install or change anything on the remote host.
    - **API key**: stores the key for you.
    - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
-   - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; API keys live in `~/.clawdbot/agent/auth.json`.
+  - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agent/auth-profiles.json` (API keys + OAuth).
 
 3) **Workspace**
    - Default `~/clawd` (configurable).

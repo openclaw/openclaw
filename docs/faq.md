@@ -15,7 +15,8 @@ Everything lives under `~/.clawdbot/`:
 |------|---------|
 | `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
 | `~/.clawdbot/credentials/oauth.json` | OAuth credentials (Anthropic/OpenAI, etc.) |
-| `~/.clawdbot/agent/auth.json` | API key store |
+| `~/.clawdbot/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
+| `~/.clawdbot/agent/auth.json` | Runtime API key cache (managed automatically) |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
 | `~/.clawdbot/sessions/` | Conversation history & state |
 | `~/.clawdbot/sessions/sessions.json` | Session metadata |
@@ -576,21 +577,16 @@ List available models with `/model`, `/model list`, or `/model status`.
 Clawdbot ships a few default model shorthands (you can override them in config):
 `opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`.
 
-**Setup:** Configure allowed models and aliases in `clawdbot.json`:
+**Setup:** Configure models and aliases in `clawdbot.json`:
 
 ```json
 {
   "agent": {
-    "model": "anthropic/claude-opus-4-5",
-    "allowedModels": [
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-5",
-      "anthropic/claude-haiku-4-5"
-    ],
-    "modelAliases": {
-      "opus": "anthropic/claude-opus-4-5",
-      "sonnet": "anthropic/claude-sonnet-4-5",
-      "haiku": "anthropic/claude-haiku-4-5"
+    "model": { "primary": "anthropic/claude-opus-4-5" },
+    "models": {
+      "anthropic/claude-opus-4-5": { "alias": "opus" },
+      "anthropic/claude-sonnet-4-5": { "alias": "sonnet" },
+      "anthropic/claude-haiku-4-5": { "alias": "haiku" }
     }
   }
 }
@@ -606,7 +602,8 @@ If you don't want to use Anthropic directly, you can use alternative providers:
 ```json5
 {
   agent: {
-    model: "openrouter/anthropic/claude-sonnet-4",
+    model: { primary: "openrouter/anthropic/claude-sonnet-4" },
+    models: { "openrouter/anthropic/claude-sonnet-4": {} },
     env: { OPENROUTER_API_KEY: "sk-or-..." }
   }
 }
@@ -616,7 +613,8 @@ If you don't want to use Anthropic directly, you can use alternative providers:
 ```json5
 {
   agent: {
-    model: "zai/glm-4.7",
+    model: { primary: "zai/glm-4.7" },
+    models: { "zai/glm-4.7": {} },
     env: { ZAI_API_KEY: "..." }
   }
 }

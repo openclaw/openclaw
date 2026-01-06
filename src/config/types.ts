@@ -639,7 +639,28 @@ export type ModelsConfig = {
   providers?: Record<string, ModelProviderConfig>;
 };
 
+export type AuthProfileConfig = {
+  provider: string;
+  mode: "api_key" | "oauth";
+  email?: string;
+};
+
+export type AuthConfig = {
+  profiles?: Record<string, AuthProfileConfig>;
+  order?: Record<string, string[]>;
+};
+
+export type AgentModelEntryConfig = {
+  alias?: string;
+};
+
+export type AgentModelListConfig = {
+  primary?: string;
+  fallbacks?: string[];
+};
+
 export type ClawdbotConfig = {
+  auth?: AuthConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
     shellEnv?: {
@@ -669,22 +690,16 @@ export type ClawdbotConfig = {
   skills?: SkillsConfig;
   models?: ModelsConfig;
   agent?: {
-    /** Model id (provider/model), e.g. "anthropic/claude-opus-4-5". */
-    model?: string;
-    /** Optional image-capable model (provider/model) used by the image tool. */
-    imageModel?: string;
+    /** Primary model and fallbacks (provider/model). */
+    model?: AgentModelListConfig;
+    /** Optional image-capable model and fallbacks (provider/model). */
+    imageModel?: AgentModelListConfig;
+    /** Model catalog with optional aliases (full provider/model keys). */
+    models?: Record<string, AgentModelEntryConfig>;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
     /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
     userTimezone?: string;
-    /** Optional allowlist for /model (provider/model or model-only). */
-    allowedModels?: string[];
-    /** Optional model aliases for /model (alias -> provider/model). */
-    modelAliases?: Record<string, string>;
-    /** Ordered fallback models (provider/model). */
-    modelFallbacks?: string[];
-    /** Ordered fallback image models (provider/model) for the image tool. */
-    imageModelFallbacks?: string[];
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
     /** Default thinking level when no /think directive is present. */

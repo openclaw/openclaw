@@ -373,17 +373,46 @@ export const ClawdbotSchema = z.object({
       seamColor: HexColorSchema.optional(),
     })
     .optional(),
+  auth: z
+    .object({
+      profiles: z
+        .record(
+          z.string(),
+          z.object({
+            provider: z.string(),
+            mode: z.union([z.literal("api_key"), z.literal("oauth")]),
+            email: z.string().optional(),
+          }),
+        )
+        .optional(),
+      order: z.record(z.string(), z.array(z.string())).optional(),
+    })
+    .optional(),
   models: ModelsConfigSchema,
   agent: z
     .object({
-      model: z.string().optional(),
-      imageModel: z.string().optional(),
+      model: z
+        .object({
+          primary: z.string().optional(),
+          fallbacks: z.array(z.string()).optional(),
+        })
+        .optional(),
+      imageModel: z
+        .object({
+          primary: z.string().optional(),
+          fallbacks: z.array(z.string()).optional(),
+        })
+        .optional(),
+      models: z
+        .record(
+          z.string(),
+          z.object({
+            alias: z.string().optional(),
+          }),
+        )
+        .optional(),
       workspace: z.string().optional(),
       userTimezone: z.string().optional(),
-      allowedModels: z.array(z.string()).optional(),
-      modelAliases: z.record(z.string(), z.string()).optional(),
-      modelFallbacks: z.array(z.string()).optional(),
-      imageModelFallbacks: z.array(z.string()).optional(),
       contextTokens: z.number().int().positive().optional(),
       tools: z
         .object({

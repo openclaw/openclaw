@@ -84,6 +84,7 @@ export function createFollowupRunner(params: {
             enforceFinalTag: queued.run.enforceFinalTag,
             provider,
             model,
+            authProfileId: queued.run.authProfileId,
             thinkLevel: queued.run.thinkLevel,
             verboseLevel: queued.run.verboseLevel,
             bashElevated: queued.run.bashElevated,

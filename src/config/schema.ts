@@ -87,10 +87,13 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agent.workspace": "Workspace",
-  "agent.model": "Default Model",
-  "agent.imageModel": "Image Model",
-  "agent.modelFallbacks": "Model Fallbacks",
-  "agent.imageModelFallbacks": "Image Model Fallbacks",
+  "auth.profiles": "Auth Profiles",
+  "auth.order": "Auth Profile Order",
+  "agent.models": "Models",
+  "agent.model.primary": "Primary Model",
+  "agent.model.fallbacks": "Model Fallbacks",
+  "agent.imageModel.primary": "Image Model",
+  "agent.imageModel.fallbacks": "Image Model Fallbacks",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
@@ -114,12 +117,18 @@ const FIELD_HELP: Record<string, string> = {
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
     "Debounce window (ms) before applying config changes.",
-  "agent.modelFallbacks":
+  "auth.profiles": "Named auth profiles (provider + mode + optional email).",
+  "auth.order":
+    "Ordered auth profile IDs per provider (used for automatic failover).",
+  "agent.models":
+    "Configured model catalog (keys are full provider/model IDs).",
+  "agent.model.primary": "Primary model (provider/model).",
+  "agent.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
-  "agent.imageModel":
-    "Optional image-capable model (provider/model) used by the image tool.",
-  "agent.imageModelFallbacks":
-    "Ordered fallback image models (provider/model) used by the image tool.",
+  "agent.imageModel.primary":
+    "Optional image model (provider/model) used when the primary model lacks image input.",
+  "agent.imageModel.fallbacks":
+    "Ordered fallback image models (provider/model).",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
 };

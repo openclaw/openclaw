@@ -195,6 +195,7 @@ export async function runReplyAgent(params: {
             enforceFinalTag: followupRun.run.enforceFinalTag,
             provider,
             model,
+            authProfileId: followupRun.run.authProfileId,
             thinkLevel: followupRun.run.thinkLevel,
             verboseLevel: followupRun.run.verboseLevel,
             bashElevated: followupRun.run.bashElevated,
