@@ -349,7 +349,6 @@ export type {
   ErrorShape,
   StateVersion,
   AgentEvent,
-  PollParams,
   AgentWaitParams,
   ChatEvent,
   TickEvent,
