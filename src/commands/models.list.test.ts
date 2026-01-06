@@ -149,7 +149,10 @@ describe("models list/status", () => {
     });
 
     const { modelsListCommand } = await import("./models/list.js");
-    await modelsListCommand({ all: true, provider: "z.ai", json: true }, runtime);
+    await modelsListCommand(
+      { all: true, provider: "z.ai", json: true },
+      runtime,
+    );
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
@@ -186,7 +189,10 @@ describe("models list/status", () => {
     });
 
     const { modelsListCommand } = await import("./models/list.js");
-    await modelsListCommand({ all: true, provider: "Z.AI", json: true }, runtime);
+    await modelsListCommand(
+      { all: true, provider: "Z.AI", json: true },
+      runtime,
+    );
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
@@ -223,7 +229,10 @@ describe("models list/status", () => {
     });
 
     const { modelsListCommand } = await import("./models/list.js");
-    await modelsListCommand({ all: true, provider: "z-ai", json: true }, runtime);
+    await modelsListCommand(
+      { all: true, provider: "z-ai", json: true },
+      runtime,
+    );
 
     expect(runtime.log).toHaveBeenCalledTimes(1);
     const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
