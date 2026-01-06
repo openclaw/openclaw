@@ -331,6 +331,22 @@ export async function uninstallSystemdService({
   }
 }
 
+export async function stopSystemdService({
+  stdout,
+}: {
+  stdout: NodeJS.WritableStream;
+}): Promise<void> {
+  await assertSystemdAvailable();
+  const unitName = `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
+  const res = await execSystemctl(["--user", "stop", unitName]);
+  if (res.code !== 0) {
+    throw new Error(
+      `systemctl stop failed: ${res.stderr || res.stdout}`.trim(),
+    );
+  }
+  stdout.write(`Stopped systemd service: ${unitName}\n`);
+}
+
 export async function restartSystemdService({
   stdout,
 }: {

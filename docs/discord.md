@@ -123,6 +123,7 @@ Example “single server, only allow me, only allow #help”:
 
 Notes:
 - `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
+- `routing.groupChat.mentionPatterns` also count as mentions for guild messages.
 - If `channels` is present, any channel not listed is denied by default.
 
 ### 6) Verify it works
@@ -154,6 +155,7 @@ Notes:
   discord: {
     enabled: true,
     token: "abc.123",
+    groupPolicy: "open",
     mediaMaxMb: 8,
     actions: {
       reactions: true,
@@ -202,10 +204,14 @@ Notes:
 }
 ```
 
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
+
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
 - `dm.allowFrom`: DM allowlist (user ids or names). Omit or set to `["*"]` to allow any DM sender.
 - `dm.groupEnabled`: enable group DMs (default `false`).
 - `dm.groupChannels`: optional allowlist for group DM channel ids or slugs.
+- `groupPolicy`: controls guild channel handling (`open|disabled|allowlist`); `allowlist` requires channel allowlists.
 - `guilds`: per-guild rules keyed by guild id (preferred) or slug.
 - `guilds."*"`: default per-guild settings applied when no explicit entry exists.
 - `guilds.<id>.slug`: optional friendly slug used for display names.

@@ -14,7 +14,11 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { healthCommand } from "./health.js";
-import { applyMinimaxConfig, setAnthropicApiKey } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  applyMinimaxConfig,
+  setAnthropicApiKey,
+} from "./onboard-auth.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -98,6 +102,11 @@ export async function runNonInteractiveOnboarding(
       return;
     }
     await setAnthropicApiKey(key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "anthropic:default",
+      provider: "anthropic",
+      mode: "api_key",
+    });
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
   } else if (

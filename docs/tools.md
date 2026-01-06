@@ -126,7 +126,7 @@ Core parameters:
 - `maxBytesMb` (optional size cap)
 
 Notes:
-- Only available when `agent.imageModel` or `agent.imageModelFallbacks` is set.
+- Only available when `agent.imageModel` is configured (primary or fallbacks).
 - Uses the image model directly (independent of the main chat model).
 
 ### `cron`
@@ -139,7 +139,7 @@ Core actions:
 
 Notes:
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
-- `update` uses `{ jobId, patch }`.
+- `update` uses `{ id, patch }`.
 
 ### `gateway`
 Restart the running Gateway process (in-place).

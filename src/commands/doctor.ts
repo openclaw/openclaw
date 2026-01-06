@@ -10,6 +10,7 @@ import {
   DEFAULT_SANDBOX_IMAGE,
 } from "../agents/sandbox.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -125,6 +126,47 @@ async function runSandboxScript(
   }
 
   runtime.log(`Completed ${scriptRel}.`);
+  return true;
+}
+
+type DoctorOptions = {
+  workspaceSuggestions?: boolean;
+};
+
+const MEMORY_SYSTEM_PROMPT = [
+  "Memory system not found in workspace.",
+  "Paste this into your agent:",
+  "",
+  "Install the memory system by applying:",
+  "https://github.com/clawdbot/clawdbot/commit/9ffea23f31ca1df5183b25668f8f814bee0fb34e",
+  "https://github.com/clawdbot/clawdbot/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
+].join("\n");
+
+async function shouldSuggestMemorySystem(
+  workspaceDir: string,
+): Promise<boolean> {
+  const memoryPaths = [
+    path.join(workspaceDir, "MEMORY.md"),
+    path.join(workspaceDir, "memory.md"),
+  ];
+
+  for (const memoryPath of memoryPaths) {
+    try {
+      await fs.promises.access(memoryPath);
+      return false;
+    } catch {
+      // keep scanning
+    }
+  }
+
+  const agentsPath = path.join(workspaceDir, DEFAULT_AGENTS_FILENAME);
+  try {
+    const content = await fs.promises.readFile(agentsPath, "utf-8");
+    if (/memory\.md/i.test(content)) return false;
+  } catch {
+    // no AGENTS.md or unreadable; treat as missing memory guidance
+  }
+
   return true;
 }
 
@@ -546,7 +588,10 @@ async function maybeMigrateLegacyGatewayService(
   });
 }
 
-export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
+export async function doctorCommand(
+  runtime: RuntimeEnv = defaultRuntime,
+  options: DoctorOptions = {},
+) {
   printWizardHeader(runtime);
   intro("Clawdbot doctor");
 
@@ -660,6 +705,12 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
     if (!loaded) {
       note("Gateway daemon not installed.", "Gateway");
     } else {
+      if (process.platform === "darwin") {
+        note(
+          `LaunchAgent loaded; stopping requires "clawdbot gateway stop" or launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}.`,
+          "Gateway",
+        );
+      }
       const restart = guardCancel(
         await confirm({
           message: "Restart gateway daemon now?",
@@ -687,6 +738,15 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
   cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
   await writeConfigFile(cfg);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+
+  if (options.workspaceSuggestions !== false) {
+    const workspaceDir = resolveUserPath(
+      cfg.agent?.workspace ?? DEFAULT_WORKSPACE,
+    );
+    if (await shouldSuggestMemorySystem(workspaceDir)) {
+      note(MEMORY_SYSTEM_PROMPT, "Workspace");
+    }
+  }
 
   outro("Doctor complete.");
 }

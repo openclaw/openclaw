@@ -139,6 +139,66 @@ describe("monitorIMessageProvider", () => {
     expect(replyMock).toHaveBeenCalled();
   });
 
+  it("allows group messages when requireMention is true but no mentionPatterns exist", async () => {
+    config = {
+      ...config,
+      routing: { groupChat: { mentionPatterns: [] }, allowFrom: [] },
+      imessage: { groups: { "*": { requireMention: true } } },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 12,
+          chat_id: 777,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello group",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).toHaveBeenCalled();
+  });
+
+  it("blocks group messages when imessage.groups is set without a wildcard", async () => {
+    config = {
+      ...config,
+      imessage: { groups: { "99": { requireMention: false } } },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 13,
+          chat_id: 123,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "@clawd hello",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it("prefixes tool and final replies with responsePrefix", async () => {
     config = {
       ...config,
@@ -206,10 +266,13 @@ describe("monitorIMessageProvider", () => {
     );
   });
 
-  it("honors allowFrom entries", async () => {
+  it("honors group allowlist when groupPolicy is allowlist", async () => {
     config = {
       ...config,
-      imessage: { allowFrom: ["chat_id:101"] },
+      imessage: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["chat_id:101"],
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -220,6 +283,35 @@ describe("monitorIMessageProvider", () => {
         message: {
           id: 3,
           chat_id: 202,
+          sender: "+15550003333",
+          is_from_me: false,
+          text: "@clawd hi",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks group messages when groupPolicy is disabled", async () => {
+    config = {
+      ...config,
+      imessage: { groupPolicy: "disabled" },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 10,
+          chat_id: 303,
           sender: "+15550003333",
           is_from_me: false,
           text: "@clawd hi",

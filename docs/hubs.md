@@ -140,16 +140,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Onboarding config protocol](./onboarding-config-protocol.md)
 - [Research: memory](./research/memory.md)
 - [Proposal: model config](./proposals/model-config.md)
-- [Refactor: agent loop](./refactor/agent-loop.md)
-- [Refactor: browser control simplification](./refactor/browser-control-simplification.md)
-- [Refactor: Canvas A2UI](./refactor/canvas-a2ui.md)
-- [Refactor: CLI unification](./refactor/cli-unification.md)
-- [Refactor: gateway client](./refactor/gateway-client.md)
-- [Refactor: gateway](./refactor/gateway.md)
-- [Refactor: new arch](./refactor/new-arch.md)
-- [Refactor: TUI](./refactor/tui.md)
-- [Refactor: web gateway troubleshooting](./refactor/web-gateway-troubleshooting.md)
-- [Refactor: webagent session](./refactor/webagent-session.md)
 
 ## Testing + release
 

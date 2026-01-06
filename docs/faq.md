@@ -15,7 +15,8 @@ Everything lives under `~/.clawdbot/`:
 |------|---------|
 | `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
 | `~/.clawdbot/credentials/oauth.json` | OAuth credentials (Anthropic/OpenAI, etc.) |
-| `~/.clawdbot/agent/auth.json` | API key store |
+| `~/.clawdbot/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
+| `~/.clawdbot/agent/auth.json` | Runtime API key cache (managed automatically) |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
 | `~/.clawdbot/sessions/` | Conversation history & state |
 | `~/.clawdbot/sessions/sessions.json` | Session metadata |
@@ -78,7 +79,7 @@ This creates `~/.clawdbot/clawdbot.json` with your API keys, workspace path, and
 cp -r ~/.clawdbot ~/.clawdbot-backup
 
 # Remove config and credentials
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 
 # Re-run onboarding
 pnpm clawdbot onboard
@@ -301,7 +302,7 @@ Claude Opus has a 200k token context window, and Clawdbot uses **autocompaction*
 
 Practical tips:
 - Keep `AGENTS.md` focused, not bloated.
-- Use `/new` to reset the session when context gets stale.
+- Use `/compact` to shrink older context or `/new` to reset when it gets stale.
 - For large memory/notes collections, use search tools like `qmd` rather than loading everything.
 
 ### Where are my memory files?
@@ -491,6 +492,9 @@ The gateway runs under a supervisor that auto-restarts it. You need to stop the 
 # Check if running
 launchctl list | grep clawdbot
 
+# Stop (disable does NOT stop a running job)
+clawdbot gateway stop
+
 # Stop and disable
 launchctl disable gui/$UID/com.clawdbot.gateway
 launchctl bootout gui/$UID/com.clawdbot.gateway
@@ -498,6 +502,9 @@ launchctl bootout gui/$UID/com.clawdbot.gateway
 # Re-enable later
 launchctl enable gui/$UID/com.clawdbot.gateway
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.gateway.plist
+
+# Or just restart
+clawdbot gateway restart
 ```
 
 **Linux (systemd)**
@@ -507,7 +514,11 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.gateway.plist
 systemctl list-units | grep -i clawdbot
 
 # Stop and disable
-sudo systemctl disable --now clawdbot
+clawdbot gateway stop
+systemctl --user disable --now clawdbot-gateway.service
+
+# Or just restart
+clawdbot gateway restart
 ```
 
 **pm2 (if used)**
@@ -531,10 +542,10 @@ sudo systemctl disable --now clawdbot
 pkill -f "clawdbot"
 
 # Remove data
-rm -rf ~/.clawdbot
+trash ~/.clawdbot
 
 # Remove repo and re-clone
-rm -rf ~/clawdbot
+trash ~/clawdbot
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot && pnpm install && pnpm build
 pnpm clawdbot onboard
@@ -550,6 +561,9 @@ Quick reference (send these in chat):
 |---------|--------|
 | `/status` | Health + session info |
 | `/new` or `/reset` | Reset the session |
+| `/compact` | Compact session context |
+
+Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authorization on other surfaces).
 | `/think <level>` | Set thinking level (off\|minimal\|low\|medium\|high) |
 | `/verbose on\|off` | Toggle verbose mode |
 | `/elevated on\|off` | Toggle elevated bash mode (approved senders only) |
@@ -576,21 +590,16 @@ List available models with `/model`, `/model list`, or `/model status`.
 Clawdbot ships a few default model shorthands (you can override them in config):
 `opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`.
 
-**Setup:** Configure allowed models and aliases in `clawdbot.json`:
+**Setup:** Configure models and aliases in `clawdbot.json`:
 
 ```json
 {
   "agent": {
-    "model": "anthropic/claude-opus-4-5",
-    "allowedModels": [
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-5",
-      "anthropic/claude-haiku-4-5"
-    ],
-    "modelAliases": {
-      "opus": "anthropic/claude-opus-4-5",
-      "sonnet": "anthropic/claude-sonnet-4-5",
-      "haiku": "anthropic/claude-haiku-4-5"
+    "model": { "primary": "anthropic/claude-opus-4-5" },
+    "models": {
+      "anthropic/claude-opus-4-5": { "alias": "opus" },
+      "anthropic/claude-sonnet-4-5": { "alias": "sonnet" },
+      "anthropic/claude-haiku-4-5": { "alias": "haiku" }
     }
   }
 }
@@ -606,7 +615,8 @@ If you don't want to use Anthropic directly, you can use alternative providers:
 ```json5
 {
   agent: {
-    model: "openrouter/anthropic/claude-sonnet-4",
+    model: { primary: "openrouter/anthropic/claude-sonnet-4" },
+    models: { "openrouter/anthropic/claude-sonnet-4": {} },
     env: { OPENROUTER_API_KEY: "sk-or-..." }
   }
 }
@@ -616,7 +626,8 @@ If you don't want to use Anthropic directly, you can use alternative providers:
 ```json5
 {
   agent: {
-    model: "zai/glm-4.7",
+    model: { primary: "zai/glm-4.7" },
+    models: { "zai/glm-4.7": {} },
     env: { ZAI_API_KEY: "..." }
   }
 }

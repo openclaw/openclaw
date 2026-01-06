@@ -19,7 +19,7 @@ read_when:
 <p align="center">
   <a href="https://github.com/clawdbot/clawdbot">GitHub</a> ·
   <a href="https://github.com/clawdbot/clawdbot/releases">Releases</a> ·
-  <a href="https://docs.clawdbot.com/">Docs</a> ·
+  <a href="https://github.com/clawdbot/clawdbot/blob/main/docs/index.md">Docs</a> ·
   <a href="./clawd.md">Clawd setup</a>
 </p>
 
@@ -181,6 +181,7 @@ Example:
 ## Core Contributors
 
 - **Maxim Vovshin** (@Hyaxia, 36747317+Hyaxia@users.noreply.github.com) — Blogwatcher skill
+- **Nacho Iacovino** (@nachoiacovino, nacho.iacovino@gmail.com) — Location parsing (Telegram + WhatsApp)
 
 ## License
 

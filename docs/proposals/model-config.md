@@ -87,7 +87,7 @@ Model listing
   - alias
   - provider
   - auth order (from `auth.order`)
-  - auth source for the current provider (env/auth.json/models.json)
+  - auth source for the current provider (auth-profiles.json/env/shell env/models.json)
 
 ## Fallback behavior (global)
 
@@ -121,19 +121,20 @@ Support detection
 ## Migration (doctor + gateway auto-run)
 
 Inputs
-- `agent.model` (string)
-- `agent.modelFallbacks` (string[])
-- `agent.imageModel` (string)
-- `agent.imageModelFallbacks` (string[])
-- `agent.allowedModels` (string[])
-- `agent.modelAliases` (record)
+- Legacy keys (pre-migration):
+  - `agent.model` (string)
+  - `agent.modelFallbacks` (string[])
+  - `agent.imageModel` (string)
+  - `agent.imageModelFallbacks` (string[])
+  - `agent.allowedModels` (string[])
+  - `agent.modelAliases` (record)
 
 Outputs
 - `agent.models` map with keys for all referenced models
 - `agent.model.primary/fallbacks`
 - `agent.imageModel.primary/fallbacks`
-- `auth.profiles` seeded from current auth.json + env (as `provider:default`)
-- `auth.order` seeded with `["provider:default"]`
+- Auth profile store seeded from current auth-profiles.json/auth.json + oauth.json + env (as `provider:default`)
+- `auth.order` seeded with `["provider:default"]` when config is updated
 
 Auto-run
 - Gateway start detects legacy keys and runs doctor migration.

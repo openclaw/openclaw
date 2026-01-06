@@ -41,7 +41,7 @@ The macOS app should:
   - `~/.clawdbot/credentials/oauth.json` (file mode `0600`, directory mode `0700`)
 
 Why this location matters: it’s the Clawdbot-owned OAuth store.
-Clawdbot also imports `oauth.json` into the agent auth store (`~/.clawdbot/agent/auth.json`) on first use.
+Clawdbot also imports `oauth.json` into the agent auth profile store (`~/.clawdbot/agent/auth-profiles.json`) on first use.
 
 ### Recommended: OAuth (OpenAI Codex)
 
@@ -50,6 +50,7 @@ The macOS app should:
 - Auto-capture the callback on `http://127.0.0.1:1455/auth/callback` when possible.
 - If the callback fails, prompt the user to paste the redirect URL or code.
 - Store credentials in `~/.clawdbot/credentials/oauth.json` (same OAuth store as Anthropic).
+- Set `agent.model` to `openai-codex/gpt-5.2` when the model is unset or `openai/*`.
 
 ### Alternative: API key (instructions only)
 
@@ -148,7 +149,7 @@ If the Gateway runs on another machine, OAuth credentials must be created/stored
 
 For now, remote onboarding should:
 - explain why OAuth isn't shown
-- point the user at the credential location (`~/.clawdbot/credentials/oauth.json`) and the workspace location on the gateway host
+- point the user at the credential location (`~/.clawdbot/credentials/oauth.json`) and the auth profile store (`~/.clawdbot/agent/auth-profiles.json`) on the gateway host
 - mention that the **bootstrap ritual happens on the gateway host** (same BOOTSTRAP/IDENTITY/USER files)
 
 ### Manual credential setup
