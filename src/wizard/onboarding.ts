@@ -58,11 +58,6 @@ import type {
   ResetScope,
 } from "../commands/onboard-types.js";
 import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "../commands/daemon-runtime.js";
-import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "../commands/openai-codex-model-default.js";
