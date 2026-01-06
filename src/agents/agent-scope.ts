@@ -53,3 +53,12 @@ export function resolveAgentDir(cfg: ClawdbotConfig, agentId: string) {
   const root = resolveStateDir(process.env, os.homedir);
   return path.join(root, "agents", id, "agent");
 }
+
+/**
+ * Resolve the agent directory for the default agent without requiring config.
+ * Used by onboarding when writing auth profiles before config is fully set up.
+ */
+export function resolveDefaultAgentDir(): string {
+  const root = resolveStateDir(process.env, os.homedir);
+  return path.join(root, "agents", DEFAULT_AGENT_ID, "agent");
+}
