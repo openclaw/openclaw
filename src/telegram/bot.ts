@@ -21,7 +21,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
-import { detectMime } from "../media/mime.js";
+import { detectMime, isGifMedia } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
@@ -176,9 +176,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ).trim();
       if (!rawBody) return;
       const replySuffix = replyTarget
-        ? `\n\n[Replying to ${replyTarget.sender}${
-            replyTarget.id ? ` id:${replyTarget.id}` : ""
-          }]\n${replyTarget.body}\n[/Replying]`
+        ? `\n\n[Replying to ${replyTarget.sender}${replyTarget.id ? ` id:${replyTarget.id}` : ""}]\n${replyTarget.body}\n[/Replying]`
         : "";
       const body = formatAgentEnvelope({
         surface: "Telegram",
@@ -336,14 +334,24 @@ async function deliverReplies(params: {
     for (const mediaUrl of mediaList) {
       const media = await loadWebMedia(mediaUrl);
       const kind = mediaKindFromMime(media.contentType ?? undefined);
-      const file = new InputFile(media.buffer, media.fileName ?? "file");
+      const isGif = isGifMedia({
+        contentType: media.contentType,
+        fileName: media.fileName,
+      });
+      const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
+      const file = new InputFile(media.buffer, fileName);
       const caption = first ? (reply.text ?? undefined) : undefined;
       first = false;
       const replyToMessageId =
         replyToId && (replyToMode === "all" || !hasReplied)
           ? replyToId
           : undefined;
-      if (kind === "image") {
+      if (isGif) {
+        await bot.api.sendAnimation(chatId, file, {
+          caption,
+          reply_to_message_id: replyToMessageId,
+        });
+      } else if (kind === "image") {
         await bot.api.sendPhoto(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
