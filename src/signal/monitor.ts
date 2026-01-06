@@ -463,6 +463,7 @@ export async function monitorSignalProvider(
         SenderName: envelope.sourceName ?? sender,
         SenderId: sender,
         Provider: "signal" as const,
+        Surface: "signal" as const,
         MessageSid: envelope.timestamp ? String(envelope.timestamp) : undefined,
         Timestamp: envelope.timestamp ?? undefined,
         MediaPath: mediaPath,

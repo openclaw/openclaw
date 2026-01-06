@@ -823,6 +823,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       SenderName: senderName,
       SenderId: message.user,
       Provider: "slack" as const,
+      Surface: "slack" as const,
       MessageSid: message.ts,
       ReplyToId: message.thread_ts ?? message.ts,
       Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
