@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessions from "../../config/sessions.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
@@ -208,6 +209,151 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payloads[0]?.text).toContain("Auto-compaction complete");
     expect(payloads[0]?.text).toContain("count 1");
     expect(sessionStore.main.compactionCount).toBe(1);
+  });
+  it("resets corrupted Gemini sessions and deletes transcripts", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const stateDir = await fs.mkdtemp(
+      path.join(tmpdir(), "clawdbot-session-reset-"),
+    );
+    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    try {
+      const sessionId = "session-corrupt";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry = { sessionId, updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "bad", "utf-8");
+
+      runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "function call turn comes immediately after a user turn or after a function response turn",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Session history was corrupted"),
+      });
+      expect(sessionStore.main).toBeUndefined();
+      await expect(fs.access(transcriptPath)).rejects.toThrow();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeUndefined();
+    } finally {
+      if (prevStateDir) {
+        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+      } else {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      }
+    }
+  });
+
+  it("keeps sessions intact on other errors", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const stateDir = await fs.mkdtemp(
+      path.join(tmpdir(), "clawdbot-session-noreset-"),
+    );
+    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    try {
+      const sessionId = "session-ok";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry = { sessionId, updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("INVALID_ARGUMENT: some other failure");
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Agent failed before reply"),
+      });
+      expect(sessionStore.main).toBeDefined();
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeDefined();
+    } finally {
+      if (prevStateDir) {
+        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+      } else {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      }
+    }
+  });
+
+  it("still replies even if session reset fails to persist", async () => {
+    const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
+    const stateDir = await fs.mkdtemp(
+      path.join(tmpdir(), "clawdbot-session-reset-fail-"),
+    );
+    process.env.CLAWDBOT_STATE_DIR = stateDir;
+    const saveSpy = vi
+      .spyOn(sessions, "saveSessionStore")
+      .mockRejectedValueOnce(new Error("boom"));
+    try {
+      const sessionId = "session-corrupt";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry = { sessionId, updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "bad", "utf-8");
+
+      runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "function call turn comes immediately after a user turn or after a function response turn",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Session history was corrupted"),
+      });
+      expect(sessionStore.main).toBeUndefined();
+      await expect(fs.access(transcriptPath)).rejects.toThrow();
+    } finally {
+      saveSpy.mockRestore();
+      if (prevStateDir) {
+        process.env.CLAWDBOT_STATE_DIR = prevStateDir;
+      } else {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      }
+    }
   });
 
   it("rewrites Bun socket errors into friendly text", async () => {

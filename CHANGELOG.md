@@ -105,6 +105,7 @@
 - Telegram: support media groups (multi-image messages). Thanks @obviyus for PR #220.
 - Telegram/WhatsApp: parse shared locations (pins, places, live) and expose structured ctx fields. Thanks @nachoiacovino for PR #194.
 - Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
+- Auto-reply: reset corrupted Gemini sessions when function-call ordering breaks. Thanks @VACInc for PR #297.
 - Auto-reply: track compaction count in session status; verbose mode announces auto-compactions.
 - Telegram: notify users when inbound media exceeds size limits. Thanks @jarvis-medmatic for PR #283.
 - Telegram: send GIF media as animations (auto-play) and improve filename sniffing.

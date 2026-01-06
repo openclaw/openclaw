@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
@@ -9,6 +10,7 @@ import {
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
+  resolveSessionTranscriptPath,
   type SessionEntry,
   saveSessionStore,
 } from "../../config/sessions.js";
@@ -378,6 +380,42 @@ export async function runReplyAgent(params: {
       const message = err instanceof Error ? err.message : String(err);
       const isContextOverflow =
         /context.*overflow|too large|context window/i.test(message);
+      const isSessionCorruption =
+        /function call turn comes immediately after/i.test(message);
+
+      // Auto-recover from Gemini session corruption by resetting the session
+      if (isSessionCorruption && sessionKey && sessionStore && storePath) {
+        const corruptedSessionId = sessionEntry?.sessionId;
+        defaultRuntime.error(
+          `Session history corrupted (Gemini function call ordering). Resetting session: ${sessionKey}`,
+        );
+
+        try {
+          // Delete transcript file if it exists
+          if (corruptedSessionId) {
+            const transcriptPath =
+              resolveSessionTranscriptPath(corruptedSessionId);
+            try {
+              fs.unlinkSync(transcriptPath);
+            } catch {
+              // Ignore if file doesn't exist
+            }
+          }
+
+          // Remove session entry from store
+          delete sessionStore[sessionKey];
+          await saveSessionStore(storePath, sessionStore);
+        } catch (cleanupErr) {
+          defaultRuntime.error(
+            `Failed to reset corrupted session ${sessionKey}: ${String(cleanupErr)}`,
+          );
+        }
+
+        return finalizeWithFollowup({
+          text: "⚠️ Session history was corrupted. I've reset the conversation - please try again!",
+        });
+      }
+
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
       return finalizeWithFollowup({
         text: isContextOverflow
