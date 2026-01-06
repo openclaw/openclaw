@@ -35,6 +35,7 @@
 - Heartbeat: make HEARTBEAT_OK ack padding configurable across heartbeat and cron delivery. (#238) — thanks @jalehman
 - WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.
 - Slack: keep auto-replies in the original thread when responding to thread messages. Thanks @scald for PR #251.
+- Docs: clarify Slack manifest scopes (current vs optional) with references. Thanks @jarvis-medmatic for PR #235.
 - Control UI: avoid Slack config ReferenceError by reading slack config snapshots. Thanks @sreekaransrinath for PR #249.
 - Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks @regenrek for PR #242.
 
