@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const readConfigFileSnapshot = vi.fn();
 const confirm = vi.fn().mockResolvedValue(true);
+const select = vi.fn().mockResolvedValue("node");
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
 const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
@@ -47,6 +48,7 @@ vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
   note: vi.fn(),
   outro: vi.fn(),
+  select,
 }));
 
 vi.mock("../agents/skills-status.js", () => ({
