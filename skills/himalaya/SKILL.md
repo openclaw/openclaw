@@ -79,7 +79,7 @@ himalaya envelope list --page 1 --page-size 20
 ### Search Emails
 
 ```bash
-himalaya envelope list --query "from john@example.com subject meeting"
+himalaya envelope list from john@example.com subject meeting
 ```
 
 ### Read an Email
@@ -195,13 +195,6 @@ Most commands support `--output` for structured output:
 ```bash
 himalaya envelope list --output json
 himalaya envelope list --output plain
-```
-
-## Sync Mode
-
-For faster access, enable local caching:
-```bash
-himalaya account sync personal
 ```
 
 ## Debugging
