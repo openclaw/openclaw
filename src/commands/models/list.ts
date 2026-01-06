@@ -64,6 +64,21 @@ const colorize = (
   value: string,
 ) => (rich ? color(value) : value);
 
+const formatKey = (key: string, rich: boolean) =>
+  colorize(rich, chalk.yellow, key);
+
+const formatValue = (value: string, rich: boolean) =>
+  colorize(rich, chalk.white, value);
+
+const formatKeyValue = (
+  key: string,
+  value: string,
+  rich: boolean,
+  valueColor: (value: string) => string = chalk.white,
+) => `${formatKey(key, rich)}=${colorize(rich, valueColor, value)}`;
+
+const formatSeparator = (rich: boolean) => colorize(rich, chalk.gray, " | ");
+
 const formatTag = (tag: string, rich: boolean) => {
   if (!rich) return tag;
   if (tag === "default") return chalk.greenBright(tag);
@@ -853,18 +868,48 @@ export async function modelsStatusCommand(
   );
 
   for (const entry of providerAuth) {
+    const separator = formatSeparator(rich);
     const bits: string[] = [];
-    bits.push(`effective=${entry.effective.kind}:${entry.effective.detail}`);
+    bits.push(
+      formatKeyValue(
+        "effective",
+        `${colorize(rich, chalk.magenta, entry.effective.kind)}:${colorize(
+          rich,
+          chalk.gray,
+          entry.effective.detail,
+        )}`,
+        rich,
+        (value) => value,
+      ),
+    );
     if (entry.profiles.count > 0) {
       bits.push(
-        `profiles=${entry.profiles.count} (oauth=${entry.profiles.oauth}, api_key=${entry.profiles.apiKey})`,
+        formatKeyValue(
+          "profiles",
+          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, api_key=${entry.profiles.apiKey})`,
+          rich,
+        ),
       );
       if (entry.profiles.labels.length > 0) {
-        bits.push(entry.profiles.labels.join(", "));
+        bits.push(formatValue(entry.profiles.labels.join(", "), rich));
       }
     }
-    if (entry.env) bits.push(`env=${entry.env.value} (${entry.env.source})`);
-    if (entry.modelsJson) bits.push(`models.json=${entry.modelsJson.value}`);
-    runtime.log(`${entry.provider}: ${bits.join(" | ")}`);
+    if (entry.env) {
+      bits.push(
+        formatKeyValue(
+          "env",
+          `${entry.env.value} (${entry.env.source})`,
+          rich,
+          chalk.gray,
+        ),
+      );
+    }
+    if (entry.modelsJson) {
+      bits.push(
+        formatKeyValue("models.json", entry.modelsJson.value, rich, chalk.gray),
+      );
+    }
+    const providerLabel = colorize(rich, chalk.cyan, entry.provider);
+    runtime.log(`${providerLabel}: ${bits.join(separator)}`);
   }
 }
