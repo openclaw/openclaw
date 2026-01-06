@@ -15,6 +15,7 @@
 - CLI: auto-migrate legacy config entries on command start (same behavior as gateway startup).
 - Auth: prioritize OAuth profiles but fall back to API keys when refresh fails; stored profiles now load without explicit auth order.
 - Control UI: harden config Form view with schema normalization, map editing, and guardrails to prevent data loss on save.
+- Cron: normalize cron.add/update inputs, align channel enums/status fields across gateway/CLI/UI/macOS, and add protocol conformance tests. Thanks @mneves75 for PR #256.
 - Docs: add group chat participation guidance to the AGENTS template.
 - Gmail: stop restart loop when `gog gmail watch serve` fails to bind (address already in use).
 - Linux: auto-attempt lingering during onboarding (try without sudo, fallback to sudo) and prompt on install/restart to keep the gateway alive after logout/idle. Thanks @tobiasbischoff for PR #237.
