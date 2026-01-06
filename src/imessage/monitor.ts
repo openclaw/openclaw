@@ -9,6 +9,10 @@ import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
+import {
+  resolveProviderGroupPolicy,
+  resolveProviderGroupRequireMention,
+} from "../config/group-policy.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -69,24 +73,6 @@ function resolveAllowFrom(opts: MonitorIMessageOpts): string[] {
   const cfg = loadConfig();
   const raw = opts.allowFrom ?? cfg.imessage?.allowFrom ?? [];
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
-}
-
-function resolveGroupRequireMention(
-  cfg: ReturnType<typeof loadConfig>,
-  opts: MonitorIMessageOpts,
-  chatId?: number | null,
-): boolean {
-  if (typeof opts.requireMention === "boolean") return opts.requireMention;
-  const groupId = chatId != null ? String(chatId) : undefined;
-  if (groupId) {
-    const groupConfig = cfg.imessage?.groups?.[groupId];
-    if (typeof groupConfig?.requireMention === "boolean") {
-      return groupConfig.requireMention;
-    }
-  }
-  const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
-  if (typeof groupDefault === "boolean") return groupDefault;
-  return true;
 }
 
 async function deliverReplies(params: {
@@ -152,6 +138,21 @@ export async function monitorIMessageProvider(
     const isGroup = Boolean(message.is_group);
     if (isGroup && !chatId) return;
 
+    const groupId = isGroup ? String(chatId) : undefined;
+    if (isGroup) {
+      const groupPolicy = resolveProviderGroupPolicy({
+        cfg,
+        surface: "imessage",
+        groupId,
+      });
+      if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+        logVerbose(
+          `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
+        );
+        return;
+      }
+    }
+
     const commandAuthorized = isAllowedIMessageSender({
       allowFrom,
       sender,
@@ -168,7 +169,13 @@ export async function monitorIMessageProvider(
     const mentioned = isGroup
       ? matchesMentionPatterns(messageText, mentionRegexes)
       : true;
-    const requireMention = resolveGroupRequireMention(cfg, opts, chatId);
+    const requireMention = resolveProviderGroupRequireMention({
+      cfg,
+      surface: "imessage",
+      groupId,
+      requireMentionOverride: opts.requireMention,
+      overrideOrder: "before-config",
+    });
     const canDetectMention = mentionRegexes.length > 0;
     const shouldBypassMention =
       isGroup &&

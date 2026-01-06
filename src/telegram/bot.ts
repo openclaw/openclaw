@@ -17,6 +17,10 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import {
+  resolveProviderGroupPolicy,
+  resolveProviderGroupRequireMention,
+} from "../config/group-policy.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -73,17 +77,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     (opts.mediaMaxMb ?? cfg.telegram?.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const mentionRegexes = buildMentionRegexes(cfg);
-  const resolveGroupRequireMention = (chatId: string | number) => {
-    const groupId = String(chatId);
-    const groupConfig = cfg.telegram?.groups?.[groupId];
-    if (typeof groupConfig?.requireMention === "boolean") {
-      return groupConfig.requireMention;
-    }
-    const groupDefault = cfg.telegram?.groups?.["*"]?.requireMention;
-    if (typeof groupDefault === "boolean") return groupDefault;
-    if (typeof opts.requireMention === "boolean") return opts.requireMention;
-    return true;
-  };
+  const resolveGroupPolicy = (chatId: string | number) =>
+    resolveProviderGroupPolicy({
+      cfg,
+      surface: "telegram",
+      groupId: String(chatId),
+    });
+  const resolveGroupRequireMention = (chatId: string | number) =>
+    resolveProviderGroupRequireMention({
+      cfg,
+      surface: "telegram",
+      groupId: String(chatId),
+      requireMentionOverride: opts.requireMention,
+      overrideOrder: "after-config",
+    });
 
   bot.on("message", async (ctx) => {
     try {
@@ -92,6 +99,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const chatId = msg.chat.id;
       const isGroup =
         msg.chat.type === "group" || msg.chat.type === "supergroup";
+
+      if (isGroup) {
+        const groupPolicy = resolveGroupPolicy(chatId);
+        if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+          logger.info(
+            { chatId, title: msg.chat.title, reason: "not-allowed" },
+            "skipping group message",
+          );
+          return;
+        }
+      }
 
       const sendTyping = async () => {
         try {
@@ -143,16 +161,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
         (ent) => ent.type === "mention",
       );
+      const requireMention = resolveGroupRequireMention(chatId);
       const shouldBypassMention =
         isGroup &&
-        resolveGroupRequireMention(chatId) &&
+        requireMention &&
         !wasMentioned &&
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(msg.text ?? msg.caption ?? "");
       const canDetectMention =
         Boolean(botUsername) || mentionRegexes.length > 0;
-      if (isGroup && resolveGroupRequireMention(chatId) && canDetectMention) {
+      if (isGroup && requireMention && canDetectMention) {
         if (!wasMentioned && !shouldBypassMention) {
           logger.info(
             { chatId, reason: "no-mention" },

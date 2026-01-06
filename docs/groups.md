@@ -54,6 +54,9 @@ Notes:
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `discord.guilds."*"` (overridable per guild/channel).
 
+## Group allowlists
+When `whatsapp.groups`, `telegram.groups`, or `imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
+
 ## Activation (owner-only)
 Group owners can toggle per-group activation:
 - `/activation mention`

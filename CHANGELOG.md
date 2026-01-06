@@ -53,6 +53,7 @@
 - Docs: clarify Slack manifest scopes (current vs optional) with references. Thanks @jarvis-medmatic for PR #235.
 - Control UI: avoid Slack config ReferenceError by reading slack config snapshots. Thanks @sreekaransrinath for PR #249.
 - Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks @regenrek for PR #242.
+- Telegram: gate groups via `telegram.groups` allowlist (align with WhatsApp/iMessage). Thanks @kitze for PR #241.
 - Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
 - Auto-reply: track compaction count in session status; verbose mode announces auto-compactions.
 - Telegram: send GIF media as animations (auto-play) and improve filename sniffing.
@@ -63,6 +64,7 @@
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
 - Skills: add 1Password CLI skill with op examples.
 - Lint: organize imports and wrap long lines in reply commands.
+- Refactor: centralize group allowlist/mention policy across providers.
 - Deps: update to latest across the repo.
 
 ## 2026.1.5-3

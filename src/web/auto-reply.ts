@@ -21,6 +21,10 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
 import {
+  resolveProviderGroupPolicy,
+  resolveProviderGroupRequireMention,
+} from "../config/group-policy.js";
+import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
   resolveGroupSessionKey,
@@ -850,16 +854,24 @@ export async function monitorWebProvider(
       Surface: "whatsapp",
     });
 
+  const resolveGroupPolicyFor = (conversationId: string) => {
+    const groupId =
+      resolveGroupResolution(conversationId)?.id ?? conversationId;
+    return resolveProviderGroupPolicy({
+      cfg,
+      surface: "whatsapp",
+      groupId,
+    });
+  };
+
   const resolveGroupRequireMentionFor = (conversationId: string) => {
     const groupId =
       resolveGroupResolution(conversationId)?.id ?? conversationId;
-    const groupConfig = cfg.whatsapp?.groups?.[groupId];
-    if (typeof groupConfig?.requireMention === "boolean") {
-      return groupConfig.requireMention;
-    }
-    const groupDefault = cfg.whatsapp?.groups?.["*"]?.requireMention;
-    if (typeof groupDefault === "boolean") return groupDefault;
-    return true;
+    return resolveProviderGroupRequireMention({
+      cfg,
+      surface: "whatsapp",
+      groupId,
+    });
   };
 
   const resolveGroupActivationFor = (conversationId: string) => {
@@ -1275,6 +1287,13 @@ export async function monitorWebProvider(
         }
 
         if (msg.chatType === "group") {
+          const groupPolicy = resolveGroupPolicyFor(conversationId);
+          if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+            logVerbose(
+              `Skipping group message ${conversationId} (not in allowlist)`,
+            );
+            return;
+          }
           noteGroupMember(conversationId, msg.senderE164, msg.senderName);
           const commandBody = stripMentionsForCommand(msg.body, msg.selfE164);
           const activationCommand = parseActivationCommand(commandBody);

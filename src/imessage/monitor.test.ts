@@ -169,6 +169,36 @@ describe("monitorIMessageProvider", () => {
     expect(replyMock).toHaveBeenCalled();
   });
 
+  it("blocks group messages when imessage.groups is set without a wildcard", async () => {
+    config = {
+      ...config,
+      imessage: { groups: { "99": { requireMention: false } } },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 13,
+          chat_id: 123,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "@clawd hello",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+  });
+
   it("prefixes tool and final replies with responsePrefix", async () => {
     config = {
       ...config,
