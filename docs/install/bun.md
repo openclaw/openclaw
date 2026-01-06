@@ -7,12 +7,12 @@ read_when:
 
 # Bun
 
-Goal: run this repo with **Bun** (preferred) without losing pnpm patch behavior.
+Goal: run this repo with **Bun** (optional) without losing pnpm patch behavior.
 
 ## Status
 
-- Bun is the preferred local runtime for running TypeScript directly (`bun run …`, `bun --watch …`).
-- `pnpm` is still fully supported (and used by some docs tooling).
+- Bun is an optional local runtime for running TypeScript directly (`bun run …`, `bun --watch …`).
+- `pnpm` is the default for builds and remains fully supported (and used by some docs tooling).
 - Bun cannot use `pnpm-lock.yaml` and will ignore it.
 
 ## Install

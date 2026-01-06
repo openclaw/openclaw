@@ -71,21 +71,21 @@ Paste the token into the UI settings (sent as `connect.params.auth.token`).
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-bun run ui:install
-bun run ui:build
+pnpm ui:install
+pnpm ui:build
 ```
 
 Optional absolute base (when you want fixed asset URLs):
 
 ```bash
-CLAWDBOT_CONTROL_UI_BASE_PATH=/clawdbot/ bun run ui:build
+CLAWDBOT_CONTROL_UI_BASE_PATH=/clawdbot/ pnpm ui:build
 ```
 
 For local development (separate dev server):
 
 ```bash
-bun run ui:install
-bun run ui:dev
+pnpm ui:install
+pnpm ui:dev
 ```
 
 Then point the UI at your Gateway WS URL (e.g. `ws://127.0.0.1:18789`).

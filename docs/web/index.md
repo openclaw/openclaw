@@ -101,6 +101,6 @@ Open:
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-bun run ui:install
-bun run ui:build
+pnpm ui:install
+pnpm ui:build
 ```

@@ -22,7 +22,7 @@ If you want the deeper reference pages, jump to: [Wizard](/wizard), [Setup](/set
 ## 0) Prereqs
 
 - Node `>=22`
-- `bun` (preferred) or `pnpm`
+- `pnpm` (recommended) or `bun` (optional)
 - Git
 
 macOS: if you plan to build the apps, install Xcode / CLT. For the CLI + gateway only, Node is enough.
@@ -32,13 +32,13 @@ macOS: if you plan to build the apps, install Xcode / CLT. For the CLI + gateway
 ```bash
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
-bun install
+pnpm install
 ```
 
-Note: `pnpm` is also supported:
+Note: Bun is optional if you prefer running TypeScript directly:
 
 ```bash
-pnpm install
+bun install
 ```
 
 ## 2) Build the Control UI (recommended)
@@ -46,9 +46,9 @@ pnpm install
 The Gateway serves the browser dashboard (Control UI) when assets exist.
 
 ```bash
-bun run ui:install
-bun run ui:build
-bun run build
+pnpm ui:install
+pnpm ui:build
+pnpm build
 ```
 
 If you skip UI build, the gateway still works — you just won’t get the dashboard.
@@ -56,7 +56,7 @@ If you skip UI build, the gateway still works — you just won’t get the dashb
 ## 3) Run the onboarding wizard
 
 ```bash
-bun run clawdbot onboard
+pnpm clawdbot onboard
 ```
 
 What you’ll choose:
@@ -98,7 +98,7 @@ https://github.com/oven-sh/bun/issues/5951
 ### WhatsApp (QR login)
 
 ```bash
-bun run clawdbot login
+pnpm clawdbot login
 ```
 
 Scan via WhatsApp → Settings → Linked Devices.
@@ -118,8 +118,8 @@ Default posture: unknown DMs get a short code and messages are not processed unt
 Approve:
 
 ```bash
-bun run clawdbot pairing list --provider telegram
-bun run clawdbot pairing approve --provider telegram <CODE>
+pnpm clawdbot pairing list --provider telegram
+pnpm clawdbot pairing approve --provider telegram <CODE>
 ```
 
 Pairing doc: [Pairing](/pairing)
@@ -129,8 +129,8 @@ Pairing doc: [Pairing](/pairing)
 In a new terminal:
 
 ```bash
-bun run clawdbot health
-bun run clawdbot send --to +15555550123 --message "Hello from Clawdbot"
+pnpm clawdbot health
+pnpm clawdbot send --to +15555550123 --message "Hello from Clawdbot"
 ```
 
 If `health` shows “no auth configured”, go back to the wizard and set OAuth/key auth — the agent won’t be able to respond without it.
