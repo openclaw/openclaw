@@ -28,6 +28,11 @@ import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { detectMime, isGifMedia } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  formatLocationText,
+  type NormalizedLocation,
+  toLocationContext,
+} from "../providers/location.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 
@@ -67,12 +72,6 @@ interface TelegramVenue {
   google_place_id?: string;
   google_place_type?: string;
 }
-
-/** Extended message type that may include location/venue */
-type TelegramMessageWithLocation = TelegramMessage & {
-  location?: TelegramLocation;
-  venue?: TelegramVenue;
-};
 
 type TelegramContext = {
   message: TelegramMessage;
@@ -252,15 +251,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     else if (msg.document) placeholder = "<media:document>";
 
     const replyTarget = describeReplyTarget(msg);
-    const locationText = formatLocationMessage(
-      msg as TelegramMessageWithLocation,
-    );
-    const rawBody = (
-      msg.text ??
-      msg.caption ??
-      locationText ??
-      placeholder
-    ).trim();
+    const locationData = extractTelegramLocation(msg);
+    const locationText = locationData
+      ? formatLocationText(locationData)
+      : undefined;
+    const rawText = (msg.text ?? msg.caption ?? "").trim();
+    let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
+    if (!rawBody) rawBody = placeholder;
     if (!rawBody && allMedia.length === 0) return;
 
     let bodyText = rawBody;
@@ -281,8 +278,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       timestamp: msg.date ? msg.date * 1000 : undefined,
       body: `${bodyText}${replySuffix}`,
     });
-
-    const locationData = extractLocationData(msg);
 
     const ctxPayload = {
       Body: body,
@@ -309,11 +304,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         allMedia.length > 0
           ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
           : undefined,
-      LocationLat: locationData?.latitude,
-      LocationLon: locationData?.longitude,
-      LocationAccuracy: locationData?.accuracy,
-      VenueName: locationData?.venueName,
-      VenueAddress: locationData?.venueAddress,
+      ...(locationData ? toLocationContext(locationData) : undefined),
       CommandAuthorized: commandAuthorized,
     };
 
@@ -739,10 +730,10 @@ function describeReplyTarget(msg: TelegramMessage) {
     else if (reply.video) body = "<media:video>";
     else if (reply.audio || reply.voice) body = "<media:audio>";
     else if (reply.document) body = "<media:document>";
-    else if ((reply as TelegramMessageWithLocation).location)
-      body =
-        formatLocationMessage(reply as TelegramMessageWithLocation) ??
-        "<location>";
+    else {
+      const locationData = extractTelegramLocation(reply);
+      if (locationData) body = formatLocationText(locationData);
+    }
   }
   if (!body) return null;
   const sender = buildSenderName(reply);
@@ -754,59 +745,37 @@ function describeReplyTarget(msg: TelegramMessage) {
   };
 }
 
-/**
- * Extract structured location data from a message.
- */
-function extractLocationData(msg: TelegramMessage): {
-  latitude: number;
-  longitude: number;
-  accuracy?: number;
-  venueName?: string;
-  venueAddress?: string;
-} | null {
-  const msgWithLocation = msg as TelegramMessageWithLocation;
+function extractTelegramLocation(
+  msg: TelegramMessage,
+): NormalizedLocation | null {
+  const msgWithLocation = msg as {
+    location?: TelegramLocation;
+    venue?: TelegramVenue;
+  };
   const { venue, location } = msgWithLocation;
 
   if (venue) {
     return {
       latitude: venue.location.latitude,
       longitude: venue.location.longitude,
-      venueName: venue.title,
-      venueAddress: venue.address,
+      accuracy: venue.location.horizontal_accuracy,
+      name: venue.title,
+      address: venue.address,
+      source: "place",
+      isLive: false,
     };
   }
 
   if (location) {
+    const isLive =
+      typeof location.live_period === "number" && location.live_period > 0;
     return {
       latitude: location.latitude,
       longitude: location.longitude,
       accuracy: location.horizontal_accuracy,
+      source: isLive ? "live" : "pin",
+      isLive,
     };
-  }
-
-  return null;
-}
-
-/**
- * Format location or venue message into text.
- * Handles both raw location shares and venue shares (places with names).
- */
-function formatLocationMessage(
-  msg: TelegramMessageWithLocation,
-): string | null {
-  const { venue, location } = msg;
-
-  if (venue) {
-    const { latitude, longitude } = venue.location;
-    return `[Venue: ${venue.title} - ${venue.address} (${latitude.toFixed(6)}, ${longitude.toFixed(6)})]`;
-  }
-
-  if (location) {
-    const { latitude, longitude, horizontal_accuracy } = location;
-    const accuracy = horizontal_accuracy
-      ? ` ±${Math.round(horizontal_accuracy)}m`
-      : "";
-    return `[Location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}${accuracy}]`;
   }
 
   return null;

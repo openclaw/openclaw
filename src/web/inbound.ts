@@ -17,6 +17,10 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
+  formatLocationText,
+  type NormalizedLocation,
+} from "../providers/location.js";
+import {
   isSelfChatMode,
   jidToE164,
   normalizeE164,
@@ -56,6 +60,7 @@ export type WebInboundMessage = {
   mentionedJids?: string[];
   selfJid?: string | null;
   selfE164?: string | null;
+  location?: NormalizedLocation;
   sendComposing: () => Promise<void>;
   reply: (text: string) => Promise<void>;
   sendMedia: (payload: AnyMessageContent) => Promise<void>;
@@ -241,7 +246,12 @@ export async function monitorWebInbox(options: {
       // but we skip triggering the auto-reply logic to avoid spamming old context.
       if (upsert.type === "append") continue;
 
+      const location = extractLocationData(msg.message ?? undefined);
+      const locationText = location ? formatLocationText(location) : undefined;
       let body = extractText(msg.message ?? undefined);
+      if (locationText) {
+        body = [body, locationText].filter(Boolean).join("\n").trim();
+      }
       if (!body) {
         body = extractMediaPlaceholder(msg.message ?? undefined);
         if (!body) continue;
@@ -319,6 +329,7 @@ export async function monitorWebInbox(options: {
             mentionedJids: mentionedJids ?? undefined,
             selfJid,
             selfE164,
+            location: location ?? undefined,
             sendComposing,
             reply,
             sendMedia,
@@ -598,6 +609,62 @@ export function extractMediaPlaceholder(
   return undefined;
 }
 
+export function extractLocationData(
+  rawMessage: proto.IMessage | undefined,
+): NormalizedLocation | null {
+  const message = unwrapMessage(rawMessage);
+  if (!message) return null;
+
+  const live = message.liveLocationMessage ?? undefined;
+  if (live) {
+    const latitudeRaw = live.degreesLatitude;
+    const longitudeRaw = live.degreesLongitude;
+    if (latitudeRaw != null && longitudeRaw != null) {
+      const latitude = Number(latitudeRaw);
+      const longitude = Number(longitudeRaw);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        return {
+          latitude,
+          longitude,
+          accuracy: live.accuracyInMeters ?? undefined,
+          caption: live.caption ?? undefined,
+          source: "live",
+          isLive: true,
+        };
+      }
+    }
+  }
+
+  const location = message.locationMessage ?? undefined;
+  if (location) {
+    const latitudeRaw = location.degreesLatitude;
+    const longitudeRaw = location.degreesLongitude;
+    if (latitudeRaw != null && longitudeRaw != null) {
+      const latitude = Number(latitudeRaw);
+      const longitude = Number(longitudeRaw);
+      if (Number.isFinite(latitude) && Number.isFinite(longitude)) {
+        const isLive = Boolean(location.isLive);
+        return {
+          latitude,
+          longitude,
+          accuracy: location.accuracyInMeters ?? undefined,
+          name: location.name ?? undefined,
+          address: location.address ?? undefined,
+          caption: location.comment ?? undefined,
+          source: isLive
+            ? "live"
+            : location.name || location.address
+              ? "place"
+              : "pin",
+          isLive,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
 function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   id?: string;
   body: string;
@@ -610,7 +677,11 @@ function describeReplyContext(rawMessage: proto.IMessage | undefined): {
     contextInfo?.quotedMessage as proto.IMessage | undefined,
   ) as proto.IMessage | undefined;
   if (!quoted) return null;
-  const body = extractText(quoted) ?? extractMediaPlaceholder(quoted);
+  const location = extractLocationData(quoted);
+  const locationText = location ? formatLocationText(location) : undefined;
+  const text = extractText(quoted);
+  let body = [text, locationText].filter(Boolean).join("\n").trim();
+  if (!body) body = extractMediaPlaceholder(quoted);
   if (!body) {
     const quotedType = quoted ? getContentType(quoted) : undefined;
     logVerbose(

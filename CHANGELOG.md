@@ -66,6 +66,7 @@
 - Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks Kevin Kern (@regenrek) for PR #242.
 - Telegram: gate groups via `telegram.groups` allowlist (align with WhatsApp/iMessage). Thanks @kitze for PR #241.
 - Telegram: support media groups (multi-image messages). Thanks @obviyus for PR #220.
+- Telegram/WhatsApp: parse shared locations (pins, places, live) and expose structured ctx fields. Thanks @nachoiacovino for PR #194.
 - Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
 - Auto-reply: track compaction count in session status; verbose mode announces auto-compactions.
 - Telegram: send GIF media as animations (auto-play) and improve filename sniffing.

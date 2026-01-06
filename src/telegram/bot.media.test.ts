@@ -341,3 +341,84 @@ describe("telegram media groups", () => {
     fetchSpy.mockRestore();
   }, 2000);
 });
+
+describe("telegram location parsing", () => {
+  it("includes location text and ctx fields for pins", async () => {
+    const { createTelegramBot } = await import("./bot.js");
+    const replyModule = await import("../auto-reply/reply.js");
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0]?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 5,
+        caption: "Meet here",
+        date: 1736380800,
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          horizontal_accuracy: 12,
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ file_path: "unused" }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("Meet here");
+    expect(payload.Body).toContain("48.858844");
+    expect(payload.LocationLat).toBe(48.858844);
+    expect(payload.LocationLon).toBe(2.294351);
+    expect(payload.LocationSource).toBe("pin");
+    expect(payload.LocationIsLive).toBe(false);
+  });
+
+  it("captures venue fields for named places", async () => {
+    const { createTelegramBot } = await import("./bot.js");
+    const replyModule = await import("../auto-reply/reply.js");
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0]?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "private" },
+        message_id: 6,
+        date: 1736380800,
+        venue: {
+          title: "Eiffel Tower",
+          address: "Champ de Mars, Paris",
+          location: { latitude: 48.858844, longitude: 2.294351 },
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ file_path: "unused" }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toContain("Eiffel Tower");
+    expect(payload.LocationName).toBe("Eiffel Tower");
+    expect(payload.LocationAddress).toBe("Champ de Mars, Paris");
+    expect(payload.LocationSource).toBe("place");
+  });
+});

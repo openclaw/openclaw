@@ -39,6 +39,7 @@ import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
+import { toLocationContext } from "../providers/location.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
 import { setActiveWebListener } from "./active-listener.js";
@@ -1216,6 +1217,7 @@ export async function monitorWebProvider(
           SenderName: msg.senderName,
           SenderE164: msg.senderE164,
           WasMentioned: msg.wasMentioned,
+          ...(msg.location ? toLocationContext(msg.location) : {}),
           Surface: "whatsapp",
         },
         cfg,
