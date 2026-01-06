@@ -7,12 +7,12 @@ read_when:
 
 Last updated: 2025-12-09
 
-We use TypeBox schemas in `src/gateway/protocol/schema.ts` as the single source of truth for the Gateway control plane (connect/req/res/event frames and payloads). All derived artifacts should be generated from these schemas, not edited by hand.
+We use TypeBox schemas in [`src/gateway/protocol/schema.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/protocol/schema.ts) as the single source of truth for the Gateway control plane (connect/req/res/event frames and payloads). All derived artifacts should be generated from these schemas, not edited by hand.
 
 ## Current pipeline
 
-- **TypeBox → JSON Schema**: `pnpm protocol:gen` writes `dist/protocol.schema.json` (draft-07) and runs AJV in the server tests.
-- **TypeBox → Swift**: `pnpm protocol:gen:swift` generates `apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`.
+- **TypeBox → JSON Schema**: `pnpm protocol:gen` writes [`dist/protocol.schema.json`](https://github.com/clawdbot/clawdbot/blob/main/dist/protocol.schema.json) (draft-07) and runs AJV in the server tests.
+- **TypeBox → Swift**: `pnpm protocol:gen:swift` generates [`apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift).
 
 ## Problem
 

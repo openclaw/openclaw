@@ -194,7 +194,7 @@ Non-goals (v1):
 - Perfect App Store compliance; this is **internal-only** initially.
 
 ### Current repo reality (constraints we respect)
-- The Gateway WebSocket server binds to `127.0.0.1:18789` (`src/gateway/server.ts`) with an optional `CLAWDBOT_GATEWAY_TOKEN`.
+- The Gateway WebSocket server binds to `127.0.0.1:18789` ([`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts)) with an optional `CLAWDBOT_GATEWAY_TOKEN`.
 - The Gateway exposes a Canvas file server (`canvasHost`) on `canvasHost.port` (default `18793`), so nodes can `canvas.navigate` to `http://<lanHost>:18793/__clawdbot__/canvas/` and auto-reload on file changes ([`docs/configuration.md`](https://docs.clawd.bot/configuration)).
 - macOS “Canvas” is controlled via the Gateway node protocol (`canvas.*`), matching iOS/Android ([`docs/mac/canvas.md`](https://docs.clawd.bot/mac/canvas)).
 - Voice wake forwards via `GatewayChannel` to Gateway `agent` (mac app: `VoiceWakeForwarder` → `GatewayConnection.sendAgent`).
@@ -267,7 +267,7 @@ Unify mac Canvas + iOS Canvas under a single conceptual surface:
   - remote iOS node via the bridge
 
 #### Minimal protocol additions (v1)
-Add to `src/gateway/protocol/schema.ts` (and regenerate Swift models):
+Add to [`src/gateway/protocol/schema.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/protocol/schema.ts) (and regenerate Swift models):
 
 **Identity**
 - Node identity comes from `connect.params.client.instanceId` (stable), and `connect.params.client.mode = "node"` (or `"ios-node"`).

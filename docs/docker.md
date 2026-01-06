@@ -252,7 +252,7 @@ Example:
 
 ## Troubleshooting
 
-- Image missing: build with `scripts/sandbox-setup.sh` or set `agent.sandbox.docker.image`.
+- Image missing: build with [`scripts/sandbox-setup.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/sandbox-setup.sh) or set `agent.sandbox.docker.image`.
 - Container not running: it will auto-create per session on demand.
 - Permission errors in sandbox: set `docker.user` to a UID:GID that matches your
   mounted workspace ownership (or chown the workspace folder).

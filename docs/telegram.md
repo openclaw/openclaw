@@ -68,7 +68,7 @@ Example config:
   }
 }
 ```
-- Tests: grammY-based paths in `src/telegram/*.test.ts` cover DM + group gating; add more media and webhook cases as needed.
+- Tests: grammY-based paths in [`src/telegram/*.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/*.test.ts) cover DM + group gating; add more media and webhook cases as needed.
 
 ## Group etiquette
 - Keep privacy mode off if you expect the bot to read all messages; with privacy on, it only sees commands/mentions.

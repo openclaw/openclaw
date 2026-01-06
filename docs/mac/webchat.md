@@ -13,10 +13,10 @@ The macOS menu bar app shows the WebChat UI as a native SwiftUI view and reuses 
 ## Launch & debugging
 - Manual: Lobster menu → “Open Chat”.
 - Auto-open for testing: run `dist/Clawdbot.app/Contents/MacOS/Clawdbot --webchat` (or pass `--webchat` to the binary launched by launchd). The window opens on startup.
-- Logs: see `./scripts/clawlog.sh` (subsystem `com.clawdbot`, category `WebChatSwiftUI`).
+- Logs: see [`./scripts/clawlog.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/clawlog.sh) (subsystem `com.clawdbot`, category `WebChatSwiftUI`).
 
 ## How it’s wired
-- Implementation: `apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift` hosts `ClawdbotChatUI` and speaks to the Gateway over `GatewayConnection`.
+- Implementation: [`apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift) hosts `ClawdbotChatUI` and speaks to the Gateway over `GatewayConnection`.
 - Data plane: Gateway WebSocket methods `chat.history`, `chat.send`, `chat.abort`; events `chat`, `agent`, `presence`, `tick`, `health`.
 - Session: usually primary (`main`); multiple transports (WhatsApp/Telegram/Discord/Desktop) share the same key. The onboarding flow uses a dedicated `onboarding` session to keep first-run setup separate.
 

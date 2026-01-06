@@ -14,8 +14,8 @@ Last updated: 2025-12-13
 ## Context
 
 Clawdbot already has:
-- A **gateway heartbeat runner** that runs the agent with `HEARTBEAT` and suppresses `HEARTBEAT_OK` (`src/infra/heartbeat-runner.ts`).
-- A lightweight, in-memory **system event queue** (`enqueueSystemEvent`) that is injected into the next **main session** turn (`drainSystemEvents` in `src/auto-reply/reply.ts`).
+- A **gateway heartbeat runner** that runs the agent with `HEARTBEAT` and suppresses `HEARTBEAT_OK` ([`src/infra/heartbeat-runner.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/heartbeat-runner.ts)).
+- A lightweight, in-memory **system event queue** (`enqueueSystemEvent`) that is injected into the next **main session** turn (`drainSystemEvents` in [`src/auto-reply/reply.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/auto-reply/reply.ts)).
 - A WebSocket **Gateway** daemon that is intended to be always-on ([`docs/gateway.md`](https://docs.clawd.bot/gateway)).
 
 This RFC adds a small “cron job system” so Clawd can schedule future work and reliably wake itself up:
@@ -180,7 +180,7 @@ When due:
 
 ### “Run in parallel to main”
 
-Clawdbot currently serializes command execution through a global in-process queue (`src/process/command-queue.ts`) to avoid collisions.
+Clawdbot currently serializes command execution through a global in-process queue ([`src/process/command-queue.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/process/command-queue.ts)) to avoid collisions.
 
 To support isolated cron jobs running “in parallel”, we should introduce **lanes** (keyed queues) plus a global concurrency cap:
 - Lane `"main"`: inbound auto-replies + main heartbeat.
@@ -198,7 +198,7 @@ We need a way for the Gateway (or the scheduler) to request an immediate heartbe
 
 Design:
 - `startHeartbeatRunner` owns the real heartbeat execution and installs a wake handler.
-- Wake hook lives in `src/infra/heartbeat-wake.ts`:
+- Wake hook lives in [`src/infra/heartbeat-wake.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/heartbeat-wake.ts):
   - `setHeartbeatWakeHandler(fn | null)` installed by the heartbeat runner
   - `requestHeartbeatNow({ reason, coalesceMs? })`
 - If the handler is absent, the request is stored as “pending”; the next time the handler is installed, it runs once.

@@ -151,6 +151,6 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Troubleshooting guide: [`docs/troubleshooting.md`](https://docs.clawd.bot/troubleshooting).
 
 ## Tests
-- `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)
-- `src/web/monitor-inbox.test.ts` (inbound parsing + reply context)
-- `src/web/outbound.test.ts` (send mapping + media)
+- [`src/web/auto-reply.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/auto-reply.test.ts) (mention gating, history injection, reply flow)
+- [`src/web/monitor-inbox.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/monitor-inbox.test.ts) (inbound parsing + reply context)
+- [`src/web/outbound.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/outbound.test.ts) (send mapping + media)

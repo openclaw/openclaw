@@ -15,14 +15,14 @@ Last updated: 2026-01-05
 
 ## Implementation snapshot (current code)
 
-### TypeScript Gateway (`src/gateway/server.ts`)
+### TypeScript Gateway ([`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts))
 - Single HTTP + WebSocket server (default `18789`); bind policy `loopback|lan|tailnet|auto`. Refuses non-loopback binds without auth; Tailscale serve/funnel requires loopback.
 - Handshake: first frame must be a `connect` request; AJV validates request + params against TypeBox schemas; protocol negotiated via `minProtocol`/`maxProtocol`.
 - `hello-ok` includes snapshot (presence/health/stateVersion/uptime/configPath/stateDir), features (methods/events), policy (max payload/buffer/tick), and `canvasHostUrl` when available.
 - Events emitted: `agent`, `chat`, `presence`, `tick`, `health`, `heartbeat`, `cron`, `talk.mode`, `node.pair.requested`, `node.pair.resolved`, `voicewake.changed`, `shutdown`.
 - Idempotency keys are required for `send`, `agent`, `chat.send`, and node invokes; the dedupe cache avoids double-sends on reconnects. Payload sizes are capped per connection.
-- Optional node bridge (`src/infra/bridge/server.ts`): TCP JSONL frames (`hello`, `pair-request`, `req/res`, `event`, `invoke`, `ping`). Node connect/disconnect updates presence and flows into the session bus.
-- Control UI + Canvas host: HTTP serves Control UI (base path configurable) and can host the A2UI canvas via `src/canvas-host/server.ts` (live reload). Canvas host URL is advertised to nodes + clients.
+- Optional node bridge ([`src/infra/bridge/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/bridge/server.ts)): TCP JSONL frames (`hello`, `pair-request`, `req/res`, `event`, `invoke`, `ping`). Node connect/disconnect updates presence and flows into the session bus.
+- Control UI + Canvas host: HTTP serves Control UI (base path configurable) and can host the A2UI canvas via [`src/canvas-host/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/canvas-host/server.ts) (live reload). Canvas host URL is advertised to nodes + clients.
 
 ### iOS node (`apps/ios`)
 - Discovery + pairing: `BridgeDiscoveryModel` uses `NWBrowser` Bonjour discovery and reads TXT fields for LAN/tailnet host hints plus gateway/bridge/canvas ports.

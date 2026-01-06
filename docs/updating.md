@@ -57,7 +57,7 @@ pnpm clawdbot health
 ```
 
 Notes:
-- `pnpm build` matters when you run the packaged `clawdbot` binary (`dist/entry.js`) or use Node to run `dist/`.
+- `pnpm build` matters when you run the packaged `clawdbot` binary ([`dist/entry.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/entry.js)) or use Node to run `dist/`.
 - If you run directly from TypeScript (`pnpm clawdbot ...` / `bun run clawdbot ...`), a rebuild is usually unnecessary, but **config migrations still apply** → run doctor.
 
 ## Always run: `clawdbot doctor`

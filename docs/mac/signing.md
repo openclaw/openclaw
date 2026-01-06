@@ -5,11 +5,11 @@ read_when:
 ---
 # mac signing (debug builds)
 
-This app is usually built from `scripts/package-mac-app.sh`, which now:
+This app is usually built from [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh), which now:
 
 - sets a stable debug bundle identifier: `com.clawdbot.mac.debug`
 - writes the Info.plist with that bundle id (override via `BUNDLE_ID=...`)
-- calls `scripts/codesign-mac-app.sh` to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [`docs/mac/permissions.md`](https://docs.clawd.bot/mac/permissions)).
+- calls [`scripts/codesign-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/codesign-mac-app.sh) to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [`docs/mac/permissions.md`](https://docs.clawd.bot/mac/permissions)).
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
 - inject build metadata into Info.plist: `ClawdbotBuildTimestamp` (UTC) and `ClawdbotGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
 - **Packaging requires Bun**: The embedded gateway relay is compiled using `bun`. Ensure it is installed (`curl -fsSL https://bun.sh/install | bash`).

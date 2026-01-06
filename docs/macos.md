@@ -96,7 +96,7 @@ Notes:
 ## Build & dev workflow (native)
 - `cd apps/macos && swift build` (debug) / `swift build -c release`.
 - Run app for dev: `swift run Clawdbot` (or Xcode scheme).
-- Package app + CLI: `scripts/package-mac-app.sh` (builds bun CLI + gateway).
+- Package app + CLI: [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) (builds bun CLI + gateway).
 - Tests: add Swift Testing suites under `apps/macos/Tests`.
 
 ## Open questions / decisions

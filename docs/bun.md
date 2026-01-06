@@ -41,7 +41,7 @@ bun run vitest run
 pnpm supports `package.json#pnpm.patchedDependencies` and records it in `pnpm-lock.yaml`.
 Bun does not support pnpm patches, so we apply them in `postinstall` when Bun is detected:
 
-- `scripts/postinstall.js` runs only for Bun installs and applies every entry from `package.json#pnpm.patchedDependencies` into `node_modules/...` using `git apply` (idempotent).
+- [`scripts/postinstall.js`](https://github.com/clawdbot/clawdbot/blob/main/scripts/postinstall.js) runs only for Bun installs and applies every entry from `package.json#pnpm.patchedDependencies` into `node_modules/...` using `git apply` (idempotent).
 
 To add a new patch that works in both pnpm + Bun:
 

@@ -11,7 +11,7 @@ read_when:
 
 ## Model latency bench (local keys)
 
-Script: `scripts/bench-model.ts`
+Script: [`scripts/bench-model.ts`](https://github.com/clawdbot/clawdbot/blob/main/scripts/bench-model.ts)
 
 Usage:
 - `source ~/.profile && bun scripts/bench-model.ts --runs 10`

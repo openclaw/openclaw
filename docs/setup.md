@@ -77,7 +77,7 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs `src/index.ts gateway --force` and reloads on `src/**/*.ts` changes.
+`gateway:watch` runs `src/index.ts gateway --force` and reloads on [`src/**/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/**/*.ts) changes.
 
 ### 2) Point the macOS app at your running Gateway
 

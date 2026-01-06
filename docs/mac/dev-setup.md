@@ -70,7 +70,7 @@ If the app crashes when you try to allow **Speech Recognition** or **Microphone*
    ```bash
    tccutil reset All com.clawdbot.mac.debug
    ```
-2. If that fails, change the `BUNDLE_ID` temporarily in `scripts/package-mac-app.sh` to force a "clean slate" from macOS.
+2. If that fails, change the `BUNDLE_ID` temporarily in [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) to force a "clean slate" from macOS.
 
 ### Gateway "Starting..." indefinitely
 If the gateway status stays on "Starting...", check if a zombie process is holding the port:

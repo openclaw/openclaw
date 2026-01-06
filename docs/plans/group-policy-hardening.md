@@ -16,7 +16,7 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 
 ### [MED] F1: Telegram Allowlist Prefix Handling Is Case-Sensitive and Excludes `tg:`
 
-**Location**: `src/telegram/bot.ts`
+**Location**: [`src/telegram/bot.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/bot.ts)
 
 **Problem**: Inbound allowlist normalization only stripped a lowercase `telegram:` prefix. This rejected `TG:123` / `Telegram:123` and did not accept the `tg:` shorthand even though outbound send normalization already accepts `tg:` and case-insensitive prefixes.
 
@@ -30,7 +30,7 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 
 ### [LOW] F2: Allowlist Entries Are Not Trimmed
 
-**Location**: `src/telegram/bot.ts`
+**Location**: [`src/telegram/bot.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/bot.ts)
 
 **Problem**: Allowlist entries are not trimmed; accidental whitespace causes mismatches.
 
@@ -42,7 +42,7 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 
 ### Phase 1: Normalize Telegram Allowlist Inputs
 
-**File**: `src/telegram/bot.ts`
+**File**: [`src/telegram/bot.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/bot.ts)
 
 **Changes**:
 1. Trim allowlist entries and drop empty values.
@@ -53,7 +53,7 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 
 ### Phase 2: Add Coverage for Prefix + Whitespace
 
-**File**: `src/telegram/bot.test.ts`
+**File**: [`src/telegram/bot.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/bot.test.ts)
 
 **Add Tests**:
 - DM allowlist accepts `TG:` prefix with surrounding whitespace.
@@ -83,8 +83,8 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 
 | File | Change Type | Description |
 |------|-------------|-------------|
-| `src/telegram/bot.ts` | Fix | Trim allowlist values; strip `telegram:` / `tg:` prefixes case-insensitively |
-| `src/telegram/bot.test.ts` | Test | Add DM + group allowlist coverage for `TG:` prefix + whitespace |
+| [`src/telegram/bot.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/bot.ts) | Fix | Trim allowlist values; strip `telegram:` / `tg:` prefixes case-insensitively |
+| [`src/telegram/bot.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/telegram/bot.test.ts) | Test | Add DM + group allowlist coverage for `TG:` prefix + whitespace |
 | [`docs/groups.md`](https://docs.clawd.bot/groups) | Docs | Mention `tg:` alias + case-insensitive prefixes |
 | [`docs/telegram.md`](https://docs.clawd.bot/telegram) | Docs | Mention `tg:` alias + case-insensitive prefixes |
 

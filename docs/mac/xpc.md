@@ -37,4 +37,4 @@ read_when:
 - Prefer requiring a TeamID match for all privileged surfaces.
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
-- TCC prompts originate only from the GUI app bundle; run `scripts/package-mac-app.sh` so the signed bundle ID stays stable.
+- TCC prompts originate only from the GUI app bundle; run [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) so the signed bundle ID stays stable.
