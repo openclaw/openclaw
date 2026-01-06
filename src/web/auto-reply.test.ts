@@ -244,6 +244,63 @@ describe("partial reply gating", () => {
   });
 });
 
+describe("typing controller idle", () => {
+  it("marks dispatch idle after replies flush", async () => {
+    const markDispatchIdle = vi.fn();
+    const typingMock = {
+      onReplyStart: vi.fn(async () => {}),
+      startTypingLoop: vi.fn(async () => {}),
+      startTypingOnText: vi.fn(async () => {}),
+      refreshTypingTtl: vi.fn(),
+      markRunComplete: vi.fn(),
+      markDispatchIdle,
+      cleanup: vi.fn(),
+    };
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
+
+    const replyResolver = vi.fn().mockImplementation(async (_ctx, opts) => {
+      opts?.onTypingController?.(typingMock);
+      return { text: "final reply" };
+    });
+
+    const mockConfig: ClawdbotConfig = {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
+    };
+
+    setLoadConfigMock(mockConfig);
+
+    await monitorWebProvider(
+      false,
+      async ({ onMessage }) => {
+        await onMessage({
+          id: "m1",
+          from: "+1000",
+          conversationId: "+1000",
+          to: "+2000",
+          body: "hello",
+          timestamp: Date.now(),
+          chatType: "direct",
+          chatId: "direct:+1000",
+          sendComposing,
+          reply,
+          sendMedia,
+        });
+        return { close: vi.fn().mockResolvedValue(undefined) };
+      },
+      false,
+      replyResolver,
+    );
+
+    resetLoadConfigMock();
+
+    expect(markDispatchIdle).toHaveBeenCalled();
+  });
+});
+
 describe("web auto-reply", () => {
   beforeEach(() => {
     vi.clearAllMocks();
