@@ -825,6 +825,13 @@
   border-top: 1px solid var(--border);
 }
 
+.shell--chat-focus .chat-compose {
+  bottom: var(--shell-pad);
+  padding-bottom: calc(var(--shell-pad) + env(safe-area-inset-bottom, 0px));
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 18px;
+}
+
 .chat-compose__field {
   gap: 4px;
 }
