@@ -11,7 +11,6 @@
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
-- Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
