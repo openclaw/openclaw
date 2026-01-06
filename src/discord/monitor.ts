@@ -517,9 +517,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         From: isDirectMessage
           ? `discord:${message.author.id}`
           : `group:${message.channelId}`,
-        To: isDirectMessage
-          ? `user:${message.author.id}`
-          : `channel:${message.channelId}`,
+        To: `channel:${message.channelId}`,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName: message.member?.displayName ?? message.author.tag,
         SenderId: message.author.id,
