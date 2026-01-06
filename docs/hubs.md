@@ -34,6 +34,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Sessions (alias)](https://docs.clawd.bot/sessions)
 - [Session tools](https://docs.clawd.bot/session-tool)
 - [Queue](https://docs.clawd.bot/queue)
+- [Slash commands](https://docs.clawd.bot/slash-commands)
 - [RPC adapters](https://docs.clawd.bot/rpc)
 - [TypeBox schemas](https://docs.clawd.bot/typebox)
 - [Presence](https://docs.clawd.bot/presence)

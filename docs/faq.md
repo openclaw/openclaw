@@ -573,6 +573,7 @@ Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authori
 | `/queue instant\|batch\|serial` | Message queuing mode |
 
 Commands are only recognized when the entire message is the command (slash required; no plain-text aliases).
+Full list + config: https://docs.clawd.bot/slash-commands
 
 ### How do I switch models on the fly?
 
