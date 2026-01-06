@@ -1,0 +1,78 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#4F46E5', 'primaryTextColor': '#fff', 'primaryBorderColor': '#4338CA', 'lineColor': '#6B7280', 'secondaryColor': '#F3F4F6', 'tertiaryColor': '#EEF2FF'}}}%%
+flowchart TB
+    subgraph Gateway["🖥️ CLAWDIS GATEWAY"]
+        Steve["🤖 STEVE<br/>Claude Opus 4.5"]
+        Cron["⏰ Cron Engine"]
+        Hooks["🪝 Webhooks"]
+    end
+
+    subgraph Messaging["💬 MESSAGING"]
+        WA["📱 WhatsApp"]
+        Discord["💜 Discord"]
+        Web["🌐 Web UI"]
+    end
+
+    subgraph Memory["🧠 MEMORY"]
+        Soul["SOUL.md"]
+        Daily["memory/*.md"]
+        QMD["qmd Search"]
+    end
+
+    subgraph CRM["📊 CRM"]
+        Twenty["Twenty CRM<br/>(One Point)"]
+        PPL["ppl.gift<br/>(Personal)"]
+    end
+
+    subgraph Google["📧 GOOGLE"]
+        Gmail["Gmail"]
+        GCal["Calendar"]
+        GDrive["Drive"]
+    end
+
+    subgraph Media["🎬 MEDIA SERVER"]
+        Plex["Plex"]
+        Radarr["Radarr"]
+        Sonarr["Sonarr"]
+    end
+
+    subgraph Home["🏠 SMART HOME"]
+        Hue["Hue Lights"]
+        Eight["Eight Sleep"]
+    end
+
+    subgraph APIs["🌐 EXTERNAL"]
+        Twitter["X/Twitter"]
+        GitHub["GitHub"]
+        Spotify["Spotify"]
+        Search["Brave Search"]
+    end
+
+    WA <--> Steve
+    Discord <--> Steve
+    Web <--> Steve
+    
+    Steve <--> Soul
+    Steve <--> Daily
+    Steve <--> QMD
+    
+    Steve <--> Twenty
+    Steve <--> PPL
+    
+    Steve <--> Gmail
+    Steve <--> GCal
+    Steve <--> GDrive
+    
+    Steve <--> Plex
+    Steve <--> Radarr
+    Steve <--> Sonarr
+    
+    Steve <--> Hue
+    Steve <--> Eight
+    
+    Steve <--> Twitter
+    Steve <--> GitHub
+    Steve <--> Spotify
+    Steve <--> Search
+    
+    Cron --> Steve
+    Hooks --> Steve

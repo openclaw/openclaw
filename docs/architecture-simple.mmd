@@ -1,0 +1,62 @@
+flowchart TB
+    subgraph Gateway["CLAWDIS GATEWAY"]
+        Steve["STEVE\nClaude Opus 4.5"]
+        Cron["Cron Engine"]
+    end
+
+    subgraph Messaging["MESSAGING"]
+        WA["WhatsApp"]
+        Discord["Discord"]
+        Web["Web UI"]
+    end
+
+    subgraph Memory["MEMORY"]
+        Soul["SOUL.md"]
+        Daily["memory/*.md"]
+        QMD["qmd Search"]
+    end
+
+    subgraph CRM["CRM SYSTEMS"]
+        Twenty["Twenty CRM\nOne Point"]
+        PPL["ppl.gift\nPersonal"]
+    end
+
+    subgraph Google["GOOGLE WORKSPACE"]
+        Gmail["Gmail"]
+        GCal["Calendar"]
+    end
+
+    subgraph Media["MEDIA SERVER"]
+        Plex["Plex"]
+        Radarr["Radarr/Sonarr"]
+    end
+
+    subgraph Home["SMART HOME"]
+        Hue["Hue Lights"]
+        Eight["Eight Sleep"]
+    end
+
+    subgraph APIs["EXTERNAL APIs"]
+        Twitter["X/Twitter"]
+        GitHub["GitHub"]
+        Spotify["Spotify"]
+    end
+
+    WA <--> Steve
+    Discord <--> Steve
+    Web <--> Steve
+    Steve <--> Soul
+    Steve <--> Daily
+    Steve <--> QMD
+    Steve <--> Twenty
+    Steve <--> PPL
+    Steve <--> Gmail
+    Steve <--> GCal
+    Steve <--> Plex
+    Steve <--> Radarr
+    Steve <--> Hue
+    Steve <--> Eight
+    Steve <--> Twitter
+    Steve <--> GitHub
+    Steve <--> Spotify
+    Cron --> Steve

@@ -1,0 +1,34 @@
+flowchart LR
+    subgraph Core["🖥️ CORE"]
+        Steve["🤖 STEVE<br/>Claude Opus 4.5"]
+    end
+
+    subgraph Input["💬 INPUT"]
+        WA["📱 WhatsApp"]
+        Discord["💜 Discord"]
+        Web["🌐 Web"]
+        Cron["⏰ Crons"]
+    end
+
+    subgraph Memory["🧠 MEMORY"]
+        Soul["SOUL.md<br/>USER.md"]
+        Daily["Daily Notes"]
+        QMD["qmd Search"]
+    end
+
+    subgraph Work["💼 WORK"]
+        Twenty["Twenty CRM"]
+        Google["Gmail/Calendar"]
+        GitHub["GitHub"]
+    end
+
+    subgraph Personal["👤 PERSONAL"]
+        PPL["ppl.gift CRM"]
+        Media["Plex/Radarr"]
+        Home["Hue/Eight"]
+    end
+
+    Input --> Steve
+    Steve <--> Memory
+    Steve <--> Work
+    Steve <--> Personal
