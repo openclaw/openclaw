@@ -48,35 +48,43 @@ pnpm clawdbot onboard
 
 ## Quick start (from source)
 
-Runtime: **Node ≥22** + **pnpm**.
+Runtime: **Node ≥22**.
+
+From source, **pnpm** is the default workflow. Bun is supported as an optional local workflow; see [`docs/bun.md`](docs/bun.md).
 
 ```bash
-pnpm install
-pnpm build
-pnpm ui:build
+# Install deps (no Bun lockfile)
+bun install --no-save
+
+# Build TypeScript
+bun run build
+
+# Build Control UI
+bun install --cwd ui --no-save
+bun run --cwd ui build
 
 # Recommended: run the onboarding wizard
-pnpm clawdbot onboard
+bun run clawdbot onboard
 
 # Link WhatsApp (stores creds in ~/.clawdbot/credentials)
-pnpm clawdbot login
+bun run clawdbot login
 
 # Start the gateway
-pnpm clawdbot gateway --port 18789 --verbose
+bun run clawdbot gateway --port 18789 --verbose
 
 # Dev loop (auto-reload on TS changes)
-pnpm gateway:watch
+bun run gateway:watch
 
 # Send a message
-pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
+bun run clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 
 # Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
-pnpm clawdbot agent --message "Ship checklist" --thinking high
+bun run clawdbot agent --message "Ship checklist" --thinking high
 ```
 
 Upgrading? `clawdbot doctor`.
 
-If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
+If you run from source, prefer `bun run clawdbot …` or `pnpm clawdbot …` (not global `clawdbot`).
 
 ## Highlights
 

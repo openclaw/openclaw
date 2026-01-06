@@ -9,7 +9,7 @@ CLAWDBOT reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (co
 
 If the file is missing, CLAWDBOT uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
-- control group mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `routing.groupChat`)
+- control group allowlists + mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `routing.groupChat`)
 - customize message prefixes (`messages`)
 - set the agent's workspace (`agent.workspace`)
 - tune the embedded agent (`agent`) and session behavior (`session`)
@@ -218,7 +218,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`).
+Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
 
 To respond **only** to specific text triggers (ignoring native @-mentions):
 ```json5

@@ -45,6 +45,7 @@
   ],
   "scripts": {
     "dev": "tsx src/entry.ts",
+    "postinstall": "node scripts/postinstall.js",
     "docs:list": "tsx scripts/docs-list.ts",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx mint broken-links",

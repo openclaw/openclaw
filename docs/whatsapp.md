@@ -118,7 +118,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Config quick map
 - `whatsapp.allowFrom` (DM allowlist).
-- `whatsapp.groups` (group mention gating defaults/overrides)
+- `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)

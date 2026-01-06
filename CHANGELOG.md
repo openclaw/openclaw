@@ -8,6 +8,7 @@
 - Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
 - Model config schema changes (auth profiles + model lists); doctor auto-migrates and the gateway rewrites legacy configs on startup.
 - Commands: gate all slash commands to authorized senders; add `/compact` to manually compact session context.
+- Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
@@ -85,6 +86,7 @@
 - Agent tools: new `image` tool routed to the image model (when configured).
 - Config: default model shorthands (`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`).
 - Docs: document built-in model shorthands + precedence (user config wins).
+- Bun: optional local install/build workflow without maintaining a Bun lockfile (see `docs/bun.md`).
 
 ### Fixes
 - Control UI: render Markdown in tool result cards.
@@ -108,6 +110,11 @@
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 - Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
+- CLI: run `clawdbot agent` via the Gateway by default; use `--local` to force embedded mode.
+
+## 2026.1.5
+
+### Fixes
 - Control UI: render Markdown in chat messages (sanitized).
 
 
