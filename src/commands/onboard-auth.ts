@@ -1,4 +1,5 @@
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
 
@@ -6,6 +7,8 @@ export async function writeOAuthCredentials(
   provider: OAuthProvider,
   creds: OAuthCredentials,
 ): Promise<void> {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  const agentDir = resolveDefaultAgentDir();
   upsertAuthProfile({
     profileId: `${provider}:${creds.email ?? "default"}`,
     credential: {
@@ -13,10 +16,13 @@ export async function writeOAuthCredentials(
       provider,
       ...creds,
     },
+    agentDir,
   });
 }
 
 export async function setAnthropicApiKey(key: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  const agentDir = resolveDefaultAgentDir();
   upsertAuthProfile({
     profileId: "anthropic:default",
     credential: {
@@ -24,6 +30,7 @@ export async function setAnthropicApiKey(key: string) {
       provider: "anthropic",
       key,
     },
+    agentDir,
   });
 }
 
