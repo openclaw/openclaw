@@ -152,7 +152,8 @@
     },
     "patchedDependencies": {
       "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
-      "qrcode-terminal": "patches/qrcode-terminal.patch"
+      "qrcode-terminal": "patches/qrcode-terminal.patch",
+      "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
     }
   },
   "vitest": {
@@ -186,5 +187,10 @@
       "apps/macos/.build/**",
       "dist/Clawdbot.app/**"
     ]
+  },
+  "patchedDependencies": {
+    "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
+    "qrcode-terminal": "patches/qrcode-terminal.patch",
+    "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
   }
 }
