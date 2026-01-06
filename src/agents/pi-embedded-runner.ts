@@ -113,6 +113,7 @@ export type EmbeddedPiCompactResult = {
 type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
+  isCompacting: () => boolean;
   abort: () => void;
 };
 
@@ -212,6 +213,7 @@ export function queueEmbeddedPiMessage(
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) return false;
   if (!handle.isStreaming()) return false;
+  if (handle.isCompacting()) return false;
   void handle.queueMessage(text);
   return true;
 }
@@ -810,21 +812,7 @@ export async function runEmbeddedPiAgent(params: {
             aborted = true;
             void session.abort();
           };
-          const queueHandle: EmbeddedPiQueueHandle = {
-            queueMessage: async (text: string) => {
-              await session.steer(text);
-            },
-            isStreaming: () => session.isStreaming,
-            abort: abortRun,
-          };
-          ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
-
-          const {
-            assistantTexts,
-            toolMetas,
-            unsubscribe,
-            waitForCompactionRetry,
-          } = subscribeEmbeddedPiSession({
+          const subscription = subscribeEmbeddedPiSession({
             session,
             runId: params.runId,
             verboseLevel: params.verboseLevel,
@@ -837,6 +825,22 @@ export async function runEmbeddedPiAgent(params: {
             onAgentEvent: params.onAgentEvent,
             enforceFinalTag: params.enforceFinalTag,
           });
+          const {
+            assistantTexts,
+            toolMetas,
+            unsubscribe,
+            waitForCompactionRetry,
+          } = subscription;
+
+          const queueHandle: EmbeddedPiQueueHandle = {
+            queueMessage: async (text: string) => {
+              await session.steer(text);
+            },
+            isStreaming: () => session.isStreaming,
+            isCompacting: () => subscription.isCompacting(),
+            abort: abortRun,
+          };
+          ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
 
           let abortWarnTimer: NodeJS.Timeout | undefined;
           const abortTimer = setTimeout(

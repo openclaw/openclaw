@@ -6,6 +6,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
+import lockfile from "proper-lockfile";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
@@ -66,6 +67,83 @@ function saveJsonFile(pathname: string, data: unknown) {
   }
   fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   fs.chmodSync(pathname, 0o600);
+}
+
+function ensureAuthStoreFile(pathname: string) {
+  if (fs.existsSync(pathname)) return;
+  const payload: AuthProfileStore = {
+    version: AUTH_STORE_VERSION,
+    profiles: {},
+  };
+  saveJsonFile(pathname, payload);
+}
+
+function buildOAuthApiKey(
+  provider: OAuthProvider,
+  credentials: OAuthCredentials,
+): string {
+  const needsProjectId =
+    provider === "google-gemini-cli" || provider === "google-antigravity";
+  return needsProjectId
+    ? JSON.stringify({
+        token: credentials.access,
+        projectId: credentials.projectId,
+      })
+    : credentials.access;
+}
+
+async function refreshOAuthTokenWithLock(params: {
+  profileId: string;
+  provider: OAuthProvider;
+}): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
+  const authPath = resolveAuthStorePath();
+  ensureAuthStoreFile(authPath);
+
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await lockfile.lock(authPath, {
+      retries: {
+        retries: 10,
+        factor: 2,
+        minTimeout: 100,
+        maxTimeout: 10_000,
+        randomize: true,
+      },
+      stale: 30_000,
+    });
+
+    const store = ensureAuthProfileStore();
+    const cred = store.profiles[params.profileId];
+    if (!cred || cred.type !== "oauth") return null;
+
+    if (Date.now() < cred.expires) {
+      return {
+        apiKey: buildOAuthApiKey(cred.provider, cred),
+        newCredentials: cred,
+      };
+    }
+
+    const oauthCreds: Record<string, OAuthCredentials> = {
+      [cred.provider]: cred,
+    };
+    const result = await getOAuthApiKey(cred.provider, oauthCreds);
+    if (!result) return null;
+    store.profiles[params.profileId] = {
+      ...cred,
+      ...result.newCredentials,
+      type: "oauth",
+    };
+    saveAuthProfileStore(store);
+    return result;
+  } finally {
+    if (release) {
+      try {
+        await release();
+      } catch {
+        // ignore unlock errors
+      }
+    }
+  }
 }
 
 function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
@@ -323,23 +401,41 @@ export async function resolveApiKeyForProfile(params: {
   if (cred.type === "api_key") {
     return { apiKey: cred.key, provider: cred.provider, email: cred.email };
   }
+  if (Date.now() < cred.expires) {
+    return {
+      apiKey: buildOAuthApiKey(cred.provider, cred),
+      provider: cred.provider,
+      email: cred.email,
+    };
+  }
 
-  const oauthCreds: Record<string, OAuthCredentials> = {
-    [cred.provider]: cred,
-  };
-  const result = await getOAuthApiKey(cred.provider, oauthCreds);
-  if (!result) return null;
-  store.profiles[profileId] = {
-    ...cred,
-    ...result.newCredentials,
-    type: "oauth",
-  };
-  saveAuthProfileStore(store);
-  return {
-    apiKey: result.apiKey,
-    provider: cred.provider,
-    email: cred.email,
-  };
+  try {
+    const result = await refreshOAuthTokenWithLock({
+      profileId,
+      provider: cred.provider,
+    });
+    if (!result) return null;
+    return {
+      apiKey: result.apiKey,
+      provider: cred.provider,
+      email: cred.email,
+    };
+  } catch (error) {
+    const refreshedStore = ensureAuthProfileStore();
+    const refreshed = refreshedStore.profiles[profileId];
+    if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
+      return {
+        apiKey: buildOAuthApiKey(refreshed.provider, refreshed),
+        provider: refreshed.provider,
+        email: refreshed.email ?? cred.email,
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
+        "Please try again or re-authenticate.",
+    );
+  }
 }
 
 export function markAuthProfileGood(params: {

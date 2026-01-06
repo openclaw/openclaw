@@ -356,12 +356,19 @@ export async function runOnboardingWizard(
       "OpenAI Codex OAuth",
     );
     const spin = prompter.progress("Starting OAuth flow…");
+    let manualCodePromise: Promise<string> | undefined;
     try {
       const creds = await loginOpenAICodex({
         onAuth: async ({ url }) => {
           if (isRemote) {
             spin.stop("OAuth URL ready");
             runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
+            manualCodePromise = prompter
+              .text({
+                message: "Paste the redirect URL (or authorization code)",
+                validate: (value) => (value?.trim() ? undefined : "Required"),
+              })
+              .then((value) => String(value));
           } else {
             spin.update("Complete sign-in in browser…");
             await openUrl(url);
@@ -369,6 +376,9 @@ export async function runOnboardingWizard(
           }
         },
         onPrompt: async (prompt) => {
+          if (manualCodePromise) {
+            return manualCodePromise;
+          }
           const code = await prompter.text({
             message: prompt.message,
             placeholder: prompt.placeholder,
@@ -376,6 +386,20 @@ export async function runOnboardingWizard(
           });
           return String(code);
         },
+        onManualCodeInput: isRemote
+          ? () => {
+              if (!manualCodePromise) {
+                manualCodePromise = prompter
+                  .text({
+                    message: "Paste the redirect URL (or authorization code)",
+                    validate: (value) =>
+                      value?.trim() ? undefined : "Required",
+                  })
+                  .then((value) => String(value));
+              }
+              return manualCodePromise;
+            }
+          : undefined,
         onProgress: (msg) => spin.update(msg),
       });
       spin.stop("OpenAI OAuth complete");

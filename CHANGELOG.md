@@ -11,6 +11,9 @@
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
+- Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
+- Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
+- Onboarding: prompt immediately for OpenAI Codex redirect URL on remote/headless logins.
 - Typing indicators: stop typing once the reply dispatcher drains to prevent stuck typing across Discord/Telegram/WhatsApp.
 - WhatsApp/Telegram: add groupPolicy handling for group messages and normalize allowFrom matching (tg/telegram prefixes). Thanks @mneves75.
 - Auto-reply: add configurable ack reactions for inbound messages (default 👀 or `identity.emoji`) with scope controls. Thanks @obviyus for PR #178.
