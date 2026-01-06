@@ -128,6 +128,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Workspace + templates
 
 - [Skills](https://docs.clawd.bot/skills)
+- [ClawdHub](https://docs.clawd.bot/clawdhub)
 - [Skills config](https://docs.clawd.bot/skills-config)
 - [Default AGENTS](https://docs.clawd.bot/AGENTS.default)
 - [Templates: AGENTS](https://docs.clawd.bot/templates/AGENTS)
