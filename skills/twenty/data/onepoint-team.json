@@ -1,0 +1,193 @@
+{
+  "scraped": "2026-01-06",
+  "source": "https://onepoint-partners.com/meet-the-team/",
+  "email_format": "{first_initial}{last_name}@onepoint-partners.com",
+  "team": [
+    {
+      "firstName": "Stephanie",
+      "lastName": "Baum",
+      "email": "sbaum@onepoint-partners.com",
+      "title": "Senior Analyst",
+      "department": "Financial Advisory"
+    },
+    {
+      "firstName": "Rob",
+      "lastName": "Beal",
+      "email": "rbeal@onepoint-partners.com",
+      "title": "Director",
+      "department": "Development"
+    },
+    {
+      "firstName": "Sharon",
+      "lastName": "Bolen",
+      "email": "sbolen@onepoint-partners.com",
+      "title": "Controller/HR",
+      "department": null
+    },
+    {
+      "firstName": "Michele",
+      "lastName": "Botcher",
+      "email": "mbotcher@onepoint-partners.com",
+      "title": "Analyst",
+      "department": "Development"
+    },
+    {
+      "firstName": "Tom",
+      "lastName": "Brod",
+      "email": "tbrod@onepoint-partners.com",
+      "title": "Senior Managing Director",
+      "department": null
+    },
+    {
+      "firstName": "Rob",
+      "lastName": "Clark",
+      "email": "rclark@onepoint-partners.com",
+      "title": "Senior Director",
+      "department": "Community Performance"
+    },
+    {
+      "firstName": "Ansley",
+      "lastName": "Dee",
+      "email": "adee@onepoint-partners.com",
+      "title": "Managing Director",
+      "department": null
+    },
+    {
+      "firstName": "Denise",
+      "lastName": "Defiebre",
+      "email": "ddefiebre@onepoint-partners.com",
+      "title": "Managing Director",
+      "department": null
+    },
+    {
+      "firstName": "Michael",
+      "lastName": "Giannetti",
+      "email": "mgiannetti@onepoint-partners.com",
+      "title": "Analyst",
+      "department": "Financial Advisory"
+    },
+    {
+      "firstName": "Fadia",
+      "lastName": "Haddad",
+      "email": "fhaddad@onepoint-partners.com",
+      "title": "Director",
+      "department": "Development"
+    },
+    {
+      "firstName": "Karen",
+      "lastName": "Hogan",
+      "email": "khogan@onepoint-partners.com",
+      "title": "Managing Director",
+      "department": null
+    },
+    {
+      "firstName": "Sharon",
+      "lastName": "Jessup",
+      "email": "sjessup@onepoint-partners.com",
+      "title": "Senior Director",
+      "department": "Marketing & Sales Strategy"
+    },
+    {
+      "firstName": "Sarah",
+      "lastName": "Laffey",
+      "email": "slaffey@onepoint-partners.com",
+      "title": "Partner",
+      "department": null
+    },
+    {
+      "firstName": "Ryan",
+      "lastName": "Larkin",
+      "email": "rlarkin@onepoint-partners.com",
+      "title": "Director",
+      "department": "Financial Advisory"
+    },
+    {
+      "firstName": "Brett",
+      "lastName": "Mehlman",
+      "email": "bmehlman@onepoint-partners.com",
+      "title": "Senior Managing Director",
+      "department": null
+    },
+    {
+      "firstName": "Meghan",
+      "lastName": "Owoc",
+      "email": "mowoc@onepoint-partners.com",
+      "title": "Analyst",
+      "department": "Market Strategy"
+    },
+    {
+      "firstName": "Nicole",
+      "lastName": "Philbrick",
+      "email": "nphilbrick@onepoint-partners.com",
+      "title": "Senior Director",
+      "department": "Market Strategy"
+    },
+    {
+      "firstName": "Toby",
+      "lastName": "Shea",
+      "email": "tshea@onepoint-partners.com",
+      "title": "Partner",
+      "department": null
+    },
+    {
+      "firstName": "Morgan",
+      "lastName": "Snyder",
+      "email": "msnyder@onepoint-partners.com",
+      "title": "Director",
+      "department": "Market Strategy"
+    },
+    {
+      "firstName": "Katie",
+      "lastName": "Sterr",
+      "email": "ksterr@onepoint-partners.com",
+      "title": "Director",
+      "department": "Financial Advisory"
+    },
+    {
+      "firstName": "Hayley",
+      "lastName": "Winslow",
+      "email": "hwinslow@onepoint-partners.com",
+      "title": "Senior Analyst",
+      "department": "Strategy Integration"
+    },
+    {
+      "firstName": "Kristopher",
+      "lastName": "Yetman",
+      "email": "kyetman@onepoint-partners.com",
+      "title": "Director",
+      "department": "Development"
+    },
+    {
+      "firstName": "Heather",
+      "lastName": "Zoeller",
+      "email": "hzoeller@onepoint-partners.com",
+      "title": "Managing Director",
+      "department": null
+    }
+  ],
+  "departments": [
+    "Financial Advisory",
+    "Development",
+    "Community Performance",
+    "Marketing & Sales Strategy",
+    "Market Strategy",
+    "Strategy Integration"
+  ],
+  "title_hierarchy": [
+    "Partner",
+    "Senior Managing Director",
+    "Managing Director",
+    "Senior Director",
+    "Director",
+    "Senior Analyst",
+    "Analyst"
+  ],
+  "already_in_twenty": [
+    "Hayley Winslow",
+    "Ryan Larkin",
+    "Ansley Dee",
+    "Rob Beal",
+    "David Hurley"
+  ],
+  "notes": "Mike Kivov no longer with firm as of Jan 2026"
+}

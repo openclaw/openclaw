@@ -17,7 +17,7 @@
       "type": "change",
       "threshold": 4.5,
       "created_at": "2026-01-05T23:10:06.487296+00:00",
-      "last_triggered": null,
+      "last_triggered": "2026-01-06T14:29:27.387313+00:00",
       "cooldown_hours": 1
     },
     {
@@ -27,7 +27,7 @@
       "type": "change",
       "threshold": 4.5,
       "created_at": "2026-01-05T23:10:06.840351+00:00",
-      "last_triggered": null,
+      "last_triggered": "2026-01-06T14:12:33.471109+00:00",
       "cooldown_hours": 1
     }
   ]

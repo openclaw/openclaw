@@ -100,3 +100,25 @@ When I learn something about a person:
 - **Toby Shea** — CEO, Founding Partner (tshea@onepoint-partners.com) — ppl.gift ID: 687527
 - **David Hurley** — Partner (dhurley@onepoint-partners.com)
 - **Lea Ann Hodson** — Team member (lhodson@onepoint-partners.com)
+
+## Ongoing Tasks
+
+### Upstream Sync (cron: every 4h)
+- Remote: `upstream` → clawdbot/clawdbot.git
+- Auto-fetch and merge, notify David of results
+- Keep our AGENTS.md customizations on conflicts
+
+## Cron Jobs (Active)
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| crypto-alert-check | Every 15 min | Check price alerts, notify users |
+| daily-verse | 6:05 AM ET | Bible verse to David via WhatsApp |
+| sync-skills | Every 4h (0 */4) | Pull upstream + push changes, notify on merges |
+| kate-airport-thu | Thu Jan 9, 1:30pm | One-time reminder for Kate's flight |
+
+**Note:** `sync-skills` handles BOTH upstream sync AND local pushes via `/Users/dbhurley/clawd/scripts/sync-skills.sh`
+
+## Rules
+
+- **Do NOT auto-publish skills to ClawdHub** — only publish when explicitly asked
