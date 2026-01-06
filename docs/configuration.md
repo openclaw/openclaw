@@ -1160,7 +1160,7 @@ Convenience flags (CLI):
 - `clawdbot --dev …` → uses `~/.clawdbot-dev` + shifts ports from base `19001`
 - `clawdbot --profile <name> …` → uses `~/.clawdbot-<name>` (port via config/env/flags)
 
-See `docs/gateway.md` for the derived port mapping (gateway/bridge/browser/canvas).
+See [`docs/gateway.md`](https://docs.clawd.bot/gateway) for the derived port mapping (gateway/bridge/browser/canvas).
 
 Example:
 ```bash
@@ -1356,7 +1356,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 
 ## Cron (Gateway scheduler)
 
-Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wakeups](cron) for the full RFC and CLI examples.
+Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wakeups](https://docs.clawd.bot/cron) for the full RFC and CLI examples.
 
 ```json5
 {
@@ -1369,4 +1369,4 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wa
 
 ---
 
-*Next: [Agent Runtime](agent)* 🦞
+*Next: [Agent Runtime](https://docs.clawd.bot/agent)* 🦞

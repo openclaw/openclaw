@@ -15,7 +15,7 @@ Recommended: use `clawdbot setup` to create `~/.clawdbot/clawdbot.json` if missi
 
 If `agent.sandbox` is enabled, non-main sessions can override this with
 per-session workspaces under `agent.sandbox.workspaceRoot` (see
-`docs/configuration.md`).
+[`docs/configuration.md`](https://docs.clawd.bot/configuration)).
 
 ## Bootstrap files (injected)
 
@@ -42,7 +42,7 @@ Clawdbot loads skills from three locations (workspace wins on name conflict):
 - Managed/local: `~/.clawdbot/skills`
 - Workspace: `<workspace>/skills`
 
-Skills can be gated by config/env (see `skills` in `docs/configuration.md`).
+Skills can be gated by config/env (see `skills` in [`docs/configuration.md`](https://docs.clawd.bot/configuration)).
 
 ## p-mono integration
 
@@ -81,7 +81,7 @@ message is injected before the next assistant response.
 
 When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
-`docs/queue.md` for mode + debounce/cap behavior.
+[`docs/queue.md`](https://docs.clawd.bot/queue) for mode + debounce/cap behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; disable
 via `agent.blockStreamingDefault: "off"` if you only want the final response.
@@ -99,4 +99,4 @@ At minimum, set:
 
 ---
 
-*Next: [Group Chats](group-messages)* 🦞
+*Next: [Group Chats](https://docs.clawd.bot/group-messages)* 🦞

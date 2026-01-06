@@ -290,4 +290,4 @@ Notes:
 
 ## Troubleshooting
 
-For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting.md](./browser-linux-troubleshooting.md).
+For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting](https://docs.clawd.bot/browser-linux-troubleshooting).

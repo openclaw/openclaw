@@ -154,7 +154,7 @@ This runs the Gateway (and its provider integrations) inside a Docker container.
 If you do this right, the container becomes the “host boundary”, and you only
 expose what you explicitly mount in.
 
-Docs: `docs/docker.md` (Docker Compose setup + onboarding).
+Docs: [`docs/docker.md`](https://docs.clawd.bot/docker) (Docker Compose setup + onboarding).
 
 Hardening reminders:
 - Don’t mount your entire home directory.
@@ -182,8 +182,8 @@ Default container hardening (configurable via `agent.sandbox.docker`):
 - per-session workspace mounted at `/workspace`
 
 Docs:
-- `docs/configuration.md` → `agent.sandbox`
-- `docs/docker.md` → “Per-session Agent Sandbox”
+- [`docs/configuration.md`](https://docs.clawd.bot/configuration) → `agent.sandbox`
+- [`docs/docker.md`](https://docs.clawd.bot/docker) → “Per-session Agent Sandbox”
 
 Important: `agent.elevated` is an explicit escape hatch that runs bash on the
 host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.

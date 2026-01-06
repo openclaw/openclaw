@@ -3,7 +3,7 @@ summary: "Frequently asked questions about Clawdbot setup, configuration, and us
 ---
 # FAQ 🦞
 
-Common questions from the community. For detailed configuration, see [configuration.md](configuration).
+Common questions from the community. For detailed configuration, see [Configuration](https://docs.clawd.bot/configuration).
 
 ## Installation & Setup
 
@@ -290,7 +290,7 @@ Per-group activation can be changed by the owner:
 - `/activation mention` — respond only when mentioned (default)
 - `/activation always` — respond to all messages
 
-See [groups.md](groups) for details.
+See [Groups](https://docs.clawd.bot/groups) for details.
 
 ---
 
@@ -327,7 +327,7 @@ cat ~/.clawdbot/clawdbot.json | grep workspace
 - **Telegram** — Via Bot API (grammY).
 - **Discord** — Bot integration.
 - **iMessage** — Via `imsg` CLI (macOS only).
-- **Signal** — Via `signal-cli` (see [signal.md](signal)).
+- **Signal** — Via `signal-cli` (see [Signal](https://docs.clawd.bot/signal)).
 - **WebChat** — Browser-based chat UI.
 
 ### Discord: Bot works in channels but not DMs?

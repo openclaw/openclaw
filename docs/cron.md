@@ -16,7 +16,7 @@ Last updated: 2025-12-13
 Clawdbot already has:
 - A **gateway heartbeat runner** that runs the agent with `HEARTBEAT` and suppresses `HEARTBEAT_OK` (`src/infra/heartbeat-runner.ts`).
 - A lightweight, in-memory **system event queue** (`enqueueSystemEvent`) that is injected into the next **main session** turn (`drainSystemEvents` in `src/auto-reply/reply.ts`).
-- A WebSocket **Gateway** daemon that is intended to be always-on (`docs/gateway.md`).
+- A WebSocket **Gateway** daemon that is intended to be always-on ([`docs/gateway.md`](https://docs.clawd.bot/gateway)).
 
 This RFC adds a small “cron job system” so Clawd can schedule future work and reliably wake itself up:
 - **Delayed**: run on the *next* normal heartbeat tick

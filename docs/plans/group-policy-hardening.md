@@ -64,8 +64,8 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 ### Phase 3: Documentation Updates
 
 **Files**:
-- `docs/groups.md`
-- `docs/telegram.md`
+- [`docs/groups.md`](https://docs.clawd.bot/groups)
+- [`docs/telegram.md`](https://docs.clawd.bot/telegram)
 
 **Changes**:
 - Document `tg:` alias and case-insensitive prefixes for Telegram allowlists.
@@ -85,8 +85,8 @@ Follow-up hardening work ensures Telegram allowlists behave consistently across 
 |------|-------------|-------------|
 | `src/telegram/bot.ts` | Fix | Trim allowlist values; strip `telegram:` / `tg:` prefixes case-insensitively |
 | `src/telegram/bot.test.ts` | Test | Add DM + group allowlist coverage for `TG:` prefix + whitespace |
-| `docs/groups.md` | Docs | Mention `tg:` alias + case-insensitive prefixes |
-| `docs/telegram.md` | Docs | Mention `tg:` alias + case-insensitive prefixes |
+| [`docs/groups.md`](https://docs.clawd.bot/groups) | Docs | Mention `tg:` alias + case-insensitive prefixes |
+| [`docs/telegram.md`](https://docs.clawd.bot/telegram) | Docs | Mention `tg:` alias + case-insensitive prefixes |
 
 ---
 

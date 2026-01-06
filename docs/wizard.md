@@ -161,7 +161,7 @@ Sessions are stored under `~/.clawdbot/sessions/`.
 
 ## Related docs
 
-- macOS app onboarding: `docs/onboarding.md`
-- Config reference: `docs/configuration.md`
-- Providers: `docs/whatsapp.md`, `docs/telegram.md`, `docs/discord.md`, `docs/signal.md`, `docs/imessage.md`
-- Skills: `docs/skills.md`, `docs/skills-config.md`
+- macOS app onboarding: [`docs/onboarding.md`](https://docs.clawd.bot/onboarding)
+- Config reference: [`docs/configuration.md`](https://docs.clawd.bot/configuration)
+- Providers: [`docs/whatsapp.md`](https://docs.clawd.bot/whatsapp), [`docs/telegram.md`](https://docs.clawd.bot/telegram), [`docs/discord.md`](https://docs.clawd.bot/discord), [`docs/signal.md`](https://docs.clawd.bot/signal), [`docs/imessage.md`](https://docs.clawd.bot/imessage)
+- Skills: [`docs/skills.md`](https://docs.clawd.bot/skills), [`docs/skills-config.md`](https://docs.clawd.bot/skills-config)

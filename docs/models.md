@@ -77,7 +77,7 @@ Output
 - Image routing uses `agent.imageModel` **only when configured** and the primary
   model lacks image input.
 - Persist last successful provider/model to session entry; auth profile success is global.
-- See `docs/model-failover.md` for auth profile rotation, cooldowns, and timeout handling.
+- See [`docs/model-failover.md`](https://docs.clawd.bot/model-failover) for auth profile rotation, cooldowns, and timeout handling.
 
 ## Tests
 
@@ -87,5 +87,5 @@ Output
 
 ## Docs
 
-- Update `docs/configuration.md` with `agent.models` + `agent.model` + `agent.imageModel`.
+- Update [`docs/configuration.md`](https://docs.clawd.bot/configuration) with `agent.models` + `agent.model` + `agent.imageModel`.
 - Keep this doc current when CLI surface or scan logic changes.
