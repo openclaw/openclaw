@@ -886,10 +886,6 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             timeoutMs?: number;
             idempotencyKey: string;
           };
-          const timeoutMs = Math.min(
-            Math.max(p.timeoutMs ?? 30_000, 0),
-            30_000,
-          );
           const normalizedAttachments =
             p.attachments?.map((a) => ({
               type: typeof a?.type === "string" ? a.type : undefined,
@@ -928,7 +924,17 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             }
           }
 
-          const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
+          const { cfg, storePath, store, entry } = loadSessionEntry(
+            p.sessionKey,
+          );
+          const defaultTimeoutMs = Math.max(
+            Math.floor((cfg.agent?.timeoutSeconds ?? 600) * 1000),
+            0,
+          );
+          const timeoutMs =
+            typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
+              ? Math.max(0, Math.floor(p.timeoutMs))
+              : defaultTimeoutMs;
           const now = Date.now();
           const sessionId = entry?.sessionId ?? randomUUID();
           const sessionEntry: SessionEntry = {
